@@ -1,0 +1,516 @@
+"use client";
+
+import React, { useState, useEffect } from 'react';
+import Sidebar from '@/components/Sidebar';
+import ChatArea from '@/components/ChatArea';
+import SettingsModal from '@/components/SettingsModal';
+import { v4 as uuidv4 } from 'uuid';
+
+// ── Per-tab navigation state ────────────────────────────────────────────────
+// Which folder/conversation a tab is viewing must be PER-TAB, not shared. Using
+// localStorage made every tab fight over one value: opening entity Y in a second
+// tab overwrote the shared "last folder", so when the first tab (e.g. with the
+// System Prompt Updater open) reloaded, it jumped to entity Y and lost its work.
+//
+// sessionStorage is isolated per browser tab and survives reloads within that
+// tab — exactly what we want. We still mirror to localStorage so a brand-new tab
+// or a fresh browser launch (empty sessionStorage) lands on the last-used entity
+// instead of the very first folder. Read prefers sessionStorage (this tab's own
+// view) and only falls back to localStorage when this tab has no value yet.
+function navGet(key: string): string | null {
+  try {
+    const s = sessionStorage.getItem(key);
+    if (s !== null) return s;
+    return localStorage.getItem(key);
+  } catch { return null; }
+}
+function navSet(key: string, value: string) {
+  try { sessionStorage.setItem(key, value); localStorage.setItem(key, value); } catch {}
+}
+
+export default function Home() {
+  const [conversations, setConversations] = useState<any[]>([]);
+  // Tracks the initial /api/logs fetch so the sidebar can show a skeleton
+  // placeholder instead of the "No history" empty-state during cold-start.
+  // Flips to false on the first response (success or failure).
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [currentConvoId, setCurrentConvoId] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // NOTE: maxRecommendedContext, autoTrimCopiedMessages, and
+  // maxTokensPerLayer were moved out of globalSettings into per-folder
+  // settings (Folder Settings → Context Management). Old user_settings.json
+  // files that still have those keys are loaded harmlessly — nothing reads
+  // them from here anymore.
+  const [globalSettings, setGlobalSettings] = useState<any>({
+    userName: 'User',
+    theme: 'dark',
+  });
+
+  const [folders, setFolders] = useState<any[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+
+  // Load basic data
+  useEffect(() => {
+    const savedGlobal = localStorage.getItem('nexus_globalSettings');
+    if (savedGlobal) {
+      try {
+        setGlobalSettings(JSON.parse(savedGlobal));
+      } catch (e) { }
+    }
+    fetchFolders();
+    fetchLogs();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('nexus_globalSettings', JSON.stringify(globalSettings));
+  }, [globalSettings]);
+
+  const fetchFolders = async () => {
+    try {
+      const res = await fetch('/api/folders');
+      if (res.ok) {
+        const data = await res.json();
+        setFolders(data);
+        const savedFolder = navGet('nexus_lastFolderId');
+        if (savedFolder && data.find((f: any) => f.id === savedFolder)) {
+          setActiveFolderId(savedFolder);
+        } else if (data.length > 0) {
+          setActiveFolderId(data[0].id);
+        }
+      }
+    } catch (e) { }
+  };
+
+  const fetchLogs = async () => {
+    try {
+      const res = await fetch('/api/logs');
+      if (res.ok) {
+        const data = await res.json();
+        setConversations(data);
+      }
+    } catch (e) { }
+    finally {
+      // Flip the skeleton off in both success and failure paths so the
+      // sidebar lands on either real data or the "No history" empty state.
+      setConversationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeFolderId) {
+      navSet('nexus_lastFolderId', activeFolderId);
+
+      const activeFolder = folders.find(f => f.id === activeFolderId);
+      if (activeFolder) {
+        const current = conversations.find(c => c.id === currentConvoId);
+        // Only auto-reselect a conversation when (a) nothing is selected, or
+        // (b) the selected one belongs to a DIFFERENT folder than the active
+        // one. Crucially we do NOT reselect when `currentConvoId` is set but
+        // momentarily absent from `conversations` (a transient refetch, or a
+        // brand-new unsaved chat) — clobbering it there would remount ChatArea
+        // and throw away whatever the user is doing (e.g. the open System
+        // Prompt Updater).
+        const needsReselect =
+          currentConvoId === null ||
+          (!!current && current.folderName !== activeFolder.name);
+        if (needsReselect) {
+          const folderConvos = conversations.filter(c => c.folderName === activeFolder.name);
+          // On reload, restore THIS tab's exact conversation if it's still in
+          // the active folder (sessionStorage is per-tab); otherwise fall back
+          // to the most-recently-updated conversation.
+          const savedConvoId = navGet('nexus_lastConvoId');
+          const saved = savedConvoId ? folderConvos.find(c => c.id === savedConvoId) : undefined;
+          if (saved) {
+            setCurrentConvoId(saved.id);
+          } else if (folderConvos.length > 0) {
+            const latest = folderConvos.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+            setCurrentConvoId(latest.id);
+          } else {
+            setCurrentConvoId(null);
+          }
+        }
+      }
+    }
+  }, [activeFolderId, folders, conversations, currentConvoId]);
+
+  useEffect(() => {
+    if (currentConvoId) {
+      navSet('nexus_lastConvoId', currentConvoId);
+    }
+  }, [currentConvoId]);
+
+  const activeFolder = folders.find(f => f.id === activeFolderId);
+
+  const createNewChat = () => {
+    if (!activeFolder) return;
+    const newId = uuidv4();
+    setCurrentConvoId(newId);
+    setConversations([{
+      id: newId,
+      title: 'New Conversation',
+      updatedAt: Date.now(),
+      folderName: activeFolder.name,
+      aiName: activeFolder.settings?.aiName || 'Claude',
+      specificModel: activeFolder.settings?.specificModel
+    }, ...conversations]);
+  };
+
+  const deleteChat = async (id: string) => {
+    try {
+      await fetch(`/api/logs/${id}`, { method: 'DELETE' });
+      const newConvos = conversations.filter(c => c.id !== id);
+      setConversations(newConvos);
+      if (currentConvoId === id) {
+        setCurrentConvoId(newConvos.length > 0 ? newConvos[0].id : null);
+      }
+    } catch (e) { }
+  };
+
+  // Build a clone title using the " copy(<N>)" suffix convention.
+  //   - "Hello"           → "Hello copy(1)"
+  //   - "Hello copy(1)"   → "Hello copy(2)"   (recognizes its own suffix)
+  //   - "Hello copy(2)"   → "Hello copy(3)"   ...etc
+  //   - On collision with another title in the same folder, advance until
+  //     we find a free number.
+  //
+  // Previously this used a CJK "＃<full-width number>" suffix that was
+  // intended for character-conversation continuations (managed now by the
+  // System Prompt Updater); the user asked the sidebar's Clone action to
+  // use a plain English copy-suffix instead.
+  const buildCloneTitle = (sourceTitle: string, folderName: string): string => {
+    const folderTitles = new Set(
+      conversations.filter(c => c.folderName === folderName).map(c => c.title)
+    );
+    // If the title already ends with " copy(N)", strip it and resume from
+    // N+1 — avoids accumulating " copy(1) copy(1) copy(1)" chains.
+    const m = sourceTitle.match(/^(.*?)\s+copy\((\d+)\)\s*$/);
+    const base = m
+      ? m[1].replace(/\s+$/, '')
+      : sourceTitle.replace(/\s+$/, '');
+    let n = m ? parseInt(m[2], 10) + 1 : 1;
+    let candidate = `${base} copy(${n})`;
+    while (folderTitles.has(candidate)) {
+      n++;
+      candidate = `${base} copy(${n})`;
+    }
+    return candidate;
+  };
+
+  const renameChat = async (id: string, newTitle: string) => {
+    // Optimistic — update sidebar list immediately. The user shouldn't have
+    // to wait for the disk write to see their new title.
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, title: newTitle } : c));
+    try {
+      const res = await fetch(`/api/logs/${id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      data.title = newTitle;
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, logData: data }),
+      });
+      // Reconcile in the background (in case the server normalized anything)
+      fetchLogs();
+    } catch (e) {
+      console.error('rename failed:', e);
+      fetchLogs(); // roll back to whatever the server actually has
+    }
+  };
+
+  // Toggle a conversation's "active" flag. Inactive conversations are hidden
+  // from the summaries Layer-4 index AND refused by the read_conversation tool
+  // (the user designates these "non-public" — the AI must not see them).
+  // Missing flag means active; we persist the explicit boolean either way.
+  const toggleChatActive = async (id: string) => {
+    const current = conversations.find(c => c.id === id);
+    const next = !(current?.active !== false); // currently-active → false; inactive → true
+    // Optimistic sidebar update.
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, active: next } : c));
+    try {
+      const res = await fetch(`/api/logs/${id}`);
+      if (!res.ok) { fetchLogs(); return; }
+      const data = await res.json();
+      data.active = next;
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, logData: data }),
+      });
+      fetchLogs();
+    } catch (e) {
+      console.error('toggle active failed:', e);
+      fetchLogs();
+    }
+  };
+
+  // One-time migration: normalize every conversation title in a folder from
+  // the legacy "<base>＃<full-width index>" form to the canonical
+  // "<base>_<index>" (half-width) used by the System Prompt Updater, layer
+  // files and summary files. Invoked from the folder "…" menu.
+  const normalizeFolderNames = async (folderName: string) => {
+    const fwToHw = (s: string) =>
+      s.replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+    const toRename = conversations
+      .filter(c => c.folderName === folderName)
+      .map(c => {
+        const m = String(c.title || '').match(/^(.*?)\s*[_#＃]([0-9０-９]+)\s*$/);
+        if (!m) return null;
+        const base = m[1].replace(/\s+$/, '');
+        const idx = parseInt(fwToHw(m[2]), 10);
+        if (isNaN(idx)) return null;
+        const next = `${base}_${idx}`;
+        return next === c.title ? null : { id: c.id as string, next };
+      })
+      .filter(Boolean) as Array<{ id: string; next: string }>;
+    if (toRename.length === 0) return;
+    // Optimistic sidebar update.
+    const map = new Map(toRename.map(t => [t.id, t.next]));
+    setConversations(prev => prev.map(c => map.has(c.id) ? { ...c, title: map.get(c.id)! } : c));
+    // Persist sequentially — each rename loads + rewrites the full log file.
+    for (const t of toRename) {
+      try {
+        const res = await fetch(`/api/logs/${t.id}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        data.title = t.next;
+        await fetch('/api/logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: t.id, logData: data }),
+        });
+      } catch (e) {
+        console.error('normalize rename failed for', t.id, e);
+      }
+    }
+    fetchLogs();
+  };
+
+  // Like cloneChat but installs a brand-new system prompt on the clone and
+  // bumps the title's "＃<N>" suffix to a caller-specified index (so it
+  // matches the layers file we just wrote at <folder>/<folder>_<N>.md).
+  // Used by the System Prompt Updater modal — see SystemPromptUpdater.tsx.
+  const cloneChatWithSystemPrompt = async ({
+    sourceId, newSystemPrompt, newIndex,
+  }: { sourceId: string; newSystemPrompt: string; newIndex: number }) => {
+    const res = await fetch(`/api/logs/${sourceId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const newId = uuidv4();
+    data.id = newId;
+    data.systemPrompt = newSystemPrompt;
+
+    // Force the title to "<base>_<newIndex>" (half-width), matching the layer
+    // file naming "<base>_<newIndex>.md". We strip any existing trailing index
+    // suffix (legacy "＃<full-width>" or "#"/"_" + digits) first, then append.
+    const oldTitle: string = data.title || 'Untitled';
+    const base = oldTitle.replace(/\s*[_#＃][0-9０-９]+\s*$/, '');
+    data.title = `${base}_${newIndex}`;
+
+    // Treat the entire cloned history as carry-over context. The new
+    // "firstOriginalIsNext" flag is consumed by ChatArea.handleSend when
+    // the user types their next message — that new message becomes the
+    // actual first-original marker. This replaces the older approach of
+    // marking the LAST source-conversation message as the boundary, which
+    // wrongly classified the last assistant turn as 'original' even though
+    // it came straight from the previous conversation.
+    data.firstOriginalMessageId = null;
+    data.firstOriginalIsNext = true;
+
+    // Persist FIRST, switch SECOND. The optimistic-then-POST pattern from the
+    // regular cloneChat races: ChatArea's load-by-convoId useEffect fires the
+    // moment currentConvoId changes, and if the log file isn't on disk yet it
+    // 404s and renders "New Conversation" with empty state. The user has to
+    // reload the page to see their cloned conversation populate. Awaiting the
+    // POST before the switch closes that window.
+    try {
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: newId, logData: data }),
+      });
+    } catch (e) {
+      console.error('clone-with-system-prompt POST failed:', e);
+      return;
+    }
+
+    const optimistic = {
+      id: newId,
+      folderName: data.folderName,
+      title: data.title,
+      aiName: data.aiName,
+      updatedAt: Date.now(),
+    };
+    setConversations(prev => [optimistic, ...prev]);
+    setCurrentConvoId(newId);
+
+    // Background reconcile — fetchLogs gets the canonical log list from disk,
+    // fetchFolders refreshes the convoOrder we set below.
+    try {
+      const folder = folders.find(f => f.name === data.folderName);
+      if (folder) {
+        const existingOrder: string[] = folder.settings?.convoOrder ||
+          conversations.filter(c => c.folderName === folder.name).map((c: any) => c.id);
+        const newOrder = [newId, ...existingOrder.filter(oid => oid !== newId)];
+        await fetch('/api/folders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: folder.name, settings: { ...folder.settings, convoOrder: newOrder } }),
+        });
+        fetchFolders();
+      }
+      fetchLogs();
+    } catch (e) {
+      console.error('clone-with-system-prompt reconcile failed:', e);
+      fetchLogs();
+    }
+  };
+
+  const cloneChat = async (id: string) => {
+    const res = await fetch(`/api/logs/${id}`);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const newId = uuidv4();
+    data.id = newId;
+    data.title = buildCloneTitle(data.title || 'Untitled', data.folderName || 'Default');
+
+    // Treat the entire cloned history as carry-over context (every existing
+    // message is "copied"). The new firstOriginalIsNext flag is consumed by
+    // ChatArea.handleSend → the next user message becomes the marker. See
+    // cloneChatWithSystemPrompt for the longer rationale; both clone paths
+    // now share this behavior.
+    data.firstOriginalMessageId = null;
+    data.firstOriginalIsNext = true;
+
+    // Optimistic — insert the new entry at the top of the sidebar immediately.
+    const optimistic = {
+      id: newId,
+      folderName: data.folderName,
+      title: data.title,
+      aiName: data.aiName,
+      updatedAt: Date.now(),
+    };
+    setConversations(prev => [optimistic, ...prev]);
+    setCurrentConvoId(newId);
+
+    try {
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: newId, logData: data }),
+      });
+
+      // Pin to top of folder ordering
+      const folder = folders.find(f => f.name === data.folderName);
+      if (folder) {
+        const existingOrder: string[] = folder.settings?.convoOrder ||
+          conversations.filter(c => c.folderName === folder.name).map((c: any) => c.id);
+        const newOrder = [newId, ...existingOrder.filter(oid => oid !== newId)];
+        fetch('/api/folders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: folder.name, settings: { ...folder.settings, convoOrder: newOrder } }),
+        }).then(() => fetchFolders()).catch(() => {});
+      }
+      // Background reconcile
+      fetchLogs();
+    } catch (e) {
+      console.error('clone failed:', e);
+      fetchLogs();
+    }
+  };
+
+  // Apply theme class to body based on active folder
+  useEffect(() => {
+    const themeName = activeFolder?.settings?.theme || globalSettings.theme || 'dark';
+
+    document.documentElement.className = '';
+
+    if (themeName !== 'light') {
+      document.documentElement.classList.add(themeName);
+    }
+
+    let styleTag = document.getElementById('folder-custom-css');
+    if (!styleTag) {
+      styleTag = document.createElement('style');
+      styleTag.id = 'folder-custom-css';
+      document.head.appendChild(styleTag);
+    }
+
+    if (themeName === 'custom' && activeFolder?.settings?.customCss) {
+      styleTag.innerHTML = activeFolder.settings.customCss;
+    } else {
+      styleTag.innerHTML = '';
+    }
+  }, [activeFolder, globalSettings.theme]);
+
+  return (
+    <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans">
+      <Sidebar
+        conversations={conversations}
+        conversationsLoading={conversationsLoading}
+        currentConvoId={currentConvoId}
+        onSelectConvo={setCurrentConvoId}
+        onNewChat={createNewChat}
+        onDeleteChat={deleteChat}
+        onRenameChat={renameChat}
+        onCloneChat={cloneChat}
+        onToggleActive={toggleChatActive}
+        onNormalizeNames={normalizeFolderNames}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        folders={folders}
+        setFolders={setFolders}
+        activeFolderId={activeFolderId}
+        setActiveFolderId={setActiveFolderId}
+        fetchFolders={fetchFolders}
+        fetchLogs={fetchLogs}
+        setConversations={setConversations}
+      />
+
+      <main className="flex-1 flex flex-col relative min-w-0">
+        {currentConvoId && activeFolder && (!conversations.find(c => c.id === currentConvoId) || conversations.find(c => c.id === currentConvoId)?.folderName === activeFolder.name) ? (
+          <ChatArea
+            key={currentConvoId}
+            convoId={currentConvoId}
+            folderName={activeFolder.name}
+            aiName={activeFolder.settings?.aiName || 'Claude'}
+            userName={globalSettings.userName}
+            defaultSystemPrompt={activeFolder.settings?.systemPrompt !== undefined ? activeFolder.settings.systemPrompt : 'You are a helpful AI assistant.'}
+            defaultAttachmentInstruction={activeFolder.settings?.attachmentInstruction !== undefined ? activeFolder.settings.attachmentInstruction : "Note: The user's chat client automatically injects the contents of attached text files into their messages using <attached_file name=\"filename\">...</attached_file> XML tags. When you see these tags, treat the contents as the actual attached file."}
+            defaultModelParams={activeFolder.settings?.modelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' }}
+            defaultSpecificModel={activeFolder.settings?.specificModel}
+            defaultCustomAiName={activeFolder.settings?.customAiName || ''}
+            defaultDateTimeVisibility={activeFolder.settings?.dateTimeVisibility || 'none'}
+            defaultVrchatMode={activeFolder.settings?.vrchatMode || false}
+            defaultVrchatRule={activeFolder.settings?.vrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]"}
+            defaultAiVoice={activeFolder.settings?.aiVoice}
+            defaultLiveSessionVoice={activeFolder.settings?.liveSessionVoice || 'Aoede'}
+            globalSettings={globalSettings}
+            folders={folders}
+            onUpdateTitle={fetchLogs}
+            fetchFolders={fetchFolders}
+            onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
+            <h2 className="text-2xl font-semibold mb-2">Welcome to AI Manager</h2>
+            <p className="mb-4 text-sm">Select or create a conversation to start</p>
+            <button onClick={createNewChat} className="px-6 py-2 bg-primary text-primary-foreground rounded-full font-medium hover:opacity-90 transition-opacity">
+              New Chat
+            </button>
+          </div>
+        )}
+      </main>
+
+      {isSettingsOpen && (
+        <SettingsModal
+          onClose={() => setIsSettingsOpen(false)}
+          globalSettings={globalSettings}
+          setGlobalSettings={setGlobalSettings}
+        />
+      )}
+    </div>
+  );
+}

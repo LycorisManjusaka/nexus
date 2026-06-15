@@ -1,0 +1,1 @@
+powershell -ExecutionPolicy Bypass -Command "$env:NEXUS_CACHE_DEBUG='1'; npm run dev"

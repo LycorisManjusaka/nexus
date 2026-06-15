@@ -1,0 +1,155 @@
+import { NextResponse } from 'next/server';
+import fs from 'fs';
+import { convertEnglishToKatakana } from '@/lib/ttsEnToKatakana';
+import { speakersJsonPath } from '@/lib/voicechangerPaths';
+
+// A segment produces ZERO phonemes — and crashes the OpenJTalk-based engines —
+// when it contains no kana, kanji, or alphanumeric characters. Coeiroink fails
+// with "JPCommonLabel_make(): No phoneme", and then its VITS text encoder dies
+// on a conv1d whose kernel (size 3) is larger than the empty phoneme sequence:
+//   RuntimeError: Calculated padded input size per channel: (2).
+//                 Kernel size: (3). Kernel size can't be greater than ...
+// Punctuation / symbol / emoji-only chunks (e.g. "！！！", "……", "♡", "🎵",
+// a lone "）") come out of sentence-splitting and must be skipped, not sent.
+//
+// Speakable = at least one Hiragana / Katakana (incl. half-width) / Han (kanji)
+// character, or an ASCII/full-width letter or digit (the engine can read those).
+const SPEAKABLE_RE =
+  /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}A-Za-z0-9０-９Ａ-Ｚａ-ｚｦ-ﾝ]/u;
+function hasSpeakableContent(text: string): boolean {
+  return SPEAKABLE_RE.test(text || '');
+}
+
+// OpenJTalk (used by both Voicevox and Coeiroink) warns and stalls ~1-2s when a
+// segment BEGINS with a pause-inducing character:
+//   "JPCommonLabel_insert_pause(): First mora should not be short pause."
+// This happens whenever the text starts with leading punctuation / whitespace /
+// dashes / brackets / symbols (e.g. "、はい", "…そうだね", "（笑）", " あの"),
+// because the engine tries to make the very first mora a short pause, which is
+// illegal. A leading non-speakable run can't be voiced anyway, so we strip it.
+// Trailing punctuation is left alone (a pause at the end is valid). If nothing
+// speakable remains after trimming, hasSpeakableContent() drops the segment.
+const LEADING_NONSPEAKABLE_RE =
+  /^[^\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}A-Za-z0-9０-９Ａ-Ｚａ-ｚｦ-ﾝ]+/u;
+function stripLeadingPause(text: string): string {
+  return (text || '').replace(LEADING_NONSPEAKABLE_RE, '');
+}
+
+async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0): Promise<ArrayBuffer | null> {
+    // Replace English words/phrases with Katakana equivalents before synthesis
+    // so Voicevox / Coeiroink pronounce them correctly instead of spelling them.
+    // Dictionary: local_data/en_katakana_dict.json (user-editable).
+    text = convertEnglishToKatakana(text);
+
+    // Trim any leading pause-inducing characters so OpenJTalk doesn't try to
+    // make the first mora a short pause (the "First mora should not be short
+    // pause" warning + 1-2s stall). Done before the speakable check so a chunk
+    // that was ALL leading punctuation correctly drops out as empty.
+    text = stripLeadingPause(text);
+
+    // Skip unspeakable (phoneme-less) chunks. Returning null tells the caller to
+    // drop this segment instead of pushing a buffer — prevents the 500 above.
+    if (!hasSpeakableContent(text)) return null;
+
+    if (engine === 0) {
+      const vvData = JSON.parse(fs.readFileSync(speakersJsonPath(), 'utf8'));
+      const char = vvData[char_idx];
+      if (!char) throw new Error('Voicevox character not found');
+      const style = char.styles[style_idx] || char.styles[0];
+      const speakerId = style.id;
+
+      const queryRes = await fetch(`http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, { method: 'POST' });
+      if (!queryRes.ok) throw new Error('Voicevox audio_query failed');
+      const queryJson = await queryRes.json();
+
+      queryJson.speedScale = speed;
+      queryJson.pitchScale = pitch;
+
+      const synthRes = await fetch(`http://127.0.0.1:50021/synthesis?speaker=${speakerId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryJson)
+      });
+      if (!synthRes.ok) throw new Error('Voicevox synthesis failed');
+
+      return await synthRes.arrayBuffer();
+    }
+    else if (engine === 1) {
+      const coeRes = await fetch('http://127.0.0.1:50032/v1/speakers');
+      if (!coeRes.ok) throw new Error('Failed to fetch Coeiroink speakers');
+      const coeData = await coeRes.json();
+      const char = coeData[char_idx];
+      if (!char) throw new Error('Coeiroink character not found');
+      const style = char.styles[style_idx] || char.styles[0];
+
+      const payload = {
+        speakerUuid: char.speakerUuid, styleId: style.styleId, text,
+        speedScale: speed, volumeScale: 1.0, pitchScale: pitch,
+        intonationScale: 1.0, prePhonemeLength: 0.1, postPhonemeLength: 0.1, outputSamplingRate: 24000
+      };
+      
+      const synthRes = await fetch('http://127.0.0.1:50032/v1/synthesis', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      if (!synthRes.ok) throw new Error('Coeiroink synthesis failed');
+      
+      return await synthRes.arrayBuffer();
+    } else {
+        throw new Error('Invalid engine');
+    }
+}
+
+function concatenateWavs(buffers: ArrayBuffer[]): Buffer {
+    if (buffers.length === 0) return Buffer.alloc(0);
+    if (buffers.length === 1) return Buffer.from(buffers[0]);
+    
+    const headerSize = 44;
+    let totalDataSize = 0;
+    
+    for (const buf of buffers) {
+        totalDataSize += (buf.byteLength - headerSize);
+    }
+    
+    const finalBuffer = Buffer.alloc(headerSize + totalDataSize);
+    
+    const firstBuf = Buffer.from(buffers[0]);
+    firstBuf.copy(finalBuffer, 0, 0, headerSize);
+    
+    finalBuffer.writeUInt32LE(finalBuffer.length - 8, 4);
+    finalBuffer.writeUInt32LE(totalDataSize, 40);
+    
+    let offset = headerSize;
+    for (const buf of buffers) {
+        const nodeBuf = Buffer.from(buf);
+        const dataSize = nodeBuf.length - headerSize;
+        nodeBuf.copy(finalBuffer, offset, headerSize, nodeBuf.length);
+        offset += dataSize;
+    }
+    
+    return finalBuffer;
+}
+
+export async function POST(req: Request) {
+  try {
+    const data = await req.json();
+    let buffers: ArrayBuffer[] = [];
+    
+    if (data.segments && Array.isArray(data.segments)) {
+      for (const seg of data.segments) {
+        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0);
+        if (buf) buffers.push(buf);
+      }
+    } else {
+       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0);
+       if (buf) buffers.push(buf);
+    }
+    
+    const finalWav = concatenateWavs(buffers);
+    
+    return new NextResponse(finalWav, {
+      headers: { 'Content-Type': 'audio/wav' }
+    });
+    
+  } catch (e: any) {
+    console.error('TTS Error:', e);
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+}
