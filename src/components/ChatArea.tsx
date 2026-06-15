@@ -9,6 +9,7 @@ import SystemPromptUpdater from './SystemPromptUpdater';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripLeadingTimestamps } from '@/lib/timestampStrip';
+import { applyOutputFilter } from '@/lib/outputFilter';
 import { injectLayer4Index } from '@/lib/layer4';
 import LiveSession from './LiveSession';
 
@@ -1117,6 +1118,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 if (globalSettings?.removeTimestamps !== false) {
                   currentText = stripLeadingTimestamps(currentText);
                 }
+                // User-configurable regex filter (Settings → Custom regex
+                // filter). Applied continuously like the timestamp strip so the
+                // stored message — and therefore TTS — never contains matches.
+                currentText = applyOutputFilter(currentText, globalSettings);
               } else if (data.type === 'thinking_signature') {
                 claudeThinkingBlocks.push({ thinking: data.thinking, signature: data.signature });
               } else if (data.type === 'continued') {

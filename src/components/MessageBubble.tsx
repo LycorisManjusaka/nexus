@@ -7,6 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { stripLeadingTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
+import { applyOutputFilter } from '@/lib/outputFilter';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal }: any) {
   const isUser = msg.role === 'user';
@@ -276,6 +277,8 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       // including a whole STACK of them — from the very start of the reply.
       textToSpeak = stripLeadingTimestamps(textToSpeak);
     }
+    // Custom regex filter — strip user-defined patterns from spoken text too.
+    textToSpeak = applyOutputFilter(textToSpeak, globalSettings);
     const sentences = splitIntoSentenceChunks(textToSpeak);
     for (const s of sentences) {
       // Belt-and-suspenders: when a timestamp stack is split across streaming
@@ -296,6 +299,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     if (isFirstChunk) {
       textToSpeak = stripLeadingTimestamps(textToSpeak);
     }
+    textToSpeak = applyOutputFilter(textToSpeak, globalSettings);
     streamingProcessedLenRef.current = fullText.length;
     const sentences = splitIntoSentenceChunks(textToSpeak);
     for (const s of sentences) {

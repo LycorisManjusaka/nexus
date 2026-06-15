@@ -411,6 +411,45 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 Automatically strips leading <code>[YYYY-MM-DD HH:MM:SS]</code> stacks that models echo at the start of a reply.
               </p>
             </div>
+
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={globalSettings.customFilterEnabled ?? false}
+                  onChange={e => setGlobalSettings({...globalSettings, customFilterEnabled: e.target.checked})}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">Custom regex filter on new AI messages</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                When enabled, every match of the pattern below is replaced (deleted if the replacement is empty) in AI output as it streams — same mechanism as timestamp removal, so it also never reaches TTS.
+              </p>
+              <div className="ml-6 mt-2 space-y-2">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Pattern (regex — what to replace)</label>
+                  <input
+                    type="text"
+                    value={globalSettings.customFilterPattern ?? ''}
+                    onChange={e => setGlobalSettings({...globalSettings, customFilterPattern: e.target.value})}
+                    placeholder={"e.g. \\[🔥[^\\]]*\\]"}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50"
+                    disabled={!globalSettings.customFilterEnabled}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Replacement (target — leave empty to delete)</label>
+                  <input
+                    type="text"
+                    value={globalSettings.customFilterReplacement ?? ''}
+                    onChange={e => setGlobalSettings({...globalSettings, customFilterReplacement: e.target.value})}
+                    placeholder="(empty)"
+                    className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50"
+                    disabled={!globalSettings.customFilterEnabled}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
         </div>
