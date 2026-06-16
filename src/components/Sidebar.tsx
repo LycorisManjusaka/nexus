@@ -121,7 +121,6 @@ export default function Sidebar({
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   
   const [themeModalOpen, setThemeModalOpen] = useState(false);
-  const [themeSelection, setThemeSelection] = useState('dark');
   const [customCss, setCustomCss] = useState('');
   const [folderVoice, setFolderVoice] = useState({ engine: 0, char_idx: 0, style_idx: 0 });
   const [folderVoicePitch, setFolderVoicePitch] = useState(0.0);
@@ -135,23 +134,6 @@ export default function Sidebar({
   const [liveSessionVoice, setLiveSessionVoice] = useState('Aoede');
   const [liveVoiceMode, setLiveVoiceMode] = useState<'preset' | 'custom'>('preset');
   const [liveCustomVoice, setLiveCustomVoice] = useState('');
-  const [themes, setThemes] = useState<{ value: string; label: string }[]>([
-    { value: 'dark', label: 'Dark (Default)' },
-    { value: 'light', label: 'Light' },
-    { value: 'custom', label: 'Custom CSS' },
-  ]);
-
-  const fetchThemes = async () => {
-    try {
-      const res = await fetch('/api/themes');
-      if (res.ok) {
-        const data = await res.json();
-        setThemes(data.themes || []);
-      }
-    } catch(e) {}
-  };
-
-  useEffect(() => { fetchThemes(); }, []);
 
   const [backupsModalOpen, setBackupsModalOpen] = useState(false);
   const [backups, setBackups] = useState<any[]>([]);
@@ -489,7 +471,6 @@ export default function Sidebar({
                   <button 
                     onClick={(e) => {
                       e.stopPropagation();
-                      setThemeSelection(activeFolder.settings?.theme || 'dark');
                       setCustomCss(activeFolder.settings?.customCss || '');
                       setFolderVoice(activeFolder.settings?.aiVoice || { engine: 0, char_idx: 0, style_idx: 0 });
                       setFolderVoicePitch(activeFolder.settings?.voicePitch ?? 0.0);
@@ -816,22 +797,6 @@ export default function Sidebar({
             
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
               <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Select Theme</label>
-                <select 
-                  value={themeSelection}
-                  onChange={(e) => setThemeSelection(e.target.value)}
-                  className="w-full p-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-indigo-500/50"
-                >
-                  {(themes.find(t => t.value === themeSelection)
-                    ? themes
-                    : [{ value: themeSelection, label: themeSelection || '(current)' }, ...themes]
-                  ).map(t => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-sm font-semibold text-foreground">CSS Theme (this folder)</label>
                   <label className="cursor-pointer text-xs flex items-center gap-1 text-indigo-500 hover:text-indigo-400">
@@ -854,11 +819,11 @@ export default function Sidebar({
                 <textarea
                   value={customCss}
                   onChange={(e) => setCustomCss(e.target.value)}
-                  placeholder={`Paste this folder's CSS scheme here. It is injected only while this folder is active.\n\nScoped to the theme name above, e.g.:\n.architect {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n}\n\n...or unscoped (:root { ... } / body { ... }).`}
+                  placeholder={`Define this folder's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/themes/<folder>.css. Empty = plain Dark.`}
                   className="w-full h-48 p-3 bg-background border border-border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500/50 resize-none custom-scrollbar"
                 />
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  Each folder carries its own CSS. Empty = base {`{`}dark/light{`}`} mode only.
+                  This folder's theme is its <span className="font-mono">local_data/themes/&lt;folder&gt;.css</span> file. No file = Dark.
                 </p>
               </div>
               
@@ -986,7 +951,6 @@ export default function Sidebar({
                         name: activeFolder.name, 
                         settings: {
                           ...activeFolder.settings,
-                          theme: themeSelection,
                           customCss,
                           aiVoice: folderVoice,
                           voicePitch: folderVoicePitch,

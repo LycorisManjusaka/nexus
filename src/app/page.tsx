@@ -422,15 +422,17 @@ export default function Home() {
     }
   };
 
-  // Apply theme class to body based on active folder
+  // Apply the active folder's theme.
+  //
+  // A folder's theme is ENTIRELY its local_data/themes/<name>.css file (loaded
+  // into settings.customCss by the API). There is no named-theme list anymore:
+  //   • if the folder has a CSS file → inject it (it sets :root variables that
+  //     override the dark base), and
+  //   • if it has none → the plain `dark` base IS the theme.
+  // The dark base is always applied so any variables a theme file doesn't set
+  // fall back to sensible dark values.
   useEffect(() => {
-    const themeName = activeFolder?.settings?.theme || globalSettings.theme || 'dark';
-
-    document.documentElement.className = '';
-
-    if (themeName !== 'light') {
-      document.documentElement.classList.add(themeName);
-    }
+    document.documentElement.className = 'dark';
 
     let styleTag = document.getElementById('folder-custom-css');
     if (!styleTag) {
@@ -438,14 +440,8 @@ export default function Home() {
       styleTag.id = 'folder-custom-css';
       document.head.appendChild(styleTag);
     }
-
-    // Folder-specific CSS scheme: always inject the active folder's own CSS
-    // (its "theme"), regardless of the base theme mode. This replaces the old
-    // globals.css-based named themes — each entity now carries its own CSS.
-    // The theme class above is still applied, so a verbatim scoped block like
-    // `.saku { ... }` works for a folder whose theme value is `saku`.
     styleTag.innerHTML = activeFolder?.settings?.customCss || '';
-  }, [activeFolder, globalSettings.theme]);
+  }, [activeFolder]);
 
   return (
     <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans">
