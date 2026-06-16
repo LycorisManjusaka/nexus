@@ -12,6 +12,40 @@ const USER_SETTINGS_FILE = path.join(DATA_DIR, 'user_settings.json');
 const FOLDERS_DIR = path.join(DATA_DIR, 'folders');
 const WORKSPACES_DIR = path.join(DATA_DIR, 'agent_workspaces');
 
+// Per-entity CSS themes live as plain, hand-editable `.css` files here:
+//   local_data/themes/<EntityName>.css
+// This file is the SOURCE OF TRUTH for a folder's `customCss`:
+//   - saveFolder() writes the CSS out to it (and keeps it OUT of the folder JSON),
+//   - listFolders() reads it back into settings.customCss,
+// so you can open/edit the .css file directly and a reload picks it up.
+const THEMES_DIR = path.join(DATA_DIR, 'themes');
+
+/** Absolute path of a folder's theme file (raw name, matching the .json naming). */
+function themeCssPath(folderName: string): string {
+  return path.join(THEMES_DIR, `${folderName}.css`);
+}
+
+/** Read a folder's theme CSS file, or null if none exists. */
+async function readThemeCss(folderName: string): Promise<string | null> {
+  try {
+    return await fs.readFile(themeCssPath(folderName), 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/** Write (or, when empty, remove) a folder's theme CSS file. */
+async function writeThemeCss(folderName: string, css: string | undefined | null): Promise<void> {
+  await fs.mkdir(THEMES_DIR, { recursive: true });
+  const p = themeCssPath(folderName);
+  if (css && css.trim()) {
+    await fs.writeFile(p, css);
+  } else {
+    // No CSS → don't leave an empty file lying around.
+    try { await fs.unlink(p); } catch {}
+  }
+}
+
 // -------- Agent workspace helpers ---------------------------------------
 // Each AI entity (Nexus folder) gets its own sandboxed directory under
 // agent_workspaces/. Paths inside are relative and bounded — any attempt
@@ -279,6 +313,7 @@ async function ensureDirs() {
   await fs.mkdir(LOGS_DIR, { recursive: true });
   await fs.mkdir(BACKUPS_DIR, { recursive: true });
   await fs.mkdir(FOLDERS_DIR, { recursive: true });
+  await fs.mkdir(THEMES_DIR, { recursive: true });
   await migrateOldLogs();
 }
 
@@ -292,18 +327,21 @@ export async function listFolders() {
         const data = await fs.readFile(path.join(FOLDERS_DIR, file), 'utf-8');
         try {
           const parsed = JSON.parse(data);
-          folders.push({
-            id: file.replace('.json', ''),
-            name: parsed.name || file.replace('.json', ''),
-            settings: parsed.settings || {}
-          });
+          const name = parsed.name || file.replace('.json', '');
+          const settings = parsed.settings || {};
+          // The .css theme file is the source of truth — overlay it onto
+          // settings.customCss so manual edits to the file are picked up.
+          const css = await readThemeCss(name);
+          if (css !== null) settings.customCss = css;
+          folders.push({ id: file.replace('.json', ''), name, settings });
         } catch (e) {}
       }
     }
     const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
     for (const dir of logDirs) {
       if (dir.isDirectory() && !folders.find(f => f.name === dir.name)) {
-        folders.push({ id: dir.name, name: dir.name, settings: {} });
+        const css = await readThemeCss(dir.name);
+        folders.push({ id: dir.name, name: dir.name, settings: css !== null ? { customCss: css } : {} });
       }
     }
     return folders;
@@ -314,8 +352,12 @@ export async function listFolders() {
 
 export async function saveFolder(folderName: string, settings: any) {
   await ensureDirs();
+  // Split the CSS out into local_data/themes/<name>.css (the editable source of
+  // truth) and keep it out of the folder JSON to avoid a stale duplicate.
+  const { customCss, ...rest } = settings || {};
+  await writeThemeCss(folderName, customCss);
   const filePath = path.join(FOLDERS_DIR, `${folderName}.json`);
-  await fs.writeFile(filePath, JSON.stringify({ name: folderName, settings }, null, 2));
+  await fs.writeFile(filePath, JSON.stringify({ name: folderName, settings: rest }, null, 2));
 }
 
 export async function renameFolder(oldName: string, newName: string) {
@@ -330,6 +372,12 @@ export async function renameFolder(oldName: string, newName: string) {
     await fs.unlink(oldFilePath);
   } catch (e) {}
 
+  // Move the per-entity CSS theme file alongside the rename.
+  try {
+    await fs.mkdir(THEMES_DIR, { recursive: true });
+    await fs.rename(themeCssPath(oldName), themeCssPath(newName));
+  } catch (e) {}
+
   try {
     const oldLogDir = path.join(LOGS_DIR, oldName);
     const newLogDir = path.join(LOGS_DIR, newName);
@@ -341,6 +389,7 @@ export async function deleteFolder(folderName: string) {
   await ensureDirs();
   try { await fs.unlink(path.join(FOLDERS_DIR, `${folderName}.json`)); } catch (e) {}
   try { await fs.rm(path.join(LOGS_DIR, folderName), { recursive: true, force: true }); } catch (e) {}
+  try { await fs.unlink(themeCssPath(folderName)); } catch (e) {}
 }
 
 export async function saveUserSettings(settings: any) {

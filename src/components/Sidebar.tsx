@@ -822,41 +822,45 @@ export default function Sidebar({
                   onChange={(e) => setThemeSelection(e.target.value)}
                   className="w-full p-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-indigo-500/50"
                 >
-                  {themes.map(t => (
+                  {(themes.find(t => t.value === themeSelection)
+                    ? themes
+                    : [{ value: themeSelection, label: themeSelection || '(current)' }, ...themes]
+                  ).map(t => (
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
               </div>
 
-              {themeSelection === 'custom' && (
-                <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-semibold text-foreground">Custom CSS</label>
-                    <label className="cursor-pointer text-xs flex items-center gap-1 text-indigo-500 hover:text-indigo-400">
-                      <Upload size={14} /> Load File
-                      <input 
-                        type="file" 
-                        accept=".css" 
-                        className="hidden" 
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          const reader = new FileReader();
-                          reader.onload = (event) => setCustomCss(event.target?.result as string);
-                          reader.readAsText(file);
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <textarea 
-                    value={customCss}
-                    onChange={(e) => setCustomCss(e.target.value)}
-                    placeholder=":root { \n  --background: #000000; \n}"
-                    className="w-full h-48 p-3 bg-background border border-border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500/50 resize-none custom-scrollbar"
-                  />
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-semibold text-foreground">CSS Theme (this folder)</label>
+                  <label className="cursor-pointer text-xs flex items-center gap-1 text-indigo-500 hover:text-indigo-400">
+                    <Upload size={14} /> Load File
+                    <input
+                      type="file"
+                      accept=".css"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (event) => setCustomCss(event.target?.result as string);
+                        reader.readAsText(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
                 </div>
-              )}
+                <textarea
+                  value={customCss}
+                  onChange={(e) => setCustomCss(e.target.value)}
+                  placeholder={`Paste this folder's CSS scheme here. It is injected only while this folder is active.\n\nScoped to the theme name above, e.g.:\n.architect {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n}\n\n...or unscoped (:root { ... } / body { ... }).`}
+                  className="w-full h-48 p-3 bg-background border border-border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500/50 resize-none custom-scrollbar"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Each folder carries its own CSS. Empty = base {`{`}dark/light{`}`} mode only.
+                </p>
+              </div>
               
               <div className="pt-4 border-t border-border mt-4">
                 <h4 className="text-sm font-semibold flex items-center gap-2 text-indigo-500 mb-4 block">

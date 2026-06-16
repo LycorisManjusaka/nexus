@@ -720,8 +720,57 @@ async function runModelSelectorPreflight(args: {
     return null;
   }
 
-  // ── OpenAI-compatible branch (Local / Qwen / DeepSeek / GLM / Grok /
-  //                              Kimi / Cohere / MiniMax) ────────────────
+  // ── Local (LM Studio) branch — TEXT-BASED selection ──────────────────────
+  // LM Studio models are unreliable at forced `tool_choice`/function calling
+  // (same reason Layer-1 uses a text approach): many reject the forced tool
+  // with an HTTP 400, which would make the shared OpenAI-compatible branch
+  // below throw and silently fall back to the original model — so auto-select
+  // never actually worked on a local selector. Instead we ask for a bare
+  // integer index and parse it. No auth, no tools, no tool_choice.
+  if (fam.includes('local')) {
+    const localUrl = `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`;
+    const localSystem =
+      'You are a model selector. Read the criteria and the recent conversation, ' +
+      'then reply with ONLY the integer index of the single most appropriate ' +
+      'option. No words, no punctuation, no explanation — just the number.';
+    const localBody: any = {
+      model: specificModel || 'local-model',
+      messages: [
+        { role: 'system', content: localSystem },
+        { role: 'user', content: `${userMsg}\n\nReply with ONLY the number.` },
+      ],
+      temperature: 0,
+      // Bounded cap: enough headroom for a reasoning model to think then answer,
+      // but never -1 (which would let runaway thinking fill the whole context).
+      max_tokens: 4096,
+      stream: false,
+    };
+    const res = await fetch(localUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(localBody),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Selector Local HTTP ${res.status}: ${errText.slice(0, 300)}`);
+    }
+    const data = await res.json();
+    let text: string = data?.choices?.[0]?.message?.content || '';
+    // Strip <think>…</think> so digits inside the model's reasoning aren't
+    // mistaken for the final answer.
+    text = text.replace(/<think>[\s\S]*?<\/think>/gi, ' ');
+    // Take the LAST in-range integer — the final answer, not a number the model
+    // may have mentioned mid-reasoning.
+    const nums = [...text.matchAll(/\b(\d{1,2})\b/g)].map((m) => m[1]);
+    for (let i = nums.length - 1; i >= 0; i--) {
+      const ans = resolveSelectorAnswer(nums[i], allowed);
+      if (ans) return ans;
+    }
+    return null;
+  }
+
+  // ── OpenAI-compatible branch (Qwen / DeepSeek / GLM / Grok /
+  //                              Kimi / Cohere / MiniMax / OpenAI / MiMo) ──
   const isLocal     = fam.includes('local');
   const isQwen      = fam.includes('qwen');
   const isDeepSeek  = fam.includes('deepseek');

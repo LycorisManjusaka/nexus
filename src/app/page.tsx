@@ -439,11 +439,12 @@ export default function Home() {
       document.head.appendChild(styleTag);
     }
 
-    if (themeName === 'custom' && activeFolder?.settings?.customCss) {
-      styleTag.innerHTML = activeFolder.settings.customCss;
-    } else {
-      styleTag.innerHTML = '';
-    }
+    // Folder-specific CSS scheme: always inject the active folder's own CSS
+    // (its "theme"), regardless of the base theme mode. This replaces the old
+    // globals.css-based named themes — each entity now carries its own CSS.
+    // The theme class above is still applied, so a verbatim scoped block like
+    // `.saku { ... }` works for a folder whose theme value is `saku`.
+    styleTag.innerHTML = activeFolder?.settings?.customCss || '';
   }, [activeFolder, globalSettings.theme]);
 
   return (
