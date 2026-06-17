@@ -247,7 +247,7 @@ async function streamClaudeViaAgentSDK(args: {
               sdk.tool(
                 'read_conversation',
                 'Read the full transcript of one of YOUR past conversations by name. The conversation index in your instructions lists every conversation\'s title and summary; call this to pull a specific past conversation\'s complete contents into context for this turn only (nothing is saved). Conversations marked inactive are private and cannot be read — the tool will refuse them.',
-                { name: z.string().describe('The exact title of the past conversation to read, copied verbatim from the index (the text right after "###"), e.g. "先輩_46". Use the current "<base>_<index>" form, NOT the old "＃" form.') },
+                { name: z.string().describe('The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.') },
                 async (a: { name: string }) => {
                   try {
                     const r = await readConversationByName(folderName, a.name);
@@ -1484,7 +1484,7 @@ export async function POST(req: Request) {
           description: 'Read the full transcript of one of YOUR past conversations by name. The Layer-4 index lists every conversation\'s title and summary; call this to pull a specific past conversation\'s complete contents into context for this turn only (nothing is saved). Conversations marked inactive are private and cannot be read — the tool will refuse them.',
           input_schema: {
             type: 'object',
-            properties: { name: { type: 'string', description: 'The exact title of the past conversation to read, copied verbatim from the index (the text right after "###"), e.g. "先輩_46". Use the current "<base>_<index>" form, NOT the old "＃" form.' } },
+            properties: { name: { type: 'string', description: 'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.' } },
             required: ['name'],
           },
         });
@@ -2141,7 +2141,7 @@ export async function POST(req: Request) {
               parameters: {
                 type: 'OBJECT',
                 properties: {
-                  name: { type: 'STRING', description: 'The exact title of the past conversation to read, copied verbatim from the index (the text right after "###"), e.g. "先輩_46". Use the current "<base>_<index>" form, NOT the old "＃" form.' },
+                  name: { type: 'STRING', description: 'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.' },
                 },
                 required: ['name'],
               },
@@ -2898,7 +2898,7 @@ export async function POST(req: Request) {
             parameters: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'The exact title of the past conversation to read, copied verbatim from the index (the text right after "###"), e.g. "先輩_46". Use the current "<base>_<index>" form, NOT the old "＃" form.' },
+                name: { type: 'string', description: 'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.' },
               },
               required: ['name'],
             },
