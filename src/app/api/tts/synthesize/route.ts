@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import { convertEnglishToKatakana } from '@/lib/ttsEnToKatakana';
 import { speakersJsonPath } from '@/lib/voicechangerPaths';
+import { loadTtsDictPairs, applyTtsDict } from '@/lib/ttsDictionary';
 
 // A segment produces ZERO phonemes — and crashes the OpenJTalk-based engines —
 // when it contains no kana, kanji, or alphanumeric characters. Coeiroink fails
@@ -35,7 +36,12 @@ function stripLeadingPause(text: string): string {
   return (text || '').replace(LEADING_NONSPEAKABLE_RE, '');
 }
 
-async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0): Promise<ArrayBuffer | null> {
+async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = []): Promise<ArrayBuffer | null> {
+    // Per-entity pronunciation dictionary (local_data/tts_dict/<folder>.json):
+    // literal CJK-friendly substring replacement, applied FIRST so an entity can
+    // override any reading (names, jargon) before the generic passes below.
+    text = applyTtsDict(text, dictPairs);
+
     // Replace English words/phrases with Katakana equivalents before synthesis
     // so Voicevox / Coeiroink pronounce them correctly instead of spelling them.
     // Dictionary: local_data/en_katakana_dict.json (user-editable).
@@ -161,14 +167,18 @@ export async function POST(req: Request) {
   try {
     const data = await req.json();
     let buffers: ArrayBuffer[] = [];
-    
+
+    // Load the per-entity pronunciation dictionary once per request (cached by
+    // mtime in the lib). `folderName` is sent by the TTS callers.
+    const dictPairs = loadTtsDictPairs(data.folderName || '');
+
     if (data.segments && Array.isArray(data.segments)) {
       for (const seg of data.segments) {
-        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0);
+        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0, dictPairs);
         if (buf) buffers.push(buf);
       }
     } else {
-       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0);
+       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0, dictPairs);
        if (buf) buffers.push(buf);
     }
     

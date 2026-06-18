@@ -122,6 +122,8 @@ export default function Sidebar({
   
   const [themeModalOpen, setThemeModalOpen] = useState(false);
   const [customCss, setCustomCss] = useState('');
+  const [ttsDict, setTtsDict] = useState('');
+  const [ttsDictError, setTtsDictError] = useState<string | null>(null);
   const [folderVoice, setFolderVoice] = useState({ engine: 0, char_idx: 0, style_idx: 0 });
   const [folderVoicePitch, setFolderVoicePitch] = useState(0.0);
   // Per-folder context-management settings. Moved here from global Preferences
@@ -472,6 +474,10 @@ export default function Sidebar({
                     onClick={(e) => {
                       e.stopPropagation();
                       setCustomCss(activeFolder.settings?.customCss || '');
+                      // Load this entity's TTS pronunciation dictionary file.
+                      setTtsDict(''); setTtsDictError(null);
+                      fetch(`/api/tts-dict?folder=${encodeURIComponent(activeFolder.name)}`)
+                        .then(r => r.json()).then(d => setTtsDict(d.content || '')).catch(() => {});
                       setFolderVoice(activeFolder.settings?.aiVoice || { engine: 0, char_idx: 0, style_idx: 0 });
                       setFolderVoicePitch(activeFolder.settings?.voicePitch ?? 0.0);
                       // Load context-management settings with the same
@@ -854,6 +860,21 @@ export default function Sidebar({
                     <span>Higher</span>
                   </div>
                 </div>
+
+                <div className="mt-4">
+                  <label className="text-xs font-medium text-muted-foreground block mb-1">
+                    TTS Pronunciation Dictionary (JSON)
+                  </label>
+                  <textarea
+                    value={ttsDict}
+                    onChange={(e) => { setTtsDict(e.target.value); if (ttsDictError) setTtsDictError(null); }}
+                    placeholder={`Replace words right before TTS (literal, no spaces needed — good for CJK), e.g.:\n{\n  "GLM": "ジーエルエム",\n  "朔": "さく"\n}`}
+                    className="w-full h-32 p-3 bg-background border border-border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500/50 resize-none custom-scrollbar"
+                  />
+                  {ttsDictError
+                    ? <p className="text-[10px] text-red-500 mt-1">{ttsDictError}</p>
+                    : <p className="text-[10px] text-muted-foreground mt-1">Per-entity. Applied just before synthesis. Saved to <span className="font-mono">local_data/tts_dict/&lt;folder&gt;.json</span>. Empty = none.</p>}
+                </div>
               </div>
 
               {/* Context Management — moved here from global Preferences so
@@ -944,11 +965,30 @@ export default function Sidebar({
               <button 
                 onClick={async () => {
                   if (activeFolder) {
+                    // Validate + persist the per-entity TTS pronunciation dict
+                    // first. A malformed dict blocks the save (and keeps the
+                    // modal open) so it can't silently fail.
+                    const dictText = ttsDict.trim();
+                    if (dictText) {
+                      try {
+                        const o = JSON.parse(dictText);
+                        if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error();
+                      } catch {
+                        setTtsDictError('Must be a JSON object like {"from": "to"}.');
+                        return;
+                      }
+                    }
+                    setTtsDictError(null);
+                    await fetch('/api/tts-dict', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ folder: activeFolder.name, content: ttsDict }),
+                    }).catch(() => {});
                     await fetch('/api/folders', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ 
-                        name: activeFolder.name, 
+                      body: JSON.stringify({
+                        name: activeFolder.name,
                         settings: {
                           ...activeFolder.settings,
                           customCss,

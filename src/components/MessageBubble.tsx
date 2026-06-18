@@ -287,7 +287,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       const res = await fetch('/api/tts/synthesize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ segments: [segment] }),
+        body: JSON.stringify({ segments: [segment], folderName }),
         signal,
       });
       if (!res.ok) { audioSlotsRef.current.set(seq, null); return; }
@@ -722,7 +722,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         const res = await fetch('/api/tts/synthesize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ segments: [sentences[i]] }),
+          body: JSON.stringify({ segments: [sentences[i]], folderName }),
           signal
         });
         if (!res.ok) continue;
