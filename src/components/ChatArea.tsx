@@ -221,6 +221,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // from a message before the latest one — at which point a fresh session is
   // started.
   const [claudeAgentSessionId, setClaudeAgentSessionId] = useState<string | null>(null);
+  // Mirror of the OAuth session id in a ref so request-building reads the
+  // CURRENT value synchronously. setState is async: handleRerun/handleEdit/
+  // handleDelete null the session and then (same tick) trigger a generation;
+  // reading the state var there returns the STALE id, so the backend resumes
+  // the Anthropic session and appends a DUPLICATE user turn (invisible
+  // locally — looks like "you repeated your message"). Always mutate the
+  // session via setAgentSession so ref + state stay in lockstep, and build the
+  // request body from claudeAgentSessionIdRef.current.
+  const claudeAgentSessionIdRef = useRef<string | null>(null);
+  const setAgentSession = (v: string | null) => {
+    claudeAgentSessionIdRef.current = v;
+    setClaudeAgentSessionId(v);
+  };
 
   // ── Claude billing mode (per-conversation) ────────────────────────────────
   // 'api-key' → token-paid API key (pay per token)
@@ -515,7 +528,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAutoModelSelectEnabled(data.autoModelSelectEnabled === true);
         if (typeof data.autoModelSelectCriteria === 'string') setAutoModelSelectCriteria(data.autoModelSelectCriteria);
         if (typeof data.autoModelSelectAllowedModels === 'string') setAutoModelSelectAllowedModels(data.autoModelSelectAllowedModels);
-        setClaudeAgentSessionId(typeof data.claudeAgentSessionId === 'string' ? data.claudeAgentSessionId : null);
+        setAgentSession(typeof data.claudeAgentSessionId === 'string' ? data.claudeAgentSessionId : null);
         if (data.claudeAuthMode === 'oauth') {
           setClaudeAuthMode('oauth');
         } else {
@@ -568,7 +581,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof folderSettings.autoModelSelectAllowedModels === 'string') {
           setAutoModelSelectAllowedModels(folderSettings.autoModelSelectAllowedModels);
         }
-        setClaudeAgentSessionId(null);
+        setAgentSession(null);
         setClaudeAuthMode(pick('claudeAuthMode', 'api-key') as 'api-key' | 'oauth');
         if (typeof folderSettings.toolInstruction === 'string') setToolInstruction(folderSettings.toolInstruction);
         if (typeof folderSettings.toolImageInstruction === 'string') setToolImageInstruction(folderSettings.toolImageInstruction);
@@ -1057,7 +1070,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -1156,7 +1169,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // Claude OAuth path emits this so we can resume the
                 // Anthropic-side session on the next turn.
                 if (typeof data.sessionId === 'string') {
-                  setClaudeAgentSessionId(data.sessionId);
+                  setAgentSession(data.sessionId);
                 }
               } else if (data.type === 'thought') {
                 currentThought += data.content;
@@ -1330,7 +1343,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Rerunning rewinds the timeline. The Anthropic OAuth session (if any)
     // is now out of sync with NEXUS's local history — invalidate so the
     // backend starts a fresh session for the next generation.
-    setClaudeAgentSessionId(null);
+    setAgentSession(null);
     await generateAiResponse(newHistory);
   };
 
@@ -1340,7 +1353,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setMessages(prev => prev.map(m => m.id === id ? { ...m, tokens: newTokens, textTokens: newTokens } : m));
     // Same reasoning as handleRerun — local history diverged from Anthropic's
     // session record, so the next OAuth generation must start fresh.
-    setClaudeAgentSessionId(null);
+    setAgentSession(null);
   };
 
   // Decide whether a message counts as "original" (preserve / confirm before
@@ -1372,7 +1385,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (id === firstOriginalMessageId) setFirstOriginalMessageId(null);
     // Deletion diverges NEXUS history from Anthropic's session record →
     // invalidate the OAuth session for the next generation.
-    setClaudeAgentSessionId(null);
+    setAgentSession(null);
   };
 
   const handleSetFirstOriginal = (id: string) => {
