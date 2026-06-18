@@ -36,6 +36,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   const currentAudioRef2 = React.useRef<HTMLAudioElement | null>(null);
   const abortControllerRef = React.useRef<AbortController | null>(null);
   const hasAutoPlayed = React.useRef(false);
+  // Always-current mirrors of msg.content / msg.streaming. The streaming-TTS
+  // pipeline and the (intentionally) stale-closure auto-play timer read these
+  // refs instead of values captured at an earlier render. Without this, a short
+  // reply that finished streaming before the 300ms auto-play timer fired would
+  // speak only the first sentence (stale content) and then hang forever (the
+  // "done" flag was computed from a stale streaming=true).
+  const msgContentRef = React.useRef(msg.content);
+  const msgStreamingRef = React.useRef(msg.streaming);
+  msgContentRef.current = msg.content;
+  msgStreamingRef.current = msg.streaming;
   // Latest-state mirror so handleTTS/stopTTS/handlePauseResume always see the
   // current ttsState rather than a closure-captured value. Without this, a
   // setTimeout from the auto-play effect can call handleTTS 300ms later with
@@ -79,9 +89,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         // generated — gives VRChat mode immediate first-line audio without
         // waiting for the full response to finish.
         if (ttsStateRef.current === 'idle') {
-          if (ttsDebug) console.debug('[tts] auto-play firing', { id: msg.id, streaming: !!msg.streaming, len: (msg.content || '').length });
-          if (msg.streaming) handleStreamingTTS();
-          else handleTTS();
+          if (ttsDebug) console.debug('[tts] auto-play firing', { id: msg.id, streaming: !!msgStreamingRef.current, len: (msgContentRef.current || '').length });
+          // Always use the streaming pipeline. It now reads live refs, so it
+          // also correctly handles a reply that already finished streaming
+          // before this timer fired (speaks every sentence, then finishes
+          // instead of hanging). Auto-play is only ever an assistant reply in
+          // VRChat mode — a single AI voice — so the per-speaker handleTTS path
+          // isn't needed here.
+          handleStreamingTTS();
         } else if (ttsDebug) {
           console.debug('[tts] auto-play skipped — ttsState not idle', { id: msg.id, state: ttsStateRef.current });
         }
@@ -132,11 +147,22 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   const streamingActiveRef = React.useRef(false);
   const streamingProcessedLenRef = React.useRef(0);
   const streamingDoneRef = React.useRef(false);
-  const audioQueueRef = React.useRef<string[]>([]);
+  // Ordered playback buffer: each synthesized segment is stored under its
+  // DISPATCH sequence number (a url, or null for an empty/skipped segment). The
+  // player only ever consumes nextPlaySeqRef, so segments always play in the
+  // order they were dispatched — never in the order their async synthesis
+  // happened to finish (which made short sentences jump ahead).
+  const audioSlotsRef = React.useRef<Map<number, string | null>>(new Map());
+  const nextDispatchSeqRef = React.useRef(0);
+  const nextPlaySeqRef = React.useRef(0);
   const isCurrentlyPlayingRef = React.useRef(false);
   const synthInFlightCountRef = React.useRef(0);
   const streamingVoiceRef = React.useRef<any>(null);
   const streamingSignalRef = React.useRef<AbortSignal | null>(null);
+  // Context mode: synthesize larger (paragraph / whole-message) blocks so a
+  // context-aware engine (AivisSpeech) can infer emotion from the full text,
+  // instead of one flat sentence at a time. Set per folder voice at TTS start.
+  const streamingContextRef = React.useRef(false);
 
   const takeCompletedFromTail = (text: string): { completed: string; consumed: number } => {
     // Walk every sentence terminator and record the LAST one. The slice up to
@@ -144,6 +170,20 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // that may still be appended to.
     let lastEnd = -1;
     const re = /[。！？\n」]+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      lastEnd = m.index + m[0].length;
+    }
+    if (lastEnd <= 0) return { completed: '', consumed: 0 };
+    return { completed: text.slice(0, lastEnd), consumed: lastEnd };
+  };
+
+  // Context mode: only treat a PARAGRAPH boundary (a blank line) as "complete",
+  // so each synthesized block carries full context. Single-paragraph replies
+  // therefore stream nothing mid-generation and get flushed whole at the end.
+  const takeCompletedParagraphsFromTail = (text: string): { completed: string; consumed: number } => {
+    let lastEnd = -1;
+    const re = /\n[ \t]*\n/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       lastEnd = m.index + m[0].length;
@@ -167,7 +207,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     if (
       streamingDoneRef.current &&
       synthInFlightCountRef.current === 0 &&
-      audioQueueRef.current.length === 0 &&
+      audioSlotsRef.current.size === 0 &&
       !isCurrentlyPlayingRef.current
     ) {
       streamingActiveRef.current = false;
@@ -180,13 +220,23 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
 
   const streamingPlayNext = async (signal: AbortSignal) => {
     if (signal.aborted) return;
-    if (audioQueueRef.current.length === 0) {
+    // Pull the NEXT-IN-ORDER segment. Skip past any empty/skipped slots (null).
+    // If the next slot hasn't synthesized yet, stop and wait — a completing
+    // synthesis will call back in. This guarantees in-order playback.
+    let url: string | null = null;
+    while (audioSlotsRef.current.has(nextPlaySeqRef.current)) {
+      const u = audioSlotsRef.current.get(nextPlaySeqRef.current) ?? null;
+      audioSlotsRef.current.delete(nextPlaySeqRef.current);
+      nextPlaySeqRef.current++;
+      if (u != null) { url = u; break; }
+      // u === null → empty/skipped segment; keep scanning in order.
+    }
+    if (url == null) {
       isCurrentlyPlayingRef.current = false;
       maybeFinishStreaming();
       return;
     }
     isCurrentlyPlayingRef.current = true;
-    const url = audioQueueRef.current.shift()!;
     const audio1 = new Audio(url);
     currentAudioRef.current = audio1;
     if (isVRChatMode && globalSettings?.device1Id && typeof (audio1 as any).setSinkId === 'function') {
@@ -230,7 +280,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     };
   };
 
-  const synthesizeStreamingSegment = async (segment: any, signal: AbortSignal) => {
+  const synthesizeStreamingSegment = async (segment: any, signal: AbortSignal, seq: number) => {
     if (signal.aborted) return;
     synthInFlightCountRef.current++;
     try {
@@ -240,35 +290,40 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         body: JSON.stringify({ segments: [segment] }),
         signal,
       });
-      if (!res.ok) return;
+      if (!res.ok) { audioSlotsRef.current.set(seq, null); return; }
       const blob = await res.blob();
       if (signal.aborted) return;
       // The server returns an empty body (0 bytes) when a segment has no
       // speakable phonemes (symbol/emoji/punctuation-only — it would crash
-      // OpenJTalk/VITS). Queuing an empty blob stalls the playback queue:
-      // new Audio(emptyUrl).play() never fires onended, so isCurrentlyPlaying
-      // stays true and no later segment ever plays. Skip it entirely.
-      if (blob.size === 0) return;
-      const url = URL.createObjectURL(blob);
-      audioQueueRef.current.push(url);
-      if (!isCurrentlyPlayingRef.current && !signal.aborted) {
-        streamingPlayNext(signal);
-      }
+      // OpenJTalk/VITS). Record the slot as a null (skip) so the in-order player
+      // advances past it instead of waiting forever for this sequence number.
+      if (blob.size === 0) { audioSlotsRef.current.set(seq, null); return; }
+      audioSlotsRef.current.set(seq, URL.createObjectURL(blob));
     } catch (e: any) {
-      // Ignore aborts — stopTTS will have cleaned up.
+      // Ignore aborts — stopTTS will have cleaned up. For any other failure,
+      // mark the slot skipped so it doesn't block the playback order.
+      if (!signal.aborted) audioSlotsRef.current.set(seq, null);
     } finally {
       synthInFlightCountRef.current--;
+      // Kick the in-order player if idle. If something is already playing, the
+      // onended chain will pick this up once earlier sequences have played.
+      if (!signal.aborted && !isCurrentlyPlayingRef.current) {
+        streamingPlayNext(signal);
+      }
       maybeFinishStreaming();
     }
   };
 
   const processStreamingTick = (signal: AbortSignal) => {
     if (signal.aborted || !streamingActiveRef.current) return;
-    const fullText = msg.content || '';
+    const fullText = msgContentRef.current || '';
     const isFirstChunk = streamingProcessedLenRef.current === 0;
     const unprocessed = fullText.slice(streamingProcessedLenRef.current);
     if (!unprocessed) return;
-    const { completed, consumed } = takeCompletedFromTail(unprocessed);
+    const ctx = streamingContextRef.current;
+    const { completed, consumed } = ctx
+      ? takeCompletedParagraphsFromTail(unprocessed)
+      : takeCompletedFromTail(unprocessed);
     if (!completed) return;
     streamingProcessedLenRef.current += consumed;
     let textToSpeak = completed;
@@ -279,19 +334,34 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     }
     // Custom regex filter — strip user-defined patterns from spoken text too.
     textToSpeak = applyOutputFilter(textToSpeak, globalSettings);
+    dispatchTtsBlock(textToSpeak, ctx, signal);
+  };
+
+  // Dispatch a span of text for synthesis. In context mode the whole block is a
+  // SINGLE segment (max context for the engine); otherwise it's split per
+  // sentence (lower latency). Each dispatched segment gets the next sequence
+  // number so the ordered player keeps everything in order.
+  const dispatchTtsBlock = (textToSpeak: string, ctx: boolean, signal: AbortSignal) => {
+    if (ctx) {
+      if (isOnlyTimestamps(textToSpeak) || !textToSpeak.trim()) return;
+      const seq = nextDispatchSeqRef.current++;
+      synthesizeStreamingSegment({ text: textToSpeak, ...streamingVoiceRef.current }, signal, seq);
+      return;
+    }
     const sentences = splitIntoSentenceChunks(textToSpeak);
     for (const s of sentences) {
       // Belt-and-suspenders: when a timestamp stack is split across streaming
       // ticks, a later (non-first) chunk can still start with a lone
       // timestamp. Never queue a segment that is only timestamp(s).
       if (isOnlyTimestamps(s)) continue;
-      synthesizeStreamingSegment({ text: s, ...streamingVoiceRef.current }, signal);
+      const seq = nextDispatchSeqRef.current++;
+      synthesizeStreamingSegment({ text: s, ...streamingVoiceRef.current }, signal, seq);
     }
   };
 
   const flushStreamingTail = (signal: AbortSignal) => {
     if (signal.aborted) return;
-    const fullText = msg.content || '';
+    const fullText = msgContentRef.current || '';
     const tail = fullText.slice(streamingProcessedLenRef.current).trim();
     if (!tail) return;
     const isFirstChunk = streamingProcessedLenRef.current === 0;
@@ -301,11 +371,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     }
     textToSpeak = applyOutputFilter(textToSpeak, globalSettings);
     streamingProcessedLenRef.current = fullText.length;
-    const sentences = splitIntoSentenceChunks(textToSpeak);
-    for (const s of sentences) {
-      if (isOnlyTimestamps(s)) continue;
-      synthesizeStreamingSegment({ text: s, ...streamingVoiceRef.current }, signal);
-    }
+    // The tail is the final, un-terminated remainder — in context mode this is
+    // typically the whole (single-paragraph) message, sent as one block.
+    dispatchTtsBlock(textToSpeak, streamingContextRef.current, signal);
   };
 
   const handleStreamingTTS = async () => {
@@ -336,20 +404,26 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       speed: voice.speed || 1.0,
       pitch,
     };
+    // Context mode: explicit per-voice flag, else default ON for AivisSpeech
+    // (engine 2) since that's where larger chunks pay off.
+    streamingContextRef.current = voice.contextChunks ?? (voice.engine === 2);
 
     streamingActiveRef.current = true;
-    streamingDoneRef.current = !msg.streaming;
+    streamingDoneRef.current = !msgStreamingRef.current;
     streamingProcessedLenRef.current = 0;
-    audioQueueRef.current = [];
+    audioSlotsRef.current = new Map();
+    nextDispatchSeqRef.current = 0;
+    nextPlaySeqRef.current = 0;
     isCurrentlyPlayingRef.current = false;
     synthInFlightCountRef.current = 0;
 
     // First tick — speak whatever is already complete.
     processStreamingTick(ac.signal);
 
-    // If the message wasn't streaming when TTS was triggered (manual click on
-    // a finished message), flush the tail right now and finish.
-    if (!msg.streaming) {
+    // If the message wasn't streaming when TTS was triggered (manual click on a
+    // finished message, OR an auto-play timer that fired after the stream ended),
+    // flush the tail right now and finish.
+    if (!msgStreamingRef.current) {
       flushStreamingTail(ac.signal);
       streamingDoneRef.current = true;
       maybeFinishStreaming();
@@ -408,10 +482,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // Streaming TTS cleanup — drop the queue and revoke any pending blob URLs
     // so the streaming pipeline doesn't keep playing after Stop.
     if (streamingActiveRef.current) {
-      for (const url of audioQueueRef.current) {
-        try { URL.revokeObjectURL(url); } catch {}
+      for (const url of audioSlotsRef.current.values()) {
+        if (url) { try { URL.revokeObjectURL(url); } catch {} }
       }
-      audioQueueRef.current = [];
+      audioSlotsRef.current = new Map();
+      nextDispatchSeqRef.current = 0;
+      nextPlaySeqRef.current = 0;
       streamingActiveRef.current = false;
       streamingDoneRef.current = false;
       streamingProcessedLenRef.current = 0;

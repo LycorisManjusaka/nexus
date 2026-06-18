@@ -92,6 +92,36 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       if (!synthRes.ok) throw new Error('Coeiroink synthesis failed');
       
       return await synthRes.arrayBuffer();
+    }
+    else if (engine === 2) {
+      // AivisSpeech (Style-Bert-VITS2). VOICEVOX-compatible HTTP API on :10101.
+      // Same audio_query → synthesis flow as Voicevox, but speakers come from the
+      // engine's /speakers endpoint. Expressiveness/emotion is INFERRED from the
+      // text by Style-Bert-VITS2's BERT analysis (no instruction needed) — which
+      // is why larger, whole-message chunks read more naturally (see the
+      // "context mode" chunking in MessageBubble).
+      const base = process.env.NEXUS_AIVISSPEECH_URL || 'http://127.0.0.1:10101';
+      const spkRes = await fetch(`${base}/speakers`);
+      if (!spkRes.ok) throw new Error('Failed to fetch AivisSpeech speakers');
+      const spkData = await spkRes.json();
+      const char = spkData[char_idx];
+      if (!char) throw new Error('AivisSpeech character not found');
+      const style = char.styles[style_idx] || char.styles[0];
+      const speakerId = style.id;
+
+      const queryRes = await fetch(`${base}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, { method: 'POST' });
+      if (!queryRes.ok) throw new Error('AivisSpeech audio_query failed');
+      const queryJson = await queryRes.json();
+
+      queryJson.speedScale = speed;
+      queryJson.pitchScale = pitch;
+
+      const synthRes = await fetch(`${base}/synthesis?speaker=${speakerId}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryJson)
+      });
+      if (!synthRes.ok) throw new Error('AivisSpeech synthesis failed');
+
+      return await synthRes.arrayBuffer();
     } else {
         throw new Error('Invalid engine');
     }

@@ -22,7 +22,18 @@ export async function GET() {
       console.error('Failed to fetch Coeiroink speakers', e);
     }
 
-    return NextResponse.json({ voicevox, coeiroink });
+    let aivisspeech = [];
+    try {
+      const base = process.env.NEXUS_AIVISSPEECH_URL || 'http://127.0.0.1:10101';
+      const aRes = await fetch(`${base}/speakers`);
+      if (aRes.ok) {
+        aivisspeech = await aRes.json();
+      }
+    } catch(e) {
+      console.error('Failed to fetch AivisSpeech speakers', e);
+    }
+
+    return NextResponse.json({ voicevox, coeiroink, aivisspeech });
   } catch(e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

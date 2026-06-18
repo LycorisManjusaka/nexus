@@ -5,6 +5,11 @@ interface VoiceSettings {
   char_idx: number;
   style_idx: number;
   speed?: number;
+  // When true, the streaming-TTS pipeline synthesizes larger blocks (whole
+  // message / paragraph) instead of sentence-by-sentence, so context-aware
+  // engines (AivisSpeech / Style-Bert-VITS2) can infer emotion from the full
+  // text. Slightly higher latency, much more natural delivery.
+  contextChunks?: boolean;
 }
 
 interface VoiceSelectorProps {
@@ -13,19 +18,19 @@ interface VoiceSelectorProps {
 }
 
 export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
-  const [speakers, setSpeakers] = useState<{voicevox: any[], coeiroink: any[]}>({ voicevox: [], coeiroink: [] });
+  const [speakers, setSpeakers] = useState<{voicevox: any[], coeiroink: any[], aivisspeech: any[]}>({ voicevox: [], coeiroink: [], aivisspeech: [] });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetch('/api/tts/speakers').then(r => r.json()).then(data => {
-      setSpeakers(data);
+      setSpeakers({ voicevox: data.voicevox || [], coeiroink: data.coeiroink || [], aivisspeech: data.aivisspeech || [] });
       setLoading(false);
     });
   }, []);
 
   if (loading) return <div className="text-xs text-muted-foreground">Loading voices...</div>;
 
-  const currentEngineData = value.engine === 0 ? speakers.voicevox : speakers.coeiroink;
+  const currentEngineData = value.engine === 0 ? speakers.voicevox : value.engine === 2 ? speakers.aivisspeech : speakers.coeiroink;
   const currentChar = currentEngineData?.[value.char_idx];
   const styles = currentChar?.styles || [];
 
@@ -40,8 +45,24 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
         >
           <option value={0}>Voicevox</option>
           <option value={1}>Coeiroink</option>
+          <option value={2}>AivisSpeech (context-aware)</option>
         </select>
+        {value.engine === 2 && speakers.aivisspeech.length === 0 && (
+          <p className="text-[10px] text-amber-500 mt-1">
+            AivisSpeech engine not detected on <span className="font-mono">:10101</span> — start the AivisSpeech app, then reopen this panel.
+          </p>
+        )}
       </div>
+
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={value.contextChunks ?? (value.engine === 2)}
+          onChange={e => onChange({ ...value, contextChunks: e.target.checked })}
+          className="w-3.5 h-3.5 accent-indigo-500"
+        />
+        <span className="text-[11px] text-muted-foreground">Context mode — synthesize whole-message chunks (recommended for AivisSpeech)</span>
+      </label>
 
       <div>
         <div className="flex items-center justify-between mb-1">

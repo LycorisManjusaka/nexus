@@ -286,6 +286,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const initialMount = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const handleSendRef = useRef<any>(null);
+  // Imperative handle to the input box (set/get its text) + the last VRChat
+  // transcript we pushed into it, so the poll only overwrites on real changes.
+  const inputApiRef = useRef<any>(null);
+  const lastVrchatLogRef = useRef<string>('');
 
   // Per-folder "use summaries instead of 4th layer" toggle. Simple gate:
   //   ON  → the live conversation-summaries index is injected at send time
@@ -751,6 +755,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const handleSend = async (text: string, attachments: any[]) => {
     if (!text.trim() && attachments.length === 0) return;
 
+    // VRChat mode: the transcript just committed to this message is now "spent",
+    // so clear the source files (kohai/ear) and reset the poll baseline. The
+    // next poll will only repopulate the input once new speech arrives.
+    if (vrchatMode) {
+      lastVrchatLogRef.current = '';
+      fetch('/api/vrchat/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear: true }),
+      }).catch(() => {});
+    }
+
     // Generate title if first message
     if (messages.length === 0 && text.trim()) {
       const newTitle = text.slice(0, 30) + (text.length > 30 ? '...' : '');
@@ -828,7 +844,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'vrchat_capture') {
-          const text = data.log || '（添付画像）';
+          // Text comes from the input box (kept live by the logs poll), NOT from
+          // the image event anymore. Snapshot it now, then clear the input +
+          // source files so the photo is sent with exactly what was visible.
+          const text = (inputApiRef.current?.getText?.() || '').trim() || '（添付画像）';
           const isClaude = localAiName?.toLowerCase().includes('claude');
           const targetMaxDim = isClaude ? 1568 : 3072;
 
@@ -895,6 +914,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             tokens
           };
           setVrchatQueue(prev => [...prev, { text, attachment }]);
+          // The snapshot is committed to the queue — clear the visible input and
+          // the source transcript so it isn't re-read/re-sent.
+          inputApiRef.current?.setText?.('');
+          lastVrchatLogRef.current = '';
+          fetch('/api/vrchat/logs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clear: true }),
+          }).catch(() => {});
         }
       } catch (e) {
         console.error("VRChat SSE Parse Error:", e);
@@ -905,6 +933,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       es.close();
     };
   }, [vrchatMode, globalSettings?.vrchatPath, localAiName]);
+
+  // VRChat live transcript → input box.
+  // Polls the (non-destructive) merged kohai/ear transcript and OVERWRITES the
+  // input whenever it changes, so the sorted "[Name] text" is visible before
+  // sending. We only overwrite on a real, non-empty change, so manual edits
+  // survive until new speech arrives, and a post-send clear doesn't wipe typing.
+  useEffect(() => {
+    if (!vrchatMode) { lastVrchatLogRef.current = ''; return; }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch('/api/vrchat/logs');
+        if (!res.ok) return;
+        const { text } = await res.json();
+        if (cancelled) return;
+        const t = (text || '').trim();
+        if (t && t !== lastVrchatLogRef.current) {
+          lastVrchatLogRef.current = t;
+          inputApiRef.current?.setText?.(t);
+        }
+      } catch (e) { /* transient — ignore */ }
+    };
+    tick();
+    const id = setInterval(tick, 1200);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [vrchatMode]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -1863,7 +1917,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </div>
         <div className="p-4 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-4xl mx-auto">
-            <InputArea onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={loading} aiName={localAiName} />
+            <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={loading} aiName={localAiName} vrchatMode={vrchatMode} />
           </div>
         </div>
       </div>

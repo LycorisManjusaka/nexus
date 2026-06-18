@@ -4,12 +4,19 @@ import React, { useState, useRef } from 'react';
 import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 
-export default function InputArea({ onSend, onStop, isGenerating, disabled, aiName }: any) {
+const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode }: any, ref: any) {
   const [text, setText] = useState('');
   const [userName, setUserName] = useState('');
   const [attachments, setAttachments] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Expose imperative setText/getText so the parent (ChatArea) can drive the
+  // input from the live VRChat transcript poll and read it back when sending.
+  React.useImperativeHandle(ref, () => ({
+    setText: (t: string) => setText(t ?? ''),
+    getText: () => text,
+  }), [text]);
 
   // Auto-grow the textarea whenever text changes. Resets to 'auto' first so
   // the element can also shrink (e.g. after send clears the input).
@@ -255,7 +262,9 @@ export default function InputArea({ onSend, onStop, isGenerating, disabled, aiNa
     const trimmedName = userName.trim();
     // Skip the prefix when the name is empty OR the literal fallback "User" —
     // anonymous/default messages don't need a meaningless tag burning tokens.
-    if (trimmedName !== '' && trimmedName !== 'User') {
+    // In VRChat mode the text is already a "[Name] ..." transcript, so don't
+    // wrap it in another [userName] tag.
+    if (!vrchatMode && trimmedName !== '' && trimmedName !== 'User') {
       finalText = `[${trimmedName}]\n${text}`.trim();
     }
     onSend(finalText, attachments);
@@ -373,4 +382,6 @@ export default function InputArea({ onSend, onStop, isGenerating, disabled, aiNa
       </div>
     </div>
   );
-}
+});
+
+export default InputArea;
