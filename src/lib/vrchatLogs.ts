@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { kohaiPath, earLogPath, speakersJsonPath } from './voicechangerPaths';
+import { resolveCharaByIds, getCharaFallback } from './charaResolver';
 
 // ───────────────────────────────────────────────────────────────────────────
 // VRChat speech-log merge.
@@ -54,7 +55,10 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
   if (fs.existsSync(kohaiFile)) {
     try {
       const content = fs.readFileSync(kohaiFile, 'utf-8');
-      let currentSpeaker = 'つよ';
+      // Speaker/style default to the character_map.json fallback, not a
+      // hardcoded name, so a kohai.txt with no leading header still labels
+      // consistently with the rest of the app.
+      let currentSpeaker = getCharaFallback();
       let currentStyleId = '0';
       let currentStyleName = 'ノーマル';
 
@@ -69,11 +73,9 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
           currentStyleId = headerMatch[3];
           currentStyleName = getStyleName(engine, charId, currentStyleId);
 
-          if (engine === '1' && charId === '2') currentSpeaker = 'つよ';
-          else if (engine === '0' && charId === '24') currentSpeaker = 'ふわふわ';
-          else if (engine === '0' && charId === '4') currentSpeaker = '美鈴';
-          else if (engine === '0' && charId === '15') currentSpeaker = 'おじいちゃん';
-          else currentSpeaker = 'つよ';
+          // Single source of truth: local_data/character_map.json (editable
+          // without touching code), instead of an out-of-sync hardcoded table.
+          currentSpeaker = resolveCharaByIds(engine, charId);
           return;
         }
 

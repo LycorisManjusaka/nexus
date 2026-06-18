@@ -57,3 +57,25 @@ export function resolveCurrentChara(): { name: string; humanLabel: string } {
   const rule = charMap.rules.find(r => r.engine === engineNum && r.charId === charId);
   return { name: rule?.name || fallback, humanLabel };
 }
+
+/**
+ * Maps a raw (engineNum, charId) pair — as found in voicechanger's kohai.txt
+ * "[engine-char-style]" header lines — to a display name, using
+ * local_data/character_map.json. Falls back to the map's `fallback` when no
+ * rule matches. This is the shared lookup so VRChat speaker labeling stays in
+ * sync with the same file that drives Live Session / message author labels,
+ * instead of a separate hardcoded table.
+ */
+export function resolveCharaByIds(engineNum: string, charId: string): string {
+  const charMap = readJson<CharMap>(CHAR_MAP_PATH, DEFAULT_MAP);
+  const rule = charMap.rules.find(
+    (r) => r.engine === String(engineNum) && r.charId === String(charId)
+  );
+  return rule?.name || charMap.fallback || 'User';
+}
+
+/** The configured fallback speaker name from character_map.json. */
+export function getCharaFallback(): string {
+  const charMap = readJson<CharMap>(CHAR_MAP_PATH, DEFAULT_MAP);
+  return charMap.fallback || 'User';
+}
