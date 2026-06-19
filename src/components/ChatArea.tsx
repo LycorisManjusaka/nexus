@@ -11,6 +11,7 @@ import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripLeadingTimestamps } from '@/lib/timestampStrip';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { injectLayer4Index } from '@/lib/layer4';
+import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
 import LiveSession from './LiveSession';
 
 const DEFAULT_CREATIVITY_INSTRUCTION =
@@ -148,6 +149,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Tool names are unified across both API-key and OAuth modes — same five
   // verbs in both, so the same prompt instruction works either way.
   const [toolUseEnabled, setToolUseEnabled] = useState(false);
+  // Per-Entity agent capability toggles (apply to every provider/model).
+  //   agentFullSystemAccess: file tools reach the whole PC (vs workspace-only).
+  //   agentDangerousTools:    enables Delete (all paths) + shell (OAuth path).
+  const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(false);
+  const [agentDangerousTools, setAgentDangerousTools] = useState(false);
+  // Per-Entity overrides for NEXUS's hidden instruction strings (tool
+  // descriptions, path rules, read_conversation + web tool text). Keyed by the
+  // ids in agentInstructions.ts; empty/absent → English default.
+  const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>({});
   const [toolInstruction, setToolInstruction] = useState(
     "You have access to a private file workspace as your persistent memory. Available tools:\n" +
     "  • Read(path) — read a text or image file. Image files (.png/.jpg/etc.) come back as inline image data you can see.\n" +
@@ -510,6 +520,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setTitle(data.title || 'New Conversation');
         setSystemPrompt(data.systemPrompt !== undefined ? data.systemPrompt : defaultSystemPrompt);
         setToolUseEnabled(data.toolUseEnabled === true);
+        setAgentFullSystemAccess(data.agentFullSystemAccess === true);
+        setAgentDangerousTools(data.agentDangerousTools === true);
+        setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
         if (typeof data.toolInstruction === 'string') setToolInstruction(data.toolInstruction);
         if (typeof data.toolImageInstruction === 'string') setToolImageInstruction(data.toolImageInstruction);
         setDateTimeVisibility(data.dateTimeVisibility || 'none');
@@ -563,6 +576,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setTitle('New Conversation');
         setSystemPrompt(defaultSystemPrompt);
         setToolUseEnabled(pick('toolUseEnabled', false));
+        setAgentFullSystemAccess(pick('agentFullSystemAccess', false));
+        setAgentDangerousTools(pick('agentDangerousTools', false));
+        setInstructionOverrides(pick('instructionOverrides', {}));
         setDateTimeVisibility(defaultDateTimeVisibility || 'none');
         setVrchatMode(defaultVrchatMode || false);
         setVrchatRule(defaultVrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]");
@@ -1070,7 +1086,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -1452,6 +1468,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       messages,
       systemPrompt,
       toolUseEnabled,
+      agentFullSystemAccess,
+      agentDangerousTools,
+      instructionOverrides,
       toolInstruction,
       toolImageInstruction,
       modelParams,
@@ -2065,6 +2084,63 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     {/* Image Read Instruction UI removed — the default hint
                         text still drives Gemini's image-read flow under the
                         hood, but it's no longer user-editable. */}
+
+                    {/* ── Per-Entity capability toggles ─────────────────── */}
+                    <div className="mt-4 ml-6 p-3 rounded-xl border border-amber-500/40 bg-amber-500/5 space-y-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={agentFullSystemAccess}
+                          onChange={(e) => setAgentFullSystemAccess(e.target.checked)}
+                          className="accent-amber-500"
+                        />
+                        <span className="text-sm font-semibold text-foreground">⚠ Full PC access (leave the workspace sandbox)</span>
+                      </label>
+                      <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
+                        OFF (default): file tools are confined to this entity's <span className="font-mono">agent_workspaces/{folderName}/</span> folder.
+                        ON: the entity can read/write/delete <strong>anywhere on this PC</strong> using absolute paths
+                        (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.
+                      </p>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={agentDangerousTools}
+                          onChange={(e) => setAgentDangerousTools(e.target.checked)}
+                          className="accent-red-500"
+                        />
+                        <span className="text-sm font-semibold text-foreground">⚠ Dangerous tools (Delete everywhere · Shell for OAuth-Claude)</span>
+                      </label>
+                      <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
+                        Adds a <span className="font-mono">Delete</span> tool for every model, and enables the
+                        <span className="font-mono"> Bash</span> shell for OAuth-Claude (which is also how it can delete/run anything Claude Code can).
+                        Scope still follows the Full-PC-access toggle above.
+                      </p>
+                    </div>
+
+                    {/* ── Hidden instruction overrides (per-Entity) ─────── */}
+                    <details className="mt-4 ml-6 group">
+                      <summary className="text-sm font-semibold text-foreground cursor-pointer select-none">
+                        Hidden instruction overrides ({Object.values(instructionOverrides).filter((v) => typeof v === 'string' && v.trim()).length} customized)
+                      </summary>
+                      <p className="text-xs text-muted-foreground mt-1 mb-3 leading-relaxed">
+                        NEXUS injects these English tool/path instructions into the model's context. Strict English wording can break a character in deep interaction — override any of them here (e.g. translate, soften, or rephrase in-character). Leave a box empty to keep the English default shown as its placeholder.
+                      </p>
+                      <div className="space-y-3">
+                        {AGENT_INSTRUCTION_LABELS.map(({ key, label }) => (
+                          <div key={key}>
+                            <label className="text-xs font-semibold text-foreground mb-1 block">{label}</label>
+                            <textarea
+                              value={instructionOverrides[key] || ''}
+                              placeholder={DEFAULT_AGENT_INSTRUCTIONS[key]}
+                              onChange={(e) =>
+                                setInstructionOverrides((prev) => ({ ...prev, [key]: e.target.value }))
+                              }
+                              className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   </>
                 )}
               </div>
@@ -2948,6 +3024,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       // Identity tab
                       systemPrompt,
                       toolUseEnabled,
+                      agentFullSystemAccess,
+                      agentDangerousTools,
+                      instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,
                       // Senses tab

@@ -117,6 +117,30 @@ async function resolveWorkspacePathSafe(folderName: string, relPath: string): Pr
   }
 }
 
+// ── Capability options ──────────────────────────────────────────────────────
+// Per-entity (per-folder) toggles, threaded from the chat route:
+//   - fullAccess: when true, the entity's file tools are NOT sandboxed to its
+//     workspace. Absolute paths are used verbatim (anywhere on the PC) and
+//     relative paths are anchored to the workspace for convenience. When false
+//     (default) every path is contained to agent_workspaces/<Entity>/ exactly
+//     as before.
+// This is the mechanism behind "full PC access is optional per Entity".
+export interface WsOpts { fullAccess?: boolean }
+
+// Unified resolver used by every workspace fs helper. Sandboxed by default;
+// unrestricted when fullAccess is on.
+async function resolvePathForAccess(folderName: string, relPath: string, opts?: WsOpts): Promise<string | null> {
+  if (opts?.fullAccess) {
+    const cleaned = String(relPath || '');
+    if (!cleaned) return null;
+    // Absolute → use as-is (whole filesystem). Relative → anchor to workspace.
+    if (path.isAbsolute(cleaned)) return path.resolve(cleaned);
+    const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
+    return path.resolve(root, cleaned);
+  }
+  return resolveWorkspacePathSafe(folderName, relPath);
+}
+
 export async function listWorkspaceFiles(folderName: string): Promise<string[]> {
   const root = await ensureWorkspace(folderName);
   const out: string[] = [];
@@ -135,8 +159,8 @@ export async function listWorkspaceFiles(folderName: string): Promise<string[]> 
   return out.sort();
 }
 
-export async function readWorkspaceFile(folderName: string, relPath: string): Promise<string | null> {
-  const target = await resolveWorkspacePathSafe(folderName, relPath);
+export async function readWorkspaceFile(folderName: string, relPath: string, opts?: WsOpts): Promise<string | null> {
+  const target = await resolvePathForAccess(folderName, relPath, opts);
   if (!target) return null;
   try { return await fs.readFile(target, 'utf-8'); }
   catch { return null; }
@@ -157,8 +181,8 @@ export function isImageFilename(p: string): boolean {
 export function imageMimeFor(p: string): string {
   return IMAGE_MIME_BY_EXT[path.extname(p).toLowerCase()] || 'application/octet-stream';
 }
-export async function readWorkspaceFileBinary(folderName: string, relPath: string): Promise<{ data: Buffer; mimeType: string } | null> {
-  const target = await resolveWorkspacePathSafe(folderName, relPath);
+export async function readWorkspaceFileBinary(folderName: string, relPath: string, opts?: WsOpts): Promise<{ data: Buffer; mimeType: string } | null> {
+  const target = await resolvePathForAccess(folderName, relPath, opts);
   if (!target) return null;
   try {
     const data = await fs.readFile(target);
@@ -166,8 +190,8 @@ export async function readWorkspaceFileBinary(folderName: string, relPath: strin
   } catch { return null; }
 }
 
-export async function writeWorkspaceFile(folderName: string, relPath: string, content: string): Promise<{ ok: boolean; existed: boolean; error?: string }> {
-  const target = await resolveWorkspacePathSafe(folderName, relPath);
+export async function writeWorkspaceFile(folderName: string, relPath: string, content: string, opts?: WsOpts): Promise<{ ok: boolean; existed: boolean; error?: string }> {
+  const target = await resolvePathForAccess(folderName, relPath, opts);
   if (!target) return { ok: false, existed: false, error: 'Path escapes workspace' };
   let existed = false;
   try { await fs.access(target); existed = true; } catch {}
@@ -187,8 +211,8 @@ export async function writeWorkspaceFile(folderName: string, relPath: string, co
 // of `oldString` with `newString` and rejects if oldString is missing or
 // occurs multiple times (forces the model to disambiguate by widening the
 // match instead of silently replacing the wrong instance).
-export async function editWorkspaceFile(folderName: string, relPath: string, oldString: string, newString: string): Promise<{ ok: boolean; error?: string }> {
-  const target = await resolveWorkspacePathSafe(folderName, relPath);
+export async function editWorkspaceFile(folderName: string, relPath: string, oldString: string, newString: string, opts?: WsOpts): Promise<{ ok: boolean; error?: string }> {
+  const target = await resolvePathForAccess(folderName, relPath, opts);
   if (!target) return { ok: false, error: 'Path escapes workspace' };
   let original: string;
   try { original = await fs.readFile(target, 'utf-8'); }
@@ -207,6 +231,28 @@ export async function editWorkspaceFile(folderName: string, relPath: string, old
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'edit failed' };
+  }
+}
+
+// Delete a file (a "dangerous" tool, gated per-Entity by agentAllowDelete).
+// Sandboxed by default; with fullAccess it can delete anywhere by absolute
+// path. Refuses directories (use with care) and missing files report cleanly.
+export async function deleteWorkspaceFile(folderName: string, relPath: string, opts?: WsOpts): Promise<{ ok: boolean; error?: string }> {
+  const target = await resolvePathForAccess(folderName, relPath, opts);
+  if (!target) return { ok: false, error: 'Path escapes workspace' };
+  try {
+    const st = await fs.stat(target);
+    if (st.isDirectory()) {
+      return { ok: false, error: 'Target is a directory; this tool only deletes files' };
+    }
+  } catch (e: any) {
+    return { ok: false, error: 'File not found' };
+  }
+  try {
+    await fs.unlink(target);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'delete failed' };
   }
 }
 

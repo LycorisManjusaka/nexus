@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles } from '@/lib/fsStorage';
+import pathModule from 'path';
+import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable } from '@/lib/modelVision';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
+import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { GoogleGenAI } from '@google/genai';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -181,8 +183,12 @@ async function streamClaudeViaAgentSDK(args: {
   toolUseEnabled: boolean;    // gate for enabling Claude Code's file tools
   senseEvents: any[];         // newly-generated descriptions to flush at start
   enableReadConversation: boolean; // expose the read_conversation MCP tool
+  agentFullSystemAccess: boolean;  // per-Entity: file tools reach the whole PC
+  agentDangerousTools: boolean;    // per-Entity: enable shell (Bash → delete/exec)
+  instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides } = args;
+  const I = resolveAgentInstructions(instructionOverrides);
 
   // Build the user content blocks for the LATEST user message only. Earlier
   // history lives on Anthropic's side under the resumed session ID.
@@ -246,8 +252,8 @@ async function streamClaudeViaAgentSDK(args: {
             tools: [
               sdk.tool(
                 'read_conversation',
-                'Read the full transcript of one of YOUR past conversations by name. The conversation index in your instructions lists every conversation\'s title and summary; call this to pull a specific past conversation\'s complete contents into context for this turn only (nothing is saved). Conversations marked inactive are private and cannot be read — the tool will refuse them.',
-                { name: z.string().describe('The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.') },
+                I.readConversationDesc,
+                { name: z.string().describe(I.readConversationNameParam) },
                 async (a: { name: string }) => {
                   try {
                     const r = await readConversationByName(folderName, a.name);
@@ -305,11 +311,16 @@ async function streamClaudeViaAgentSDK(args: {
         // file tools but keep dangerous ones (shell, subagent) permanently
         // disabled regardless of the toggle — there's no UI expectation that
         // turning on Tool Use grants shell access.
-        const dangerousAlwaysDisabled = [
-          'Bash', 'BashOutput', 'KillShell',
-          'Task', 'TodoWrite', 'NotebookEdit',
-          'SlashCommand', 'Skill',
-        ];
+        // Shell family (Bash/BashOutput/KillShell) = "dangerous": it grants
+        // arbitrary command execution, which on this path is how the entity
+        // deletes files and does anything else Claude Code can. Gated per-Entity
+        // by agentDangerousTools. Task/subagent + workflow tools stay off (the
+        // SDK doesn't drive subagents reliably here, per the OAuth notes).
+        const shellTools = ['Bash', 'BashOutput', 'KillShell'];
+        const alwaysOffTools = ['Task', 'TodoWrite', 'NotebookEdit', 'SlashCommand', 'Skill'];
+        const dangerousAlwaysDisabled = agentDangerousTools
+          ? alwaysOffTools
+          : [...shellTools, ...alwaysOffTools];
         // Web search/fetch follow the SAME "Enable Web Search" checkbox the
         // API-key Claude path uses (`enableClaudeWebSearch`). Claude Code's
         // built-in WebSearch/WebFetch tools work under the OAuth subscription,
@@ -323,6 +334,34 @@ async function streamClaudeViaAgentSDK(args: {
           ? []
           : ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
         const disallowedTools = [...dangerousAlwaysDisabled, ...webToolsDisabledByToggle, ...fileToolsDisabledByToggle];
+
+        // Workspace boundary enforcement. `bypassPermissions` (used previously)
+        // skips ALL permission AND directory checks, so cwd/additionalDirectories
+        // never actually sandboxed OAuth-Claude — it could always read the whole
+        // PC. Instead we run in the normal permission mode and supply a
+        // canUseTool callback that programmatically allows every tool but DENIES
+        // any file-path argument that escapes the workspace, unless this Entity
+        // has Full PC access. (Bash, when enabled via dangerous tools, runs with
+        // cwd=workspace but a shell can still navigate out — that's inherent to
+        // granting shell, and is called out in the UI.)
+        const sandboxRoot = pathModule.resolve(workspaceDir);
+        const withinSandbox = (val: string): boolean => {
+          const abs = pathModule.isAbsolute(val) ? pathModule.resolve(val) : pathModule.resolve(sandboxRoot, val);
+          return abs === sandboxRoot || abs.startsWith(sandboxRoot + pathModule.sep);
+        };
+        const canUseTool = async (_toolName: string, input: Record<string, unknown>) => {
+          if (agentFullSystemAccess) return { behavior: 'allow', updatedInput: input } as any;
+          for (const field of ['file_path', 'path', 'notebook_path']) {
+            const v = (input as any)?.[field];
+            if (typeof v === 'string' && v && !withinSandbox(v)) {
+              return {
+                behavior: 'deny',
+                message: `Blocked: "${v}" is outside your workspace. Full PC access is OFF for this entity — use a path inside your workspace.`,
+              } as any;
+            }
+          }
+          return { behavior: 'allow', updatedInput: input } as any;
+        };
 
         const queryOptions: any = {
           // env passes CLAUDE_CODE_OAUTH_TOKEN to the spawned Claude Code
@@ -342,7 +381,11 @@ async function streamClaudeViaAgentSDK(args: {
           // Claude Code refuses paths outside cwd unless they're explicitly
           // listed in `additionalDirectories` (we leave that empty).
           cwd: workspaceDir,
-          additionalDirectories: [],
+          // Sandbox scope. Default: only the entity's workspace (additional dirs
+          // empty → Claude Code refuses paths outside cwd). With per-Entity full
+          // system access ON: grant the whole drive that holds the workspace so
+          // the entity can read/write anywhere on the PC.
+          additionalDirectories: agentFullSystemAccess ? [pathModule.parse(workspaceDir).root] : [],
           // Without this, the SDK only yields final `assistant` messages
           // (one per turn, with the complete content). With it, the SDK
           // additionally yields `stream_event` messages carrying the raw
@@ -360,8 +403,14 @@ async function streamClaudeViaAgentSDK(args: {
           // Don't load CLAUDE.md from project/user — keeps NEXUS sessions
           // isolated from whatever's in the calling shell's working directory.
           settingSources: [],
-          // No permission prompting (we've already restricted tools by name).
-          permissionMode: 'bypassPermissions',
+          // Normal permission mode + canUseTool callback (above): this is what
+          // makes the workspace sandbox real. bypassPermissions would skip the
+          // callback entirely and leak the whole filesystem. canUseTool answers
+          // every permission request programmatically (allow within sandbox /
+          // anywhere when Full PC access is on; deny escapes), so there is still
+          // no interactive prompt to hang the headless stream.
+          permissionMode: 'default',
+          canUseTool,
         };
 
         let capturedSessionId: string | null = null;
@@ -907,6 +956,17 @@ export async function POST(req: Request) {
       folderName = 'Default',
       systemPrompt = "You are a helpful AI assistant.",
       toolUseEnabled = false,
+      // ── Per-Entity agent capability toggles (apply to ALL providers) ──────
+      // agentFullSystemAccess: file tools reach the whole PC (absolute paths),
+      //   instead of being sandboxed to agent_workspaces/<Entity>/.
+      // agentDangerousTools: enables the Delete tool everywhere, and (OAuth
+      //   path only) the Bash/shell family.
+      agentFullSystemAccess = false,
+      agentDangerousTools = false,
+      // Per-Entity overrides for NEXUS's hidden/injected instruction strings
+      // (tool descriptions, path rules, read_conversation + web tool text).
+      // Empty/missing keys fall back to the English defaults.
+      instructionOverrides = {},
       toolInstruction = '',
       toolImageInstruction = '',
       modelParams = { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' },
@@ -975,6 +1035,17 @@ export async function POST(req: Request) {
       enableReadConversation = false,
     } = await req.json();
     const keys = await loadKeys();
+
+    // Per-Entity path-scope hints baked into the workspace tool descriptions so
+    // the model knows whether absolute paths are allowed. Without this, the
+    // descriptions kept saying "never use absolute paths" even with Full PC
+    // access ON, so non-OAuth models never tried to reach outside their
+    // workspace (the fs layer would have allowed it).
+    // Resolve all hidden instruction strings (defaults overlaid with this
+    // Entity's per-folder overrides). Used to build every tool description below.
+    const I = resolveAgentInstructions(instructionOverrides);
+    const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
+    const pathRule = agentFullSystemAccess ? I.pathRuleFull : I.pathRuleSandbox;
 
     // ── Auto-Model-Select preflight ─────────────────────────────────────────
     // Runs BEFORE the provider flags are computed so the resolved model drives
@@ -1321,6 +1392,9 @@ export async function POST(req: Request) {
           senseEvents,
           toolUseEnabled,
           enableReadConversation,
+          agentFullSystemAccess,
+          agentDangerousTools,
+          instructionOverrides,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -1481,10 +1555,10 @@ export async function POST(req: Request) {
       if (enableReadConversation) {
         claudeTools.push({
           name: 'read_conversation',
-          description: 'Read the full transcript of one of YOUR past conversations by name. The Layer-4 index lists every conversation\'s title and summary; call this to pull a specific past conversation\'s complete contents into context for this turn only (nothing is saved). Conversations marked inactive are private and cannot be read — the tool will refuse them.',
+          description: I.readConversationDesc,
           input_schema: {
             type: 'object',
-            properties: { name: { type: 'string', description: 'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.' } },
+            properties: { name: { type: 'string', description: I.readConversationNameParam } },
             required: ['name'],
           },
         });
@@ -1496,20 +1570,20 @@ export async function POST(req: Request) {
         // and refuse paths escaping it (symlink-checked).
         claudeTools.push({
           name: 'Read',
-          description: 'Read a file from your private workspace. Text files return as a string; image files (.png/.jpg/.jpeg/.gif/.webp/.bmp) return as inline image data you can see. Paths are relative to your workspace root; never use ".." or absolute paths.',
+          description: `${I.toolReadDesc} ${pathRule}`,
           input_schema: {
             type: 'object',
-            properties: { path: { type: 'string', description: 'Relative path within the workspace' } },
+            properties: { path: { type: 'string', description: pathDesc } },
             required: ['path'],
           },
         });
         claudeTools.push({
           name: 'Write',
-          description: 'Create or overwrite a text file in your private workspace. Paths are relative; parent directories are created automatically. Replaces the entire file — use Edit for partial updates.',
+          description: I.toolWriteDesc,
           input_schema: {
             type: 'object',
             properties: {
-              path: { type: 'string', description: 'Relative path within the workspace' },
+              path: { type: 'string', description: pathDesc },
               content: { type: 'string', description: 'Full file contents to write' },
             },
             required: ['path', 'content'],
@@ -1517,11 +1591,11 @@ export async function POST(req: Request) {
         });
         claudeTools.push({
           name: 'Edit',
-          description: 'Surgically replace one occurrence of `old_string` with `new_string` in an existing file. Fails if old_string is missing or matches multiple times — widen the match if that happens. Use Edit instead of Write when changing a small portion of a large file (cheaper, less risk of clobbering).',
+          description: I.toolEditDesc,
           input_schema: {
             type: 'object',
             properties: {
-              path: { type: 'string', description: 'Relative path within the workspace' },
+              path: { type: 'string', description: pathDesc },
               old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' },
               new_string: { type: 'string', description: 'Text to replace it with.' },
             },
@@ -1530,7 +1604,7 @@ export async function POST(req: Request) {
         });
         claudeTools.push({
           name: 'Glob',
-          description: 'List files in your workspace whose path matches a glob pattern. Patterns use `*` (any chars within one segment), `**` (any chars including slashes), and `?` (single char). Examples: `*.md`, `memories/*.txt`, `**/*.json`.',
+          description: I.toolGlobDesc,
           input_schema: {
             type: 'object',
             properties: { pattern: { type: 'string', description: 'Glob pattern. Use `**` to match all files.' } },
@@ -1539,7 +1613,7 @@ export async function POST(req: Request) {
         });
         claudeTools.push({
           name: 'Grep',
-          description: 'Search file contents in your workspace for a regex. Returns `{path, line, text}` for each match. Use the optional `file_pattern` to narrow which files are searched (same glob syntax as Glob).',
+          description: I.toolGrepDesc,
           input_schema: {
             type: 'object',
             properties: {
@@ -1550,6 +1624,17 @@ export async function POST(req: Request) {
             required: ['pattern'],
           },
         });
+        if (agentDangerousTools) {
+          claudeTools.push({
+            name: 'Delete',
+            description: I.toolDeleteDesc,
+            input_schema: {
+              type: 'object',
+              properties: { path: { type: 'string', description: 'Path of the file to delete.' } },
+              required: ['path'],
+            },
+          });
+        }
       }
       if (claudeTools.length) claudeParams.tools = claudeTools;
 
@@ -1827,7 +1912,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'read_conversation']);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'read_conversation']);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // Turn finished. If it was cut off at the token cap (thinking +
@@ -1859,7 +1944,7 @@ export async function POST(req: Request) {
                   if (tu.name === 'Read') {
                     const p = String(tu.input?.path || '');
                     if (isImageFilename(p)) {
-                      const bin = await readWorkspaceFileBinary(folderName, p);
+                      const bin = await readWorkspaceFileBinary(folderName, p, { fullAccess: agentFullSystemAccess });
                       if (!bin) {
                         resultContent = `Error: image not found or path outside workspace: ${p}`;
                       } else {
@@ -1884,7 +1969,7 @@ export async function POST(req: Request) {
                         };
                       }
                     } else {
-                      const text = await readWorkspaceFile(folderName, p);
+                      const text = await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
                       if (text == null) {
                         resultContent = `Error: file not found or path outside workspace: ${p}`;
                       } else {
@@ -1907,7 +1992,7 @@ export async function POST(req: Request) {
                   } else if (tu.name === 'Write') {
                     const p = String(tu.input?.path || '');
                     const c = String(tu.input?.content ?? '');
-                    const wr = await writeWorkspaceFile(folderName, p, c);
+                    const wr = await writeWorkspaceFile(folderName, p, c, { fullAccess: agentFullSystemAccess });
                     if (!wr.ok) {
                       resultContent = `Error: ${wr.error || 'write failed'}`;
                     } else {
@@ -1930,12 +2015,12 @@ export async function POST(req: Request) {
                     const p = String(tu.input?.path || '');
                     const oldS = String(tu.input?.old_string ?? '');
                     const newS = String(tu.input?.new_string ?? '');
-                    const ed = await editWorkspaceFile(folderName, p, oldS, newS);
+                    const ed = await editWorkspaceFile(folderName, p, oldS, newS, { fullAccess: agentFullSystemAccess });
                     if (!ed.ok) {
                       resultContent = `Error: ${ed.error || 'edit failed'}`;
                     } else {
                       // Re-read so the UI attachment reflects the post-edit state.
-                      const after = (await readWorkspaceFile(folderName, p)) || '';
+                      const after = (await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess })) || '';
                       resultContent = `OK: edited ${p} (replaced ${oldS.length} chars with ${newS.length} chars).`;
                       attachmentEvent = {
                         type: 'file_attachment',
@@ -1969,6 +2054,10 @@ export async function POST(req: Request) {
                     } else {
                       resultContent = gr.matches.map(m => `${m.path}:${m.line}: ${m.text}`).join('\n');
                     }
+                  } else if (tu.name === 'Delete') {
+                    const p = String(tu.input?.path || '');
+                    const del = await deleteWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
+                    resultContent = del.ok ? `OK: deleted ${p}.` : `Error: ${del.error || 'delete failed'}`;
                   } else if (tu.name === 'read_conversation') {
                     // Pull a past conversation by name for this turn only.
                     // Inactive ("non-public") conversations are refused inside
@@ -2071,22 +2160,22 @@ export async function POST(req: Request) {
           functionDeclarations: [
             {
               name: 'Read',
-              description: 'Read a file from your private workspace. Text files return as a string; image files (.png/.jpg/.jpeg/.gif/.webp/.bmp) return as inline image data you can see. Paths are relative to your workspace root; never use ".." or absolute paths.',
+              description: `${I.toolReadDesc} ${pathRule}`,
               parameters: {
                 type: 'OBJECT',
                 properties: {
-                  path: { type: 'STRING', description: 'Relative path within the workspace' },
+                  path: { type: 'STRING', description: pathDesc },
                 },
                 required: ['path'],
               },
             },
             {
               name: 'Write',
-              description: 'Create or overwrite a text file in your private workspace. Parent directories are created automatically. Use Edit for partial updates.',
+              description: I.toolWriteDesc,
               parameters: {
                 type: 'OBJECT',
                 properties: {
-                  path: { type: 'STRING', description: 'Relative path within the workspace' },
+                  path: { type: 'STRING', description: pathDesc },
                   content: { type: 'STRING', description: 'Full file contents to write' },
                 },
                 required: ['path', 'content'],
@@ -2094,11 +2183,11 @@ export async function POST(req: Request) {
             },
             {
               name: 'Edit',
-              description: 'Surgically replace one occurrence of old_string with new_string in an existing file. Fails if old_string is missing or matches multiple times — widen the match in that case.',
+              description: I.toolEditDesc,
               parameters: {
                 type: 'OBJECT',
                 properties: {
-                  path: { type: 'STRING', description: 'Relative path within the workspace' },
+                  path: { type: 'STRING', description: pathDesc },
                   old_string: { type: 'STRING', description: 'Text to find. Must occur exactly once.' },
                   new_string: { type: 'STRING', description: 'Text to replace it with.' },
                 },
@@ -2107,7 +2196,7 @@ export async function POST(req: Request) {
             },
             {
               name: 'Glob',
-              description: 'List files matching a glob pattern. `*`=segment wildcard, `**`=cross-segment, `?`=single char. Examples: `*.md`, `memories/*.txt`, `**/*.json`.',
+              description: I.toolGlobDesc,
               parameters: {
                 type: 'OBJECT',
                 properties: {
@@ -2118,7 +2207,7 @@ export async function POST(req: Request) {
             },
             {
               name: 'Grep',
-              description: 'Regex search across file contents. Returns matching lines as path:line:text. Use file_pattern to narrow which files are searched.',
+              description: I.toolGrepDesc,
               parameters: {
                 type: 'OBJECT',
                 properties: {
@@ -2137,11 +2226,11 @@ export async function POST(req: Request) {
           functionDeclarations: [
             {
               name: 'read_conversation',
-              description: 'Read the full transcript of one of YOUR past conversations by name. The Layer-4 index lists every conversation\'s title and summary; call this to pull a specific past conversation\'s complete contents into context for this turn only (nothing is saved). Conversations marked inactive are private and cannot be read — the tool will refuse them.',
+              description: I.readConversationDesc,
               parameters: {
                 type: 'OBJECT',
                 properties: {
-                  name: { type: 'STRING', description: 'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.' },
+                  name: { type: 'STRING', description: I.readConversationNameParam },
                 },
                 required: ['name'],
               },
@@ -2410,7 +2499,7 @@ export async function POST(req: Request) {
                     if (fc.name === 'Read') {
                       const p = String(fc.args?.path || '');
                       if (isImageFilename(p)) {
-                        const bin = await readWorkspaceFileBinary(folderName, p);
+                        const bin = await readWorkspaceFileBinary(folderName, p, { fullAccess: agentFullSystemAccess });
                         if (!bin) {
                           result = { error: `image not found or path outside workspace: ${p}` };
                         } else {
@@ -2447,7 +2536,7 @@ export async function POST(req: Request) {
                           };
                         }
                       } else {
-                        const text = await readWorkspaceFile(folderName, p);
+                        const text = await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
                         if (text == null) {
                           result = { error: `file not found or path outside workspace: ${p}` };
                         } else {
@@ -2470,7 +2559,7 @@ export async function POST(req: Request) {
                     } else if (fc.name === 'Write') {
                       const p = String(fc.args?.path || '');
                       const c = String(fc.args?.content ?? '');
-                      const wr = await writeWorkspaceFile(folderName, p, c);
+                      const wr = await writeWorkspaceFile(folderName, p, c, { fullAccess: agentFullSystemAccess });
                       if (!wr.ok) {
                         result = { error: wr.error || 'write failed' };
                       } else {
@@ -2493,11 +2582,11 @@ export async function POST(req: Request) {
                       const p = String(fc.args?.path || '');
                       const oldS = String(fc.args?.old_string ?? '');
                       const newS = String(fc.args?.new_string ?? '');
-                      const ed = await editWorkspaceFile(folderName, p, oldS, newS);
+                      const ed = await editWorkspaceFile(folderName, p, oldS, newS, { fullAccess: agentFullSystemAccess });
                       if (!ed.ok) {
                         result = { error: ed.error || 'edit failed' };
                       } else {
-                        const after = (await readWorkspaceFile(folderName, p)) || '';
+                        const after = (await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess })) || '';
                         result = { ok: true, bytes_replaced: oldS.length, bytes_inserted: newS.length };
                         attachmentEvent = {
                           type: 'file_attachment',
@@ -2775,10 +2864,10 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'Read',
-            description: 'Read a text file from your private workspace and return its contents. Paths are relative to your workspace root; never use ".." or absolute paths.',
+            description: `${I.toolReadDesc} ${pathRule}`,
             parameters: {
               type: 'object',
-              properties: { path: { type: 'string', description: 'Relative path within the workspace' } },
+              properties: { path: { type: 'string', description: pathDesc } },
               required: ['path'],
             },
           },
@@ -2787,11 +2876,11 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'Write',
-            description: 'Create or overwrite a text file in your private workspace. Use Edit for partial updates.',
+            description: I.toolWriteDesc,
             parameters: {
               type: 'object',
               properties: {
-                path: { type: 'string', description: 'Relative path within the workspace' },
+                path: { type: 'string', description: pathDesc },
                 content: { type: 'string', description: 'Full file contents to write' },
               },
               required: ['path', 'content'],
@@ -2802,11 +2891,11 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'Edit',
-            description: 'Surgically replace one occurrence of old_string with new_string in an existing file. Fails if old_string is missing or matches multiple times — widen the match if that happens.',
+            description: I.toolEditDesc,
             parameters: {
               type: 'object',
               properties: {
-                path: { type: 'string', description: 'Relative path within the workspace' },
+                path: { type: 'string', description: pathDesc },
                 old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' },
                 new_string: { type: 'string', description: 'Text to replace it with.' },
               },
@@ -2818,7 +2907,7 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'Glob',
-            description: 'List files matching a glob pattern. `*`=segment wildcard, `**`=cross-segment, `?`=single char. Examples: `*.md`, `memories/*.txt`, `**/*.json`.',
+            description: I.toolGlobDesc,
             parameters: {
               type: 'object',
               properties: { pattern: { type: 'string', description: 'Glob pattern. Use `**` to match all files.' } },
@@ -2830,7 +2919,7 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'Grep',
-            description: 'Regex search across file contents. Returns matching lines as path:line:text. Use file_pattern to narrow which files are searched.',
+            description: I.toolGrepDesc,
             parameters: {
               type: 'object',
               properties: {
@@ -2842,6 +2931,20 @@ export async function POST(req: Request) {
             },
           },
         });
+        if (agentDangerousTools) {
+          localTools.push({
+            type: 'function',
+            function: {
+              name: 'Delete',
+              description: I.toolDeleteDesc,
+              parameters: {
+                type: 'object',
+                properties: { path: { type: 'string', description: 'Path of the file to delete.' } },
+                required: ['path'],
+              },
+            },
+          });
+        }
       }
 
       // ── Universal NEXUS web tools ───────────────────────────────────────────
@@ -2859,7 +2962,7 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'web_search',
-            description: 'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
+            description: I.webSearchDesc,
             parameters: {
               type: 'object',
               properties: {
@@ -2873,7 +2976,7 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'web_fetch',
-            description: 'Open ONE specific URL and return its readable text content (HTML stripped). Use this to actually read a page — either a URL the user gave you, or one returned by web_search. Only http/https public URLs; internal/localhost addresses are blocked.',
+            description: I.webFetchDesc,
             parameters: {
               type: 'object',
               properties: {
@@ -2894,11 +2997,11 @@ export async function POST(req: Request) {
           type: 'function',
           function: {
             name: 'read_conversation',
-            description: 'Read the full transcript of one of YOUR past conversations by name. Use this when a summary in your memory index is not enough and you need the exact details of an earlier conversation. The name must match a conversation title you can see in the summaries index. Conversations marked inactive are private and cannot be read.',
+            description: I.readConversationDesc,
             parameters: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.' },
+                name: { type: 'string', description: I.readConversationNameParam },
               },
               required: ['name'],
             },
@@ -3517,7 +3620,7 @@ export async function POST(req: Request) {
                     if (tc.name === 'Read') {
                       const p = String(parsed.path || '');
                       if (isImageFilename(p)) {
-                        const bin = await readWorkspaceFileBinary(folderName, p);
+                        const bin = await readWorkspaceFileBinary(folderName, p, { fullAccess: agentFullSystemAccess });
                         if (!bin) {
                           resultText = `Error: image not found or path outside workspace: ${p}`;
                         } else if (useEyes) {
@@ -3567,7 +3670,7 @@ export async function POST(req: Request) {
                           };
                         }
                       } else {
-                        const text = await readWorkspaceFile(folderName, p);
+                        const text = await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
                         if (text == null) {
                           resultText = `Error: file not found or path outside workspace: ${p}`;
                         } else {
@@ -3586,7 +3689,7 @@ export async function POST(req: Request) {
                     } else if (tc.name === 'Write') {
                       const p = String(parsed.path || '');
                       const c = String(parsed.content ?? '');
-                      const wr = await writeWorkspaceFile(folderName, p, c);
+                      const wr = await writeWorkspaceFile(folderName, p, c, { fullAccess: agentFullSystemAccess });
                       if (!wr.ok) {
                         resultText = `Error: ${wr.error || 'write failed'}`;
                       } else {
@@ -3605,11 +3708,11 @@ export async function POST(req: Request) {
                       const p = String(parsed.path || '');
                       const oldS = String(parsed.old_string ?? '');
                       const newS = String(parsed.new_string ?? '');
-                      const ed = await editWorkspaceFile(folderName, p, oldS, newS);
+                      const ed = await editWorkspaceFile(folderName, p, oldS, newS, { fullAccess: agentFullSystemAccess });
                       if (!ed.ok) {
                         resultText = `Error: ${ed.error || 'edit failed'}`;
                       } else {
-                        const after = (await readWorkspaceFile(folderName, p)) || '';
+                        const after = (await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess })) || '';
                         resultText = `OK: edited ${p} (replaced ${oldS.length} chars with ${newS.length} chars).`;
                         attachmentEvent = {
                           type: 'file_attachment',
@@ -3639,6 +3742,10 @@ export async function POST(req: Request) {
                       } else {
                         resultText = gr.matches.map(m => `${m.path}:${m.line}: ${m.text}`).join('\n');
                       }
+                    } else if (tc.name === 'Delete') {
+                      const p = String(parsed.path || '');
+                      const del = await deleteWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
+                      resultText = del.ok ? `OK: deleted ${p}.` : `Error: ${del.error || 'delete failed'}`;
                     } else if (tc.name === 'web_search') {
                       // Universal NEXUS web search (DuckDuckGo, keyless). Runs
                       // here on the server; results are fed back to the model AND
