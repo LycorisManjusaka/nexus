@@ -309,6 +309,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [convoLoadingTotal, setConvoLoadingTotal] = useState<number>(0);
   const [convoIsLoading, setConvoIsLoading] = useState<boolean>(false);
   const convoLoadAbortRef = useRef<AbortController | null>(null);
+  // Set true by the conversation-load effect right before it applies the loaded
+  // state. The auto-save effect consumes it to skip the one POST that the load
+  // would otherwise trigger — that POST stamps a fresh updatedAt (→ file mtime)
+  // and rewrites the JSON on disk merely from OPENING a conversation, which
+  // needlessly churns bytes that rclone/Mercurial then have to re-sync. With
+  // this flag, updatedAt only advances when the user actually changes something.
+  const skipNextAutoSaveRef = useRef(false);
   const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
   const [systemTokens, setSystemTokens] = useState(0);
   // Token count for the tool instruction when tool-use is enabled, otherwise 0.
@@ -528,6 +535,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         return;
       }
       if (data) {
+        // Opening a conversation must not bump updatedAt. Applying the loaded
+        // state below re-fires the auto-save effect; this flag makes that one
+        // run skip its POST so the file's mtime/contents stay untouched.
+        skipNextAutoSaveRef.current = true;
         const loadedMessages = (data.messages || []).map((m: any) => ({ ...m, autoPlay: false }));
         setMessages(loadedMessages);
         setTitle(data.title || 'New Conversation');
@@ -651,17 +662,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   //
   // When loading flips back to false, this effect re-runs once and persists the
   // full final state. Token totals below are still recalculated on every change.
+  //
+  // CRITICAL: this effect deliberately does NOT depend on systemTokens or
+  // attachmentInstructionTokens. Those are display-only counters that are
+  // resolved ASYNCHRONOUSLY by the tokenizer effects (fetchSysTokens /
+  // fetchAttTokens) shortly after a conversation loads. If they were deps of
+  // the save, opening a conversation would cascade: load applies state → save
+  // skipped via the flag → tokenizer resolves → systemTokens changes → save
+  // fires AGAIN (flag already spent) → POST → fresh updatedAt purely from
+  // viewing. They live in the separate token-totals effect below instead.
   useEffect(() => {
-    // Skip this whole effect WHILE a reply is streaming. Each streamed frame
-    // updates `messages`, which previously made this effect recompute every
-    // message's tokens and fire two setStates (totalTokens/conversationTokens)
-    // PER FRAME. That per-frame setState churn — amplified by fast tool-driven
-    // GLM streams (read_conversation) — is what tripped React's "Maximum update
-    // depth" guard. `loading` is in this effect's deps, so the moment streaming
-    // finishes (loading → false) the effect runs once and refreshes the token
-    // counts + autosave. (Live token growth during streaming is intentionally
-    // dropped; the bar now jumps to the final value when the reply completes.)
+    // Skip the disk-save POST WHILE a reply is streaming (loading === true).
+    // During streaming every SSE frame updates `messages`; without this guard a
+    // full multi-MB POST would fire per frame, piling up against Chrome's
+    // 6-connection cap and starving the tokenizer/voices/TTS fetches. When
+    // loading flips back to false this effect runs once and persists the final
+    // state.
     if (loading) return;
+
+    // Skip the single POST triggered by a conversation load. Opening a convo
+    // applies the on-disk state in one batched render, which fires this effect
+    // exactly once; without this guard that fire would re-write the file with a
+    // fresh updatedAt, churning bytes for rclone/Mercurial purely from viewing.
+    // The async token-counter cascade that previously caused a SECOND fire no
+    // longer reaches this effect (it lives in the token-totals effect below), so
+    // consuming the flag on this one fire is sufficient — genuine later edits
+    // find the flag already cleared and save normally.
+    const skipSave = skipNextAutoSaveRef.current;
+    skipNextAutoSaveRef.current = false;
+    if (skipSave) return;
 
     if (messages.length > 0) {
       const cleanMessages = messages.map(m => {
@@ -679,8 +708,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         })
       });
     }
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
-    // Update tokens dynamically based on exclusions
+  // Token totals for the context bar (display only — never persisted). Split
+  // out from the save effect so the async tokenizer counters (systemTokens /
+  // attachmentInstructionTokens) can update the bar WITHOUT triggering a
+  // disk-save / updatedAt bump. Skipped during streaming to avoid per-frame
+  // churn (the bar jumps to the final value when the reply completes).
+  useEffect(() => {
+    if (loading) return;
     let total = 0;
     let convoTotal = 0;
     messages.forEach(m => {
@@ -702,7 +738,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     });
     setTotalTokens(total + systemTokens + attachmentInstructionTokens);
     setConversationTokens(convoTotal);
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, systemTokens, attachmentInstructionTokens, loading]);
+  }, [messages, saveThinkingToLog, systemTokens, attachmentInstructionTokens, loading]);
 
   // Per-message tokens, split so the progress bar can show attachments as
   // their own layer and so the auto-trim threshold can ignore attachments.
