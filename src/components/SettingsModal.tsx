@@ -254,7 +254,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">z.ai</span> → API Console. Required for the GLM family (GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air).
+                Get one at <span className="font-mono">z.ai</span> → API Console. Required for the GLM family (GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air).
               </div>
             </div>
             <div>

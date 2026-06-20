@@ -308,11 +308,11 @@ export default function SystemPromptUpdater({
   const [selectedAgentType, setSelectedAgentType] = useState<string>('');
   const userPickedTypeRef = useRef(false);
 
-  // Updater model override — default ON (GLM-5.1). Independent of the
+  // Updater model override — default ON (GLM-5.2). Independent of the
   // conversation's own model.
   const [forceGlmForUpdates, setForceGlmForUpdates] = useState<boolean>(true);
   const effectiveAiName = forceGlmForUpdates ? 'GLM' : aiName;
-  const effectiveSpecificModel = forceGlmForUpdates ? 'glm-5.1' : specificModel;
+  const effectiveSpecificModel = forceGlmForUpdates ? 'glm-5.2' : specificModel;
 
   // Summary writer model override — default MiMo V2.5 Pro.
   const [forceMimoForSummary, setForceMimoForSummary] = useState<boolean>(true);
@@ -1160,7 +1160,7 @@ export default function SystemPromptUpdater({
               onChange={(e) => setForceGlmForUpdates(e.target.checked)}
               className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
             />
-            <span className="font-medium">Force GLM-5.1 for updater (ignore conversation model)</span>
+            <span className="font-medium">Force GLM-5.2 for updater (ignore conversation model)</span>
             <span className="text-[10px] text-muted-foreground">
               Default ON. When OFF, agent runs use <span className="font-mono">{aiName} / {specificModel}</span>.
             </span>

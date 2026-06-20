@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import MessageBubble from './MessageBubble';
 import InputArea from './InputArea';
 import { motion } from 'framer-motion';
@@ -64,6 +64,7 @@ DeepSeek | deepseek-chat                | off | DeepSeek Chat
 DeepSeek | deepseek-v3.2                | on  | DeepSeek V3.2 (hybrid reasoning)
 
 # ── GLM (Z.AI) ─────────────────────────────────────────────────────
+GLM      | glm-5.2                      | on  | GLM-5.2 Thinking
 GLM      | glm-5.1                      | on  | GLM-5.1 Thinking
 GLM      | glm-5                        | on  | GLM-5 Thinking
 GLM      | glm-5-turbo                  | off | GLM-5 Turbo (fast)
@@ -180,7 +181,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'none');
   const [claudeThinking, setClaudeThinking] = useState(false);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
-  const [vrchatMode, setVrchatMode] = useState(defaultVrchatMode || false);
+  // Initialize OFF (not the folder default). The real value is always set by
+  // the conversation-load effect below — data.vrchatMode for an existing convo,
+  // or the folder default for a new one. Seeding this with `defaultVrchatMode`
+  // caused a transient VRChat-ON window on every reload (for folders whose
+  // default is ON, e.g. 先輩): before the saved value loaded, the live-transcript
+  // poll fired once and injected the kohai/ear_log "[Name] text" merge into the
+  // input box even though the conversation actually has VRChat OFF.
+  const [vrchatMode, setVrchatMode] = useState(false);
   const [vrchatRule, setVrchatRule] = useState(defaultVrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]");
   const [localAiName, setLocalAiName] = useState(aiName);
   const [firstOriginalMessageId, setFirstOriginalMessageId] = useState<string | null>(null);
@@ -221,7 +229,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
     "Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking\n" +
     "Claude | claude-haiku-4-5-20251001 | off | Claude Haiku 4.5\n" +
-    "GLM    | glm-5.1          | on | GLM-5.1 Thinking\n" +
+    "GLM    | glm-5.2          | on | GLM-5.2 Thinking\n" +
     "GLM    | glm-4.6v-flash   | off | GLM-4.6V Flash"
   );
   // ── Claude OAuth session ID (per-conversation) ────────────────────────────
@@ -397,12 +405,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const isAudioPlaying = Object.values(audioPlayingStates).some(v => v);
   const [vrchatQueue, setVrchatQueue] = useState<{ text: string, attachment: any }[]>([]);
 
-  const handleAudioStateChange = (msgId: string, isPlaying: boolean) => {
+  // Stable identity (useCallback): this is passed to every MessageBubble and
+  // used inside one of its effects' dependency arrays. As a fresh closure each
+  // render it made that child effect re-run on every render — exactly the
+  // "dependency changes on every render" pattern React warns about. The state
+  // update itself is already guarded (returns prev when unchanged).
+  const handleAudioStateChange = useCallback((msgId: string, isPlaying: boolean) => {
     setAudioPlayingStates(prev => {
       if (prev[msgId] === isPlaying) return prev;
       return { ...prev, [msgId]: isPlaying };
     });
-  };
+  }, []);
 
   const fetchTokensForText = async (text: string, modelName: string) => {
     try {
@@ -639,7 +652,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // When loading flips back to false, this effect re-runs once and persists the
   // full final state. Token totals below are still recalculated on every change.
   useEffect(() => {
-    if (messages.length > 0 && !loading) {
+    // Skip this whole effect WHILE a reply is streaming. Each streamed frame
+    // updates `messages`, which previously made this effect recompute every
+    // message's tokens and fire two setStates (totalTokens/conversationTokens)
+    // PER FRAME. That per-frame setState churn — amplified by fast tool-driven
+    // GLM streams (read_conversation) — is what tripped React's "Maximum update
+    // depth" guard. `loading` is in this effect's deps, so the moment streaming
+    // finishes (loading → false) the effect runs once and refreshes the token
+    // counts + autosave. (Live token growth during streaming is intentionally
+    // dropped; the bar now jumps to the final value when the reply completes.)
+    if (loading) return;
+
+    if (messages.length > 0) {
       const cleanMessages = messages.map(m => {
         // Strip ephemeral runtime flags (autoPlay = TTS auto-trigger,
         // streaming = "generation still in progress") before persisting.
@@ -1141,6 +1165,46 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // attached to the assistant message.
       const toolAttachments: any[] = [];
 
+      // Throttle the streaming UI update to ONE render per animation frame.
+      // GLM-5.2 with tool calls (e.g. read_conversation) flushes the buffered
+      // post-tool re-stream as many SSE chunks in a tight microtask burst;
+      // calling setMessages once per chunk there was still fast enough to trip
+      // React's "Maximum update depth exceeded" guard (the per-line coalescing
+      // wasn't enough at this granularity). Coalescing to ~1 render/frame
+      // decouples render rate from chunk rate and fixes it for any provider.
+      // flushStreamingMessage() reads the latest accumulated values (closure
+      // over currentText/currentThought/toolAttachments/etc.).
+      let rafId: number | null = null;
+      const flushStreamingMessage = () => {
+        rafId = null;
+        setMessages(prev => prev.map(m =>
+          m.id === msgId
+            ? {
+                ...m,
+                content: currentText,
+                thoughtProcess: currentThought || undefined,
+                continuationCount: continuationCount || undefined,
+                attachments: toolAttachments.length ? [...toolAttachments] : (m.attachments || []),
+                ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
+                ...(chosenModelFamily ? {
+                  modelFamily: chosenModelFamily,
+                  modelSpecific: chosenModelSpecific,
+                  modelThinking: chosenModelThinking,
+                  modelLabel: chosenModelLabel,
+                } : {}),
+              }
+            : m
+        ));
+      };
+      const scheduleStreamingFlush = () => {
+        if (rafId !== null) return; // a frame is already queued — coalesce into it
+        if (typeof requestAnimationFrame !== 'undefined') {
+          rafId = requestAnimationFrame(flushStreamingMessage);
+        } else {
+          rafId = setTimeout(flushStreamingMessage, 16) as unknown as number;
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1261,30 +1325,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           }
         }
 
-        // Coalesce all the events parsed from THIS chunk into a single
-        // setMessages. Calling it once per `data:` line (inside the for-loop
-        // above) fired dozens of synchronous state updates on fast/bursty
-        // streams, tripping React's "Maximum update depth exceeded" guard and
-        // forcing a full message-list re-render per line. One update per chunk
-        // is both correct and far cheaper.
-        setMessages(prev => prev.map(m =>
-          m.id === msgId
-            ? {
-                ...m,
-                content: currentText,
-                thoughtProcess: currentThought || undefined,
-                continuationCount: continuationCount || undefined,
-                attachments: toolAttachments.length ? [...toolAttachments] : (m.attachments || []),
-                ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
-                ...(chosenModelFamily ? {
-                  modelFamily: chosenModelFamily,
-                  modelSpecific: chosenModelSpecific,
-                  modelThinking: chosenModelThinking,
-                  modelLabel: chosenModelLabel,
-                } : {}),
-              }
-            : m
-        ));
+        // Render at most once per animation frame (see scheduleStreamingFlush).
+        // Accumulated text/thought/attachments are already updated above; this
+        // just asks for a coalesced repaint.
+        scheduleStreamingFlush();
+      }
+
+      // Stream loop finished — cancel any queued frame so it can't fire AFTER
+      // the authoritative finalize update below (which carries streaming:false
+      // + token counts). A late flush would otherwise revert those.
+      if (rafId !== null) {
+        if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId);
+        else clearTimeout(rafId as unknown as ReturnType<typeof setTimeout>);
+        rafId = null;
       }
 
       // Finalize the message NOW with everything except the precise token
@@ -2369,7 +2422,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       } else if (newAiName === 'DeepSeek' && !specificModel?.startsWith('deepseek')) {
                         setSpecificModel('deepseek-v4-flash');
                       } else if (newAiName === 'GLM' && !specificModel?.startsWith('glm')) {
-                        setSpecificModel('glm-4.7');
+                        setSpecificModel('glm-5.2');
                       } else if (newAiName === 'Grok' && !specificModel?.startsWith('grok')) {
                         setSpecificModel('grok-4.3');
                       } else if (newAiName === 'Kimi' && !specificModel?.toLowerCase().includes('kimi')) {
@@ -2621,7 +2674,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="glm-5.1">GLM-5.1 (latest)</option>
+                      <option value="glm-5.2">GLM-5.2 (latest)</option>
+                      <option value="glm-5.1">GLM-5.1</option>
                       <option value="glm-5">GLM-5</option>
                       <option value="glm-5-turbo">GLM-5 Turbo (fast)</option>
                       <option value="glm-5v-turbo">GLM-5V Turbo (fast multimodal)</option>
