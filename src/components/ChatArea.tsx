@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import MessageBubble from './MessageBubble';
+import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock } from 'lucide-react';
@@ -155,6 +156,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   //   agentDangerousTools:    enables Delete (all paths) + shell (OAuth path).
   const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(false);
   const [agentDangerousTools, setAgentDangerousTools] = useState(false);
+  // Optional interactive "ask the user a multiple-choice question" tool. When
+  // ON, the model can pause a turn to ask and wait for the user's selection.
+  const [askUserEnabled, setAskUserEnabled] = useState(false);
+  // How long a turn waits for the user's answer to an AskUserQuestion, in ms.
+  // 0 = wait indefinitely (default). Per-conversation, edited in the Identity
+  // tab's question panel.
+  const [askUserTimeoutMs, setAskUserTimeoutMs] = useState(0);
+  // Transient: the question currently awaiting an answer (drives the card).
+  // { askId, questions } while pending; null otherwise.
+  const [pendingAsk, setPendingAsk] = useState<{ askId: string; questions: any[] } | null>(null);
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
@@ -546,6 +557,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setToolUseEnabled(data.toolUseEnabled === true);
         setAgentFullSystemAccess(data.agentFullSystemAccess === true);
         setAgentDangerousTools(data.agentDangerousTools === true);
+        setAskUserEnabled(data.askUserEnabled === true);
+        setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
         if (typeof data.toolInstruction === 'string') setToolInstruction(data.toolInstruction);
         if (typeof data.toolImageInstruction === 'string') setToolImageInstruction(data.toolImageInstruction);
@@ -602,6 +615,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setToolUseEnabled(pick('toolUseEnabled', false));
         setAgentFullSystemAccess(pick('agentFullSystemAccess', false));
         setAgentDangerousTools(pick('agentDangerousTools', false));
+        setAskUserEnabled(pick('askUserEnabled', false));
+        setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setInstructionOverrides(pick('instructionOverrides', {}));
         setDateTimeVisibility(defaultDateTimeVisibility || 'none');
         setVrchatMode(defaultVrchatMode || false);
@@ -704,11 +719,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         })
       });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1064,6 +1079,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    // Drop any unanswered question card — the turn it belonged to is gone.
+    setPendingAsk(null);
   };
 
   const generateAiResponse = async (history: any[]) => {
@@ -1154,7 +1171,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -1208,6 +1225,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Attachments collected from tool calls during this turn, to be
       // attached to the assistant message.
       const toolAttachments: any[] = [];
+      // Interactive AskUserQuestion records for this turn (question + the
+      // answer the user picked). Persisted onto the assistant message so the
+      // exchange is visible again when the conversation is reloaded.
+      const askedQuestions: any[] = [];
 
       // Throttle the streaming UI update to ONE render per animation frame.
       // GLM-5.2 with tool calls (e.g. read_conversation) flushes the buffered
@@ -1328,6 +1349,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   ...data.attachment,
                 };
                 toolAttachments.push(att);
+              } else if (data.type === 'ask_user' && data.askId && Array.isArray(data.questions)) {
+                // The model paused to ask the user a question. Surface an
+                // interactive card; the user's selection is POSTed to
+                // /api/chat/answer, which resolves the paused server handler.
+                // Record it now (answers filled in on ask_user_resolved) so it
+                // persists onto the message even if the page is reloaded.
+                askedQuestions.push({ askId: data.askId, questions: data.questions, answers: null, timedOut: false });
+                setPendingAsk({ askId: data.askId, questions: data.questions });
+              } else if (data.type === 'ask_user_resolved' && data.askId) {
+                // Server resolved the question (user answered, or it timed out
+                // and fell back to the recommended option). Record the outcome
+                // and dismiss the card.
+                const rec = askedQuestions.find((q: any) => q.askId === data.askId);
+                if (rec) { rec.answers = data.answers || []; rec.timedOut = !!data.timedOut; }
+                setPendingAsk(prev => (prev && prev.askId === data.askId ? null : prev));
               } else if (data.type === 'attachment_described') {
                 // Sense bridge (eyes/ears/watcher) generated a description for
                 // an attachment on an existing message. Stash it on that
@@ -1421,6 +1457,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } : {}),
               ...(cacheUsage ? { cacheUsage } : {}),
               ...(webSources ? { webSources } : {}),
+              ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
             }
           : m
       ));
@@ -1446,6 +1483,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
     setLoading(false);
     abortControllerRef.current = null;
+    // Turn finished — no question can still be pending.
+    setPendingAsk(null);
   };
 
   const handleRerun = async (msgId: string) => {
@@ -1567,6 +1606,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       toolUseEnabled,
       agentFullSystemAccess,
       agentDangerousTools,
+      askUserEnabled,
+      askUserTimeoutMs,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -1592,6 +1633,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     a.download = `${safeName}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  // Send the user's AskUserQuestion selection back to the paused server
+  // handler. Optimistically dismiss the card; the authoritative dismiss also
+  // happens on the `ask_user_resolved` SSE event.
+  const submitAskAnswer = async (answers: any[]) => {
+    const cur = pendingAsk;
+    if (!cur) return;
+    setPendingAsk(null);
+    try {
+      await fetch('/api/chat/answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ askId: cur.askId, answers }),
+      });
+    } catch { /* if it fails the server times out / waits per setting */ }
   };
 
   const hasVisibleAttachments = messages.some(m => m.attachments?.some((a: any) => !a.excluded));
@@ -1972,6 +2029,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 isFirstOriginal={firstOriginalMessageId === msg.id}
                 onSetFirstOriginal={() => handleSetFirstOriginal(msg.id)}
               />
+              {/* Persisted AskUserQuestion exchanges (read-only on reload). */}
+              {Array.isArray(msg.askedQuestions) && msg.askedQuestions.map((aq: any, ai: number) => (
+                <div key={ai} className="mt-2 ml-2 max-w-2xl">
+                  <AskUserQuestionCard questions={aq.questions || []} answered={aq.answers || null} />
+                  {aq.timedOut ? (
+                    <div className="text-[10px] text-amber-500 mt-1 ml-1">No answer in time — recommended option was used.</div>
+                  ) : null}
+                </div>
+              ))}
             </React.Fragment>
           ))}
           {loading && (
@@ -2046,6 +2112,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </div>
         <div className="p-4 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-4xl mx-auto">
+            {pendingAsk && (
+              <div className="mb-3">
+                <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
+              </div>
+            )}
             <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={loading} aiName={localAiName} vrchatMode={vrchatMode} />
           </div>
         </div>
@@ -2239,6 +2310,57 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </div>
                     </details>
                   </>
+                )}
+              </div>
+
+              {/* ── Interactive "ask the user" tool (optional, top-level) ──────
+                  Same hierarchy level as the summaries and file-workspace
+                  toggles — independent of file tools. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={askUserEnabled}
+                    onChange={(e) => setAskUserEnabled(e.target.checked)}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">💬 Ask-the-user tool (pause to ask a multiple-choice question)</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  OFF (default): the model answers on its own. ON: the model gets an <span className="font-mono">AskUserQuestion</span> tool
+                  to pause a turn, show you a multiple-choice card, and wait for your selection before continuing.
+                  <em> Active for all tool-capable providers: OpenAI-compatible (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo), local models, Gemini, and Claude in both modes — OAuth (its native question tool is replaced by this one) and token-paid.</em>
+                </p>
+                {askUserEnabled && (
+                  <div className="mt-3 ml-6 space-y-4">
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">Answer wait timeout (seconds)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={Math.round((Number(askUserTimeoutMs) || 0) / 1000)}
+                        onChange={(e) => setAskUserTimeoutMs(Math.max(0, Number(e.target.value) || 0) * 1000)}
+                        className="w-40 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        How long a turn waits for your selection. <strong>0 = wait indefinitely</strong> (default).
+                        Any positive value auto-picks the recommended option after that many seconds.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">Tool instruction (customizable)</label>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Hidden description the model sees for the <span className="font-mono">AskUserQuestion</span> tool — teaches it when and how to ask.
+                        Leave empty to keep the English default shown as the placeholder.
+                      </p>
+                      <textarea
+                        value={instructionOverrides['askUserDesc'] || ''}
+                        placeholder={DEFAULT_AGENT_INSTRUCTIONS['askUserDesc']}
+                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, askUserDesc: e.target.value }))}
+                        className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
               </>)}
@@ -3124,6 +3246,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       toolUseEnabled,
                       agentFullSystemAccess,
                       agentDangerousTools,
+                      askUserEnabled,
+                      askUserTimeoutMs,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

@@ -9,6 +9,7 @@ import { describeVideo } from '@/lib/videoBridge';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
+import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
 import { GoogleGenAI } from '@google/genai';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -186,8 +187,10 @@ async function streamClaudeViaAgentSDK(args: {
   agentFullSystemAccess: boolean;  // per-Entity: file tools reach the whole PC
   agentDangerousTools: boolean;    // per-Entity: enable shell (Bash → delete/exec)
   instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
+  askUserEnabled: boolean;         // per-Entity: expose the AskUserQuestion MCP tool
+  askUserTimeoutMs: number;        // wait time for an answer (0 = indefinite)
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs } = args;
   const I = resolveAgentInstructions(instructionOverrides);
 
   // Build the user content blocks for the LATEST user message only. Earlier
@@ -243,13 +246,16 @@ async function streamClaudeViaAgentSDK(args: {
         // inside readConversationByName). The handler runs in-process, so the
         // SDK drives the tool loop for us. Tool name as seen by the model:
         // `mcp__nexus__read_conversation` (auto-allowed under bypassPermissions).
+        // The in-process MCP server hosts NEXUS's custom tools. We add
+        // read_conversation and/or AskUserQuestion to it depending on the
+        // per-conversation toggles. Tool names as seen by the model:
+        // `mcp__nexus__read_conversation`, `mcp__nexus__AskUserQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation) {
+        if (enableReadConversation || askUserEnabled) {
           const { z } = await import('zod');
-          const readConvServer = sdk.createSdkMcpServer({
-            name: 'nexus',
-            version: '1.0.0',
-            tools: [
+          const nexusTools: any[] = [];
+          if (enableReadConversation) {
+            nexusTools.push(
               sdk.tool(
                 'read_conversation',
                 I.readConversationDesc,
@@ -264,9 +270,51 @@ async function streamClaudeViaAgentSDK(args: {
                   }
                 },
               ),
-            ],
+            );
+          }
+          if (askUserEnabled) {
+            // Interactive question tool. Mirrors the OpenAI-compatible path: emit
+            // the question over SSE, await the user's selection via the shared
+            // rendezvous (or the configured timeout), return it as the result.
+            // This REPLACES Claude Code's built-in AskUserQuestion (disabled in
+            // disallowedTools below) so there's no unusable-native duplicate.
+            const askOptionSchema = z.object({
+              label: z.string().describe('Short option label (1-5 words).'),
+              description: z.string().optional().describe('What choosing this option means.'),
+            });
+            const askQuestionSchema = z.object({
+              question: z.string().describe('The full question text. End with a question mark.'),
+              header: z.string().optional().describe('Very short label/chip for the question (max ~12 chars).'),
+              multiSelect: z.boolean().optional().describe('Set true to let the user pick multiple options.'),
+              options: z.array(askOptionSchema).describe('2 to 4 distinct, mutually-exclusive choices.'),
+            });
+            nexusTools.push(
+              sdk.tool(
+                'AskUserQuestion',
+                I.askUserDesc,
+                { questions: z.array(askQuestionSchema).describe('Between 1 and 4 questions to ask the user.') },
+                async (a: { questions: any[] }) => {
+                  const questions = normalizeQuestions(a);
+                  if (questions.length === 0) {
+                    return { content: [{ type: 'text' as const, text: 'Error: AskUserQuestion requires 1-4 questions, each with 2-4 options.' }] };
+                  }
+                  const askId = createAskId();
+                  enqueue({ type: 'ask_user', askId, questions });
+                  const answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                  const timedOut = answered === null;
+                  const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
+                  enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
+                  return { content: [{ type: 'text' as const, text: formatAnswerForModel(finalAnswers, timedOut) }] };
+                },
+              ),
+            );
+          }
+          const nexusServer = sdk.createSdkMcpServer({
+            name: 'nexus',
+            version: '1.0.0',
+            tools: nexusTools,
           });
-          nexusMcpServers = { nexus: readConvServer };
+          nexusMcpServers = { nexus: nexusServer };
         }
 
         // Single-message async iterable for query().prompt.
@@ -333,7 +381,13 @@ async function streamClaudeViaAgentSDK(args: {
         const fileToolsDisabledByToggle = toolUseEnabled
           ? []
           : ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
-        const disallowedTools = [...dangerousAlwaysDisabled, ...webToolsDisabledByToggle, ...fileToolsDisabledByToggle];
+        // Claude Code's BUILT-IN AskUserQuestion is ALWAYS disabled: it can't be
+        // answered through the SDK's public API (canUseTool only allows/denies),
+        // so headless it just auto-picks its recommended default. When the user
+        // enables the question tool, NEXUS registers its own answerable MCP
+        // version (mcp__nexus__AskUserQuestion) above; when disabled, the model
+        // simply has no question tool. Either way, no unusable native duplicate.
+        const disallowedTools = [...dangerousAlwaysDisabled, ...webToolsDisabledByToggle, ...fileToolsDisabledByToggle, 'AskUserQuestion'];
 
         // Workspace boundary enforcement. `bypassPermissions` (used previously)
         // skips ALL permission AND directory checks, so cwd/additionalDirectories
@@ -1033,6 +1087,15 @@ export async function POST(req: Request) {
       // sees summarized in the live Layer-4 index). Inactive conversations are
       // refused server-side.
       enableReadConversation = false,
+      // ── Interactive "Ask the user a question" tool ───────────────────────
+      // Optional, per-conversation. When ON, the model gets an AskUserQuestion
+      // tool that pauses the turn to ask a multiple-choice question and waits
+      // for the user's selection (via the /api/chat/answer rendezvous).
+      //   askUserEnabled    — master toggle (default OFF; the tool is opt-in).
+      //   askUserTimeoutMs  — how long to wait for an answer. 0 (or missing) =
+      //                       wait INDEFINITELY (the default behavior).
+      askUserEnabled = false,
+      askUserTimeoutMs = 0,
     } = await req.json();
     const keys = await loadKeys();
 
@@ -1395,6 +1458,8 @@ export async function POST(req: Request) {
           agentFullSystemAccess,
           agentDangerousTools,
           instructionOverrides,
+          askUserEnabled,
+          askUserTimeoutMs,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -1635,6 +1700,44 @@ export async function POST(req: Request) {
             },
           });
         }
+      }
+      // Optional interactive AskUserQuestion tool (independent of file tools).
+      if (askUserEnabled) {
+        claudeTools.push({
+          name: 'AskUserQuestion',
+          description: I.askUserDesc,
+          input_schema: {
+            type: 'object',
+            properties: {
+              questions: {
+                type: 'array',
+                description: 'Between 1 and 4 questions to ask the user.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    question: { type: 'string', description: 'The full question text. End with a question mark.' },
+                    header: { type: 'string', description: 'Very short label/chip for the question (max ~12 chars).' },
+                    multiSelect: { type: 'boolean', description: 'Set true to let the user pick multiple options.' },
+                    options: {
+                      type: 'array',
+                      description: '2 to 4 distinct, mutually-exclusive choices.',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          label: { type: 'string', description: 'Short option label (1-5 words).' },
+                          description: { type: 'string', description: 'What choosing this option means.' },
+                        },
+                        required: ['label'],
+                      },
+                    },
+                  },
+                  required: ['question', 'options'],
+                },
+              },
+            },
+            required: ['questions'],
+          },
+        });
       }
       if (claudeTools.length) claudeParams.tools = claudeTools;
 
@@ -1912,7 +2015,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'read_conversation']);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'read_conversation', 'AskUserQuestion']);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // Turn finished. If it was cut off at the token cap (thinking +
@@ -2067,6 +2170,22 @@ export async function POST(req: Request) {
                     resultContent = r.ok
                       ? `Transcript of "${r.title}":\n\n${r.transcript}`
                       : `Error: ${r.error}`;
+                  } else if (tu.name === 'AskUserQuestion') {
+                    // Pause the turn: emit the question, wait for the user's
+                    // selection (or the configured timeout), return it as the
+                    // tool result. Same rendezvous as the other provider paths.
+                    const questions = normalizeQuestions(tu.input);
+                    if (questions.length === 0) {
+                      resultContent = 'Error: AskUserQuestion requires 1-4 questions, each with 2-4 options.';
+                    } else {
+                      const askId = createAskId();
+                      enqueue({ type: 'ask_user', askId, questions });
+                      const answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                      const timedOut = answered === null;
+                      const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
+                      enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
+                      resultContent = formatAnswerForModel(finalAnswers, timedOut);
+                    }
                   }
                 } catch (e: any) {
                   resultContent = `Error: ${e?.message || 'tool execution failed'}`;
@@ -2233,6 +2352,48 @@ export async function POST(req: Request) {
                   name: { type: 'STRING', description: I.readConversationNameParam },
                 },
                 required: ['name'],
+              },
+            },
+          ],
+        });
+      }
+      // Optional interactive AskUserQuestion tool (independent of file tools).
+      if (askUserEnabled) {
+        geminiTools.push({
+          functionDeclarations: [
+            {
+              name: 'AskUserQuestion',
+              description: I.askUserDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  questions: {
+                    type: 'ARRAY',
+                    description: 'Between 1 and 4 questions to ask the user.',
+                    items: {
+                      type: 'OBJECT',
+                      properties: {
+                        question: { type: 'STRING', description: 'The full question text. End with a question mark.' },
+                        header: { type: 'STRING', description: 'Very short label/chip for the question (max ~12 chars).' },
+                        multiSelect: { type: 'BOOLEAN', description: 'Set true to let the user pick multiple options.' },
+                        options: {
+                          type: 'ARRAY',
+                          description: '2 to 4 distinct, mutually-exclusive choices.',
+                          items: {
+                            type: 'OBJECT',
+                            properties: {
+                              label: { type: 'STRING', description: 'Short option label (1-5 words).' },
+                              description: { type: 'STRING', description: 'What choosing this option means.' },
+                            },
+                            required: ['label'],
+                          },
+                        },
+                      },
+                      required: ['question', 'options'],
+                    },
+                  },
+                },
+                required: ['questions'],
               },
             },
           ],
@@ -2622,6 +2783,22 @@ export async function POST(req: Request) {
                       result = r.ok
                         ? { title: r.title, transcript: r.transcript }
                         : { error: r.error };
+                    } else if (fc.name === 'AskUserQuestion') {
+                      // Pause the turn: emit the question, wait for the user's
+                      // selection (or the configured timeout), return it as the
+                      // functionResponse. Same rendezvous as the other paths.
+                      const questions = normalizeQuestions(fc.args);
+                      if (questions.length === 0) {
+                        result = { error: 'AskUserQuestion requires 1-4 questions, each with 2-4 options.' };
+                      } else {
+                        const askId = createAskId();
+                        enqueue({ type: 'ask_user', askId, questions });
+                        const answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                        const timedOut = answered === null;
+                        const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
+                        enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
+                        result = { answer: formatAnswerForModel(finalAnswers, timedOut) };
+                      }
                     } else {
                       result = { error: `unknown function: ${fc.name}` };
                     }
@@ -2945,6 +3122,51 @@ export async function POST(req: Request) {
             },
           });
         }
+      }
+
+      // ── Interactive AskUserQuestion tool (optional, independent toggle) ──────
+      // Gives the model a way to pause and ask the user a multiple-choice
+      // question, then continue once they answer. Independent of toolUseEnabled
+      // and web tools — it's its own opt-in capability.
+      if (askUserEnabled) {
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'AskUserQuestion',
+            description: I.askUserDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                questions: {
+                  type: 'array',
+                  description: 'Between 1 and 4 questions to ask the user.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      question: { type: 'string', description: 'The full question text. End with a question mark.' },
+                      header: { type: 'string', description: 'Very short label/chip for the question (max ~12 chars).' },
+                      multiSelect: { type: 'boolean', description: 'Set true to let the user pick multiple options.' },
+                      options: {
+                        type: 'array',
+                        description: '2 to 4 distinct, mutually-exclusive choices.',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            label: { type: 'string', description: 'Short option label (1-5 words).' },
+                            description: { type: 'string', description: 'What choosing this option means.' },
+                          },
+                          required: ['label'],
+                        },
+                      },
+                    },
+                    required: ['question', 'options'],
+                  },
+                },
+              },
+              required: ['questions'],
+            },
+          },
+        });
       }
 
       // ── Universal NEXUS web tools ───────────────────────────────────────────
@@ -3803,6 +4025,22 @@ export async function POST(req: Request) {
                       // anything else (or "unknown function") makes Kimi report
                       // it has no web access.
                       resultText = tc.arguments || '{}';
+                    } else if (tc.name === 'AskUserQuestion') {
+                      // Pause the turn: emit the question to the client, wait
+                      // for the user's selection (or indefinitely / until the
+                      // configured timeout), then return it as the tool result.
+                      const questions = normalizeQuestions(parsed);
+                      if (questions.length === 0) {
+                        resultText = 'Error: AskUserQuestion requires 1-4 questions, each with 2-4 options.';
+                      } else {
+                        const askId = createAskId();
+                        enqueue({ type: 'ask_user', askId, questions });
+                        const answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                        const timedOut = answered === null;
+                        const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
+                        enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
+                        resultText = formatAnswerForModel(finalAnswers, timedOut);
+                      }
                     } else {
                       resultText = `Error: unknown function ${tc.name}`;
                     }

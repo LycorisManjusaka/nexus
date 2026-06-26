@@ -57,6 +57,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   readConversationNameParam:
     'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.',
 
+  // Interactive AskUserQuestion tool (optional; OpenAI-compatible providers for
+  // now). Description the model sees that teaches it when/how to ask the user.
+  askUserDesc:
+    'Ask the user one to four multiple-choice questions and WAIT for their answer before continuing. ' +
+    'Use this when you genuinely need the user to choose between options you cannot resolve yourself ' +
+    '(design decisions, ambiguous requirements). Each question needs 2-4 distinct options. Do NOT use it ' +
+    'for things you can decide from context. The user\'s selection is returned to you as the tool result.',
+
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:
     'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
