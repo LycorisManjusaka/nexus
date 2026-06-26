@@ -347,19 +347,21 @@ export default function SystemPromptUpdater({
         if (cancelled) return;
 
         // Initial state: copy the saved file verbatim into the LEFT side (all
-        // layers, no separation/recognition). The RIGHT side seeds from the
-        // next-conversation draft if one exists, otherwise from a copy of the
-        // left so the user can hand-edit (e.g. remove Layer 4 once) before/after
-        // running the updater.
+        // layers, no separation/recognition). The RIGHT side seeds ONLY from the
+        // next-conversation draft if one actually exists on disk; if there is no
+        // next file, the right side stays EMPTY (we do NOT copy the left over —
+        // that previously made it look like a draft already existed). Because
+        // lastSavedRightRef matches the empty rightText, the right auto-save
+        // effect won't write a spurious empty <baseName>_<index+1>.md on open.
         setLeftText(leftRaw);
-        setRightText(nextRaw || leftRaw);
+        setRightText(nextRaw);
         setDiffLeft(leftRaw);
-        setDiffRight(nextRaw || leftRaw);
+        setDiffRight(nextRaw);
         setUpdateStatus({ state: 'idle' });
         setUpdateLogs('');
         setChangelogText('');
         lastSavedLeftRef.current = leftRaw;
-        lastSavedRightRef.current = nextRaw || leftRaw;
+        lastSavedRightRef.current = nextRaw;
 
         const types: string[] = Array.isArray(typesRes?.types) ? typesRes.types : [];
         setAgentTypes(types);

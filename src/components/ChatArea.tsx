@@ -704,11 +704,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         })
       });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -768,13 +768,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const markerIdx = firstOriginalMessageId
       ? messages.findIndex(m => m.id === firstOriginalMessageId)
       : -1;
+    // "Next = First Original" pending state: no marker exists yet, but the next
+    // user message WILL become it — so the entire current history is carry-over
+    // context. Count it all as copied (original = 0). Without this, the unmarked
+    // conversation fell through to the all-original default below, showing
+    // copied = 0 and original = full, which is the exact inverse of the truth.
+    const allCopied = markerIdx < 0 && firstOriginalIsNext;
     messages.forEach((m, i) => {
       const textT = computeMsgTextTokens(m);
       const attT = computeMsgAttachTokens(m);
       attach += attT;
-      // No marker -> everything is treated as "original" (the safe default).
-      // Marker present -> messages before it are copied, at-and-after are original.
-      if (markerIdx >= 0 && i < markerIdx) copied += textT;
+      // allCopied -> the whole pending carry-over history counts as copied.
+      // No marker (and not pending) -> everything is "original" (safe default).
+      // Marker present -> messages before it are copied, at-and-after original.
+      if (allCopied) copied += textT;
+      else if (markerIdx >= 0 && i < markerIdx) copied += textT;
       else original += textT;
     });
     return { sys, copied, original, attach, total: sys + copied + original + attach };
