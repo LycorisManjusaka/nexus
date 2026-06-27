@@ -611,12 +611,34 @@ export async function loadLog(convoId: string) {
   await ensureDirs();
   const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
   for (const dir of logDirs) {
-    if (dir.isDirectory()) {
-      const filePath = path.join(LOGS_DIR, dir.name, `${convoId}.json`);
-      try {
-        const data = await fs.readFile(filePath, 'utf-8');
-        return JSON.parse(data);
-      } catch (e) {}
+    if (!dir.isDirectory()) continue;
+    const filePath = path.join(LOGS_DIR, dir.name, `${convoId}.json`);
+    let data: string;
+    try {
+      data = await fs.readFile(filePath, 'utf-8');
+    } catch {
+      // Not in this folder (ENOENT) — keep scanning the others.
+      continue;
+    }
+    // The file EXISTS in this folder. Strip a leading UTF-8 BOM if present:
+    // cross-machine sync (rclone/Google Drive) or an editor re-save can prepend
+    // EF BB BF, which the 4KB header regex in listLogs tolerates but JSON.parse
+    // rejects at position 0 — the exact "list works, single-load 404s" symptom.
+    if (data.charCodeAt(0) === 0xFEFF) data = data.slice(1);
+    try {
+      return JSON.parse(data);
+    } catch (e: any) {
+      // File found but unparseable. DON'T swallow it silently (the old behavior
+      // made this a mystery 404). Log the concrete reason — BOM already handled
+      // above, so this now means truncated/corrupted content (e.g. an
+      // interrupted or partial sync). Length + head help tell which.
+      console.error(
+        `[fsStorage] loadLog: found "${filePath}" but JSON.parse failed: ${e?.message}. ` +
+        `length=${data.length} bytes; head="${data.slice(0, 120).replace(/\n/g, '\\n')}"; ` +
+        `tail="${data.slice(-80).replace(/\n/g, '\\n')}". ` +
+        `Likely a truncated/corrupted file from sync — re-pull local_data or restore from local_data/backups/.`
+      );
+      return null; // exists but corrupt — no point scanning other folders
     }
   }
   return null;
@@ -716,7 +738,8 @@ export async function listLogs() {
       // Fallback: header read failed or wasn't structured. Full parse so we
       // either find the fields or mark the file as corrupted.
       try {
-        const data = await fs.readFile(fullPath, 'utf-8');
+        let data = await fs.readFile(fullPath, 'utf-8');
+        if (data.charCodeAt(0) === 0xFEFF) data = data.slice(1); // strip UTF-8 BOM
         const parsed = JSON.parse(data);
         return {
           id,

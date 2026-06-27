@@ -424,10 +424,10 @@ async function streamClaudeViaAgentSDK(args: {
           // per-request credentials.
           env: { CLAUDE_CODE_OAUTH_TOKEN: oauthToken },
           model,
-          // First turn: send custom systemPrompt; subsequent turns: resume.
-          // The two are mutually exclusive — `systemPrompt` only takes effect
-          // on session creation; ignored when resuming.
-          ...(resumeSessionId ? { resume: resumeSessionId } : { systemPrompt }),
+          // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
+          // below (they're mutually exclusive — systemPrompt only applies when
+          // CREATING a session, resume only when continuing one). This lets us
+          // fall back from a failed resume to a fresh session automatically.
           thinking: thinkingConfig,
           // Thinking-depth level. Only for effort-supporting adaptive models.
           ...(isAdaptiveOauth ? { effort: oauthEffort } : {}),
@@ -505,93 +505,127 @@ async function streamClaudeViaAgentSDK(args: {
           }
         };
 
-        for await (const msg of query({ prompt: userMsgGen(), options: queryOptions } as any)) {
-          // Every message carries the session_id once Anthropic has assigned
-          // one. We keep capturing in case the first chunks don't have it.
-          if ((msg as any).session_id) capturedSessionId = (msg as any).session_id;
+        // Whether ANY visible content (text/thought) has been streamed to the
+        // client. Gates the auto-retry below: we only retry a failed resume if
+        // nothing has been shown yet, so a retry can never duplicate output.
+        let producedContent = false;
 
-          // ── Streaming path: SDKPartialAssistantMessage wraps a raw
-          //     Anthropic stream event. This is what makes the bubble fill
-          //     in token-by-token instead of arriving as a complete dump.
-          if ((msg as any).type === 'stream_event') {
-            const ev: any = (msg as any).event;
-            if (!ev?.type) continue;
+        // Run ONE query() pass. `useResume` = a session id to continue, or null
+        // for a fresh session. Returns the SDK result subtype ('success' or an
+        // error like 'error_during_execution') so the caller can decide whether
+        // to retry. resume and systemPrompt are mutually exclusive.
+        const consume = async (useResume: string | null): Promise<{ subtype: string | null; errorText: string }> => {
+          const opts: any = { ...queryOptions };
+          if (useResume) { opts.resume = useResume; delete opts.systemPrompt; }
+          else { delete opts.resume; opts.systemPrompt = systemPrompt; }
+          let resultSubtype: string | null = null;
+          let resultErrorText = '';
+          for await (const msg of query({ prompt: userMsgGen(), options: opts } as any)) {
+            // Every message carries the session_id once Anthropic has assigned
+            // one. We keep capturing in case the first chunks don't have it.
+            if ((msg as any).session_id) capturedSessionId = (msg as any).session_id;
 
-            if (ev.type === 'message_start' && ev.message?.usage) {
-              const u = ev.message.usage;
-              cumUsage.input += Number(u.input_tokens || 0);
-              cumUsage.output += Number(u.output_tokens || 0);
-              cumUsage.cacheRead += Number(u.cache_read_input_tokens || 0);
-              cumUsage.cacheCreate += Number(u.cache_creation_input_tokens || 0);
-            } else if (ev.type === 'message_delta' && ev.usage) {
-              // message_delta carries the running output_tokens count.
-              // We could replace, but additive across iterations is fine
-              // since we only do one query() per turn here.
-              cumUsage.output += Number(ev.usage.output_tokens || 0);
-            } else if (ev.type === 'content_block_start') {
-              curBlockType = ev.content_block?.type || null;
-              // Some blocks ship an initial chunk of text in the start
-              // event itself (summarized_thinking often does this for the
-              // first sentence of the summary).
-              const init = ev.content_block?.summary
-                       || ev.content_block?.thinking
-                       || ev.content_block?.text
-                       || '';
-              if (init) {
-                if (curBlockType === 'text') enqueue({ type: 'text', content: init });
-                else if (curBlockType === 'thinking' || curBlockType === 'summarized_thinking') {
-                  enqueue({ type: 'thought', content: init });
-                } else if (curBlockType === 'redacted_thinking') {
-                  enqueue({ type: 'thought', content: '[Anthropic redacted this thinking block]\n' });
+            // ── Streaming path: SDKPartialAssistantMessage wraps a raw
+            //     Anthropic stream event. This is what makes the bubble fill
+            //     in token-by-token instead of arriving as a complete dump.
+            if ((msg as any).type === 'stream_event') {
+              const ev: any = (msg as any).event;
+              if (!ev?.type) continue;
+
+              if (ev.type === 'message_start' && ev.message?.usage) {
+                const u = ev.message.usage;
+                cumUsage.input += Number(u.input_tokens || 0);
+                cumUsage.output += Number(u.output_tokens || 0);
+                cumUsage.cacheRead += Number(u.cache_read_input_tokens || 0);
+                cumUsage.cacheCreate += Number(u.cache_creation_input_tokens || 0);
+              } else if (ev.type === 'message_delta' && ev.usage) {
+                // message_delta carries the running output_tokens count.
+                cumUsage.output += Number(ev.usage.output_tokens || 0);
+              } else if (ev.type === 'content_block_start') {
+                curBlockType = ev.content_block?.type || null;
+                // Some blocks ship an initial chunk of text in the start
+                // event itself (summarized_thinking often does this for the
+                // first sentence of the summary).
+                const init = ev.content_block?.summary
+                         || ev.content_block?.thinking
+                         || ev.content_block?.text
+                         || '';
+                if (init) {
+                  if (curBlockType === 'text') { enqueue({ type: 'text', content: init }); producedContent = true; }
+                  else if (curBlockType === 'thinking' || curBlockType === 'summarized_thinking') {
+                    enqueue({ type: 'thought', content: init }); producedContent = true;
+                  } else if (curBlockType === 'redacted_thinking') {
+                    enqueue({ type: 'thought', content: '[Anthropic redacted this thinking block]\n' }); producedContent = true;
+                  }
                 }
+              } else if (ev.type === 'content_block_delta') {
+                const d = ev.delta || {};
+                if (d.type === 'text_delta' && d.text) {
+                  enqueue({ type: 'text', content: d.text }); producedContent = true;
+                } else if (d.type === 'thinking_delta' && d.thinking) {
+                  enqueue({ type: 'thought', content: d.thinking }); producedContent = true;
+                } else if (d.type === 'summary_delta') {
+                  // Opus 4.6/4.7 with adaptive+summarized emits these for
+                  // each chunk of the thinking summary.
+                  const t = d.summary || d.text || '';
+                  if (t) { enqueue({ type: 'thought', content: t }); producedContent = true; }
+                }
+                // signature_delta / redacted_thinking_delta are continuity
+                // signals we don't display — silently consumed.
+              } else if (ev.type === 'content_block_stop') {
+                curBlockType = null;
               }
-            } else if (ev.type === 'content_block_delta') {
-              const d = ev.delta || {};
-              if (d.type === 'text_delta' && d.text) {
-                enqueue({ type: 'text', content: d.text });
-              } else if (d.type === 'thinking_delta' && d.thinking) {
-                enqueue({ type: 'thought', content: d.thinking });
-              } else if (d.type === 'summary_delta') {
-                // Opus 4.6/4.7 with adaptive+summarized emits these for
-                // each chunk of the thinking summary.
-                const t = d.summary || d.text || '';
-                if (t) enqueue({ type: 'thought', content: t });
-              }
-              // signature_delta / redacted_thinking_delta are continuity
-              // signals we don't display — silently consumed.
-            } else if (ev.type === 'content_block_stop') {
-              curBlockType = null;
+              continue;
             }
-            continue;
-          }
 
-          // ── Non-streaming envelopes ─────────────────────────────────
-          // With includePartialMessages enabled, `assistant` messages still
-          // arrive at end-of-turn carrying the fully-assembled content.
-          // We skip their content (already streamed via stream_events
-          // above) but capture authoritative usage if present.
-          if (msg.type === 'assistant' || msg.type === 'user') {
-            harvestOauthBlocks((msg as any).message?.content);
-          }
-          if (msg.type === 'assistant') {
-            const u = (msg as any).message?.usage;
-            if (u) {
-              // Use these as the source of truth — they're the consolidated
-              // final counts. Reset rather than add to avoid double-counting
-              // against the per-event accumulation above.
-              cumUsage.input = Number(u.input_tokens || cumUsage.input);
-              cumUsage.output = Number(u.output_tokens || cumUsage.output);
-              cumUsage.cacheRead = Number(u.cache_read_input_tokens || cumUsage.cacheRead);
-              cumUsage.cacheCreate = Number(u.cache_creation_input_tokens || cumUsage.cacheCreate);
+            // ── Non-streaming envelopes ─────────────────────────────────
+            // With includePartialMessages enabled, `assistant` messages still
+            // arrive at end-of-turn carrying the fully-assembled content.
+            // We skip their content (already streamed via stream_events
+            // above) but capture authoritative usage if present.
+            if (msg.type === 'assistant' || msg.type === 'user') {
+              harvestOauthBlocks((msg as any).message?.content);
             }
-          } else if (msg.type === 'result') {
-            // Result message signals the end of this query. SDK closes after.
-            const errAny: any = msg as any;
-            if (errAny.subtype && errAny.subtype !== 'success') {
-              enqueue({ error: `Agent SDK result: ${errAny.subtype} ${errAny.error || ''}`.trim() });
+            if (msg.type === 'assistant') {
+              const u = (msg as any).message?.usage;
+              if (u) {
+                // Use these as the source of truth — they're the consolidated
+                // final counts. Reset rather than add to avoid double-counting
+                // against the per-event accumulation above.
+                cumUsage.input = Number(u.input_tokens || cumUsage.input);
+                cumUsage.output = Number(u.output_tokens || cumUsage.output);
+                cumUsage.cacheRead = Number(u.cache_read_input_tokens || cumUsage.cacheRead);
+                cumUsage.cacheCreate = Number(u.cache_creation_input_tokens || cumUsage.cacheCreate);
+              }
+            } else if (msg.type === 'result') {
+              // Result message signals the end of this query. SDK closes after.
+              const errAny: any = msg as any;
+              resultSubtype = errAny.subtype || 'success';
+              resultErrorText = errAny.error || '';
+              break;
             }
-            break;
           }
+          return { subtype: resultSubtype, errorText: resultErrorText };
+        };
+
+        // First attempt: resume the saved session if there is one.
+        let res = await consume(resumeSessionId);
+        // Best-effort resume with automatic fallback. A session id created on a
+        // DIFFERENT machine (carried here by local_data sync) — or an expired /
+        // cleaned one — doesn't exist in THIS machine's Claude Code session
+        // store, so resuming it fails instantly with `error_during_execution`.
+        // If nothing has streamed yet, transparently retry ONCE on a fresh
+        // session so the user gets a working reply instead of an error (this is
+        // what manually rerunning already does). Cross-machine history
+        // continuity is inherently limited on the OAuth path since it relies on
+        // server-side resume — the fresh session starts from this turn.
+        if (res.subtype && res.subtype !== 'success' && resumeSessionId && !producedContent) {
+          console.warn(`[claude-oauth] resume of "${resumeSessionId}" failed (${res.subtype}); retrying with a fresh session`);
+          capturedSessionId = null; // forget the bad id; a new one is captured on retry
+          res = await consume(null);
+        }
+        if (res.subtype && res.subtype !== 'success') {
+          enqueue({ error: `Agent SDK result: ${res.subtype} ${res.errorText || ''}`.trim() });
         }
 
         if (capturedSessionId) {
