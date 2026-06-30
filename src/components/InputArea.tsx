@@ -7,6 +7,8 @@ import { v4 as uuidv4 } from 'uuid';
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode }: any, ref: any) {
   const [text, setText] = useState('');
   const [userName, setUserName] = useState('');
+  // Characters from local_data/character_map.json, for the speaker dropdown.
+  const [charaList, setCharaList] = useState<{ name: string; engine: string; charId: string }[]>([]);
   const [attachments, setAttachments] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -39,6 +41,10 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       }).catch(() => {});
     };
     fetchName();
+    // Populate the speaker dropdown from character_map.json.
+    fetch('/api/chara/list').then(r => r.json()).then(d => {
+      setCharaList(d?.characters || []);
+    }).catch(() => {});
     const id = setInterval(fetchName, 30000);
     const onCharaChanged = (e: any) => {
       // The custom event optionally carries the new name in detail; trust the
@@ -52,6 +58,22 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       window.removeEventListener('nx-chara-changed', onCharaChanged as EventListener);
     };
   }, []);
+
+  // Switch the active speaker — SAME logic as Preferences → User Identity:
+  // writes voicechanger/chara_settings.json via /api/chara/select, then tells
+  // the rest of the app to refresh (so this label + Preferences stay in sync).
+  const handleCharaSelect = async (newName: string) => {
+    if (!newName) return;
+    setUserName(newName); // optimistic
+    try {
+      await fetch('/api/chara/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName }),
+      });
+      window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: newName } }));
+    } catch { /* the 30s poll will reconcile if this fails */ }
+  };
 
   const [isDragging, setIsDragging] = useState(false);
 
@@ -337,19 +359,26 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           onChange={handleFileChange} 
         />
         <div className="flex-1 flex flex-col">
-          <input 
-            type="text" 
-            placeholder="User Name (optional)" 
+          <select
             value={userName}
-            onChange={(e) => {
-              setUserName(e.target.value);
-              clearTimeout((window as any).userNameTimeout);
-              (window as any).userNameTimeout = setTimeout(() => {
-                fetch('/api/user', { method: 'POST', body: JSON.stringify({ userName: e.target.value }) });
-              }, 500);
-            }}
-            className="px-2 pt-2 text-xs text-muted-foreground bg-transparent outline-none font-medium placeholder:text-muted-foreground/50"
-          />
+            onChange={(e) => handleCharaSelect(e.target.value)}
+            title="Active speaker — same as Preferences → User Identity (writes chara_settings.json)"
+            className="px-2 pt-2 text-xs text-muted-foreground bg-transparent outline-none font-medium cursor-pointer hover:text-foreground"
+          >
+            {/* The native option list ignores Tailwind utilities and falls back
+                to the OS default (white-on-white under dark themes). Force the
+                theme colors explicitly via CSS variables so it's always legible. */}
+            {charaList.length === 0 && (
+              <option value="" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>— no characters —</option>
+            )}
+            {/* Keep the current name visible even if it's not in the map. */}
+            {userName && !charaList.some(c => c.name === userName) && (
+              <option value={userName} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{userName}</option>
+            )}
+            {charaList.map(c => (
+              <option key={c.name} value={c.name} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{c.name}</option>
+            ))}
+          </select>
           <textarea
             ref={textareaRef}
             value={text}

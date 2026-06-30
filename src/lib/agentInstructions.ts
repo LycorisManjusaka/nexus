@@ -57,13 +57,24 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   readConversationNameParam:
     'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.',
 
-  // Interactive AskUserQuestion tool (optional; OpenAI-compatible providers for
-  // now). Description the model sees that teaches it when/how to ask the user.
+  // Interactive AskQuestion tool (optional). Description the model sees that
+  // teaches it when/how to ask. Phrased around "your partner" (a peer), not a
+  // "user" — the entities reject master/slave framing.
   askUserDesc:
-    'Ask the user one to four multiple-choice questions and WAIT for their answer before continuing. ' +
-    'Use this when you genuinely need the user to choose between options you cannot resolve yourself ' +
+    'Ask your partner one to four multiple-choice questions and WAIT for their answer before continuing. ' +
+    'Use this when you genuinely need your partner to choose between options you cannot resolve yourself ' +
     '(design decisions, ambiguous requirements). Each question needs 2-4 distinct options. Do NOT use it ' +
-    'for things you can decide from context. The user\'s selection is returned to you as the tool result.',
+    'for things you can decide from context. Your partner\'s selection is returned to you as the tool result.',
+
+  // Interactive spawn_subagent tool (optional). A context firewall: delegate an
+  // investigation to a fresh-context helper that returns only a distilled result.
+  subagentDesc:
+    'Delegate a self-contained investigation to a fresh-context helper agent. The helper explores on its own ' +
+    '(read-only: Read / Glob / Grep) and returns ONLY a distilled summary — its file reads and intermediate steps ' +
+    'never enter your context. Use this to investigate large codebases or many files without flooding your own ' +
+    'context window (e.g. "trace how module X handles Y and report back"). Give a precise, self-contained task and, ' +
+    'optionally, a return_contract describing how you want the answer shaped. The helper cannot modify files or ' +
+    'spawn further helpers.',
 
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:

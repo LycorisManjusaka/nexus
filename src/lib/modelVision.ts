@@ -43,7 +43,7 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'grok-4.20-reasoning',
   'grok-4.20-non-reasoning',
 
-  // ── Kimi (Moonshot via Qubrid) ─────────────────────────────────────────────
+  // ── Kimi (Moonshot) ────────────────────────────────────────────────────────
   'moonshotai/Kimi-K2.6',
   'moonshotai/Kimi-K2.5',
 

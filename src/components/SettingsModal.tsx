@@ -11,7 +11,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // See the inline help text in the Anthropic section below for setup steps.
   const [keys, setKeys] = useState<any>({
     gemini: '', claude: '', qwen: '', deepseek: '', glm: '', grok: '',
-    kimi: '', qubrid: '', cohere: '', minimax: '', openai: '', mimo: '',
+    kimi: '', cohere: '', minimax: '', openai: '', mimo: '',
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
   });
   const [loading, setLoading] = useState(true);
@@ -280,20 +280,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Moonshot's first-party Kimi API (<span className="font-mono">platform.kimi.ai</span> → Console → API Keys; endpoint <span className="font-mono">api.moonshot.ai/v1</span>). <strong>Preferred</strong> for the Kimi family — when this key is set, NEXUS routes Kimi here instead of Qubrid (lower latency, real cache stats, correct Kimi identity). Use the international platform, not the <span className="font-mono">.cn</span> one.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Qubrid API Key <span className="opacity-60">(Kimi fallback)</span></label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.qubrid || ''}
-                onChange={e => setKeys({...keys, qubrid: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">platform.qubrid.com</span>. Qubrid is a third-party inference host for Moonshot's Kimi models (K2.5, K2.6) and other open-source LLMs. Used for Kimi only when the Moonshot key above is empty.
+                Moonshot's first-party Kimi API (<span className="font-mono">platform.kimi.ai</span> → Console → API Keys; endpoint <span className="font-mono">api.moonshot.ai/v1</span>). Use the international platform, not the <span className="font-mono">.cn</span> one.
               </div>
             </div>
             <div>

@@ -83,7 +83,7 @@ Grok     | grok-4.20-0309-non-reasoning | off | Grok 4.20 Non-reasoning (fast)
 Grok     | grok-4-1-fast-non-reasoning  | off | Grok 4.1 Fast
 Grok     | grok-code-fast-1             | off | Grok Code Fast 1
 
-# ── Kimi (Moonshot via Qubrid) ─────────────────────────────────────
+# ── Kimi (Moonshot) ────────────────────────────────────────────────
 Kimi     | moonshotai/Kimi-K2.6         | on  | Kimi K2.6 Thinking
 Kimi     | moonshotai/Kimi-K2.5         | on  | Kimi K2.5 Thinking
 
@@ -105,6 +105,27 @@ ChatGPT  | gpt-5.4-mini                 | off | GPT-5.4 Mini
 MiMo     | mimo-v2.5-pro                | on  | MiMo V2.5 Pro
 MiMo     | mimo-v2.5                    | on  | MiMo V2.5
 `;
+
+// Parsed { family, model, label } rows for the Subagent model dropdown, derived
+// from the same CLOUD_MODELS_FILL table the "Fill all" button uses. The family
+// is what routes the subagent to the correct provider endpoint+key.
+const SUBAGENT_MODEL_OPTIONS: { family: string; model: string; label: string }[] =
+  CLOUD_MODELS_FILL.split('\n')
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('#') && l.includes('|'))
+    .map(l => { const p = l.split('|').map(s => s.trim()); return { family: p[0], model: p[1], label: p[3] || p[1] }; })
+    .filter(o => o.family && o.model);
+
+// Group the rows by family for <optgroup>s, preserving first-seen order.
+const SUBAGENT_MODEL_GROUPS: { family: string; items: { model: string; label: string }[] }[] = (() => {
+  const order: string[] = [];
+  const map: Record<string, { model: string; label: string }[]> = {};
+  for (const o of SUBAGENT_MODEL_OPTIONS) {
+    if (!map[o.family]) { map[o.family] = []; order.push(o.family); }
+    map[o.family].push({ model: o.model, label: o.label });
+  }
+  return order.map(family => ({ family, items: map[family] }));
+})();
 
 // Heuristic: infer whether a Local model name implies a thinking/reasoning
 // variant. Local models have no thinking toggle — LM Studio just runs the
@@ -166,6 +187,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Transient: the question currently awaiting an answer (drives the card).
   // { askId, questions } while pending; null otherwise.
   const [pendingAsk, setPendingAsk] = useState<{ askId: string; questions: any[] } | null>(null);
+  // Optional subagent (context-firewall helper) tool — OAuth path for now.
+  const [subagentEnabled, setSubagentEnabled] = useState(false);
+  // Model the child subagent runs on ('' = cheap default, e.g. Haiku).
+  const [subagentModel, setSubagentModel] = useState('');
+  // Provider family of the subagent model (routes it to the right endpoint).
+  const [subagentFamily, setSubagentFamily] = useState('');
+  // Transient: a subagent currently running (drives the inline activity chip).
+  const [activeSubagent, setActiveSubagent] = useState<{ task: string } | null>(null);
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
@@ -559,6 +588,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAgentDangerousTools(data.agentDangerousTools === true);
         setAskUserEnabled(data.askUserEnabled === true);
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
+        setSubagentEnabled(data.subagentEnabled === true);
+        setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
+        setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
         if (typeof data.toolInstruction === 'string') setToolInstruction(data.toolInstruction);
         if (typeof data.toolImageInstruction === 'string') setToolImageInstruction(data.toolImageInstruction);
@@ -617,6 +649,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAgentDangerousTools(pick('agentDangerousTools', false));
         setAskUserEnabled(pick('askUserEnabled', false));
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
+        setSubagentEnabled(pick('subagentEnabled', false));
+        setSubagentModel(pick('subagentModel', ''));
+        setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
         setDateTimeVisibility(defaultDateTimeVisibility || 'none');
         setVrchatMode(defaultVrchatMode || false);
@@ -719,11 +754,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         })
       });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1081,6 +1116,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
     // Drop any unanswered question card — the turn it belonged to is gone.
     setPendingAsk(null);
+    setActiveSubagent(null);
   };
 
   const generateAiResponse = async (history: any[]) => {
@@ -1171,7 +1207,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -1229,6 +1265,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // answer the user picked). Persisted onto the assistant message so the
       // exchange is visible again when the conversation is reloaded.
       const askedQuestions: any[] = [];
+      // Subagent runs for this turn (task + distilled result). Persisted onto
+      // the assistant message and shown as a collapsed group on reload.
+      const subagentRuns: any[] = [];
 
       // Throttle the streaming UI update to ONE render per animation frame.
       // GLM-5.2 with tool calls (e.g. read_conversation) flushes the buffered
@@ -1357,6 +1396,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // persists onto the message even if the page is reloaded.
                 askedQuestions.push({ askId: data.askId, questions: data.questions, answers: null, timedOut: false });
                 setPendingAsk({ askId: data.askId, questions: data.questions });
+              } else if (data.type === 'subagent_start') {
+                // A context-firewall child agent started investigating. Show a
+                // live activity chip; record it (result filled on subagent_done).
+                subagentRuns.push({ task: data.task || '', result: null });
+                setActiveSubagent({ task: data.task || '' });
+              } else if (data.type === 'subagent_done') {
+                // Child returned its distilled result. Record it and clear the chip.
+                const rec = [...subagentRuns].reverse().find((s: any) => s.task === (data.task || '') && s.result === null);
+                if (rec) rec.result = data.result || '';
+                else subagentRuns.push({ task: data.task || '', result: data.result || '' });
+                setActiveSubagent(null);
               } else if (data.type === 'ask_user_resolved' && data.askId) {
                 // Server resolved the question (user answered, or it timed out
                 // and fell back to the recommended option). Record the outcome
@@ -1458,6 +1508,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               ...(cacheUsage ? { cacheUsage } : {}),
               ...(webSources ? { webSources } : {}),
               ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
+              ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
             }
           : m
       ));
@@ -1483,8 +1534,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
     setLoading(false);
     abortControllerRef.current = null;
-    // Turn finished — no question can still be pending.
+    // Turn finished — no question or subagent can still be pending.
     setPendingAsk(null);
+    setActiveSubagent(null);
   };
 
   const handleRerun = async (msgId: string) => {
@@ -1608,6 +1660,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       agentDangerousTools,
       askUserEnabled,
       askUserTimeoutMs,
+      subagentEnabled,
+      subagentModel,
+      subagentFamily,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -2029,6 +2084,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 isFirstOriginal={firstOriginalMessageId === msg.id}
                 onSetFirstOriginal={() => handleSetFirstOriginal(msg.id)}
               />
+              {/* Persisted subagent runs (collapsed — task + distilled result). */}
+              {Array.isArray(msg.subagentRuns) && msg.subagentRuns.map((sr: any, si: number) => (
+                <details key={`sub-${si}`} className="mt-2 ml-2 max-w-2xl rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2">
+                  <summary className="text-xs font-semibold text-violet-700 dark:text-violet-300 cursor-pointer select-none">
+                    🔍 Subagent: {sr.task ? (sr.task.length > 80 ? sr.task.slice(0, 80) + '…' : sr.task) : 'investigation'}
+                  </summary>
+                  <div className="mt-2 text-xs text-foreground whitespace-pre-wrap leading-relaxed">
+                    {sr.result || '(no result)'}
+                  </div>
+                </details>
+              ))}
               {/* Persisted AskUserQuestion exchanges (read-only on reload). */}
               {Array.isArray(msg.askedQuestions) && msg.askedQuestions.map((aq: any, ai: number) => (
                 <div key={ai} className="mt-2 ml-2 max-w-2xl">
@@ -2112,6 +2178,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </div>
         <div className="p-4 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-4xl mx-auto">
+            {activeSubagent && (
+              <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-xl border border-violet-500/40 bg-violet-500/10 text-sm text-violet-700 dark:text-violet-300">
+                <span className="animate-pulse">🔍</span>
+                <span className="font-medium">Subagent investigating…</span>
+                <span className="text-xs text-muted-foreground truncate">{activeSubagent.task}</span>
+              </div>
+            )}
             {pendingAsk && (
               <div className="mb-3">
                 <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
@@ -2327,7 +2400,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <span className="text-sm font-semibold text-foreground">💬 Ask-the-user tool (pause to ask a multiple-choice question)</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): the model answers on its own. ON: the model gets an <span className="font-mono">AskUserQuestion</span> tool
+                  OFF (default): the model answers on its own. ON: the model gets an <span className="font-mono">AskQuestion</span> tool
                   to pause a turn, show you a multiple-choice card, and wait for your selection before continuing.
                   <em> Active for all tool-capable providers: OpenAI-compatible (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo), local models, Gemini, and Claude in both modes — OAuth (its native question tool is replaced by this one) and token-paid.</em>
                 </p>
@@ -2350,7 +2423,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <div>
                       <label className="text-xs font-semibold text-foreground mb-1 block">Tool instruction (customizable)</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Hidden description the model sees for the <span className="font-mono">AskUserQuestion</span> tool — teaches it when and how to ask.
+                        Hidden description the model sees for the <span className="font-mono">AskQuestion</span> tool — teaches it when and how to ask.
                         Leave empty to keep the English default shown as the placeholder.
                       </p>
                       <textarea
@@ -2358,6 +2431,71 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         placeholder={DEFAULT_AGENT_INSTRUCTIONS['askUserDesc']}
                         onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, askUserDesc: e.target.value }))}
                         className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Subagent (context-firewall helper) — OAuth Claude only ───── */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={subagentEnabled}
+                    onChange={(e) => setSubagentEnabled(e.target.checked)}
+                    className="accent-violet-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">🔍 Subagent tool (delegate investigation to a fresh-context helper)</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  OFF (default): the model investigates inline. ON: the model gets a <span className="font-mono">spawn_subagent</span> tool
+                  that hands a task to a <strong>read-only</strong> child agent with its own fresh context. The child reads files
+                  (Read/Glob/Grep) and returns only a distilled result — its file dumps never enter this conversation's context.
+                  Ideal for tracing large codebases without flooding the main thread.
+                  <em> Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo) + local, and Gemini.</em>
+                </p>
+                {subagentEnabled && (
+                  <div className="mt-3 ml-6 space-y-4">
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">Subagent model</label>
+                      <select
+                        value={`${subagentFamily}|${subagentModel}`}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          const i = v.indexOf('|');
+                          setSubagentFamily(i >= 0 ? v.slice(0, i) : '');
+                          setSubagentModel(i >= 0 ? v.slice(i + 1) : '');
+                        }}
+                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:ring-2 focus:ring-violet-500/50 outline-none cursor-pointer"
+                      >
+                        <option value="|" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>— default (cheap model on the parent's own provider) —</option>
+                        {SUBAGENT_MODEL_GROUPS.map(g => (
+                          <optgroup key={g.family} label={g.family} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
+                            {g.items.map(it => (
+                              <option key={`${g.family}|${it.model}`} value={`${g.family}|${it.model}`} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
+                                {it.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Pick the model the child runs on. It routes to that model's own provider (using that provider's API key in Preferences) — independent of this conversation's model.
+                        Leave on <em>default</em> for a cheap model on the parent's provider. A cheap, fast model (e.g. a flash/mini/haiku) is ideal for grunt file-reading.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">Tool instruction (customizable)</label>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Hidden description the model sees for the <span className="font-mono">spawn_subagent</span> tool.
+                        Leave empty to keep the English default shown as the placeholder.
+                      </p>
+                      <textarea
+                        value={instructionOverrides['subagentDesc'] || ''}
+                        placeholder={DEFAULT_AGENT_INSTRUCTIONS['subagentDesc']}
+                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, subagentDesc: e.target.value }))}
+                        className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-violet-500/50 outline-none"
                       />
                     </div>
                   </div>
@@ -2771,7 +2909,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="moonshotai/Kimi-K2.5">Kimi K2.5 (agentic, multimodal)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Routes to Moonshot's first-party API (<span className="font-mono">api.moonshot.ai</span>) when the Kimi (Moonshot) key is set in Preferences — otherwise falls back to <span className="font-mono">platform.qubrid.com</span>. Model IDs are normalized automatically for whichever host is active.
+                      Routes to Moonshot's first-party API (<span className="font-mono">api.moonshot.ai</span>) using the Kimi (Moonshot) key set in Preferences. Model IDs are normalized to Moonshot's bare form automatically.
                       {' '}When Thinking Mode is on, Moonshot recommends Temperature = 1.0 for best chain-of-thought quality.
                     </div>
                   </div>
@@ -3248,6 +3386,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       agentDangerousTools,
                       askUserEnabled,
                       askUserTimeoutMs,
+                      subagentEnabled,
+                      subagentModel,
+                      subagentFamily,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

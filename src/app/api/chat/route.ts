@@ -10,6 +10,7 @@ import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
+import { runSubagent } from '@/lib/subagent';
 import { GoogleGenAI } from '@google/genai';
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -23,31 +24,13 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
 }
 
 // ── Kimi (Moonshot) host resolution ──────────────────────────────────────────
-// Kimi can run two ways in NEXUS:
-//   • Moonshot direct  — the model's first-party API (platform.kimi.ai /
-//                         api.moonshot.ai). Uses keys.kimi. Model IDs are the
-//                         bare Moonshot form: "kimi-k2.6", "kimi-k2.5", etc.
-//   • Qubrid (legacy)  — third-party reseller. Uses keys.qubrid. Model IDs are
-//                         namespaced: "moonshotai/Kimi-K2.6".
-// Direct is preferred whenever keys.kimi is set (better latency, real cache
-// stats, no Qubrid identity-prompt injection). The dropdown stores the Qubrid
-// "moonshotai/Kimi-K2.x" form for backward compat; we normalize to the bare
-// Moonshot id when routing direct.
-function useKimiDirect(keys: any): boolean {
-  return !!keys?.kimi;
-}
-function resolveKimiModel(model: string | undefined | null, direct: boolean): string {
-  const fallback = direct ? 'kimi-k2.6' : 'moonshotai/Kimi-K2.6';
-  if (!model) return fallback;
-  if (direct) {
-    // Strip the "moonshotai/" namespace and lowercase → Moonshot's bare id.
-    // "moonshotai/Kimi-K2.6" → "kimi-k2.6"; already-bare ids pass through.
-    return model.replace(/^moonshotai\//i, '').toLowerCase();
-  }
-  // Qubrid form: ensure the "moonshotai/" namespace is present.
-  if (/^moonshotai\//i.test(model)) return model;
-  // "kimi-k2.6" → "moonshotai/Kimi-K2.6"
-  return 'moonshotai/' + model.replace(/^kimi/i, 'Kimi');
+// Kimi runs on Moonshot's first-party API (platform.kimi.ai / api.moonshot.ai),
+// using keys.kimi. Model IDs are normalized to the bare Moonshot form
+// ("moonshotai/Kimi-K2.6" → "kimi-k2.6"); the dropdown may store either form.
+function resolveKimiModel(model: string | undefined | null): string {
+  if (!model) return 'kimi-k2.6';
+  // Strip any "moonshotai/" namespace and lowercase → Moonshot's bare id.
+  return model.replace(/^moonshotai\//i, '').toLowerCase();
 }
 
 const DEFAULT_ANALYSIS_INSTRUCTION =
@@ -187,10 +170,14 @@ async function streamClaudeViaAgentSDK(args: {
   agentFullSystemAccess: boolean;  // per-Entity: file tools reach the whole PC
   agentDangerousTools: boolean;    // per-Entity: enable shell (Bash → delete/exec)
   instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
-  askUserEnabled: boolean;         // per-Entity: expose the AskUserQuestion MCP tool
+  askUserEnabled: boolean;         // per-Entity: expose the AskQuestion MCP tool
   askUserTimeoutMs: number;        // wait time for an answer (0 = indefinite)
+  subagentEnabled: boolean;        // per-Entity: expose the spawn_subagent MCP tool
+  subagentModel: string;           // model the child runs on ('' = cheap default)
+  subagentFamily: string;          // provider family of the child model ('' = Claude)
+  keys: any;                       // API keys, for routing a non-Claude subagent
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, keys } = args;
   const I = resolveAgentInstructions(instructionOverrides);
 
   // Build the user content blocks for the LATEST user message only. Earlier
@@ -247,11 +234,11 @@ async function streamClaudeViaAgentSDK(args: {
         // SDK drives the tool loop for us. Tool name as seen by the model:
         // `mcp__nexus__read_conversation` (auto-allowed under bypassPermissions).
         // The in-process MCP server hosts NEXUS's custom tools. We add
-        // read_conversation and/or AskUserQuestion to it depending on the
+        // read_conversation and/or AskQuestion to it depending on the
         // per-conversation toggles. Tool names as seen by the model:
-        // `mcp__nexus__read_conversation`, `mcp__nexus__AskUserQuestion`.
+        // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled) {
+        if (enableReadConversation || askUserEnabled || subagentEnabled) {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -290,13 +277,13 @@ async function streamClaudeViaAgentSDK(args: {
             });
             nexusTools.push(
               sdk.tool(
-                'AskUserQuestion',
+                'AskQuestion',
                 I.askUserDesc,
                 { questions: z.array(askQuestionSchema).describe('Between 1 and 4 questions to ask the user.') },
                 async (a: { questions: any[] }) => {
                   const questions = normalizeQuestions(a);
                   if (questions.length === 0) {
-                    return { content: [{ type: 'text' as const, text: 'Error: AskUserQuestion requires 1-4 questions, each with 2-4 options.' }] };
+                    return { content: [{ type: 'text' as const, text: 'Error: AskQuestion requires 1-4 questions, each with 2-4 options.' }] };
                   }
                   const askId = createAskId();
                   enqueue({ type: 'ask_user', askId, questions });
@@ -305,6 +292,106 @@ async function streamClaudeViaAgentSDK(args: {
                   const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
                   enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                   return { content: [{ type: 'text' as const, text: formatAnswerForModel(finalAnswers, timedOut) }] };
+                },
+              ),
+            );
+          }
+          if (subagentEnabled) {
+            // Context firewall: a child agent with a FRESH, empty context does
+            // the investigation and returns ONLY a distilled result — its file
+            // reads and intermediate steps never reach the parent's context.
+            // Runs a separate query() (NOT Claude Code's native Task tool, which
+            // is unreliable headless). Read-only, no recursion, capped turns +
+            // wall-clock so a runaway child dies instead of looping.
+            nexusTools.push(
+              sdk.tool(
+                'spawn_subagent',
+                I.subagentDesc,
+                {
+                  task: z.string().describe('A precise, self-contained investigation for the helper to perform.'),
+                  return_contract: z.string().optional().describe('Optional: how the distilled result should be shaped/formatted.'),
+                },
+                async (a: { task: string; return_contract?: string }) => {
+                  const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : 'Claude';
+                  // NON-Claude family on an OAuth parent: the Claude Code child
+                  // (which uses the OAuth subscription token) can only run Claude,
+                  // so route the child through the API-key path for that provider
+                  // instead — exactly like the non-OAuth parents do.
+                  if (!/claude|fable|mythos/i.test(childFamily)) {
+                    enqueue({ type: 'subagent_start', task: a.task });
+                    const sub = await runSubagent({
+                      family: childFamily, model: subagentModel, keys, task: a.task,
+                      returnContract: a.return_contract, folderName, fullAccess: agentFullSystemAccess,
+                    });
+                    cumUsage.input += sub.usage.input;
+                    cumUsage.output += sub.usage.output;
+                    cumUsage.cacheRead += sub.usage.cacheRead;
+                    cumUsage.cacheCreate += sub.usage.cacheCreate;
+                    enqueue({ type: 'subagent_done', task: a.task, result: sub.text });
+                    return { content: [{ type: 'text' as const, text: sub.text || '(subagent returned nothing)' }] };
+                  }
+                  // Claude family → child query() on the OAuth subscription token.
+                  // A configurable, cheaper Claude by default; non-Claude model
+                  // ids (with a Claude family) fall back to Haiku.
+                  const childModel = (subagentModel && /claude|haiku|opus|sonnet|fable|mythos/i.test(subagentModel))
+                    ? subagentModel
+                    : 'claude-haiku-4-5';
+                  const childSystem =
+                    'You are a focused sub-investigator with a FRESH, empty context. You have read-only tools ' +
+                    '(Read, Glob, Grep). Do EXACTLY the task below, then reply with ONLY the distilled result — ' +
+                    'no preamble, no narration of your steps.' +
+                    (a.return_contract ? `\n\nReturn format: ${a.return_contract}` : '');
+                  const ac = new AbortController();
+                  const killTimer = setTimeout(() => { try { ac.abort(); } catch {} }, 180000);
+                  enqueue({ type: 'subagent_start', task: a.task });
+                  let resultText = '';
+                  let childUsage: any = null;
+                  try {
+                    async function* childPrompt() {
+                      yield { type: 'user' as const, message: { role: 'user' as const, content: [{ type: 'text', text: a.task }] }, parent_tool_use_id: null };
+                    }
+                    const childOpts: any = {
+                      env: { CLAUDE_CODE_OAUTH_TOKEN: oauthToken },
+                      model: childModel,
+                      systemPrompt: childSystem,
+                      cwd: workspaceDir,
+                      additionalDirectories: agentFullSystemAccess ? [pathModule.parse(workspaceDir).root] : [],
+                      // Read-only investigation ONLY: whitelist + explicit blocks
+                      // (no write/edit/delete, no shell, no web, no recursion).
+                      allowedTools: ['Read', 'Glob', 'Grep'],
+                      disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Delete', 'Bash', 'BashOutput', 'KillShell', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'SlashCommand', 'Skill'],
+                      settingSources: [],
+                      permissionMode: 'default',
+                      canUseTool, // same path-sandbox enforcement as the parent
+                      maxTurns: 20,
+                      abortController: ac,
+                      includePartialMessages: false,
+                    };
+                    for await (const m of query({ prompt: childPrompt(), options: childOpts } as any)) {
+                      if ((m as any).type === 'result') {
+                        const r: any = m;
+                        childUsage = r.usage;
+                        resultText = r.subtype === 'success'
+                          ? (r.result || '')
+                          : `Subagent did not finish cleanly (${r.subtype}). ${(r.errors || []).join('; ')}`.trim();
+                        break;
+                      }
+                    }
+                  } catch (e: any) {
+                    resultText = `Subagent error: ${e?.message || 'failed'}`;
+                  } finally {
+                    clearTimeout(killTimer);
+                  }
+                  // Fold the child's token bill into the parent's meter so cost
+                  // stays honest.
+                  if (childUsage) {
+                    cumUsage.input += Number(childUsage.input_tokens || 0);
+                    cumUsage.output += Number(childUsage.output_tokens || 0);
+                    cumUsage.cacheRead += Number(childUsage.cache_read_input_tokens || 0);
+                    cumUsage.cacheCreate += Number(childUsage.cache_creation_input_tokens || 0);
+                  }
+                  enqueue({ type: 'subagent_done', task: a.task, result: resultText });
+                  return { content: [{ type: 'text' as const, text: resultText || '(subagent returned nothing)' }] };
                 },
               ),
             );
@@ -385,7 +472,7 @@ async function streamClaudeViaAgentSDK(args: {
         // answered through the SDK's public API (canUseTool only allows/denies),
         // so headless it just auto-picks its recommended default. When the user
         // enables the question tool, NEXUS registers its own answerable MCP
-        // version (mcp__nexus__AskUserQuestion) above; when disabled, the model
+        // version (mcp__nexus__AskQuestion) above; when disabled, the model
         // simply has no question tool. Either way, no unusable native duplicate.
         const disallowedTools = [...dangerousAlwaysDisabled, ...webToolsDisabledByToggle, ...fileToolsDisabledByToggle, 'AskUserQuestion'];
 
@@ -767,7 +854,7 @@ function resolveSelectorAnswer(rawId: any, allowed: AllowedModel[]): AllowedMode
 //   • Gemini     → @google/genai SDK with functionDeclarations + ANY mode
 //   • all others → OpenAI-compatible /chat/completions with tool_choice
 //                  routed to the right URL/key (DeepSeek-direct, DashScope,
-//                  Z.AI, xAI, Qubrid, Cohere, MiniMax, LM Studio).
+//                  Z.AI, xAI, Moonshot, Cohere, MiniMax, LM Studio).
 // Thinking is forced OFF where the provider supports it — the selector task
 // doesn't need reasoning and we don't want to inflate per-turn latency.
 // Returns null on any failure (the caller falls back to the user's original
@@ -927,7 +1014,7 @@ async function runModelSelectorPreflight(args: {
     : isDashScope ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
     : isGLM       ? 'https://api.z.ai/api/paas/v4/chat/completions'
     : isGrok      ? 'https://api.x.ai/v1/chat/completions'
-    : isKimi      ? (useKimiDirect(keys) ? 'https://api.moonshot.ai/v1/chat/completions' : 'https://platform.qubrid.com/v1/chat/completions')
+    : isKimi      ? 'https://api.moonshot.ai/v1/chat/completions'
     : isCohere    ? 'https://api.cohere.ai/compatibility/v1/chat/completions'
     : isMinimax   ? 'https://api.minimax.io/v1/chat/completions'
     : isOpenAI    ? 'https://api.openai.com/v1/chat/completions'
@@ -940,7 +1027,7 @@ async function runModelSelectorPreflight(args: {
     : isDashScope ? keys.qwen
     : isGLM       ? keys.glm
     : isGrok      ? keys.grok
-    : isKimi      ? (useKimiDirect(keys) ? keys.kimi : keys.qubrid)
+    : isKimi      ? keys.kimi
     : isCohere    ? keys.cohere
     : isMinimax   ? keys.minimax
     : isOpenAI    ? keys.openai
@@ -968,7 +1055,7 @@ async function runModelSelectorPreflight(args: {
   // model-suffix; MiniMax always reasons; LM Studio runs the loaded weights.
 
   const body: any = {
-    model: isKimi ? resolveKimiModel(specificModel, useKimiDirect(keys)) : (specificModel || (
+    model: isKimi ? resolveKimiModel(specificModel) : (specificModel || (
       isGLM      ? 'glm-4.7' :
       isGrok     ? 'grok-4.3' :
       isCohere   ? 'command-a-plus-05-2026' :
@@ -1130,6 +1217,18 @@ export async function POST(req: Request) {
       //                       wait INDEFINITELY (the default behavior).
       askUserEnabled = false,
       askUserTimeoutMs = 0,
+      // ── Subagent (context-firewall helper) ───────────────────────────────
+      // Optional, per-conversation. When ON (OAuth path), the model gets a
+      // spawn_subagent tool that delegates an investigation to a fresh-context
+      // read-only child and returns only the distilled result.
+      //   subagentEnabled — master toggle (default OFF).
+      //   subagentModel   — model the child runs on ('' = cheap default).
+      subagentEnabled = false,
+      subagentModel = '',
+      // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
+      // Routes the child to that provider's endpoint+key, independent of the
+      // parent's provider. Empty = inherit the parent's family.
+      subagentFamily = '',
     } = await req.json();
     const keys = await loadKeys();
 
@@ -1210,10 +1309,9 @@ export async function POST(req: Request) {
     // Reasoning effort is selected via model-name suffix (-reasoning /
     // -non-reasoning), so we don't send a thinking toggle parameter.
     const isGrok      = aiName.toLowerCase().includes('grok');
-    // Kimi is Moonshot's model family, hosted by Qubrid (third-party
-    // OpenAI-compatible aggregator). Reuses keys.qubrid since one Qubrid
-    // account can serve multiple Qubrid-hosted models. Thinking mode shape
-    // matches GLM's `thinking: { type: 'enabled' | 'disabled' }` field.
+    // Kimi is Moonshot's model family, served by Moonshot's first-party API
+    // (api.moonshot.ai) using keys.kimi. Thinking mode shape matches GLM's
+    // `thinking: { type: 'enabled' | 'disabled' }` field.
     const isKimi      = aiName.toLowerCase().includes('kimi');
     // Cohere Command A family via their official OpenAI-compatibility
     // endpoint. Thinking is toggled via OpenAI's standard
@@ -1494,6 +1592,10 @@ export async function POST(req: Request) {
           instructionOverrides,
           askUserEnabled,
           askUserTimeoutMs,
+          subagentEnabled,
+          subagentModel,
+          subagentFamily,
+          keys,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -1738,7 +1840,7 @@ export async function POST(req: Request) {
       // Optional interactive AskUserQuestion tool (independent of file tools).
       if (askUserEnabled) {
         claudeTools.push({
-          name: 'AskUserQuestion',
+          name: 'AskQuestion',
           description: I.askUserDesc,
           input_schema: {
             type: 'object',
@@ -1770,6 +1872,21 @@ export async function POST(req: Request) {
               },
             },
             required: ['questions'],
+          },
+        });
+      }
+      // Optional subagent (context-firewall helper) tool.
+      if (subagentEnabled) {
+        claudeTools.push({
+          name: 'spawn_subagent',
+          description: I.subagentDesc,
+          input_schema: {
+            type: 'object',
+            properties: {
+              task: { type: 'string', description: 'A precise, self-contained investigation for the helper to perform.' },
+              return_contract: { type: 'string', description: 'Optional: how the distilled result should be shaped/formatted.' },
+            },
+            required: ['task'],
           },
         });
       }
@@ -2049,7 +2166,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'read_conversation', 'AskUserQuestion']);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'read_conversation', 'AskQuestion', 'spawn_subagent']);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // Turn finished. If it was cut off at the token cap (thinking +
@@ -2204,13 +2321,13 @@ export async function POST(req: Request) {
                     resultContent = r.ok
                       ? `Transcript of "${r.title}":\n\n${r.transcript}`
                       : `Error: ${r.error}`;
-                  } else if (tu.name === 'AskUserQuestion') {
+                  } else if (tu.name === 'AskQuestion') {
                     // Pause the turn: emit the question, wait for the user's
                     // selection (or the configured timeout), return it as the
                     // tool result. Same rendezvous as the other provider paths.
                     const questions = normalizeQuestions(tu.input);
                     if (questions.length === 0) {
-                      resultContent = 'Error: AskUserQuestion requires 1-4 questions, each with 2-4 options.';
+                      resultContent = 'Error: AskQuestion requires 1-4 questions, each with 2-4 options.';
                     } else {
                       const askId = createAskId();
                       enqueue({ type: 'ask_user', askId, questions });
@@ -2219,6 +2336,31 @@ export async function POST(req: Request) {
                       const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
                       enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                       resultContent = formatAnswerForModel(finalAnswers, timedOut);
+                    }
+                  } else if (tu.name === 'spawn_subagent') {
+                    // Context firewall: a fresh read-only child investigates and
+                    // returns only its distilled result. Child model defaults to
+                    // a cheap Claude; non-Claude subagentModel values fall back.
+                    const task = String((tu.input as any)?.task || '');
+                    if (!task.trim()) {
+                      resultContent = 'Error: spawn_subagent requires a non-empty "task".';
+                    } else {
+                      enqueue({ type: 'subagent_start', task });
+                      // Route by the chosen model's family. Empty → a cheap
+                      // Claude child on the same Anthropic key.
+                      const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : 'Claude';
+                      const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : 'claude-haiku-4-5';
+                      const sub = await runSubagent({
+                        family: childFamily, model: childModel, keys, task,
+                        returnContract: (tu.input as any)?.return_contract ? String((tu.input as any).return_contract) : undefined,
+                        folderName, fullAccess: agentFullSystemAccess,
+                      });
+                      cumUsage.input += sub.usage.input;
+                      cumUsage.output += sub.usage.output;
+                      cumUsage.cacheRead += sub.usage.cacheRead;
+                      cumUsage.cacheCreate += sub.usage.cacheCreate;
+                      enqueue({ type: 'subagent_done', task, result: sub.text });
+                      resultContent = sub.text || '(subagent returned nothing)';
                     }
                   }
                 } catch (e: any) {
@@ -2396,7 +2538,7 @@ export async function POST(req: Request) {
         geminiTools.push({
           functionDeclarations: [
             {
-              name: 'AskUserQuestion',
+              name: 'AskQuestion',
               description: I.askUserDesc,
               parameters: {
                 type: 'OBJECT',
@@ -2428,6 +2570,25 @@ export async function POST(req: Request) {
                   },
                 },
                 required: ['questions'],
+              },
+            },
+          ],
+        });
+      }
+      // Optional subagent (context-firewall helper) tool.
+      if (subagentEnabled) {
+        geminiTools.push({
+          functionDeclarations: [
+            {
+              name: 'spawn_subagent',
+              description: I.subagentDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  task: { type: 'STRING', description: 'A precise, self-contained investigation for the helper to perform.' },
+                  return_contract: { type: 'STRING', description: 'Optional: how the distilled result should be shaped/formatted.' },
+                },
+                required: ['task'],
               },
             },
           ],
@@ -2817,13 +2978,13 @@ export async function POST(req: Request) {
                       result = r.ok
                         ? { title: r.title, transcript: r.transcript }
                         : { error: r.error };
-                    } else if (fc.name === 'AskUserQuestion') {
+                    } else if (fc.name === 'AskQuestion') {
                       // Pause the turn: emit the question, wait for the user's
                       // selection (or the configured timeout), return it as the
                       // functionResponse. Same rendezvous as the other paths.
                       const questions = normalizeQuestions(fc.args);
                       if (questions.length === 0) {
-                        result = { error: 'AskUserQuestion requires 1-4 questions, each with 2-4 options.' };
+                        result = { error: 'AskQuestion requires 1-4 questions, each with 2-4 options.' };
                       } else {
                         const askId = createAskId();
                         enqueue({ type: 'ask_user', askId, questions });
@@ -2832,6 +2993,29 @@ export async function POST(req: Request) {
                         const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
                         enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                         result = { answer: formatAnswerForModel(finalAnswers, timedOut) };
+                      }
+                    } else if (fc.name === 'spawn_subagent') {
+                      // Context firewall: a fresh read-only child investigates
+                      // and returns only its distilled result. Child model
+                      // defaults to a fast Gemini; non-Gemini values fall back.
+                      const task = String(fc.args?.task || '');
+                      if (!task.trim()) {
+                        result = { error: 'spawn_subagent requires a non-empty "task".' };
+                      } else {
+                        enqueue({ type: 'subagent_start', task });
+                        // Route by the chosen model's family. Empty → a fast
+                        // Gemini child on the same Google key.
+                        const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : 'Gemini';
+                        const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : 'gemini-3.1-flash-lite';
+                        const sub = await runSubagent({
+                          family: childFamily, model: childModel, keys, task,
+                          returnContract: fc.args?.return_contract ? String(fc.args.return_contract) : undefined,
+                          folderName, fullAccess: agentFullSystemAccess,
+                        });
+                        cumGeminiUsage.promptTokenCount += sub.usage.input;
+                        cumGeminiUsage.candidatesTokenCount += sub.usage.output;
+                        enqueue({ type: 'subagent_done', task, result: sub.text });
+                        result = { result: sub.text || '(subagent returned nothing)' };
                       }
                     } else {
                       result = { error: `unknown function: ${fc.name}` };
@@ -2952,9 +3136,9 @@ export async function POST(req: Request) {
           error: `Grok (xAI) requires the xAI API key in Preferences.`,
         }, { status: 400 });
       }
-      if (isKimi && !keys.kimi && !keys.qubrid) {
+      if (isKimi && !keys.kimi) {
         return NextResponse.json({
-          error: `Kimi requires an API key in Preferences — either the Kimi (Moonshot direct) key from platform.kimi.ai, or the legacy Qubrid key. The Moonshot direct key is preferred when both are set.`,
+          error: `Kimi requires the Kimi (Moonshot) API key in Preferences (from platform.kimi.ai → Console → API Keys).`,
         }, { status: 400 });
       }
       if (isCohere && !keys.cohere) {
@@ -2991,7 +3175,7 @@ export async function POST(req: Request) {
             : isGrok
               ? 'https://api.x.ai/v1/chat/completions'
               : isKimi
-                ? (useKimiDirect(keys) ? 'https://api.moonshot.ai/v1/chat/completions' : 'https://platform.qubrid.com/v1/chat/completions')
+                ? 'https://api.moonshot.ai/v1/chat/completions'
                 : isCohere
                   ? 'https://api.cohere.ai/compatibility/v1/chat/completions'
                   : isMinimax
@@ -3010,7 +3194,7 @@ export async function POST(req: Request) {
             : isGrok
               ? { Authorization: `Bearer ${keys.grok}` }
               : isKimi
-                ? { Authorization: `Bearer ${useKimiDirect(keys) ? keys.kimi : keys.qubrid}` }
+                ? { Authorization: `Bearer ${keys.kimi}` }
                 : isCohere
                   ? { Authorization: `Bearer ${keys.cohere}` }
                   : isMinimax
@@ -3020,7 +3204,7 @@ export async function POST(req: Request) {
                       : isMimo
                         ? { Authorization: `Bearer ${keys.mimo}` }
                         : {};
-      const localModel = isKimi ? resolveKimiModel(specificModel, useKimiDirect(keys)) : (specificModel || (
+      const localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
         isGrok     ? 'grok-4.3' :
         isCohere   ? 'command-a-plus-05-2026' :
@@ -3166,7 +3350,7 @@ export async function POST(req: Request) {
         localTools.push({
           type: 'function',
           function: {
-            name: 'AskUserQuestion',
+            name: 'AskQuestion',
             description: I.askUserDesc,
             parameters: {
               type: 'object',
@@ -3198,6 +3382,25 @@ export async function POST(req: Request) {
                 },
               },
               required: ['questions'],
+            },
+          },
+        });
+      }
+
+      // ── Subagent (context-firewall helper) tool (optional) ──────────────────
+      if (subagentEnabled) {
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'spawn_subagent',
+            description: I.subagentDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                task: { type: 'string', description: 'A precise, self-contained investigation for the helper to perform.' },
+                return_contract: { type: 'string', description: 'Optional: how the distilled result should be shaped/formatted.' },
+              },
+              required: ['task'],
             },
           },
         });
@@ -3486,7 +3689,7 @@ export async function POST(req: Request) {
         // model / quantization, or via a `/no_think`-style hint in the prompt).
         // Z.AI / GLM uses a different shape: `thinking: { type: 'enabled' | 'disabled' }`
         // (object, not boolean). Reuses the same UI toggle since semantics match.
-        // Kimi K2.6 on Qubrid uses the exact same shape, so it shares this branch.
+        // Kimi K2.6 uses the exact same shape, so it shares this branch.
         if (isGLM || isKimi) {
           requestBody.thinking = {
             type: modelParams.qwenEnableThinking !== false ? 'enabled' : 'disabled',
@@ -3564,7 +3767,7 @@ export async function POST(req: Request) {
               : isGrok
                 ? 'xAI Grok'
                 : isKimi
-                  ? (useKimiDirect(keys) ? 'Kimi (Moonshot)' : 'Qubrid (Kimi)')
+                  ? 'Kimi (Moonshot)'
                   : isCohere
                     ? 'Cohere'
                     : isMinimax
@@ -4059,13 +4262,13 @@ export async function POST(req: Request) {
                       // anything else (or "unknown function") makes Kimi report
                       // it has no web access.
                       resultText = tc.arguments || '{}';
-                    } else if (tc.name === 'AskUserQuestion') {
+                    } else if (tc.name === 'AskQuestion') {
                       // Pause the turn: emit the question to the client, wait
                       // for the user's selection (or indefinitely / until the
                       // configured timeout), then return it as the tool result.
                       const questions = normalizeQuestions(parsed);
                       if (questions.length === 0) {
-                        resultText = 'Error: AskUserQuestion requires 1-4 questions, each with 2-4 options.';
+                        resultText = 'Error: AskQuestion requires 1-4 questions, each with 2-4 options.';
                       } else {
                         const askId = createAskId();
                         enqueue({ type: 'ask_user', askId, questions });
@@ -4074,6 +4277,30 @@ export async function POST(req: Request) {
                         const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
                         enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                         resultText = formatAnswerForModel(finalAnswers, timedOut);
+                      }
+                    } else if (tc.name === 'spawn_subagent') {
+                      // Context firewall: a fresh read-only child investigates
+                      // and returns only its distilled result. Default child
+                      // model = subagentModel, else the parent's own model.
+                      const task = String(parsed?.task || '');
+                      if (!task.trim()) {
+                        resultText = 'Error: spawn_subagent requires a non-empty "task".';
+                      } else {
+                        enqueue({ type: 'subagent_start', task });
+                        // Route the child to the provider that owns the chosen
+                        // model (subagentFamily/subagentModel), NOT the parent's
+                        // endpoint. Empty → inherit the parent's family+model.
+                        const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : aiName;
+                        const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : localModel;
+                        const sub = await runSubagent({
+                          family: childFamily, model: childModel, keys,
+                          task, returnContract: parsed?.return_contract ? String(parsed.return_contract) : undefined,
+                          folderName, fullAccess: agentFullSystemAccess,
+                        });
+                        cumOaiUsage.prompt_tokens += sub.usage.input;
+                        cumOaiUsage.completion_tokens += sub.usage.output;
+                        enqueue({ type: 'subagent_done', task, result: sub.text });
+                        resultText = sub.text || '(subagent returned nothing)';
                       }
                     } else {
                       resultText = `Error: unknown function ${tc.name}`;
