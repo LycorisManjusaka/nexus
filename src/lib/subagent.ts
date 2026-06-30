@@ -21,7 +21,12 @@ import { GoogleGenAI } from '@google/genai';
 import { readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, globWorkspaceFiles, grepWorkspaceFiles } from './fsStorage';
 
 export interface SubagentUsage { input: number; output: number; cacheRead: number; cacheCreate: number }
-export interface SubagentResult { text: string; usage: SubagentUsage }
+// `via` records WHERE the request actually went: the provider label, the exact
+// endpoint URL we POSTed to, and the model the PROVIDER echoed back in its
+// response. This is hard proof of which API served the subagent — independent
+// of whatever the model claims about itself.
+export interface SubagentVia { label: string; endpoint: string; echoedModel?: string }
+export interface SubagentResult { text: string; usage: SubagentUsage; via?: SubagentVia }
 
 const MAX_TURNS = 16;
 
@@ -46,7 +51,10 @@ type ReadResult =
 
 async function dispatchTool(name: string, args: any, folderName: string, fullAccess: boolean): Promise<ReadResult> {
   try {
-    if (name === 'Read') {
+    // Generic, provider-neutral tool names (NOT Claude Code's Read/Glob/Grep,
+    // which biased distilled models into claiming they were Claude). Legacy
+    // Read/Glob/Grep names are still accepted for safety.
+    if (name === 'read_file' || name === 'Read') {
       const p = String(args?.path || '');
       if (isImageFilename(p)) {
         const bin = await readWorkspaceFileBinary(folderName, p, { fullAccess });
@@ -56,11 +64,11 @@ async function dispatchTool(name: string, args: any, folderName: string, fullAcc
       const t = await readWorkspaceFile(folderName, p, { fullAccess });
       return { kind: 'text', text: t == null ? `Error: file not found or outside workspace: ${p}` : t };
     }
-    if (name === 'Glob') {
+    if (name === 'list_files' || name === 'Glob') {
       const matches = await globWorkspaceFiles(folderName, String(args?.pattern || '**'));
       return { kind: 'text', text: matches.length ? matches.join('\n') : `(no files match \`${args?.pattern}\`)` };
     }
-    if (name === 'Grep') {
+    if (name === 'search_files' || name === 'Grep') {
       const gr = await grepWorkspaceFiles(folderName, String(args?.pattern || ''), {
         filePattern: args?.file_pattern ? String(args.file_pattern) : undefined,
         flags: args?.flags ? String(args.flags) : undefined,
@@ -68,7 +76,7 @@ async function dispatchTool(name: string, args: any, folderName: string, fullAcc
       if (!gr.ok) return { kind: 'text', text: `Error: ${gr.error}` };
       return { kind: 'text', text: gr.matches?.length ? gr.matches.map((m: any) => `${m.path}:${m.line}: ${m.text}`).join('\n') : '(no matches)' };
     }
-    return { kind: 'text', text: `Error: tool "${name}" is not available to a subagent (read-only: Read/Glob/Grep).` };
+    return { kind: 'text', text: `Error: tool "${name}" is not available (read-only: read_file / list_files / search_files).` };
   } catch (e: any) {
     return { kind: 'text', text: `Error: ${e?.message || 'tool execution failed'}` };
   }
@@ -78,22 +86,22 @@ const emptyUsage = (): SubagentUsage => ({ input: 0, output: 0, cacheRead: 0, ca
 
 // ── Tool schemas, one per provider shape ─────────────────────────────────────
 const OPENAI_TOOLS = [
-  { type: 'function', function: { name: 'Read', description: 'Read a file (read-only). Image files come back as inline images you can see.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Path within the workspace.' } }, required: ['path'] } } },
-  { type: 'function', function: { name: 'Glob', description: 'List files matching a glob pattern.', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Glob pattern, e.g. **/*.ts' } }, required: ['pattern'] } } },
-  { type: 'function', function: { name: 'Grep', description: 'Regex-search file contents.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, file_pattern: { type: 'string' }, flags: { type: 'string' } }, required: ['pattern'] } } },
+  { type: 'function', function: { name: 'read_file', description: 'Read a file (read-only). Image files come back as inline images you can see.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Path within the workspace.' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'list_files', description: 'List files matching a glob pattern.', parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Glob pattern, e.g. **/*.ts' } }, required: ['pattern'] } } },
+  { type: 'function', function: { name: 'search_files', description: 'Regex-search file contents.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, file_pattern: { type: 'string' }, flags: { type: 'string' } }, required: ['pattern'] } } },
 ];
 
 const ANTHROPIC_TOOLS = [
-  { name: 'Read', description: 'Read a file (read-only). Image files come back as inline images you can see.', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
-  { name: 'Glob', description: 'List files matching a glob pattern.', input_schema: { type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] } },
-  { name: 'Grep', description: 'Regex-search file contents.', input_schema: { type: 'object', properties: { pattern: { type: 'string' }, file_pattern: { type: 'string' }, flags: { type: 'string' } }, required: ['pattern'] } },
+  { name: 'read_file', description: 'Read a file (read-only). Image files come back as inline images you can see.', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+  { name: 'list_files', description: 'List files matching a glob pattern.', input_schema: { type: 'object', properties: { pattern: { type: 'string' } }, required: ['pattern'] } },
+  { name: 'search_files', description: 'Regex-search file contents.', input_schema: { type: 'object', properties: { pattern: { type: 'string' }, file_pattern: { type: 'string' }, flags: { type: 'string' } }, required: ['pattern'] } },
 ];
 
 const GEMINI_TOOLS = [{
   functionDeclarations: [
-    { name: 'Read', description: 'Read a file (read-only). Image files come back as inline images you can see.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
-    { name: 'Glob', description: 'List files matching a glob pattern.', parameters: { type: 'OBJECT', properties: { pattern: { type: 'STRING' } }, required: ['pattern'] } },
-    { name: 'Grep', description: 'Regex-search file contents.', parameters: { type: 'OBJECT', properties: { pattern: { type: 'STRING' }, file_pattern: { type: 'STRING' }, flags: { type: 'STRING' } }, required: ['pattern'] } },
+    { name: 'read_file', description: 'Read a file (read-only). Image files come back as inline images you can see.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
+    { name: 'list_files', description: 'List files matching a glob pattern.', parameters: { type: 'OBJECT', properties: { pattern: { type: 'STRING' } }, required: ['pattern'] } },
+    { name: 'search_files', description: 'Regex-search file contents.', parameters: { type: 'OBJECT', properties: { pattern: { type: 'STRING' }, file_pattern: { type: 'STRING' }, flags: { type: 'STRING' } }, required: ['pattern'] } },
   ],
 }];
 
@@ -102,6 +110,8 @@ export async function runOpenAISubagent(opts: {
   url: string; headers: Record<string, string>; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean;
 }): Promise<SubagentResult> {
   const usage = emptyUsage();
+  let echoedModel = '';
+  const via = (): SubagentVia => ({ label: 'OpenAI-compatible', endpoint: opts.url, echoedModel });
   // eslint-disable-next-line no-console
   console.log(`[subagent] OpenAI-compatible → endpoint=${opts.url} model=${opts.model}`);
   const msgs: any[] = [
@@ -117,12 +127,14 @@ export async function runOpenAISubagent(opts: {
       body: JSON.stringify({ model: opts.model, messages: msgs, tools: OPENAI_TOOLS, stream: false }),
     });
     const data = await resp.json().catch(() => null);
-    if (!data) return { text: `Subagent error: provider returned non-JSON (HTTP ${resp.status}).`, usage };
-    if (data.error) return { text: `Subagent error: ${data.error?.message || JSON.stringify(data.error)}`, usage };
+    if (!data) return { text: `Subagent error: provider returned non-JSON (HTTP ${resp.status}).`, usage, via: via() };
+    if (data.error) return { text: `Subagent error: ${data.error?.message || JSON.stringify(data.error)}`, usage, via: via() };
+    // The provider echoes the model it actually served in `data.model`.
+    if (data.model) echoedModel = String(data.model);
     if (data.usage) { usage.input += Number(data.usage.prompt_tokens || 0); usage.output += Number(data.usage.completion_tokens || 0); }
     const m = data?.choices?.[0]?.message;
     const toolCalls = m?.tool_calls;
-    if (!toolCalls?.length) return { text: String(m?.content || ''), usage };
+    if (!toolCalls?.length) return { text: String(m?.content || ''), usage, via: via() };
     msgs.push({ role: 'assistant', content: m.content || '', tool_calls: toolCalls });
     // The OpenAI `tool` role can't carry images, so images read this turn are
     // queued and injected as a follow-up user message after the tool results.
@@ -143,7 +155,7 @@ export async function runOpenAISubagent(opts: {
       msgs.push({ role: 'user', content: parts });
     }
   }
-  return { text: '(subagent reached its turn limit without a final answer)', usage };
+  return { text: '(subagent reached its turn limit without a final answer)', usage, via: via() };
 }
 
 // ── Anthropic API-key (token-paid Claude) ────────────────────────────────────
@@ -286,13 +298,17 @@ export async function runSubagent(opts: {
   if (fam.includes('claude') || fam.includes('fable') || fam.includes('mythos')) {
     if (!opts.keys?.claude) return { text: 'Subagent error: a Claude subagent needs the Anthropic API key in Preferences.', usage: emptyUsage() };
     const anthropic = new Anthropic({ apiKey: opts.keys.claude });
-    return runAnthropicSubagent({ anthropic, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+    const r = await runAnthropicSubagent({ anthropic, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+    r.via = { label: 'Anthropic', endpoint: 'https://api.anthropic.com/v1/messages', echoedModel: opts.model };
+    return r;
   }
   // Gemini family → Google.
   if (fam.includes('gemini')) {
     if (!opts.keys?.gemini) return { text: 'Subagent error: a Gemini subagent needs the Google API key in Preferences.', usage: emptyUsage() };
     const ai = new GoogleGenAI({ apiKey: opts.keys.gemini });
-    return runGeminiSubagent({ ai, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+    const r = await runGeminiSubagent({ ai, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+    r.via = { label: 'Google Gemini', endpoint: 'https://generativelanguage.googleapis.com', echoedModel: opts.model };
+    return r;
   }
   // Everything else → that family's OpenAI-compatible endpoint.
   const route = resolveOpenAIRoute(opts.family, opts.model, opts.keys);
@@ -302,5 +318,8 @@ export async function runSubagent(opts: {
   }
   // eslint-disable-next-line no-console
   console.log(`[subagent] family="${opts.family}" → ${route.label} endpoint=${route.url} model=${route.model}`);
-  return runOpenAISubagent({ url: route.url, headers: route.headers, model: route.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+  const r = await runOpenAISubagent({ url: route.url, headers: route.headers, model: route.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+  // Authoritative label/endpoint from the route; keep the provider-echoed model.
+  r.via = { label: route.label, endpoint: route.url, echoedModel: r.via?.echoedModel };
+  return r;
 }

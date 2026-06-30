@@ -1194,7 +1194,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             });
           if (kept.length) slim.attachments = kept;
         }
-        if (m.claudeThinkingBlocks?.length) {
+        // Only feed Claude its own past reasoning when the user opts in via the
+        // "Save & reuse thinking process" toggle. When off, thinking blocks are
+        // withheld from the wire entirely — so the API-key path won't resend
+        // them and the OAuth path's transcript reconstruction won't include the
+        // "(thinking)" lines. (This mirrors the .md export, which is gated by
+        // the same toggle.)
+        if (saveThinkingToLog && m.claudeThinkingBlocks?.length) {
           slim.claudeThinkingBlocks = m.claudeThinkingBlocks;
         }
         return slim;
@@ -1402,10 +1408,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 subagentRuns.push({ task: data.task || '', result: null });
                 setActiveSubagent({ task: data.task || '' });
               } else if (data.type === 'subagent_done') {
-                // Child returned its distilled result. Record it and clear the chip.
+                // Child returned its distilled result. Record it (+ the proof of
+                // which API actually served it) and clear the chip.
                 const rec = [...subagentRuns].reverse().find((s: any) => s.task === (data.task || '') && s.result === null);
-                if (rec) rec.result = data.result || '';
-                else subagentRuns.push({ task: data.task || '', result: data.result || '' });
+                if (rec) { rec.result = data.result || ''; rec.via = data.via || null; }
+                else subagentRuns.push({ task: data.task || '', result: data.result || '', via: data.via || null });
                 setActiveSubagent(null);
               } else if (data.type === 'ask_user_resolved' && data.askId) {
                 // Server resolved the question (user answered, or it timed out
@@ -3178,8 +3185,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                           />
                           <label htmlFor="saveThinking" className="text-sm font-medium text-foreground cursor-pointer">
-                            Save thinking process to log
-                            <span className="text-xs text-muted-foreground ml-1">(adds [thinking] blocks to .md export)</span>
+                            Save &amp; reuse thinking process
+                            <span className="text-xs text-muted-foreground ml-1">(adds [thinking] to .md export and lets Claude see its own past reasoning)</span>
                           </label>
                         </div>
                       )}

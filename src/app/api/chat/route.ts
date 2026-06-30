@@ -180,14 +180,11 @@ async function streamClaudeViaAgentSDK(args: {
   const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, keys } = args;
   const I = resolveAgentInstructions(instructionOverrides);
 
-  // Build the user content blocks for the LATEST user message only. Earlier
-  // history lives on Anthropic's side under the resumed session ID.
-  // If `resumeSessionId` is null, this is a fresh session — the systemPrompt
-  // becomes the session's identity. Subsequent turns within the same session
-  // ignore the systemPrompt parameter (Anthropic uses the one from session
-  // creation). When NEXUS reruns/edits/deletes happen, the frontend nulls
-  // the session ID, forcing a fresh session with the (possibly updated)
-  // current systemPrompt.
+  // Build the content blocks for the LATEST user message (its text + any image
+  // attachments). The full prior conversation is replayed separately as a text
+  // transcript (see historyText below) — we always start a fresh session and
+  // send the systemPrompt as the identity, rather than relying on Anthropic's
+  // server-side session resume (which drifts from NEXUS's visible history).
   const lastUserMsg = [...processedMessages].reverse().find((m: any) => m.role === 'user');
   if (!lastUserMsg) {
     return NextResponse.json({ error: 'No user message to send.' }, { status: 400 });
@@ -208,6 +205,52 @@ async function streamClaudeViaAgentSDK(args: {
   }
   if (lastUserMsg.content) contentBlocks.push({ type: 'text', text: lastUserMsg.content });
   if (contentBlocks.length === 0) contentBlocks.push({ type: 'text', text: '-' });
+
+  // Prior conversation turns (everything before this latest user message).
+  // NEXUS is the SINGLE SOURCE OF TRUTH for history. We do NOT trust Anthropic's
+  // server-side session resume — it drifts from the visible conversation in
+  // every way the user actually hits: it can't see interleaved non-Claude
+  // turns, it never shrinks when NEXUS auto-trims, it goes stale on rerun/edit/
+  // delete, and a session id created on one machine simply doesn't exist on
+  // another after a local_data sync (so resume collapses to a near-empty
+  // session → "this is the first message"). Instead we replay the FULL visible
+  // conversation as a text transcript on the live user message, every turn —
+  // exactly what the user sees, exactly like the API-key path and every other
+  // provider. Text-only by design: re-sending every historical image as base64
+  // would blow up the payload — the live turn still carries its own media via
+  // contentBlocks above. Claude's own saved thinking is folded in as text so it
+  // still sees its prior reasoning (the one thing server-side resume gave us).
+  const lastIdx = processedMessages.indexOf(lastUserMsg);
+  const priorMsgs = lastIdx > 0 ? processedMessages.slice(0, lastIdx) : [];
+  const historyText = (() => {
+    if (priorMsgs.length === 0) return '';
+    const lines: string[] = [];
+    for (const m of priorMsgs) {
+      const role = m.role === 'assistant' ? 'ASSISTANT' : 'USER';
+      let block = '';
+      // Surface Claude's own saved thinking (present only when the entity has
+      // "save thinking to log" enabled) so it can see its earlier reasoning.
+      if (m.role === 'assistant' && Array.isArray(m.claudeThinkingBlocks) && m.claudeThinkingBlocks.length) {
+        const thoughts = m.claudeThinkingBlocks
+          .map((tb: any) => (tb?.thinking || '').trim())
+          .filter(Boolean)
+          .join('\n\n');
+        if (thoughts) block += `(thinking)\n${thoughts}\n\n`;
+      }
+      block += (m.content || '').trim();
+      if (!block.trim()) continue;
+      lines.push(`[${role}]:\n${block.trim()}`);
+    }
+    if (lines.length === 0) return '';
+    return (
+      '<conversation_history>\n' +
+      'This is the full prior conversation, provided for your context — it is exactly ' +
+      'what the user currently sees. Continue naturally from it; this is NOT the first ' +
+      'message. Lines marked "(thinking)" are your own earlier reasoning.\n\n' +
+      lines.join('\n\n') +
+      '\n</conversation_history>'
+    );
+  })();
 
   const readableStream = new ReadableStream({
     async start(controller) {
@@ -327,7 +370,7 @@ async function streamClaudeViaAgentSDK(args: {
                     cumUsage.output += sub.usage.output;
                     cumUsage.cacheRead += sub.usage.cacheRead;
                     cumUsage.cacheCreate += sub.usage.cacheCreate;
-                    enqueue({ type: 'subagent_done', task: a.task, result: sub.text });
+                    enqueue({ type: 'subagent_done', task: a.task, result: sub.text, via: sub.via });
                     return { content: [{ type: 'text' as const, text: sub.text || '(subagent returned nothing)' }] };
                   }
                   // Claude family → child query() on the OAuth subscription token.
@@ -390,7 +433,7 @@ async function streamClaudeViaAgentSDK(args: {
                     cumUsage.cacheRead += Number(childUsage.cache_read_input_tokens || 0);
                     cumUsage.cacheCreate += Number(childUsage.cache_creation_input_tokens || 0);
                   }
-                  enqueue({ type: 'subagent_done', task: a.task, result: resultText });
+                  enqueue({ type: 'subagent_done', task: a.task, result: resultText, via: { label: 'Anthropic (OAuth / Claude Code)', endpoint: 'Claude Code subscription session', echoedModel: childModel } });
                   return { content: [{ type: 'text' as const, text: resultText || '(subagent returned nothing)' }] };
                 },
               ),
@@ -404,11 +447,17 @@ async function streamClaudeViaAgentSDK(args: {
           nexusMcpServers = { nexus: nexusServer };
         }
 
-        // Single-message async iterable for query().prompt.
-        async function* userMsgGen() {
+        // Single-message async iterable for query().prompt. On a fresh session
+        // (`includeHistory`) the prior turns are prepended as a text preamble so
+        // a loaded `.md` conversation is visible; on a resumed session only the
+        // live turn is sent (history already lives under the session id).
+        async function* userMsgGen(includeHistory: boolean) {
+          const content = includeHistory && historyText
+            ? [{ type: 'text' as const, text: historyText }, ...contentBlocks]
+            : contentBlocks;
           yield {
             type: 'user' as const,
-            message: { role: 'user' as const, content: contentBlocks },
+            message: { role: 'user' as const, content },
             parent_tool_use_id: null,
           };
         }
@@ -607,7 +656,7 @@ async function streamClaudeViaAgentSDK(args: {
           else { delete opts.resume; opts.systemPrompt = systemPrompt; }
           let resultSubtype: string | null = null;
           let resultErrorText = '';
-          for await (const msg of query({ prompt: userMsgGen(), options: opts } as any)) {
+          for await (const msg of query({ prompt: userMsgGen(!useResume), options: opts } as any)) {
             // Every message carries the session_id once Anthropic has assigned
             // one. We keep capturing in case the first chunks don't have it.
             if ((msg as any).session_id) capturedSessionId = (msg as any).session_id;
@@ -695,22 +744,16 @@ async function streamClaudeViaAgentSDK(args: {
           return { subtype: resultSubtype, errorText: resultErrorText };
         };
 
-        // First attempt: resume the saved session if there is one.
-        let res = await consume(resumeSessionId);
-        // Best-effort resume with automatic fallback. A session id created on a
-        // DIFFERENT machine (carried here by local_data sync) — or an expired /
-        // cleaned one — doesn't exist in THIS machine's Claude Code session
-        // store, so resuming it fails instantly with `error_during_execution`.
-        // If nothing has streamed yet, transparently retry ONCE on a fresh
-        // session so the user gets a working reply instead of an error (this is
-        // what manually rerunning already does). Cross-machine history
-        // continuity is inherently limited on the OAuth path since it relies on
-        // server-side resume — the fresh session starts from this turn.
-        if (res.subtype && res.subtype !== 'success' && resumeSessionId && !producedContent) {
-          console.warn(`[claude-oauth] resume of "${resumeSessionId}" failed (${res.subtype}); retrying with a fresh session`);
-          capturedSessionId = null; // forget the bad id; a new one is captured on retry
-          res = await consume(null);
-        }
+        // ALWAYS a fresh session with the full reconstructed transcript (see the
+        // historyText note above). We deliberately ignore `resumeSessionId`:
+        // server-side resume drifts from NEXUS's visible conversation and is the
+        // root cause of "Claude can only see the last message" after a loaded
+        // `.md`, a rerun, a cross-machine sync, or model interleaving. Sending
+        // the whole visible conversation every turn is exactly what the API-key
+        // path and every other provider already do, so OAuth Claude now behaves
+        // identically — it sees precisely what the user sees.
+        void resumeSessionId; // retained in the request body for back-compat; unused
+        const res = await consume(null);
         if (res.subtype && res.subtype !== 'success') {
           enqueue({ error: `Agent SDK result: ${res.subtype} ${res.errorText || ''}`.trim() });
         }
@@ -2359,7 +2402,7 @@ export async function POST(req: Request) {
                       cumUsage.output += sub.usage.output;
                       cumUsage.cacheRead += sub.usage.cacheRead;
                       cumUsage.cacheCreate += sub.usage.cacheCreate;
-                      enqueue({ type: 'subagent_done', task, result: sub.text });
+                      enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                       resultContent = sub.text || '(subagent returned nothing)';
                     }
                   }
@@ -3014,7 +3057,7 @@ export async function POST(req: Request) {
                         });
                         cumGeminiUsage.promptTokenCount += sub.usage.input;
                         cumGeminiUsage.candidatesTokenCount += sub.usage.output;
-                        enqueue({ type: 'subagent_done', task, result: sub.text });
+                        enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                         result = { result: sub.text || '(subagent returned nothing)' };
                       }
                     } else {
@@ -4299,7 +4342,7 @@ export async function POST(req: Request) {
                         });
                         cumOaiUsage.prompt_tokens += sub.usage.input;
                         cumOaiUsage.completion_tokens += sub.usage.output;
-                        enqueue({ type: 'subagent_done', task, result: sub.text });
+                        enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                         resultText = sub.text || '(subagent returned nothing)';
                       }
                     } else {
