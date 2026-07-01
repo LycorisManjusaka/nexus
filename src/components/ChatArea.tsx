@@ -773,10 +773,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const textTokens = (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
       total += textTokens;
       convoTotal += textTokens;
-      // Include thinking tokens in total if saveThinkingToLog is on
-      if (saveThinkingToLog && m.thinkingTokens) {
+      // Thinking tokens are treated like attachments: counted in the grand
+      // total (so the context bar reflects them) but honoring a per-message
+      // `thinkingExcluded` opt-out, and kept out of the conversation-text
+      // subtotal (convoTotal) just like attachment tokens are.
+      if (saveThinkingToLog && m.thinkingTokens && !m.thinkingExcluded) {
         total += m.thinkingTokens;
-        convoTotal += m.thinkingTokens;
       }
       if (m.attachments) {
         m.attachments.forEach((att: any) => {
@@ -793,15 +795,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Per-message tokens, split so the progress bar can show attachments as
   // their own layer and so the auto-trim threshold can ignore attachments.
   const computeMsgTextTokens = (m: any) => {
-    let t = (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
-    if (saveThinkingToLog && m.thinkingTokens) t += m.thinkingTokens;
-    return t;
+    return (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
   };
   const computeMsgAttachTokens = (m: any) => {
     let t = 0;
     if (m.attachments) {
       for (const a of m.attachments) if (!a.excluded) t += (a.tokens || 0);
     }
+    // Reusable thinking is bucketed with attachments: it shows in the "Att"
+    // segment and (like attachments) is excluded from the auto-trim threshold,
+    // honoring the per-message `thinkingExcluded` opt-out.
+    if (saveThinkingToLog && m.thinkingTokens && !m.thinkingExcluded) t += m.thinkingTokens;
     return t;
   };
   const computeMsgTokens = (m: any) => computeMsgTextTokens(m) + computeMsgAttachTokens(m);
@@ -1195,13 +1199,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (kept.length) slim.attachments = kept;
         }
         // Only feed Claude its own past reasoning when the user opts in via the
-        // "Save & reuse thinking process" toggle. When off, thinking blocks are
-        // withheld from the wire entirely — so the API-key path won't resend
-        // them and the OAuth path's transcript reconstruction won't include the
-        // "(thinking)" lines. (This mirrors the .md export, which is gated by
-        // the same toggle.)
-        if (saveThinkingToLog && m.claudeThinkingBlocks?.length) {
-          slim.claudeThinkingBlocks = m.claudeThinkingBlocks;
+        // "Save & reuse thinking process" toggle, and only for blocks the user
+        // hasn't manually excluded. When off (or excluded), thinking is withheld
+        // from the wire entirely — the API-key path won't resend it and the OAuth
+        // transcript reconstruction won't include the "(thinking)" lines. (This
+        // mirrors the .md export, which is gated by the same toggle.)
+        //
+        // Two sources of reusable thinking:
+        //   1. claudeThinkingBlocks — signed blocks from the token-paid API-key
+        //      path (carry real signatures, replayable natively).
+        //   2. thoughtProcess — the OAuth/Agent-SDK path emits thinking as text
+        //      only (no signatures), so it is NEVER stored as claudeThinkingBlocks.
+        //      Without this fallback, OAuth Claude never receives its own past
+        //      reasoning at all (the transcript builder reads claudeThinkingBlocks,
+        //      which is empty). We forward it as a signature-less block: the OAuth
+        //      transcript builder folds `tb.thinking` regardless of signature, and
+        //      the API-key native-replay path safely skips signature-less blocks.
+        if (saveThinkingToLog && !m.thinkingExcluded) {
+          if (m.claudeThinkingBlocks?.length) {
+            slim.claudeThinkingBlocks = m.claudeThinkingBlocks;
+          } else if (m.thoughtProcess) {
+            slim.claudeThinkingBlocks = [{ thinking: m.thoughtProcess, signature: '' }];
+          }
         }
         return slim;
       });
@@ -1713,16 +1732,37 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     } catch { /* if it fails the server times out / waits per setting */ }
   };
 
-  const hasVisibleAttachments = messages.some(m => m.attachments?.some((a: any) => !a.excluded));
+  // A message's reusable thinking (Claude's own saved reasoning) is treated
+  // like an attachment: it can be individually excluded from context and is
+  // swept by the same "hide/show all" control. Only meaningful while the
+  // "Save & reuse thinking process" toggle is on.
+  const handleToggleThinking = (msgId: string) => {
+    setMessages(prev => prev.map(m => (
+      m.id === msgId ? { ...m, thinkingExcluded: !m.thinkingExcluded } : m
+    )));
+  };
+
+  // "Has reusable thinking" keys on `thoughtProcess` — the display text present
+  // on BOTH the API-key path (which also stores signed claudeThinkingBlocks) and
+  // the OAuth path (which emits thinking as text only, no signature blocks). The
+  // earlier `claudeThinkingBlocks` gate was empty on OAuth messages, hiding the
+  // toggle and neutering the sweep for exactly the OAuth conversations this is for.
+  const hasVisibleThinking = saveThinkingToLog && messages.some(m => m.thoughtProcess && !m.thinkingExcluded);
+  const hasVisibleAttachments = messages.some(m => m.attachments?.some((a: any) => !a.excluded)) || hasVisibleThinking;
 
   const handleToggleAllAttachments = () => {
     const shouldHide = hasVisibleAttachments;
     setMessages(prev => prev.map(m => {
-      if (!m.attachments || m.attachments.length === 0) return m;
-      return {
-        ...m,
-        attachments: m.attachments.map((a: any) => ({ ...a, excluded: shouldHide }))
-      };
+      let nm = m;
+      if (m.attachments && m.attachments.length > 0) {
+        nm = { ...nm, attachments: m.attachments.map((a: any) => ({ ...a, excluded: shouldHide })) };
+      }
+      // Sweep reusable thinking too, but only while the reuse toggle is on
+      // (otherwise thinking isn't part of context and shouldn't be touched).
+      if (saveThinkingToLog && m.thoughtProcess) {
+        nm = { ...nm, thinkingExcluded: shouldHide };
+      }
+      return nm;
     }));
   };
 
@@ -1925,7 +1965,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               </div>
             );
           })()}
-          <button onClick={handleToggleAllAttachments} className={`p-1.5 transition-colors ${hasVisibleAttachments ? 'text-muted-foreground hover:text-red-400' : 'text-red-400 hover:text-muted-foreground'}`} title={hasVisibleAttachments ? "Hide all attachments" : "Show all attachments"}>
+          <button onClick={handleToggleAllAttachments} className={`p-1.5 transition-colors ${hasVisibleAttachments ? 'text-muted-foreground hover:text-red-400' : 'text-red-400 hover:text-muted-foreground'}`} title={hasVisibleAttachments ? "Hide all attachments & reusable thinking" : "Show all attachments & reusable thinking"}>
             {hasVisibleAttachments ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
           <button
@@ -2090,6 +2130,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 isOriginal={isMessageOriginal(msg.id)}
                 isFirstOriginal={firstOriginalMessageId === msg.id}
                 onSetFirstOriginal={() => handleSetFirstOriginal(msg.id)}
+                reuseThinking={saveThinkingToLog}
+                onToggleThinking={() => handleToggleThinking(msg.id)}
               />
               {/* Persisted subagent runs (collapsed — task + distilled result). */}
               {Array.isArray(msg.subagentRuns) && msg.subagentRuns.map((sr: any, si: number) => (

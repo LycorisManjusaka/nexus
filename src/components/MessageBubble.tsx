@@ -9,7 +9,7 @@ import remarkBreaks from 'remark-breaks';
 import { stripLeadingTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
 import { applyOutputFilter } from '@/lib/outputFilter';
 
-export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal }: any) {
+export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal }: any) {
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(msg.content);
@@ -1026,10 +1026,30 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               </div>
             )}
             {msg.thoughtProcess && (
-              <details className="bg-muted/30 border border-border rounded-xl px-4 py-3 text-sm group/details max-w-full shadow-sm text-muted-foreground open:bg-muted/50 transition-colors">
+              <details className={`border rounded-xl px-4 py-3 text-sm group/details max-w-full shadow-sm text-muted-foreground transition-colors ${msg.thinkingExcluded ? 'bg-muted/10 border-dashed border-border/60 opacity-60' : 'bg-muted/30 border-border open:bg-muted/50'}`}>
                 <summary className="font-semibold cursor-pointer flex items-center gap-2 select-none hover:text-foreground transition-colors outline-none">
                   <Brain size={16} className="text-indigo-400 shrink-0" />
                   <span>Thought Process</span>
+                  {/* Reusable-thinking visibility toggle — mirrors attachment
+                      exclusion. Shown whenever the entity's "Save & reuse
+                      thinking process" toggle is on (we're already inside a
+                      `msg.thoughtProcess &&` guard, so thinking text exists).
+                      Keyed on thoughtProcess, NOT claudeThinkingBlocks, because
+                      the OAuth path stores thinking as text only. */}
+                  {reuseThinking && (
+                    <>
+                      <button
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleThinking?.(); }}
+                        className="ml-auto p-1 rounded hover:bg-muted transition-colors shrink-0"
+                        title={msg.thinkingExcluded ? "Include this thinking in context" : "Exclude this thinking from context"}
+                      >
+                        {msg.thinkingExcluded ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                      {msg.thinkingExcluded && (
+                        <span className="text-[10px] text-red-500 font-bold bg-red-500/10 rounded px-1.5 py-0.5 shrink-0">EXCLUDED</span>
+                      )}
+                    </>
+                  )}
                 </summary>
                 <div className="mt-3 pt-3 border-t border-border/50 text-[13px] leading-relaxed whitespace-pre-wrap font-mono opacity-80">
                   {msg.thoughtProcess}
