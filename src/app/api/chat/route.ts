@@ -224,6 +224,14 @@ async function streamClaudeViaAgentSDK(args: {
   const priorMsgs = lastIdx > 0 ? processedMessages.slice(0, lastIdx) : [];
   const historyText = (() => {
     if (priorMsgs.length === 0) return '';
+    // The entity's own name (the character folder = its identity, same value the
+    // .md export labels assistant turns with). Used to name ASSISTANT turns
+    // symmetrically with the human [name] tags that USER turns already carry in
+    // their content — so both sides of the transcript are named, not just the
+    // human. The [USER]/[ASSISTANT] role tokens are kept because they are the
+    // least ambiguous turn-boundary signal for the model; the names sit beneath
+    // them and carry no hierarchy.
+    const entityName = (folderName || '').trim() || 'Assistant';
     const lines: string[] = [];
     for (const m of priorMsgs) {
       const role = m.role === 'assistant' ? 'ASSISTANT' : 'USER';
@@ -239,14 +247,23 @@ async function streamClaudeViaAgentSDK(args: {
       }
       block += (m.content || '').trim();
       if (!block.trim()) continue;
-      lines.push(`[${role}]:\n${block.trim()}`);
+      // Assistant turns get the entity's name beneath the role label, mirroring
+      // the human's in-content [name] tags. (Prepended only after the empty-turn
+      // skip above, so a truly empty assistant turn isn't emitted as a bare name.)
+      const named = m.role === 'assistant'
+        ? `[${entityName}]\n${block.trim()}`
+        : block.trim();
+      lines.push(`[${role}]:\n${named}`);
     }
     if (lines.length === 0) return '';
     return (
       '<conversation_history>\n' +
       'This is the full prior conversation, provided for your context — it is exactly ' +
       'what the user currently sees. Continue naturally from it; this is NOT the first ' +
-      'message. Lines marked "(thinking)" are your own earlier reasoning.\n\n' +
+      'message. Each turn is labelled with its speaker: your own turns are marked ' +
+      `[ASSISTANT] and carry your name ([${entityName}]); everyone else appears under ` +
+      '[USER] with their name in brackets. Lines marked "(thinking)" are your own ' +
+      'earlier reasoning.\n\n' +
       lines.join('\n\n') +
       '\n</conversation_history>'
     );
