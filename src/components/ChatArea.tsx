@@ -43,6 +43,7 @@ const CLOUD_MODELS_FILL =
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
 Claude   | claude-opus-4-8              | on  | Claude Opus 4.8 Thinking
 Claude   | claude-opus-4-7              | on  | Claude Opus 4.7 Thinking
+Claude   | claude-sonnet-5              | on  | Claude Sonnet 5 Thinking
 Claude   | claude-sonnet-4-6            | on  | Claude Sonnet 4.6 Thinking
 Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
 
@@ -268,6 +269,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "Claude | claude-fable-5 | on | Claude Fable 5 Thinking\n" +
     "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
     "Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking\n" +
+    "Claude | claude-sonnet-5 | on | Claude Sonnet 5 Thinking\n" +
     "Claude | claude-haiku-4-5-20251001 | off | Claude Haiku 4.5\n" +
     "GLM    | glm-5.2          | on | GLM-5.2 Thinking\n" +
     "GLM    | glm-4.6v-flash   | off | GLM-4.6V Flash"
@@ -688,7 +690,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof folderSettings.watcherPrompt === 'string') setWatcherPrompt(folderSettings.watcherPrompt);
         setWatcherModel(pick('watcherModel', 'gemini-3.5-flash'));
         setModelParams(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
-        setSpecificModel(defaultSpecificModel || (aiName === 'Gemini' ? 'gemini-3.5-flash' : 'claude-sonnet-4-6'));
+        setSpecificModel(defaultSpecificModel || (aiName === 'Gemini' ? 'gemini-3.5-flash' : 'claude-opus-4-8'));
       }
       setConvoIsLoading(false);
     })();
@@ -2769,7 +2771,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       if (newAiName === 'Gemini' && !specificModel?.includes('gemini')) {
                         setSpecificModel('gemini-3.5-flash');
                       } else if (newAiName === 'Claude' && !specificModel?.includes('claude')) {
-                        setSpecificModel('claude-sonnet-4-6');
+                        setSpecificModel('claude-opus-4-8');
                       } else if (newAiName === 'Qwen' && !specificModel?.startsWith('qwen')) {
                         setSpecificModel('qwen3.6-plus');
                       } else if (newAiName === 'DeepSeek' && !specificModel?.startsWith('deepseek')) {
@@ -2815,6 +2817,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, flagship)</option>
                       <option value="claude-opus-4-8">Claude Opus 4.8 (thinking)</option>
                       <option value="claude-opus-4-7">Claude Opus 4.7 (thinking)</option>
+                      <option value="claude-sonnet-5">Claude Sonnet 5 (adaptive thinking, 1M ctx)</option>
                       <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (thinking)</option>
                       <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
                     </select>

@@ -479,8 +479,13 @@ async function streamClaudeViaAgentSDK(args: {
         // Agent SDK accepts the same five levels as the API. Only send it for
         // models that support effort (Opus 4.7/4.8, Fable/Mythos 5) so we don't
         // pass it to Sonnet/Haiku; default 'high' = same as omitting it.
-        const isAdaptiveOauth = isFable5Oauth || /opus-4-?7|opus-4-?8/.test(model || '');
-        const oauthEffort = sanitizeClaudeEffort(modelParams?.claudeEffort);
+        // Sonnet 5 is adaptive+effort like Opus 4.7/4.8, so it takes the effort
+        // control too. (The classic non-adaptive Sonnet 4.6/Haiku do not.)
+        const isAdaptiveOauth = isFable5Oauth || /opus-4-?7|opus-4-?8|sonnet-?5/.test(model || '');
+        const isSonnet5Oauth = /sonnet-?5/.test(model || '');
+        let oauthEffort = sanitizeClaudeEffort(modelParams?.claudeEffort);
+        // Sonnet 5 tops out at 'xhigh' (no 'max' tier) — clamp to avoid a 400.
+        if (isSonnet5Oauth && oauthEffort === 'max') oauthEffort = 'xhigh';
 
         // Per-character sandbox path. Claude Code's file tools (Read/Write/
         // Edit/Glob/Grep) operate relative to `cwd` and refuse to escape it
@@ -1620,7 +1625,7 @@ export async function POST(req: Request) {
       if (resolvedClaudeAuthMode === 'oauth' && keys.claudeOAuthToken) {
         return streamClaudeViaAgentSDK({
           oauthToken: keys.claudeOAuthToken,
-          model: specificModel?.includes('claude') ? specificModel : 'claude-sonnet-4-6',
+          model: specificModel?.includes('claude') ? specificModel : 'claude-opus-4-8',
           systemPrompt: enhancedSystemPrompt,
           processedMessages,
           resumeSessionId: claudeAgentSessionId,
@@ -1652,7 +1657,7 @@ export async function POST(req: Request) {
       const anthropic = new Anthropic({ apiKey: keys.claude });
 
       const useThinking = !!modelParams.claudeThinking;
-      const claudeModel = specificModel?.includes('claude') ? specificModel : 'claude-sonnet-4-6';
+      const claudeModel = specificModel?.includes('claude') ? specificModel : 'claude-opus-4-8';
 
       // Models that support extended thinking
       const thinkingModels = ['claude-opus-4', 'claude-sonnet-4', 'claude-opus-3-7'];
@@ -1733,6 +1738,10 @@ export async function POST(req: Request) {
 
       const isOpus47 = claudeModel.includes('opus-4-7') || claudeModel.includes('opus-4.7');
       const isOpus48 = claudeModel.includes('opus-4-8') || claudeModel.includes('opus-4.8');
+      // Claude Sonnet 5 (June 2026): adaptive thinking with selectable effort,
+      // same request shape as Opus 4.7/4.8 (classic enabled/budget_tokens is
+      // rejected). Its top effort tier is 'xhigh' (NOT 'max'), so clamp below.
+      const isSonnet5 = claudeModel.includes('sonnet-5') || claudeModel.includes('sonnet5');
       // Claude Fable 5 / Mythos 5: adaptive thinking is the ONLY thinking mode —
       // `thinking: { type: 'disabled' }` is rejected, so thinking is effectively
       // always on. Depth is controlled by `output_config.effort`. Raw chain of
@@ -1743,12 +1752,15 @@ export async function POST(req: Request) {
       // Newer Opus models (4.7, 4.8) and Fable/Mythos 5 reject the classic
       // `thinking: { type: 'enabled', budget_tokens }` shape and require the
       // adaptive format with an `output_config.effort` control instead.
-      const isAdaptiveThinking = isOpus47 || isOpus48 || isFable5;
+      const isAdaptiveThinking = isOpus47 || isOpus48 || isFable5 || isSonnet5;
       // Fable/Mythos 5 cannot disable thinking, so force it on regardless of the
       // UI toggle. (Also keeps temperature off, which adaptive models reject.)
       const claudeThinkingOn = enableThinking || isFable5;
-      // Per-conversation thinking-depth level for adaptive models.
-      const claudeEffort = sanitizeClaudeEffort(modelParams.claudeEffort);
+      // Per-conversation thinking-depth level for adaptive models. Sonnet 5's
+      // highest supported tier is 'xhigh' (Opus/Fable go up to 'max'), so
+      // clamp 'max'→'xhigh' for Sonnet 5 to avoid an invalid-effort 400.
+      let claudeEffort = sanitizeClaudeEffort(modelParams.claudeEffort);
+      if (isSonnet5 && claudeEffort === 'max') claudeEffort = 'xhigh';
 
       if (claudeThinkingOn) {
         claudeParams.max_tokens = 16000;
