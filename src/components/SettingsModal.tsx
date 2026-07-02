@@ -403,6 +403,21 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
+                  checked={globalSettings.saveTimestampsToMd ?? false}
+                  onChange={e => setGlobalSettings({...globalSettings, saveTimestampsToMd: e.target.checked})}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">Save timestamps to .md</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                When exporting a conversation to Markdown, writes each message&apos;s <code>[YYYY-MM-DD HH:MM:SS]</code> time under its <code>## Name</code> header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.
+              </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
                   checked={globalSettings.customFilterEnabled ?? false}
                   onChange={e => setGlobalSettings({...globalSettings, customFilterEnabled: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"

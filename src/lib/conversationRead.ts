@@ -89,23 +89,36 @@ export async function readConversationByName(
     return { ok: false, error: `Failed to load "${hit.title}".` };
   }
 
-  // Build a clean Role: text transcript. Skip pure-system bookkeeping; strip
-  // base64; drop thinking blocks (they aren't stored in `content`, but guard
-  // against any inline thought markers just in case).
+  // Build a clean transcript. Each turn is prefixed with its speaker in square
+  // brackets — "[Name]:" — matching the app's native [username] identity
+  // convention (used in message content, VRChat input, and the OAuth
+  // transcript). Brackets are chosen over "## Name" on purpose: message bodies
+  // legitimately contain markdown sub-headings ("## Summary"), so a "##" speaker
+  // delimiter would be indistinguishable from in-body headings. The assistant
+  // label falls back to the ENTITY name (folderName) — never the conversation
+  // TITLE, which is a per-conversation name, not the speaker's identity.
+  // Skip pure-system bookkeeping; strip base64; guard against inline thoughts.
   const lines: string[] = [];
   for (const m of full.messages) {
-    const role = m.role === 'user' ? (m.name || 'User') : (m.name || hit.title || 'Assistant');
+    const speaker = m.role === 'user' ? (m.name || 'User') : (m.name || folderName || 'Assistant');
     const text = cleanContent(m.content || '').trim();
     const atts = Array.isArray(m.attachments) && m.attachments.length > 0
       ? ` [${m.attachments.length} attachment(s)]`
       : '';
     if (!text && !atts) continue;
-    lines.push(`${role}:${atts ? atts : ''}\n${text}`.trimEnd());
+    lines.push(`[${speaker}]:${atts ? atts : ''}\n${text}`.trimEnd());
   }
+
+  // Framing legend so the reading model parses speakers unambiguously and
+  // doesn't mistake a message's own "##" markdown headings for new speakers.
+  const legend =
+    'This is a past conversation transcript. Each turn begins with its speaker ' +
+    'in square brackets, e.g. "[Name]:". Any line starting with "##" inside a ' +
+    'turn is that message\'s own markdown heading — NOT a new speaker.';
 
   return {
     ok: true,
     title: hit.title,
-    transcript: lines.join('\n\n'),
+    transcript: `${legend}\n\n${lines.join('\n\n')}`,
   };
 }

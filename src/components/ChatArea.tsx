@@ -1664,7 +1664,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   const handleExport = () => {
-    const md = exportToMarkdown(messages, folderName, saveThinkingToLog);
+    const md = exportToMarkdown(messages, folderName, saveThinkingToLog, globalSettings?.saveTimestampsToMd ?? false);
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

@@ -4,15 +4,28 @@ function escapeRegExp(string: string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function exportToMarkdown(messages: any[], customAiName?: string, saveThinking = false) {
+// Format a numeric (ms) timestamp as the app's "[YYYY-MM-DD HH:MM:SS]" tag in
+// LOCAL time — identical to the dateTimeVisibility formatter used elsewhere, so
+// exported timestamps match what the user sees in the chat bubble.
+function formatTimestampTag(ts: number): string {
+  const d = new Date(ts);
+  const p = (n: number) => n.toString().padStart(2, '0');
+  return `[${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}]`;
+}
+
+export function exportToMarkdown(messages: any[], customAiName?: string, saveThinking = false, saveTimestamps = false) {
   let md = '';
   messages.forEach(m => {
     let content = m.content || '';
     let header = '';
+    // Optional "[YYYY-MM-DD HH:MM:SS]" line placed directly under the "## Name"
+    // header — before any [thinking] block or body text — when the user has
+    // "Save timestamps to .md" enabled.
+    const tsLine = (saveTimestamps && m.timestamp) ? `${formatTimestampTag(m.timestamp)}\n` : '';
 
     if (m.role === 'assistant') {
       header = customAiName ? customAiName : m.name;
-      let entry = `## ${header}\n`;
+      let entry = `## ${header}\n${tsLine}`;
       // Include thinking block if enabled and present
       if (saveThinking && m.thoughtProcess) {
         entry += `[thinking]\n${m.thoughtProcess}\n[/thinking]\n\n`;
@@ -26,16 +39,16 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
 
       if (uniqueTags.length === 0) {
         header = m.name || 'User';
-        md += `## ${header}\n${content}\n\n`;
+        md += `## ${header}\n${tsLine}${content}\n\n`;
       } else if (uniqueTags.length === 1) {
         header = uniqueTags[0];
         let singleTagPattern = new RegExp(`\\[${escapeRegExp(header)}\\]\\s*`, 'g');
         let newContent = content.replace(singleTagPattern, '').trim();
-        md += `## ${header}\n${newContent}\n\n`;
+        md += `## ${header}\n${tsLine}${newContent}\n\n`;
       } else {
         header = uniqueTags.join(', ');
         let newContent = content.replace(/(\[.*?\])\s*\n\s*/g, '$1\n').trim();
-        md += `## ${header}\n${newContent}\n\n`;
+        md += `## ${header}\n${tsLine}${newContent}\n\n`;
       }
     }
   });
@@ -77,10 +90,32 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
 
   const addMessage = () => {
     if (!currentHeader) return;
-    
+
     let role = 'user';
     let finalContent = currentContent.join('\n').trim();
-    
+
+    // Extract a leading "[YYYY-MM-DD HH:MM:SS]" timestamp (seconds optional)
+    // into the message's timestamp field and remove it from the visible text.
+    // This ALWAYS runs, independent of the "Save timestamps to .md" export
+    // preference — reading honors an on-disk timestamp whenever one is present.
+    // Runs before the user-tag logic below so the timestamp is never mistaken
+    // for a "[username]" identity tag.
+    let parsedTimestamp: number | null = null;
+    const tsMatch = finalContent.match(
+      /^\s*\[(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\][ \t]*(?:\r?\n|$)/
+    );
+    if (tsMatch) {
+      const [, yy, mo, dd, hh, mi, ss] = tsMatch;
+      const d = new Date(
+        Number(yy), Number(mo) - 1, Number(dd),
+        Number(hh), Number(mi), Number(ss ?? '0')
+      );
+      if (!isNaN(d.getTime())) {
+        parsedTimestamp = d.getTime();
+        finalContent = finalContent.slice(tsMatch[0].length).trim();
+      }
+    }
+
     if (customAiName && currentHeader.trim() === customAiName.trim()) {
       role = 'assistant';
     } else if (currentHeader.toLowerCase().includes('claude') || currentHeader.toLowerCase().includes('gemini')) {
@@ -107,7 +142,7 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       name: currentHeader,
       content: finalContent,
       attachments: [],
-      timestamp: Date.now(),
+      timestamp: parsedTimestamp !== null ? parsedTimestamp : Date.now(),
       tokens: 0
     });
   };
