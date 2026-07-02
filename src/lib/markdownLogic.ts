@@ -122,6 +122,27 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       role = 'assistant';
     }
 
+    // Extract a leading "[thinking] ... [/thinking]" block (written by
+    // exportToMarkdown directly under the header, after the optional timestamp)
+    // into the message's thoughtProcess, and remove it from the visible text.
+    // Only for assistant turns — that's the only place the exporter writes it,
+    // and it avoids stripping a literal "[thinking]" a user happened to type.
+    // Setting thoughtProcess is sufficient for both display AND reuse: the
+    // OAuth path forwards thoughtProcess as its reasoning when no signed
+    // claudeThinkingBlocks exist. thinkingTokens uses the same ~len/4 heuristic
+    // as the live streaming path so the context bar accounts for it.
+    let parsedThought: string | null = null;
+    if (role === 'assistant') {
+      const thinkMatch = finalContent.match(
+        /^\s*\[thinking\][ \t]*\r?\n([\s\S]*?)\r?\n?\[\/thinking\][ \t]*(?:\r?\n|$)/i
+      );
+      if (thinkMatch) {
+        const t = thinkMatch[1].trim();
+        if (t) parsedThought = t;
+        finalContent = finalContent.slice(thinkMatch[0].length).trim();
+      }
+    }
+
     if (role === 'user') {
       const isMultiple = currentHeader.includes(',') || currentHeader.includes('、');
       // Mirror the app's specific behavior: the plain "User" username is never
@@ -143,7 +164,10 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       content: finalContent,
       attachments: [],
       timestamp: parsedTimestamp !== null ? parsedTimestamp : Date.now(),
-      tokens: 0
+      tokens: 0,
+      ...(parsedThought
+        ? { thoughtProcess: parsedThought, thinkingTokens: Math.ceil(parsedThought.length / 4) }
+        : {}),
     });
   };
 
