@@ -42,11 +42,38 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
   return md.trim() + '\n';
 }
 
-export function parseMarkdown(markdown: string, customAiName?: string) {
+export function parseMarkdown(markdown: string, customAiName?: string, validUserNames: string[] = []) {
   const lines = markdown.split('\n');
   const messages: any[] = [];
   let currentHeader = '';
   let currentContent: string[] = [];
+
+  // Normalize a header/name for comparison: fold full-width digits to ASCII,
+  // trim, lowercase. Keeps matching tolerant of digit-width and case
+  // differences (e.g. a "先輩_４６" header matches a "先輩_46" character name).
+  const norm = (s: string) =>
+    s
+      .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+      .trim()
+      .toLowerCase();
+
+  // The ONLY headers that legitimately start a new message: the entity /
+  // assistant (customAiName), the built-in "User" fallback header, and every
+  // speaker registered in character_map.json (passed in as validUserNames). A
+  // "## X" line is a message boundary only when X — or, for a multi-speaker
+  // header, EVERY comma/、-separated part of X — is one of those known names.
+  // Any other "## ..." line is treated as ordinary body text of the current
+  // message and kept verbatim (the "## " prefix is NOT stripped). This stops
+  // markdown sub-headings inside a message (e.g. "## Summary") from being
+  // misread as new turns.
+  const validSet = new Set(
+    [customAiName || '', 'User', ...validUserNames].filter(Boolean).map(norm)
+  );
+  const isRecognizedHeader = (h: string): boolean => {
+    const parts = h.split(/[,、]/).map((p) => norm(p)).filter(Boolean);
+    if (parts.length === 0) return false;
+    return parts.every((p) => validSet.has(p));
+  };
 
   const addMessage = () => {
     if (!currentHeader) return;
@@ -92,12 +119,18 @@ export function parseMarkdown(markdown: string, customAiName?: string) {
       if (parsedHeader.endsWith(':')) {
         parsedHeader = parsedHeader.substring(0, parsedHeader.length - 1).trim();
       }
-      
-      if (currentHeader) {
-        addMessage();
+
+      if (isRecognizedHeader(parsedHeader)) {
+        if (currentHeader) {
+          addMessage();
+        }
+        currentHeader = parsedHeader;
+        currentContent = [];
+      } else {
+        // Not a known speaker — this "## ..." line belongs to the current
+        // message body. Push it unchanged (keep the "## ").
+        currentContent.push(line);
       }
-      currentHeader = parsedHeader;
-      currentContent = [];
     } else {
       currentContent.push(line);
     }

@@ -303,11 +303,26 @@ export default function Sidebar({
     // update and deterministic "open the first imported file" UX.
     (async () => {
       const newIds: string[] = [];
+      // Fetch the registered speaker names from character_map.json once. Only
+      // these names (plus the entity/assistant name and the built-in "User")
+      // are allowed to start a new message when parsing "## X" headers — any
+      // other "## ..." line is kept as body text. If the fetch fails we pass an
+      // empty list, so only the entity + "User" headers are recognized.
+      let validUserNames: string[] = [];
+      try {
+        const cr = await fetch('/api/chara/list');
+        if (cr.ok) {
+          const cd = await cr.json();
+          validUserNames = (cd.characters || [])
+            .map((c: any) => c?.name)
+            .filter((n: any): n is string => typeof n === 'string' && n.trim().length > 0);
+        }
+      } catch {}
       for (const file of filesArray) {
         try {
           const text = await file.text();
           const title = file.name.replace(/\.[^/.]+$/, "");
-          const parsed = parseMarkdown(text, activeFolder.name);
+          const parsed = parseMarkdown(text, activeFolder.name, validUserNames);
           if (parsed.length === 0) continue;
 
           // Compute tokens for every imported message — parseMarkdown produces
