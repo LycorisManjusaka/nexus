@@ -1070,6 +1070,7 @@ async function runModelSelectorPreflight(args: {
   const isMinimax   = fam.includes('minimax');
   const isOpenAI    = fam.includes('openai') || fam.includes('chatgpt');
   const isMimo      = fam.includes('mimo');
+  const isBytedance = fam.includes('bytedance');
   const isDashScope = isQwen || isDeepSeek;
   // DeepSeek direct vs via DashScope (only deepseek-v3.2 lives on DashScope).
   const useDeepSeekDirect = isDeepSeek && !!specificModel && specificModel !== 'deepseek-v3.2';
@@ -1084,6 +1085,7 @@ async function runModelSelectorPreflight(args: {
     : isMinimax   ? 'https://api.minimax.io/v1/chat/completions'
     : isOpenAI    ? 'https://api.openai.com/v1/chat/completions'
     : isMimo      ? 'https://api.xiaomimimo.com/v1/chat/completions'
+    : isBytedance ? 'https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions'
     : isLocal     ? `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`
     : null;
   if (!url) return null;
@@ -1097,6 +1099,7 @@ async function runModelSelectorPreflight(args: {
     : isMinimax   ? keys.minimax
     : isOpenAI    ? keys.openai
     : isMimo      ? keys.mimo
+    : isBytedance ? keys.bytedance
     : null; // Local has no auth
   if (!isLocal && !apiKey) return null;
 
@@ -1129,6 +1132,7 @@ async function runModelSelectorPreflight(args: {
       isQwen     ? 'qwen3.6-plus' :
       isOpenAI   ? 'gpt-5.4' :
       isMimo     ? 'mimo-v2.5' :
+      isBytedance ? 'seed-2-0-pro-260328' :
                    'local-model'
     )),
     messages: [
@@ -1396,6 +1400,11 @@ export async function POST(req: Request) {
     // reasoning built in; no documented on/off thinking parameter, so — like
     // MiniMax — we don't send a thinking flag (avoids a 400 on an unknown param).
     const isMimo      = aiName.toLowerCase().includes('mimo');
+    // ByteDance Seed 2.0 (seed-2-0-pro/lite/mini/code-* snapshots) via BytePlus
+    // ModelArk's OpenAI-compatible endpoint (ark.ap-southeast.bytepluses.com/
+    // api/v3). Reasoning is built into the Seed family; no documented on/off
+    // thinking parameter is sent (like MiniMax / MiMo) to avoid a 400.
+    const isBytedance = aiName.toLowerCase().includes('bytedance');
     // Anything routed through DashScope shares the same base URL + Bearer key.
     const isDashScope = isQwen || isDeepSeek;
 
@@ -1417,6 +1426,7 @@ export async function POST(req: Request) {
                      ? modelParams.qwenEnableThinking !== false :
       isMinimax      ? true :
       isMimo         ? true :
+      isBytedance    ? true :
       isGrok         ? /reasoning/i.test(specificModel || '') && !/non-?reasoning/i.test(specificModel || '') :
                        false;
     const modelLabelForSSE = buildModelLabel(aiName, specificModel, modelThinkingFlag, modelParams);
@@ -1614,7 +1624,7 @@ export async function POST(req: Request) {
     // user-configured tool instruction. Workspace file discovery is on-demand
     // only — the AI calls Glob when it needs to see what files exist.
     let enhancedSystemPrompt = systemPrompt;
-    if (toolUseEnabled && (isClaude || isGemini || isLocal || isQwen || isDeepSeek || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo)) {
+    if (toolUseEnabled && (isClaude || isGemini || isLocal || isQwen || isDeepSeek || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance)) {
       // File listing removed: the AI discovers workspace contents on demand via
       // Glob (the only supported listing tool). Injecting the full list every
       // turn wasted context tokens and violated the on-demand tool model.
@@ -3173,7 +3183,7 @@ export async function POST(req: Request) {
         },
       });
     }
-    else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo) {
+    else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
       // ----- OpenAI-compatible: LM Studio (Local), DashScope (Qwen / DeepSeek
       //       V3.2), DeepSeek's first-party API, or Z.AI (GLM family) -----
       // All speak the same /chat/completions JSON protocol; only the full URL,
@@ -3233,6 +3243,11 @@ export async function POST(req: Request) {
           error: `MiMo (Xiaomi) requires the MiMo API key in Preferences.`,
         }, { status: 400 });
       }
+      if (isBytedance && !keys.bytedance) {
+        return NextResponse.json({
+          error: `ByteDance (Seed) requires the BytePlus API key in Preferences.`,
+        }, { status: 400 });
+      }
 
       // Full URL of the chat-completions endpoint. We build it once instead
       // of "base + /v1/chat/completions" because each provider has a slightly
@@ -3256,7 +3271,9 @@ export async function POST(req: Request) {
                       ? 'https://api.openai.com/v1/chat/completions'
                       : isMimo
                         ? 'https://api.xiaomimimo.com/v1/chat/completions'
-                        : `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`;
+                        : isBytedance
+                          ? 'https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions'
+                          : `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`;
       const authHeaders: Record<string, string> = useDeepSeekDirect
         ? { Authorization: `Bearer ${keys.deepseek}` }
         : isDashScope
@@ -3275,7 +3292,9 @@ export async function POST(req: Request) {
                       ? { Authorization: `Bearer ${keys.openai}` }
                       : isMimo
                         ? { Authorization: `Bearer ${keys.mimo}` }
-                        : {};
+                        : isBytedance
+                          ? { Authorization: `Bearer ${keys.bytedance}` }
+                          : {};
       const localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
         isGrok     ? 'grok-4.3' :
@@ -3286,6 +3305,7 @@ export async function POST(req: Request) {
         isQwen     ? 'qwen3.6-plus' :
         isOpenAI   ? 'gpt-5.4' :
         isMimo     ? 'mimo-v2.5' :
+        isBytedance ? 'seed-2-0-pro-260328' :
                      'local-model'
       ));
 
@@ -3294,7 +3314,7 @@ export async function POST(req: Request) {
       // all reject any single `data:` URI larger than 20 MiB with a 400.
       // Catch it here and return a clear error naming the offending file(s)
       // instead of letting the user see the cryptic upstream message.
-      if (isDashScope || useDeepSeekDirect || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo) {
+      if (isDashScope || useDeepSeekDirect || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
         const DATA_URI_MAX = 20 * 1024 * 1024; // 20 MiB hard limit
         const tooBig: string[] = [];
         for (const m of processedMessages) {
@@ -3848,7 +3868,9 @@ export async function POST(req: Request) {
                         ? 'OpenAI'
                         : isMimo
                           ? 'MiMo (Xiaomi)'
-                          : isDashScope
+                          : isBytedance
+                            ? 'ByteDance (BytePlus)'
+                            : isDashScope
                             ? (isDeepSeek ? 'DeepSeek via DashScope' : 'Qwen DashScope')
                             : 'LM Studio';
           throw new Error(`${label}: ${lsRes.status} ${errText}`);
@@ -4018,6 +4040,7 @@ export async function POST(req: Request) {
         : isCohere ? 'cohere'
         : isMinimax ? 'minimax'
         : isMimo ? 'mimo'
+        : isBytedance ? 'bytedance'
         : isQwen ? 'qwen'
         : isLocal ? 'local'
         : 'oai';

@@ -98,6 +98,11 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
   if (lowered.includes('-vl') || lowered.includes('mmproj') || lowered.includes('vision')) {
     return true;
   }
+  // ByteDance Seed 2.0 family (BytePlus ModelArk) is multimodal across every
+  // snapshot (pro/lite/mini/code all accept image_url). IDs are date-versioned
+  // (seed-2-0-pro-260328, seed-2-0-lite-260428, …) so match by family prefix
+  // rather than pinning exact snapshot ids into the set above.
+  if (lowered.includes('seed-2-0')) return true;
 
   return false;
 }

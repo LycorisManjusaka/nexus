@@ -105,6 +105,12 @@ ChatGPT  | gpt-5.4-mini                 | off | GPT-5.4 Mini
 # ── Xiaomi MiMo — always-on reasoning, no toggle ───────────────────
 MiMo     | mimo-v2.5-pro                | on  | MiMo V2.5 Pro
 MiMo     | mimo-v2.5                    | on  | MiMo V2.5
+
+# ── ByteDance Seed (BytePlus ModelArk) — reasoning-first, no toggle ─
+ByteDance | seed-2-0-pro-260328          | on  | Seed 2.0 Pro
+ByteDance | seed-2-0-lite-260428         | on  | Seed 2.0 Lite
+ByteDance | seed-2-0-mini-260428         | on  | Seed 2.0 Mini
+ByteDance | seed-2-0-code-preview-260328 | on  | Seed 2.0 Code
 `;
 
 // Parsed { family, model, label } rows for the Subagent model dropdown, derived
@@ -2790,16 +2796,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         setSpecificModel('gpt-5.4');
                       } else if (newAiName === 'MiMo' && !specificModel?.toLowerCase().startsWith('mimo')) {
                         setSpecificModel('mimo-v2.5');
+                      } else if (newAiName === 'ByteDance' && !specificModel?.toLowerCase().startsWith('seed')) {
+                        setSpecificModel('seed-2-0-pro-260328');
                       } else if (newAiName === 'Local') {
                         // Clear so the user picks from the list LM Studio reports
-                        if (specificModel?.includes('claude') || specificModel?.includes('gemini') || specificModel?.startsWith('qwen') || specificModel?.startsWith('deepseek') || specificModel?.startsWith('glm') || specificModel?.startsWith('grok') || specificModel?.toLowerCase().includes('kimi') || specificModel?.startsWith('command-') || specificModel?.toLowerCase().startsWith('minimax') || specificModel?.toLowerCase().startsWith('gpt') || specificModel?.toLowerCase().startsWith('mimo')) {
+                        if (specificModel?.includes('claude') || specificModel?.includes('gemini') || specificModel?.startsWith('qwen') || specificModel?.startsWith('deepseek') || specificModel?.startsWith('glm') || specificModel?.startsWith('grok') || specificModel?.toLowerCase().includes('kimi') || specificModel?.startsWith('command-') || specificModel?.toLowerCase().startsWith('minimax') || specificModel?.toLowerCase().startsWith('gpt') || specificModel?.toLowerCase().startsWith('mimo') || specificModel?.toLowerCase().startsWith('seed')) {
                           setSpecificModel('');
                         }
                       }
                     }}
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                   >
-                    {['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Kimi', 'Grok', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'Local'].map(m => (
+                    {['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Kimi', 'Grok', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Local'].map(m => (
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
@@ -3022,6 +3030,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </div>
                 )}
 
+                {localAiName === 'ByteDance' && (
+                  <div className="mb-4">
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">ByteDance (Seed) Model</label>
+                    <input
+                      type="text"
+                      value={specificModel}
+                      onChange={(e) => setSpecificModel(e.target.value)}
+                      list="bytedance-model-suggestions"
+                      placeholder="e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)"
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                    />
+                    <datalist id="bytedance-model-suggestions">
+                      <option value="seed-2-0-pro-260328">Seed 2.0 Pro</option>
+                      <option value="seed-2-0-lite-260428">Seed 2.0 Lite</option>
+                      <option value="seed-2-0-mini-260428">Seed 2.0 Mini</option>
+                      <option value="seed-2-0-code-preview-260328">Seed 2.0 Code (preview)</option>
+                    </datalist>
+                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                      Served by BytePlus ModelArk at <span className="font-mono">ark.ap-southeast.bytepluses.com/api/v3</span> (key in Preferences). ModelArk calls a model by its <strong>versioned Model ID</strong> (the display name won&apos;t work). Known IDs are suggested above — pick one, or paste a newer snapshot / your own <span className="font-mono">ep-…</span> endpoint ID. Seed 2.0 accepts image input natively (no Eyes bridge needed). Reasoning is built-in; no thinking toggle is sent.
+                    </div>
+                  </div>
+                )}
+
                 {localAiName === 'GLM' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">GLM Model</label>
@@ -3171,7 +3202,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </label>
                     </div>
                   )}
-                  {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'Local') && (
+                  {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'ByteDance' || localAiName === 'Local') && (
                     <div className="col-span-2 flex items-start gap-2 mt-2">
                       <input
                         type="checkbox"

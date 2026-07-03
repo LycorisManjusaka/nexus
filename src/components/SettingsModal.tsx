@@ -11,7 +11,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // See the inline help text in the Anthropic section below for setup steps.
   const [keys, setKeys] = useState<any>({
     gemini: '', claude: '', qwen: '', deepseek: '', glm: '', grok: '',
-    kimi: '', cohere: '', minimax: '', openai: '', mimo: '',
+    kimi: '', cohere: '', minimax: '', openai: '', mimo: '', bytedance: '',
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
   });
   const [loading, setLoading] = useState(true);
@@ -333,6 +333,19 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                 Get one at <span className="font-mono">api.xiaomimimo.com</span>. Required for the Xiaomi MiMo family — MiMo V2.5 Pro, MiMo V2.5.
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">ByteDance / BytePlus API Key</label>
+              <input
+                type="password"
+                placeholder="..."
+                value={keys.bytedance || ''}
+                onChange={e => setKeys({...keys, bytedance: e.target.value})}
+                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                Get one at <span className="font-mono">console.byteplus.com</span> (BytePlus ModelArk). Required for the ByteDance Seed family — Seed 2.0 Pro / Lite / Mini / Code.
               </div>
             </div>
           </div>
