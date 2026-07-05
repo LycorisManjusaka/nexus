@@ -19,6 +19,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import { readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, globWorkspaceFiles, grepWorkspaceFiles } from './fsStorage';
+import { webSearch as runWebSearch, webFetch as runWebFetch } from './webTools';
 
 export interface SubagentUsage { input: number; output: number; cacheRead: number; cacheCreate: number }
 // `via` records WHERE the request actually went: the provider label, the exact
@@ -30,7 +31,7 @@ export interface SubagentResult { text: string; usage: SubagentUsage; via?: Suba
 
 const MAX_TURNS = 16;
 
-export function buildSubagentSystem(returnContract?: string): string {
+export function buildSubagentSystem(returnContract?: string, webSearch?: boolean): string {
   // IMPORTANT: keep this identity-neutral. It must NOT bias the model's sense of
   // who it is. Earlier wording ("You are a focused sub-investigator" + the tool
   // names Read/Glob/Grep, which are Claude Code's signature tools) caused
@@ -39,6 +40,9 @@ export function buildSubagentSystem(returnContract?: string): string {
   return (
     'Use the available read-only tools to investigate and answer the task below. ' +
     'read_file can also open image files (you will see them as images). ' +
+    (webSearch
+      ? 'You can also search the live web and read specific pages for up-to-date information; cite the URLs you rely on. '
+      : '') +
     'When done, reply with ONLY the final result — no preamble, no narration of your steps.' +
     (returnContract ? `\n\nReturn format: ${returnContract}` : '')
   );
@@ -76,7 +80,31 @@ async function dispatchTool(name: string, args: any, folderName: string, fullAcc
       if (!gr.ok) return { kind: 'text', text: `Error: ${gr.error}` };
       return { kind: 'text', text: gr.matches?.length ? gr.matches.map((m: any) => `${m.path}:${m.line}: ${m.text}`).join('\n') : '(no matches)' };
     }
-    return { kind: 'text', text: `Error: tool "${name}" is not available (read-only: read_file / list_files / search_files).` };
+    // Universal web tools (only exposed to the OpenAI-compatible child when web
+    // search is enabled — Claude/Gemini children use their provider-NATIVE
+    // search instead, executed server-side, so they never route through here).
+    if (name === 'web_search') {
+      const q = String(args?.query || args?.q || '').trim();
+      if (!q) return { kind: 'text', text: 'Error: web_search requires a non-empty "query".' };
+      const hits = await runWebSearch(q, { maxResults: 6 });
+      return {
+        kind: 'text',
+        text: hits.length === 0
+          ? `(no results for "${q}")`
+          : hits.map((h: any, i: number) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${h.snippet}` : ''}`).join('\n\n') +
+            '\n\n(To read a full page, call web_fetch with one of the URLs above.)',
+      };
+    }
+    if (name === 'web_fetch') {
+      const u = String(args?.url || args?.URL || '').trim();
+      if (!u) return { kind: 'text', text: 'Error: web_fetch requires an absolute "url".' };
+      const page = await runWebFetch(u, { maxChars: 8000 });
+      return {
+        kind: 'text',
+        text: `URL: ${page.url}\n${page.title ? `Title: ${page.title}\n` : ''}\n${page.text}${page.truncated ? '\n\n[...content truncated...]' : ''}`,
+      };
+    }
+    return { kind: 'text', text: `Error: tool "${name}" is not available.` };
   } catch (e: any) {
     return { kind: 'text', text: `Error: ${e?.message || 'tool execution failed'}` };
   }
@@ -105,17 +133,31 @@ const GEMINI_TOOLS = [{
   ],
 }];
 
+// ── Web-search tool schemas (added only when web search is enabled) ───────────
+// OpenAI-compatible: NEXUS's universal DuckDuckGo tools (client-executed here).
+const OPENAI_WEB_TOOLS = [
+  { type: 'function', function: { name: 'web_search', description: 'Search the live web. Returns a numbered list of results (title, URL, snippet). Then call web_fetch to read a promising URL. Cite the URLs you use.', parameters: { type: 'object', properties: { query: { type: 'string', description: 'The search query.' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'web_fetch', description: 'Open ONE http(s) URL and return its readable text content.', parameters: { type: 'object', properties: { url: { type: 'string', description: 'The absolute http(s) URL to open.' } }, required: ['url'] } } },
+];
+// Claude (API-key): Anthropic's NATIVE server-side web search — runs during
+// generation, no client execution needed. Same tool version as the main path.
+const ANTHROPIC_WEB_TOOL = { type: 'web_search_20260209', name: 'web_search', allowed_callers: ['direct'] };
+// Gemini: Google Search grounding — also server-side (needs the
+// includeServerSideToolInvocations flag the runner already sets).
+const GEMINI_WEB_TOOL = { googleSearch: {} };
+
 // ── OpenAI-compatible (GLM / Kimi / DeepSeek / Grok / Cohere / MiniMax / ChatGPT / MiMo / local) ──
 export async function runOpenAISubagent(opts: {
-  url: string; headers: Record<string, string>; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean;
+  url: string; headers: Record<string, string>; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean; webSearch?: boolean;
 }): Promise<SubagentResult> {
   const usage = emptyUsage();
   let echoedModel = '';
   const via = (): SubagentVia => ({ label: 'OpenAI-compatible', endpoint: opts.url, echoedModel });
   // eslint-disable-next-line no-console
-  console.log(`[subagent] OpenAI-compatible → endpoint=${opts.url} model=${opts.model}`);
+  console.log(`[subagent] OpenAI-compatible → endpoint=${opts.url} model=${opts.model} web=${!!opts.webSearch}`);
+  const tools = opts.webSearch ? [...OPENAI_TOOLS, ...OPENAI_WEB_TOOLS] : OPENAI_TOOLS;
   const msgs: any[] = [
-    { role: 'system', content: buildSubagentSystem(opts.returnContract) },
+    { role: 'system', content: buildSubagentSystem(opts.returnContract, opts.webSearch) },
     { role: 'user', content: opts.task },
   ];
   for (let turn = 0; turn < MAX_TURNS; turn++) {
@@ -124,7 +166,7 @@ export async function runOpenAISubagent(opts: {
       headers: { 'Content-Type': 'application/json', ...opts.headers },
       // No temperature: GPT-5 and Kimi reject any value but their default (1),
       // and an investigation task doesn't need it. Each provider uses its own.
-      body: JSON.stringify({ model: opts.model, messages: msgs, tools: OPENAI_TOOLS, stream: false }),
+      body: JSON.stringify({ model: opts.model, messages: msgs, tools, stream: false }),
     });
     const data = await resp.json().catch(() => null);
     if (!data) return { text: `Subagent error: provider returned non-JSON (HTTP ${resp.status}).`, usage, via: via() };
@@ -160,17 +202,21 @@ export async function runOpenAISubagent(opts: {
 
 // ── Anthropic API-key (token-paid Claude) ────────────────────────────────────
 export async function runAnthropicSubagent(opts: {
-  anthropic: any; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean;
+  anthropic: any; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean; webSearch?: boolean;
 }): Promise<SubagentResult> {
   const usage = emptyUsage();
   // eslint-disable-next-line no-console
-  console.log(`[subagent] Anthropic (token-paid Claude) → model=${opts.model}`);
+  console.log(`[subagent] Anthropic (token-paid Claude) → model=${opts.model} web=${!!opts.webSearch}`);
   const messages: any[] = [{ role: 'user', content: opts.task }];
-  const system = buildSubagentSystem(opts.returnContract);
+  const system = buildSubagentSystem(opts.returnContract, opts.webSearch);
+  // Claude's native web_search is a SERVER tool: it runs during generation and
+  // returns result blocks + text in one response, so the client loop below never
+  // has to execute it (it only handles the read-only client tools).
+  const tools = opts.webSearch ? [...ANTHROPIC_TOOLS, ANTHROPIC_WEB_TOOL] : ANTHROPIC_TOOLS;
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     let resp: any;
     try {
-      resp = await opts.anthropic.messages.create({ model: opts.model, max_tokens: 4096, system, messages, tools: ANTHROPIC_TOOLS });
+      resp = await opts.anthropic.messages.create({ model: opts.model, max_tokens: 4096, system, messages, tools });
     } catch (e: any) {
       return { text: `Subagent error: ${e?.message || 'Anthropic call failed'}`, usage };
     }
@@ -206,13 +252,16 @@ export async function runAnthropicSubagent(opts: {
 
 // ── Gemini ───────────────────────────────────────────────────────────────────
 export async function runGeminiSubagent(opts: {
-  ai: any; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean;
+  ai: any; model: string; task: string; returnContract?: string; folderName: string; fullAccess: boolean; webSearch?: boolean;
 }): Promise<SubagentResult> {
   const usage = emptyUsage();
   // eslint-disable-next-line no-console
-  console.log(`[subagent] Gemini → model=${opts.model}`);
+  console.log(`[subagent] Gemini → model=${opts.model} web=${!!opts.webSearch}`);
   const contents: any[] = [{ role: 'user', parts: [{ text: opts.task }] }];
-  const config: any = { systemInstruction: buildSubagentSystem(opts.returnContract), tools: GEMINI_TOOLS, toolConfig: { includeServerSideToolInvocations: true } };
+  // googleSearch grounding is server-side; mixing it with the read-only function
+  // declarations is allowed because includeServerSideToolInvocations is set.
+  const geminiTools = opts.webSearch ? [...GEMINI_TOOLS, GEMINI_WEB_TOOL] : GEMINI_TOOLS;
+  const config: any = { systemInstruction: buildSubagentSystem(opts.returnContract, opts.webSearch), tools: geminiTools, toolConfig: { includeServerSideToolInvocations: true } };
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     let resp: any;
     // Retry transient Google outages (503 / UNAVAILABLE / 429) a few times with
@@ -292,14 +341,14 @@ function resolveOpenAIRoute(family: string, model: string, keys: any): { url: st
 
 export async function runSubagent(opts: {
   family: string; model: string; keys: any;
-  task: string; returnContract?: string; folderName: string; fullAccess: boolean;
+  task: string; returnContract?: string; folderName: string; fullAccess: boolean; webSearch?: boolean;
 }): Promise<SubagentResult> {
   const fam = (opts.family || '').toLowerCase();
   // Claude family → Anthropic API (token-paid key).
   if (fam.includes('claude') || fam.includes('fable') || fam.includes('mythos')) {
     if (!opts.keys?.claude) return { text: 'Subagent error: a Claude subagent needs the Anthropic API key in Preferences.', usage: emptyUsage() };
     const anthropic = new Anthropic({ apiKey: opts.keys.claude });
-    const r = await runAnthropicSubagent({ anthropic, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+    const r = await runAnthropicSubagent({ anthropic, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess, webSearch: opts.webSearch });
     r.via = { label: 'Anthropic', endpoint: 'https://api.anthropic.com/v1/messages', echoedModel: opts.model };
     return r;
   }
@@ -307,7 +356,7 @@ export async function runSubagent(opts: {
   if (fam.includes('gemini')) {
     if (!opts.keys?.gemini) return { text: 'Subagent error: a Gemini subagent needs the Google API key in Preferences.', usage: emptyUsage() };
     const ai = new GoogleGenAI({ apiKey: opts.keys.gemini });
-    const r = await runGeminiSubagent({ ai, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+    const r = await runGeminiSubagent({ ai, model: opts.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess, webSearch: opts.webSearch });
     r.via = { label: 'Google Gemini', endpoint: 'https://generativelanguage.googleapis.com', echoedModel: opts.model };
     return r;
   }
@@ -318,8 +367,8 @@ export async function runSubagent(opts: {
     return { text: `Subagent error: the ${route.label} subagent needs its API key set in Preferences.`, usage: emptyUsage() };
   }
   // eslint-disable-next-line no-console
-  console.log(`[subagent] family="${opts.family}" → ${route.label} endpoint=${route.url} model=${route.model}`);
-  const r = await runOpenAISubagent({ url: route.url, headers: route.headers, model: route.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess });
+  console.log(`[subagent] family="${opts.family}" → ${route.label} endpoint=${route.url} model=${route.model} web=${!!opts.webSearch}`);
+  const r = await runOpenAISubagent({ url: route.url, headers: route.headers, model: route.model, task: opts.task, returnContract: opts.returnContract, folderName: opts.folderName, fullAccess: opts.fullAccess, webSearch: opts.webSearch });
   // Authoritative label/endpoint from the route; keep the provider-echoed model.
   r.via = { label: route.label, endpoint: route.url, echoedModel: r.via?.echoedModel };
   return r;

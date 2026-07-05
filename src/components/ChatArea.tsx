@@ -206,15 +206,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
   const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>({});
+  // Default kept deliberately small: it carries ONLY what the per-tool schema
+  // descriptions (agentInstructions.ts, attached to each tool definition) do
+  // NOT — the "workspace = your memory" framing and a read-only-when-needed
+  // hint. The five-tool enumeration and path rules were removed as redundant
+  // with (and authoritative in) the tool schemas — which are also mode-aware
+  // (sandbox vs full-PC) and never drift out of sync. This block is still the
+  // sole NEXUS-authored workspace framing on the OAuth/Claude-Code path, whose
+  // built-in tool descriptions can't be overridden.
   const [toolInstruction, setToolInstruction] = useState(
-    "You have access to a private file workspace as your persistent memory. Available tools:\n" +
-    "  • Read(path) — read a text or image file. Image files (.png/.jpg/etc.) come back as inline image data you can see.\n" +
-    "  • Write(path, content) — create or overwrite a file. Replaces the whole file.\n" +
-    "  • Edit(path, old_string, new_string) — surgical replace within an existing file. Use this for small changes to large files. Fails if old_string is missing or matches multiple times.\n" +
-    "  • Glob(pattern) — list files by pattern. `*` = within one path segment, `**` = across segments. Examples: `*.md`, `memories/*.txt`, `**/*.json`.\n" +
-    "  • Grep(pattern, file_pattern?, flags?) — regex search across file contents. Returns `path:line:text` for each match.\n" +
-    "\n" +
-    "Paths are relative to your workspace root; never use `..` or absolute paths. The currently available files are listed at the end of this system message. Prefer reading a file only when needed — if its content is already visible in one of your prior turns, you don't need to call Read again."
+    "Your file workspace is your persistent memory. Use the Read / Write / Edit / Glob / Grep tools — each is described in its own tool definition — to store and recall information across turns. Prefer reading a file only when you need it; if its content is already visible in a prior turn, you don't need to Read it again."
   );
   // Hint appended after an image read result so Gemini doesn't fall into
   // spatial-understanding mode (returning {point:[x,y]} coordinates) or
@@ -228,6 +229,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'none');
   const [claudeThinking, setClaudeThinking] = useState(false);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
+  // When ON, a hidden note is appended to the system prompt each turn telling
+  // the entity its own fatigue level (the same % shown on the status bar).
+  // {percent} in the instruction is substituted with the value.
+  const [showFatigueToEntity, setShowFatigueToEntity] = useState(false);
+  const [fatigueInstruction, setFatigueInstruction] = useState(
+    "(Awareness note — your current fatigue level is {percent}. This reflects how much of your available working memory this session has filled with new exchanges since your last fresh start. Lower is comfortable; as it climbs toward and past 100%, older context is at risk of being trimmed away — consider consolidating or noting down anything important before it slips.)"
+  );
   // Initialize OFF (not the folder default). The real value is always set by
   // the conversation-load effect below — data.vrchatMode for an existing convo,
   // or the folder default for a new one. Seeding this with `defaultVrchatMode`
@@ -488,21 +496,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   useEffect(() => {
+    // `cancelled` guards against an async race: on load this effect fires once
+    // for the initial `defaultSystemPrompt` and again once the log sets the real
+    // prompt. Without cleanup, the slower/earlier request can resolve LAST and
+    // overwrite the correct count with the default prompt's (the "Sys shows 194
+    // on load, fixes on edit" bug). Ignoring a superseded response fixes it.
+    let cancelled = false;
     const fetchSysTokens = async () => {
       const tokens = await fetchTokensForText(systemPrompt || '', localAiName);
-      setSystemTokens(tokens);
+      if (!cancelled) setSystemTokens(tokens);
     };
     fetchSysTokens();
+    return () => { cancelled = true; };
   }, [systemPrompt, localAiName]);
 
   useEffect(() => {
+    // Same stale-response guard as the system-prompt counter above.
+    let cancelled = false;
     const fetchAttTokens = async () => {
       // Tool instruction is only sent (and only takes tokens) when tool use is on.
       const text = toolUseEnabled ? (toolInstruction || '') : '';
       const tokens = await fetchTokensForText(text, localAiName);
-      setAttachmentInstructionTokens(tokens);
+      if (!cancelled) setAttachmentInstructionTokens(tokens);
     };
     fetchAttTokens();
+    return () => { cancelled = true; };
   }, [toolUseEnabled, toolInstruction, localAiName]);
 
   // Sync specific model when changed from the sidebar
@@ -605,6 +623,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setDateTimeVisibility(data.dateTimeVisibility || 'none');
         setClaudeThinking(data.claudeThinking || false);
         setSaveThinkingToLog(data.saveThinkingToLog || false);
+        setShowFatigueToEntity(data.showFatigueToEntity || false);
+        if (typeof data.fatigueInstruction === 'string') setFatigueInstruction(data.fatigueInstruction);
         setVrchatMode(data.vrchatMode !== undefined ? data.vrchatMode : defaultVrchatMode);
         setVrchatRule(data.vrchatRule !== undefined ? data.vrchatRule : defaultVrchatRule);
         setLocalAiName(data.aiName || aiName);
@@ -685,6 +705,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof folderSettings.toolImageInstruction === 'string') setToolImageInstruction(folderSettings.toolImageInstruction);
         setClaudeThinking(pick('claudeThinking', false));
         setSaveThinkingToLog(pick('saveThinkingToLog', false));
+        setShowFatigueToEntity(pick('showFatigueToEntity', false));
+        if (typeof folderSettings.fatigueInstruction === 'string') setFatigueInstruction(folderSettings.fatigueInstruction);
         // Sense bridges — default OFF; folder-saved defaults override.
         setEyesEnabled(pick('eyesEnabled', false));
         if (typeof folderSettings.eyesPrompt === 'string') setEyesPrompt(folderSettings.eyesPrompt);
@@ -762,11 +784,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         })
       });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1175,7 +1197,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         console.warn('[summaries] failed to assemble Layer-4 index, sending prompt as-is', e);
       }
     }
-    const effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${vrchatRule}`.trim() : baseSystemPrompt;
+    let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${vrchatRule}`.trim() : baseSystemPrompt;
+    // Optional hidden "fatigue" note so the entity sees its own fatigue level.
+    // Same formula as the status-bar indicator: original (non-copied) messages
+    // ÷ room left after the fixed "Sys" overhead (system prompt + instructions).
+    // {percent} is replaced with the value (e.g. "42%").
+    if (showFatigueToEntity && fatigueInstruction.trim()) {
+      const fatigueFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
+      const fatigueMax = fatigueFolderSettings.maxRecommendedContext || 60000;
+      const fatiguePct = Math.round((tokenBreakdown.original / Math.max(1, fatigueMax - tokenBreakdown.sys)) * 100);
+      effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${fatiguePct}%`)}`.trim();
+    }
 
     try {
       // Slim the wire payload aggressively. The backend only reads role / content /
@@ -1705,6 +1737,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       dateTimeVisibility,
       claudeThinking,
       saveThinkingToLog,
+      showFatigueToEntity,
+      fatigueInstruction,
       vrchatMode,
       vrchatRule,
       firstOriginalMessageId,
@@ -1971,6 +2005,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <span className={overLimit ? 'text-red-500' : 'text-muted-foreground'}>· {total.toLocaleString()}/{max.toLocaleString()}</span>
                 </div>
               </div>
+            );
+          })()}
+          {/* Fatigue level — how "tired" the entity is this session. ORIGINAL
+              (non-copied) message tokens over the room left after the FIXED,
+              non-conversational overhead: max context − (system prompt + all
+              instructions) = the indigo "Sys" bucket. Copied messages and
+              attachments don't count. 0% right after a fresh start ("sleep");
+              can exceed 100% once original messages fill the remaining window.
+              Visible indicator is only the percent — the "Fatigue" meaning lives
+              in the hover hint. */}
+          {(() => {
+            const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
+            const max = activeFolderSettings.maxRecommendedContext || 60000;
+            // Denominator is the room left after the FIXED, non-conversational
+            // overhead — the "Sys" bucket = system prompt + attachment/tool
+            // instructions (the indigo bar segment). Guarded against ≤0.
+            const denom = Math.max(1, max - tokenBreakdown.sys);
+            const fatigue = Math.round((tokenBreakdown.original / denom) * 100);
+            return (
+              <span
+                className={`text-sm font-semibold tabular-nums cursor-default ${fatigue >= 100 ? 'text-red-500' : fatigue >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
+                title={`Fatigue level: ${fatigue}% — original (non-copied) messages ${tokenBreakdown.original.toLocaleString()} ÷ (max context ${max.toLocaleString()} − fixed overhead ${tokenBreakdown.sys.toLocaleString()}: system prompt + all instructions) tokens. How "tired" the entity is this session. 0% right after a fresh start ("sleep"); grows as original messages accumulate and can exceed 100% once they fill the remaining window. Copied messages and attachments are not counted.`}
+              >
+                {fatigue}%
+              </span>
             );
           })()}
           <button onClick={handleToggleAllAttachments} className={`p-1.5 transition-colors ${hasVisibleAttachments ? 'text-muted-foreground hover:text-red-400' : 'text-red-400 hover:text-muted-foreground'}`} title={hasVisibleAttachments ? "Hide all attachments & reusable thinking" : "Show all attachments & reusable thinking"}>
@@ -2424,7 +2483,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         NEXUS injects these English tool/path instructions into the model's context. Strict English wording can break a character in deep interaction — override any of them here (e.g. translate, soften, or rephrase in-character). Leave a box empty to keep the English default shown as its placeholder.
                       </p>
                       <div className="space-y-3">
-                        {AGENT_INSTRUCTION_LABELS.map(({ key, label }) => (
+                        {AGENT_INSTRUCTION_LABELS.filter(({ key }) => key !== 'webSearchDesc' && key !== 'webFetchDesc').map(({ key, label }) => (
                           <div key={key}>
                             <label className="text-xs font-semibold text-foreground mb-1 block">{label}</label>
                             <textarea
@@ -2440,6 +2499,83 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </div>
                     </details>
                   </>
+                )}
+              </div>
+
+              {/* ── Web Search & Access (universal DuckDuckGo tools) ──────────
+                  Moved here from the Model tab so every tool toggle lives in
+                  one place. Shown for the OpenAI-compatible families that have
+                  no first-party search; Gemini (Google grounding) and Claude
+                  (native web_search) keep their own toggles on the Model tab
+                  because they use different engines and fields. The web_search /
+                  web_fetch description editors live inside this check for
+                  consistency with the other per-tool description editors. */}
+              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'ByteDance' || localAiName === 'Local') && (
+                <div>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={modelParams.enableWebSearch || false}
+                      onChange={(e) => setModelParams({ ...modelParams, enableWebSearch: e.target.checked })}
+                      className="mt-0.5 accent-sky-500"
+                    />
+                    <span className="text-sm font-semibold text-foreground leading-tight">
+                      🌐 Enable Web Search &amp; Access
+                      <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
+                        Gives this model NEXUS&apos;s own server-side tools: <span className="font-mono">web_search</span> (keyless DuckDuckGo → result list) and <span className="font-mono">web_fetch</span> (opens one URL and reads the full page). Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere, and Local — no provider-native search needed. Pages it actually opened appear as clickable <span className="font-medium">Web sources</span> under the reply (your proof it didn&apos;t hallucinate). Internal/localhost URLs are blocked.
+                      </span>
+                    </span>
+                  </label>
+                  {modelParams.enableWebSearch && (
+                    <div className="mt-3 ml-6 space-y-3">
+                      {['webSearchDesc', 'webFetchDesc'].map((key) => {
+                        const label = AGENT_INSTRUCTION_LABELS.find((l) => l.key === key)?.label || key;
+                        return (
+                          <div key={key}>
+                            <label className="text-xs font-semibold text-foreground mb-1 block">{label}</label>
+                            <textarea
+                              value={instructionOverrides[key] || ''}
+                              placeholder={DEFAULT_AGENT_INSTRUCTIONS[key]}
+                              onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, [key]: e.target.value }))}
+                              className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Show fatigue level to the entity (hidden system-prompt note) ── */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showFatigueToEntity}
+                    onChange={(e) => setShowFatigueToEntity(e.target.checked)}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">😴 Tell the entity its fatigue level</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  OFF (default): the fatigue % is shown only to you, on the status bar. ON: a hidden note is appended to the
+                  system prompt every turn so the entity itself sees its current fatigue level. Put
+                  {' '}<span className="font-mono">{'{percent}'}</span> where the value should appear (e.g. <span className="font-mono">42%</span>).
+                </p>
+                {showFatigueToEntity && (
+                  <div className="mt-3 ml-6">
+                    <label className="text-xs font-semibold text-foreground mb-1 block">Fatigue instruction (hidden, appended to system prompt)</label>
+                    <textarea
+                      value={fatigueInstruction}
+                      onChange={(e) => setFatigueInstruction(e.target.value)}
+                      placeholder="(Awareness note — your current fatigue level is {percent}. …)"
+                      className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                      Uses the same value as the status-bar Fatigue indicator: original messages ÷ (max context − fixed overhead). <span className="font-mono">{'{percent}'}</span> is replaced each turn.
+                    </p>
+                  </div>
                 )}
               </div>
 
@@ -3202,27 +3338,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </label>
                     </div>
                   )}
-                  {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'ByteDance' || localAiName === 'Local') && (
-                    <div className="col-span-2 flex items-start gap-2 mt-2">
-                      <input
-                        type="checkbox"
-                        id="webSearchCompat"
-                        checked={modelParams.enableWebSearch || false}
-                        onChange={(e) => setModelParams({ ...modelParams, enableWebSearch: e.target.checked })}
-                        className="mt-0.5 rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
-                      />
-                      <label htmlFor="webSearchCompat" className="text-sm font-medium text-foreground cursor-pointer leading-tight">
-                        Enable Web Search &amp; Access
-                        <div className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed font-normal">
-                          Gives this model NEXUS&apos;s own server-side tools:
-                          {' '}<span className="font-mono">web_search</span> (keyless DuckDuckGo → result list) and
-                          {' '}<span className="font-mono">web_fetch</span> (opens one URL and reads the full page).
-                          {' '}Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere, and Local — no provider-native search needed.
-                          {' '}Pages it actually opened appear as clickable <span className="font-medium">Web sources</span> under the reply (your proof it didn&apos;t hallucinate). Internal/localhost URLs are blocked.
-                        </div>
-                      </label>
-                    </div>
-                  )}
                   {localAiName === 'Claude' && (
                     <div className="col-span-2 space-y-3 mt-2">
                       <div className="flex items-center gap-2">
@@ -3491,6 +3606,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       claudeAuthMode,
                       claudeThinking,
                       saveThinkingToLog,
+                      showFatigueToEntity,
+                      fatigueInstruction,
                       autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels,
                     };
                     const res = await fetch('/api/folders', {

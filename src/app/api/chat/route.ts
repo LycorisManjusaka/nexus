@@ -382,6 +382,7 @@ async function streamClaudeViaAgentSDK(args: {
                     const sub = await runSubagent({
                       family: childFamily, model: subagentModel, keys, task: a.task,
                       returnContract: a.return_contract, folderName, fullAccess: agentFullSystemAccess,
+                      webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                     });
                     cumUsage.input += sub.usage.input;
                     cumUsage.output += sub.usage.output;
@@ -416,10 +417,18 @@ async function streamClaudeViaAgentSDK(args: {
                       systemPrompt: childSystem,
                       cwd: workspaceDir,
                       additionalDirectories: agentFullSystemAccess ? [pathModule.parse(workspaceDir).root] : [],
-                      // Read-only investigation ONLY: whitelist + explicit blocks
-                      // (no write/edit/delete, no shell, no web, no recursion).
-                      allowedTools: ['Read', 'Glob', 'Grep'],
-                      disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Delete', 'Bash', 'BashOutput', 'KillShell', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite', 'SlashCommand', 'Skill'],
+                      // Read-only investigation: whitelist read tools (+ web when
+                      // the conversation has web search on) and explicitly block
+                      // write/edit/delete, shell, and recursion. Claude Code's
+                      // native WebSearch/WebFetch use its own search backend.
+                      allowedTools: (modelParams?.enableClaudeWebSearch || modelParams?.enableWebSearch)
+                        ? ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch']
+                        : ['Read', 'Glob', 'Grep'],
+                      disallowedTools: [
+                        'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Delete', 'Bash', 'BashOutput', 'KillShell',
+                        ...((modelParams?.enableClaudeWebSearch || modelParams?.enableWebSearch) ? [] : ['WebFetch', 'WebSearch']),
+                        'Task', 'TodoWrite', 'SlashCommand', 'Skill',
+                      ],
                       settingSources: [],
                       permissionMode: 'default',
                       canUseTool, // same path-sandbox enforcement as the parent
@@ -2436,6 +2445,7 @@ export async function POST(req: Request) {
                         family: childFamily, model: childModel, keys, task,
                         returnContract: (tu.input as any)?.return_contract ? String((tu.input as any).return_contract) : undefined,
                         folderName, fullAccess: agentFullSystemAccess,
+                        webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                       });
                       cumUsage.input += sub.usage.input;
                       cumUsage.output += sub.usage.output;
@@ -3093,6 +3103,7 @@ export async function POST(req: Request) {
                           family: childFamily, model: childModel, keys, task,
                           returnContract: fc.args?.return_contract ? String(fc.args.return_contract) : undefined,
                           folderName, fullAccess: agentFullSystemAccess,
+                          webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                         });
                         cumGeminiUsage.promptTokenCount += sub.usage.input;
                         cumGeminiUsage.candidatesTokenCount += sub.usage.output;
@@ -4391,6 +4402,7 @@ export async function POST(req: Request) {
                           family: childFamily, model: childModel, keys,
                           task, returnContract: parsed?.return_contract ? String(parsed.return_contract) : undefined,
                           folderName, fullAccess: agentFullSystemAccess,
+                          webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                         });
                         cumOaiUsage.prompt_tokens += sub.usage.input;
                         cumOaiUsage.completion_tokens += sub.usage.output;
