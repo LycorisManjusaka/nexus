@@ -446,7 +446,7 @@ export default function Sidebar({
 
       <div className="px-4 pb-2 space-y-3 relative">
         <div className="flex items-center justify-between mb-2">
-          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">AI Characters</label>
+          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">Digital Identities</label>
           <button onClick={createFolder} className="text-muted-foreground hover:text-indigo-500 transition-colors" title="New Folder">
             <FolderPlus size={16} />
           </button>

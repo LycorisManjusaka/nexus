@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import pathModule from 'path';
+import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable } from '@/lib/modelVision';
 import { describeImage } from '@/lib/eyesVision';
@@ -21,6 +22,29 @@ import Anthropic from '@anthropic-ai/sdk';
 const CLAUDE_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'max' {
   return (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(v) ? v : 'high';
+}
+
+// ── Tool-activity display names ──────────────────────────────────────────────
+// Maps NEXUS's internal workspace-tool names to a short human phrase for the
+// `tool_activity` SSE event (drives the "<Entity> is using X…" loading label).
+// Used by every provider path so a long tool call (esp. a big Write, whose
+// input streams silently) isn't mistaken for a frozen "thinking...". Tools with
+// their own dedicated UI (AskQuestion → question card, spawn_subagent → chip)
+// return null so we don't override those richer indicators.
+function toolActivityLabel(name: string): string | null {
+  switch (name) {
+    case 'Read': return 'reading a file';
+    case 'Write': return 'writing a file';
+    case 'Edit': return 'editing a file';
+    case 'Glob': return 'searching for files';
+    case 'Grep': return 'searching file contents';
+    case 'Delete': return 'deleting a file';
+    case 'read_conversation': return 'reading a past conversation';
+    case 'web_search': case 'WebSearch': return 'searching the web';
+    case 'web_fetch': case 'WebFetch': return 'fetching a web page';
+    case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
+    default: return null;
+  }
 }
 
 // ── Kimi (Moonshot) host resolution ──────────────────────────────────────────
@@ -272,6 +296,38 @@ async function streamClaudeViaAgentSDK(args: {
   const readableStream = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+
+      // ── Stall watchdog ──────────────────────────────────────────────────
+      // The SDK yields a message for every stream event — even a huge Write
+      // tool call keeps input_json_delta events flowing — so real work always
+      // refreshes lastSdkEventAt. A genuinely wedged subprocess or hung tool
+      // (e.g. a stuck WebFetch) produces NOTHING, which the UI otherwise can't
+      // distinguish from work. After 2 minutes of total silence the interval
+      // emits `stall_warning` (repeating every 30s with the growing idle
+      // count); the next SDK message emits `stall_cleared`.
+      // `pausedForRendezvous` suppresses the watchdog while the turn is
+      // LEGITIMATELY silent by design: an AskQuestion waiting on the user's
+      // answer, or a subagent run (which shows its own activity chip).
+      let lastSdkEventAt = Date.now();
+      let stallWarned = false;
+      let pausedForRendezvous = 0;
+      const touchSdkActivity = () => {
+        lastSdkEventAt = Date.now();
+        if (stallWarned) {
+          stallWarned = false;
+          try { enqueue({ type: 'stall_cleared' }); } catch {}
+        }
+      };
+      const stallTimer = setInterval(() => {
+        if (pausedForRendezvous > 0) return;
+        const idleMs = Date.now() - lastSdkEventAt;
+        if (idleMs >= 120_000) {
+          stallWarned = true;
+          // try/catch: the interval can race stream teardown on client abort.
+          try { enqueue({ type: 'stall_warning', idleSeconds: Math.round(idleMs / 1000) }); } catch {}
+        }
+      }, 30_000);
+
       enqueue(modelSelectedPayload);
       // Flush any newly-generated sense descriptions so the frontend can
       // persist them onto message attachments before AI text begins streaming.
@@ -347,9 +403,18 @@ async function streamClaudeViaAgentSDK(args: {
                   }
                   const askId = createAskId();
                   enqueue({ type: 'ask_user', askId, questions });
-                  const answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                  // Rendezvous pause: the SDK is silent while we wait for the
+                  // user's answer — that's not a stall.
+                  pausedForRendezvous++;
+                  let answered: any = null;
+                  try {
+                    answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                  } finally {
+                    pausedForRendezvous--;
+                    touchSdkActivity();
+                  }
                   const timedOut = answered === null;
-                  const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
+                  const finalAnswers = timedOut ? recommendedDefaults(questions) : answered;
                   enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                   return { content: [{ type: 'text' as const, text: formatAnswerForModel(finalAnswers, timedOut) }] };
                 },
@@ -379,11 +444,20 @@ async function streamClaudeViaAgentSDK(args: {
                   // instead — exactly like the non-OAuth parents do.
                   if (!/claude|fable|mythos/i.test(childFamily)) {
                     enqueue({ type: 'subagent_start', task: a.task });
-                    const sub = await runSubagent({
-                      family: childFamily, model: subagentModel, keys, task: a.task,
-                      returnContract: a.return_contract, folderName, fullAccess: agentFullSystemAccess,
-                      webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
-                    });
+                    // Subagent pause: the parent SDK is silent while the child
+                    // runs (it has its own activity chip) — not a stall.
+                    pausedForRendezvous++;
+                    let sub: Awaited<ReturnType<typeof runSubagent>>;
+                    try {
+                      sub = await runSubagent({
+                        family: childFamily, model: subagentModel, keys, task: a.task,
+                        returnContract: a.return_contract, folderName, fullAccess: agentFullSystemAccess,
+                        webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
+                      });
+                    } finally {
+                      pausedForRendezvous--;
+                      touchSdkActivity();
+                    }
                     cumUsage.input += sub.usage.input;
                     cumUsage.output += sub.usage.output;
                     cumUsage.cacheRead += sub.usage.cacheRead;
@@ -407,6 +481,10 @@ async function streamClaudeViaAgentSDK(args: {
                   enqueue({ type: 'subagent_start', task: a.task });
                   let resultText = '';
                   let childUsage: any = null;
+                  // Subagent pause: the parent SDK is silent while the child
+                  // query() runs — suppress the stall watchdog for its duration
+                  // (the child has its own chip + 180s kill timer).
+                  pausedForRendezvous++;
                   try {
                     async function* childPrompt() {
                       yield { type: 'user' as const, message: { role: 'user' as const, content: [{ type: 'text', text: a.task }] }, parent_tool_use_id: null };
@@ -450,6 +528,8 @@ async function streamClaudeViaAgentSDK(args: {
                     resultText = `Subagent error: ${e?.message || 'failed'}`;
                   } finally {
                     clearTimeout(killTimer);
+                    pausedForRendezvous--;
+                    touchSdkActivity();
                   }
                   // Fold the child's token bill into the parent's meter so cost
                   // stays honest.
@@ -519,7 +599,19 @@ async function streamClaudeViaAgentSDK(args: {
         // the same isolation that NEXUS's API-key path's Read/Write/Edit/Glob/Grep
         // provides — Claude Code's tools just call them "Read/Write/Edit/
         // Glob/Grep" instead.
-        const workspaceDir = await ensureWorkspace(folderName);
+        // Realpath the workspace dir so the SDK cwd matches what the entity's
+        // own shell reports. `ensureWorkspace` returns a path built from the
+        // server cwd (…/chat-manager/local_data/…); when local_data is a
+        // JUNCTION/symlink, Claude Code's Bash `pwd` follows it and reports the
+        // TARGET (…/common/local_data/…). If we hand the SDK the un-resolved
+        // junction path as cwd, the entity sees one spelling from pwd and its
+        // file tools are anchored to another — which is exactly what made the
+        // Default entity spiral into "why is my own workspace outside my
+        // workspace?". Resolving here keeps cwd == pwd == sandboxRoot.
+        const workspaceDirRaw = await ensureWorkspace(folderName);
+        let workspaceDir: string;
+        try { workspaceDir = await fsp.realpath(workspaceDirRaw); }
+        catch { workspaceDir = workspaceDirRaw; }
 
         // When the user has Tool Use OFF for this conversation, disable
         // every Claude Code agent tool (pure chat). When ON, enable the
@@ -565,16 +657,52 @@ async function streamClaudeViaAgentSDK(args: {
         // has Full PC access. (Bash, when enabled via dangerous tools, runs with
         // cwd=workspace but a shell can still navigate out — that's inherent to
         // granting shell, and is called out in the UI.)
-        const sandboxRoot = pathModule.resolve(workspaceDir);
-        const withinSandbox = (val: string): boolean => {
+        // Sandbox root, resolved through fs.realpath so symlinks/junctions in
+        // the path don't cause false "outside workspace" denials. This is the
+        // load-bearing fix for junction setups: DATA_DIR is computed from the
+        // server's cwd (chat-manager/local_data), but when that is a JUNCTION to
+        // e.g. common/local_data, the entity's Bash `pwd` reports the realpath'd
+        // target — so every absolute path it builds from its own cwd starts with
+        // the target, not the junction, and a plain string prefix check rejects
+        // it. Realpathing BOTH sides (like the API-key resolveWorkspacePathSafe)
+        // makes the two spellings of the same physical directory compare equal.
+        // Falls back to a plain resolve if realpath fails (e.g. dir vanished).
+        let sandboxRoot: string;
+        try { sandboxRoot = await fsp.realpath(workspaceDir); }
+        catch { sandboxRoot = pathModule.resolve(workspaceDir); }
+        // Realpath-aware containment test. For a path that doesn't exist yet
+        // (a Write to a new file), walk up to the deepest existing ancestor,
+        // realpath THAT, then re-attach the missing tail — identical strategy
+        // to resolveWorkspacePathSafe in fsStorage.
+        const withinSandbox = async (val: string): Promise<boolean> => {
           const abs = pathModule.isAbsolute(val) ? pathModule.resolve(val) : pathModule.resolve(sandboxRoot, val);
-          return abs === sandboxRoot || abs.startsWith(sandboxRoot + pathModule.sep);
+          let real: string | null = null;
+          try {
+            real = await fsp.realpath(abs);
+          } catch {
+            let dir = pathModule.dirname(abs);
+            let tail = pathModule.basename(abs);
+            for (let i = 0; i < 64; i++) {
+              try {
+                const realDir = await fsp.realpath(dir);
+                real = pathModule.join(realDir, tail);
+                break;
+              } catch {
+                const parent = pathModule.dirname(dir);
+                if (parent === dir) { real = abs; break; } // hit fs root — use as-is
+                tail = pathModule.join(pathModule.basename(dir), tail);
+                dir = parent;
+              }
+            }
+          }
+          if (!real) real = abs;
+          return real === sandboxRoot || real.startsWith(sandboxRoot + pathModule.sep);
         };
         const canUseTool = async (_toolName: string, input: Record<string, unknown>) => {
           if (agentFullSystemAccess) return { behavior: 'allow', updatedInput: input } as any;
           for (const field of ['file_path', 'path', 'notebook_path']) {
             const v = (input as any)?.[field];
-            if (typeof v === 'string' && v && !withinSandbox(v)) {
+            if (typeof v === 'string' && v && !(await withinSandbox(v))) {
               return {
                 behavior: 'deny',
                 message: `Blocked: "${v}" is outside your workspace. Full PC access is OFF for this entity — use a path inside your workspace.`,
@@ -639,6 +767,13 @@ async function streamClaudeViaAgentSDK(args: {
         // Track which content-block index is currently open and what type
         // it is, so deltas know whether to be emitted as 'text' or 'thought'.
         let curBlockType: string | null = null;
+        // Tool name currently shown in the client's loading label (via the
+        // 'tool_activity' SSE event). Tool calls are otherwise invisible:
+        // their input streams as input_json_delta (a large Write can take
+        // minutes with zero text output), and execution adds more silence.
+        // Non-null while a tool_use block is open/executing; cleared when
+        // visible text/thinking resumes.
+        let shownToolActivity: string | null = null;
         // Web citations for the OAuth path. Unlike the API-key path (where
         // web_search is an Anthropic server-side tool), here WebSearch/WebFetch
         // are Claude Code CLIENT tools — results arrive as tool_use / tool_result
@@ -688,6 +823,8 @@ async function streamClaudeViaAgentSDK(args: {
           let resultSubtype: string | null = null;
           let resultErrorText = '';
           for await (const msg of query({ prompt: userMsgGen(!useResume), options: opts } as any)) {
+            // Any SDK message means the turn is alive — feed the watchdog.
+            touchSdkActivity();
             // Every message carries the session_id once Anthropic has assigned
             // one. We keep capturing in case the first chunks don't have it.
             if ((msg as any).session_id) capturedSessionId = (msg as any).session_id;
@@ -710,6 +847,22 @@ async function streamClaudeViaAgentSDK(args: {
                 cumUsage.output += Number(ev.usage.output_tokens || 0);
               } else if (ev.type === 'content_block_start') {
                 curBlockType = ev.content_block?.type || null;
+                if (curBlockType === 'tool_use' || curBlockType === 'server_tool_use' || curBlockType === 'mcp_tool_use') {
+                  // Surface what the model is doing so the loading label reflects
+                  // the tool call instead of a silent generic "thinking...".
+                  // MCP tools arrive as `mcp__nexus__AskQuestion` — strip the
+                  // server prefix. AskQuestion/spawn_subagent have their own UI
+                  // (question card / subagent chip), so we don't override those.
+                  const cleanName = String(ev.content_block?.name || 'a tool').replace(/^mcp__\w+?__/, '');
+                  if (cleanName !== 'AskQuestion' && cleanName !== 'spawn_subagent') {
+                    shownToolActivity = toolActivityLabel(cleanName) || `using ${cleanName}`;
+                    enqueue({ type: 'tool_activity', tool: shownToolActivity });
+                  }
+                } else if (shownToolActivity && (curBlockType === 'text' || curBlockType === 'thinking' || curBlockType === 'summarized_thinking')) {
+                  // Visible content resumed — fall back to "thinking...".
+                  shownToolActivity = null;
+                  enqueue({ type: 'tool_activity', tool: null });
+                }
                 // Some blocks ship an initial chunk of text in the start
                 // event itself (summarized_thinking often does this for the
                 // first sentence of the summary).
@@ -818,6 +971,10 @@ async function streamClaudeViaAgentSDK(args: {
         console.error('[claude-oauth] error:', msg);
         controller.enqueue(`data: ${JSON.stringify({ error: `Claude OAuth path failed: ${msg}` })}\n\n`);
         controller.close();
+      } finally {
+        // Stop the stall watchdog on every exit path — a leaked interval
+        // would keep firing enqueue() against a closed controller.
+        clearInterval(stallTimer);
       }
     },
   });
@@ -2285,6 +2442,10 @@ export async function POST(req: Request) {
               for (const tu of toolUses) {
                 let resultContent: any = '';        // string OR content-block array (Anthropic accepts both)
                 let attachmentEvent: any = null;
+                // Surface what the model is doing so the loading label reflects
+                // the tool call instead of a silent "thinking...".
+                const actLabel = toolActivityLabel(tu.name);
+                if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
                 try {
                   if (tu.name === 'Read') {
                     const p = String(tu.input?.path || '');
@@ -2460,6 +2621,7 @@ export async function POST(req: Request) {
                 }
                 toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: resultContent });
                 if (attachmentEvent) enqueue(attachmentEvent);
+                if (actLabel) enqueue({ type: 'tool_activity', tool: null });
               }
               currentMessages.push({ role: 'user', content: toolResultBlocks });
               // …and around the loop again. Next iteration the model sees the
@@ -2943,6 +3105,9 @@ export async function POST(req: Request) {
                 for (const fc of functionCalls) {
                   let result: any = {};
                   let attachmentEvent: any = null;
+                  // Reflect the tool call in the loading label (silent otherwise).
+                  const actLabel = toolActivityLabel(fc.name);
+                  if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
                   try {
                     if (fc.name === 'Read') {
                       const p = String(fc.args?.path || '');
@@ -3118,6 +3283,7 @@ export async function POST(req: Request) {
                   }
                   fnRespParts.push({ functionResponse: { name: fc.name, response: result } });
                   if (attachmentEvent) enqueue(attachmentEvent);
+                  if (actLabel) enqueue({ type: 'tool_activity', tool: null });
                 }
                 contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts] }];
                 continue; // loop — model will continue with the function responses visible
@@ -4181,6 +4347,9 @@ export async function POST(req: Request) {
                   try { parsed = JSON.parse(tc.arguments || '{}'); } catch {}
                   let resultText = '';
                   let attachmentEvent: any = null;
+                  // Reflect the tool call in the loading label (silent otherwise).
+                  const actLabel = toolActivityLabel(tc.name);
+                  if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
                   try {
                     if (tc.name === 'Read') {
                       const p = String(parsed.path || '');
@@ -4426,6 +4595,7 @@ export async function POST(req: Request) {
                     content: resultText,
                   }];
                   if (attachmentEvent) enqueue(attachmentEvent);
+                  if (actLabel) enqueue({ type: 'tool_activity', tool: null });
                 }
 
                 // If any image was read, inject a follow-up user message

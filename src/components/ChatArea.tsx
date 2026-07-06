@@ -202,6 +202,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [subagentFamily, setSubagentFamily] = useState('');
   // Transient: a subagent currently running (drives the inline activity chip).
   const [activeSubagent, setActiveSubagent] = useState<{ task: string } | null>(null);
+  // OAuth-path live status for the loading indicator. `liveToolActivity` is
+  // the tool the model is currently invoking (tool_activity SSE) — without it
+  // a long tool call (e.g. writing a big workspace file) looks like a frozen
+  // "thinking...". `stallIdleSeconds` is set when the server's stall watchdog
+  // reports no SDK activity at all (stall_warning SSE) — the signal that the
+  // turn may genuinely be stuck and a rerun is warranted. Display-only.
+  const [liveToolActivity, setLiveToolActivity] = useState<string | null>(null);
+  const [stallIdleSeconds, setStallIdleSeconds] = useState<number | null>(null);
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
@@ -1151,11 +1159,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Drop any unanswered question card — the turn it belonged to is gone.
     setPendingAsk(null);
     setActiveSubagent(null);
+    setLiveToolActivity(null);
+    setStallIdleSeconds(null);
   };
 
   const generateAiResponse = async (history: any[]) => {
     setLoading(true);
+    setLiveToolActivity(null);
+    setStallIdleSeconds(null);
     abortControllerRef.current = new AbortController();
+    // Wall-clock start of this generation. Used to record how long the model
+    // took (thinking + tool loops + streaming) onto the finished message as
+    // `generationMs` — a display-only indicator, persisted to the log but
+    // never sent back to the entity (reconstruction uses only message content).
+    const genStartTime = Date.now();
 
     const msgId = (Date.now() + 1).toString();
     const newAiMessage = {
@@ -1473,6 +1490,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 if (rec) { rec.result = data.result || ''; rec.via = data.via || null; }
                 else subagentRuns.push({ task: data.task || '', result: data.result || '', via: data.via || null });
                 setActiveSubagent(null);
+              } else if (data.type === 'tool_activity') {
+                // OAuth path: the model started (tool name) or finished (null)
+                // a tool call — reflect it in the loading indicator.
+                setLiveToolActivity(typeof data.tool === 'string' && data.tool ? data.tool : null);
+              } else if (data.type === 'stall_warning') {
+                // Server-side watchdog: no SDK activity for this many seconds.
+                setStallIdleSeconds(Number(data.idleSeconds || 0));
+              } else if (data.type === 'stall_cleared') {
+                setStallIdleSeconds(null);
               } else if (data.type === 'ask_user_resolved' && data.askId) {
                 // Server resolved the question (user answered, or it timed out
                 // and fell back to the recommended option). Record the outcome
@@ -1557,6 +1583,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               tokens: fallbackTokens,
               textTokens: fallbackTokens,
               thinkingTokens: saveThinkingToLog ? thinkingTokens : 0,
+              // Total generation time (ms) for this turn — shown in the meta
+              // bar, saved to the log, hidden from the entity.
+              generationMs: Date.now() - genStartTime,
               autoPlay: vrchatMode,
               // Streaming finished — flip the flag so MessageBubble's streaming
               // TTS path flushes the final non-terminated tail (if any) as its
@@ -1600,9 +1629,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
     setLoading(false);
     abortControllerRef.current = null;
-    // Turn finished — no question or subagent can still be pending.
+    // Turn finished — no question, subagent, tool, or stall can still be live.
     setPendingAsk(null);
     setActiveSubagent(null);
+    setLiveToolActivity(null);
+    setStallIdleSeconds(null);
   };
 
   const handleRerun = async (msgId: string) => {
@@ -2233,7 +2264,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <span className="w-2 h-2 bg-primary rounded-full animate-bounce [animation-delay:-0.15s]"></span>
                 <span className="w-2 h-2 bg-primary rounded-full animate-bounce"></span>
               </div>
-              <span className="text-sm font-medium">{localAiName} is thinking...</span>
+              <div className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium">
+                  {liveToolActivity
+                    ? `${localAiName} is ${liveToolActivity}…`
+                    : `${localAiName} is thinking...`}
+                </span>
+                {stallIdleSeconds !== null && (
+                  <span className="text-xs text-amber-500 font-medium">
+                    ⚠ No activity from the model for{' '}
+                    {stallIdleSeconds >= 120
+                      ? `${Math.round(stallIdleSeconds / 60)} min`
+                      : `${stallIdleSeconds}s`}{' '}
+                    — it may be stuck. Keep waiting, or Stop and rerun.
+                  </span>
+                )}
+              </div>
             </motion.div>
           )}
         </div>

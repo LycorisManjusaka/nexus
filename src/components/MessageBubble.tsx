@@ -823,6 +823,24 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         {displayTokens > 0 && (
           <span className="bg-muted px-2 py-0.5 rounded-full">{displayTokens} tokens</span>
         )}
+        {/* Generation time — how long this turn took (thinking + tool loops +
+            streaming). Display-only, persisted to the log, never sent to the
+            entity. Only on AI messages that recorded it. */}
+        {!isUser && typeof msg.generationMs === 'number' && msg.generationMs > 0 && (() => {
+          const ms = msg.generationMs;
+          const label =
+            ms < 1000 ? `${ms} ms` :
+            ms < 60000 ? `${(ms / 1000).toFixed(1)}s` :
+            `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+          return (
+            <span
+              className="bg-sky-500/15 text-sky-700 dark:text-sky-400 px-2 py-0.5 rounded-full font-mono"
+              title={`This turn took ${(ms / 1000).toFixed(1)}s to generate (thinking + tool use + streaming)`}
+            >
+              ⏱ {label}
+            </span>
+          );
+        })()}
         {/* Prompt-cache stats from the provider's `usage` block. Shown only
             on AI messages and only when the backend captured non-zero input
             usage. Color: green when there was a cache hit, gray otherwise.
