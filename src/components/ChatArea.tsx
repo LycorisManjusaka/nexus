@@ -324,7 +324,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // token-paid unless they already had a claudeAuthMode stored in their log.
   const [claudeAuthMode, setClaudeAuthMode] = useState<'api-key' | 'oauth'>('api-key');
 
-  // ── "Eyes" — vision bridge for text-only models ───────────────────────────
+  // ── "Eyes" — vision bridge for text-only models (plus OAuth-Claude past-image
+  //    recall: describes only PAST images so they persist in the flat transcript) ─
   // When the active primary model can't accept images directly (e.g. glm-5-turbo,
   // deepseek-chat, glm-4.6), NEXUS routes each image through a helper vision
   // model (default GLM-5V-Turbo on Z.AI) and substitutes the raw image with the
@@ -2743,7 +2744,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               </>)}
 
               {activeSettingsTab === 'senses' && (<>
-              {/* ── "Eyes" — vision bridge for text-only models ─────────────── */}
+              {/* ── "Eyes" — vision bridge for text-only models (+ OAuth-Claude past-image recall) ── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -2758,7 +2759,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   When the active primary model can&apos;t see images (e.g. <span className="font-mono">glm-5-turbo</span>, <span className="font-mono">deepseek-chat</span>, <span className="font-mono">glm-4.6</span>), NEXUS routes each incoming image through a helper multimodal model and substitutes the image with the returned text description. Triggers in two cases:
                   <span className="block mt-1">• you attach an image to a text-only entity</span>
                   <span className="block">• the entity calls <span className="font-mono">Read</span> on an image file in its workspace</span>
-                  <span className="block mt-1">Descriptions are cached on disk (<span className="font-mono">local_data/eyes_cache/</span>) so the same image is never described twice. For vision-capable primary models (Claude, Gemini, GLM-V, etc.) this is a no-op — images pass through unchanged.</span>
+                  <span className="block mt-1">Descriptions are cached on disk (<span className="font-mono">local_data/eyes_cache/</span>) so the same image is never described twice. For vision-capable primary models images pass through unchanged — <span className="font-semibold">except</span> the OAuth-Claude path, where the flattened text history can&apos;t carry old image bytes: there, with Eyes ON, <span className="font-semibold">past</span> images are described so they persist in context (durable recall), while the <span className="font-semibold">current</span> turn&apos;s images stay native. Other paths and models are unaffected.</span>
                 </p>
                 {eyesEnabled && (
                   <>
@@ -2776,27 +2777,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <div className="mt-3 ml-6">
                       <label className="text-xs font-semibold text-foreground mb-1 block">Eyes Model</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Multimodal model used to describe images. <span className="font-mono">glm-5v-turbo</span> is the cheap-and-fast default. <span className="font-mono">gemini-3.5-flash</span> tends to produce richer, more nuanced descriptions at slightly higher cost. GLM variants use the Z.AI API key; Gemini variants use the Google API key — set whichever you pick in Preferences.
+                        Multimodal model used to describe images. Pick a preset or type your own id. Two options need <span className="font-semibold">no API key</span>:
+                        <span className="block mt-1">• <span className="font-mono">claude-haiku-4-5</span> (or any <span className="font-mono">claude-…</span> id) → <span className="font-semibold">OAuth Claude</span> subscription, via the Agent SDK.</span>
+                        <span className="block">• <span className="font-mono">local:&lt;model&gt;</span> (e.g. <span className="font-mono">local:qwen2-vl-7b-instruct</span>) → a vision model loaded in <span className="font-semibold">LM Studio</span> (JIT loading on).</span>
+                        <span className="block mt-1">GLM ids use the Z.AI key; Gemini the Google key; MiMo the MiMo key — set whichever you pick in Preferences.</span>
                       </p>
-                      <select
+                      <input
+                        list="eyes-model-list"
                         value={eyesModel}
                         onChange={(e) => setEyesModel(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                      >
-                        <optgroup label="Z.AI / GLM (uses Z.AI API key)">
-                          <option value="glm-5v-turbo">glm-5v-turbo</option>
-                          <option value="glm-4.6v-flash">glm-4.6v-flash</option>
-                          <option value="glm-4.6v">glm-4.6v</option>
-                        </optgroup>
-                        <optgroup label="Google Gemini (uses Google API key)">
-                          <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                          <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
-                          <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                        </optgroup>
-                        <optgroup label="Xiaomi MiMo (uses MiMo API key)">
-                          <option value="mimo-v2.5">mimo-v2.5</option>
-                        </optgroup>
-                      </select>
+                        placeholder="e.g. claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo"
+                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                      />
+                      <datalist id="eyes-model-list">
+                        {/* No-key options first — these are what you want when only
+                            OAuth Claude and/or local models are available. */}
+                        <option value="claude-haiku-4-5">OAuth Claude — Haiku 4.5 (no key, cheapest)</option>
+                        <option value="claude-opus-4-8">OAuth Claude — Opus 4.8 (no key, richest)</option>
+                        <option value="local:qwen2-vl-7b-instruct">Local LM Studio (no key — replace with your loaded model)</option>
+                        <option value="glm-5v-turbo">glm-5v-turbo (Z.AI key)</option>
+                        <option value="glm-4.6v-flash">glm-4.6v-flash (Z.AI key)</option>
+                        <option value="glm-4.6v">glm-4.6v (Z.AI key)</option>
+                        <option value="gemini-3.5-flash">gemini-3.5-flash (Google key)</option>
+                        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Google key)</option>
+                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Google key)</option>
+                        <option value="mimo-v2.5">mimo-v2.5 (MiMo key)</option>
+                      </datalist>
                     </div>
                   </>
                 )}

@@ -193,6 +193,138 @@ async function callGeminiVision(params: {
   return { description, fromCache: false };
 }
 
+// Local (LM Studio / llama.cpp) vision. OpenAI-compatible, NO API key — the
+// only requirement is a vision-capable model loaded in LM Studio (JIT loading
+// on). The eyes model value carries a "local:" sentinel prefix (e.g.
+// "local:qwen2-vl-7b-instruct") so it's unambiguously routed here regardless
+// of the model's own name; the prefix is stripped before the request. Base URL
+// follows the same env override the main chat path uses (LOCAL_LLM_BASE).
+async function callLocalVision(params: {
+  imageBase64: string;
+  imageMimeType: string;
+  eyesPrompt: string;
+  eyesModel: string;
+}): Promise<EyesResult> {
+  const { imageBase64, imageMimeType, eyesPrompt, eyesModel } = params;
+  const dataUrl = `data:${imageMimeType};base64,${imageBase64}`;
+  const model = eyesModel.replace(/^local:/i, '').trim();
+  if (!model) {
+    return { description: '[image — eyes via Local needs a model id, e.g. local:qwen2-vl-7b]', fromCache: false, error: 'no_model' };
+  }
+  const base = (process.env.LOCAL_LLM_BASE || 'http://localhost:1234').replace(/\/+$/, '');
+  const body = {
+    model,
+    messages: [
+      { role: 'user', content: [
+        { type: 'text', text: eyesPrompt },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ] },
+    ],
+    stream: false,
+    temperature: 0.3,
+    top_p: 0.9,
+  };
+  const res = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error(`[eyes/local] HTTP ${res.status} · FULL BODY:\n${errText}`);
+    const cleanMsg = parseUpstreamError(errText, res.status);
+    return {
+      description: `[image — local model ${model} could not describe it: ${cleanMsg}]`,
+      fromCache: false,
+      error: cleanMsg,
+    };
+  }
+  const data = await res.json();
+  const description = (data?.choices?.[0]?.message?.content || '').trim();
+  if (!description) {
+    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty' };
+  }
+  return { description, fromCache: false };
+}
+
+// OAuth Claude vision. Describes the image using the Pro/Max SUBSCRIPTION token
+// via the Agent SDK (same sanctioned Claude Code client the main OAuth chat
+// path uses — NOT the raw Messages API), so it needs NO API key. This is the
+// eyes provider to pick when the only credential available is OAuth Claude.
+// The eyes model value is a Claude id (default claude-haiku-4-5 = cheapest
+// vision-capable). One short, tool-less, single-turn query per image; results
+// are cached like every other provider, so an image is described only once.
+async function callOAuthClaudeVision(params: {
+  imageBase64: string;
+  imageMimeType: string;
+  eyesPrompt: string;
+  eyesModel: string;
+  oauthToken: string;
+}): Promise<EyesResult> {
+  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, oauthToken } = params;
+  const model = /claude/i.test(eyesModel) ? eyesModel : 'claude-haiku-4-5';
+  try {
+    const sdk = await import('@anthropic-ai/claude-agent-sdk');
+    const { query } = sdk;
+    async function* prompt() {
+      yield {
+        type: 'user' as const,
+        message: {
+          role: 'user' as const,
+          content: [
+            { type: 'text', text: eyesPrompt },
+            { type: 'image', source: { type: 'base64', media_type: imageMimeType, data: imageBase64 } },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+    }
+    let text = '';
+    for await (const m of query({
+      prompt: prompt(),
+      options: {
+        env: { CLAUDE_CODE_OAUTH_TOKEN: oauthToken },
+        model,
+        systemPrompt: 'You describe images. Output ONLY the description, no preamble, no follow-up.',
+        // Pure single-turn description — block every tool so the SDK can't
+        // wander into the filesystem/web, and load no project settings.
+        disallowedTools: [
+          'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep',
+          'Bash', 'BashOutput', 'KillShell', 'WebSearch', 'WebFetch',
+          'Task', 'TodoWrite', 'SlashCommand', 'Skill', 'AskUserQuestion',
+        ],
+        settingSources: [],
+        permissionMode: 'default',
+        maxTurns: 1,
+      } as any,
+    } as any)) {
+      if ((m as any).type === 'assistant') {
+        const content = (m as any).message?.content;
+        if (Array.isArray(content)) {
+          for (const b of content) if (b?.type === 'text' && b.text) text += b.text;
+        }
+      } else if ((m as any).type === 'result') {
+        const r: any = m;
+        if (!text && typeof r.result === 'string') text = r.result;
+        break;
+      }
+    }
+    text = text.trim();
+    if (!text) {
+      return { description: '[image — OAuth Claude returned an empty description]', fromCache: false, error: 'empty' };
+    }
+    return { description: text, fromCache: false };
+  } catch (e: any) {
+    const cleanMsg = e?.message || 'unknown error';
+    console.error(`[eyes/oauth-claude] ${cleanMsg}`);
+    return {
+      description: `[image — OAuth Claude could not describe it: ${cleanMsg}]`,
+      fromCache: false,
+      error: cleanMsg,
+    };
+  }
+}
+
 /**
  * Describe an image by sending it to a multimodal model. Used to bridge
  * vision content to text-only models: NEXUS calls describeImage() on each
@@ -200,11 +332,12 @@ async function callGeminiVision(params: {
  * in the message that gets sent to the text-only model.
  *
  * Provider routing by model name prefix:
- *   • starts with "glm"    → Z.AI GLM family (uses zaiKey)
+ *   • starts with "local:" → Local LM Studio, OpenAI-compatible (NO key)
+ *   • starts with "claude" → OAuth Claude via Agent SDK subscription (NO key,
+ *                            needs oauthToken)
  *   • starts with "gemini" → Google Generative Language API (uses geminiKey)
  *   • starts with "mimo"   → Xiaomi MiMo hosted API (uses mimoKey)
- *   • anything else        → defaults to Z.AI (legacy behavior; assumes the
- *                            user typed a GLM model name without the prefix)
+ *   • anything else        → defaults to Z.AI GLM (uses zaiKey)
  *
  * Results are cached on disk by (imageBytes, eyesPrompt, eyesModel) so the
  * same image isn't described twice across turns or conversations. The cache
@@ -218,8 +351,9 @@ export async function describeImage(params: {
   zaiKey: string;
   geminiKey?: string;
   mimoKey?: string;
+  oauthToken?: string;
 }): Promise<EyesResult> {
-  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, zaiKey, geminiKey, mimoKey } = params;
+  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, zaiKey, geminiKey, mimoKey, oauthToken } = params;
 
   if (!eyesPrompt || !eyesPrompt.trim()) {
     return {
@@ -250,7 +384,20 @@ export async function describeImage(params: {
   const lower = eyesModel.toLowerCase();
   let result: EyesResult;
   try {
-    if (lower.startsWith('gemini')) {
+    if (lower.startsWith('local:')) {
+      // Local LM Studio — no key needed, just a loaded vision model.
+      result = await callLocalVision({ imageBase64, imageMimeType, eyesPrompt, eyesModel });
+    } else if (lower.startsWith('claude')) {
+      // OAuth Claude subscription — no API key, uses the OAuth token.
+      if (!oauthToken) {
+        return {
+          description: '[image — eyes via OAuth Claude needs the OAuth token set in Preferences → Anthropic]',
+          fromCache: false,
+          error: 'no_oauth',
+        };
+      }
+      result = await callOAuthClaudeVision({ imageBase64, imageMimeType, eyesPrompt, eyesModel, oauthToken });
+    } else if (lower.startsWith('gemini')) {
       if (!geminiKey) {
         return {
           description: '[image — eyes via Gemini needs a Google API key in Settings]',

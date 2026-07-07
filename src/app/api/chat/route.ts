@@ -1620,6 +1620,23 @@ export async function POST(req: Request) {
     const useEars    = !!earsEnabled    && !isAudioCapable(specificModel);
     const useWatcher = !!watcherEnabled && !isVideoCapable(specificModel);
 
+    // OAuth-Claude-only exception for EYES (does NOT change any other path).
+    // The OAuth/Agent-SDK Claude path flattens history to a text transcript that
+    // carries no historical image bytes — so a vision-capable OAuth Claude sees
+    // only the CURRENT turn's images natively and is blind to every earlier one.
+    // When eyes is ON we describe PAST images only (not the current turn) so the
+    // description persists into the transcript and gives durable recall, while
+    // current images still reach Claude as native pixels. Text-only models are
+    // unaffected (they already bridge via useEyes); non-OAuth and non-Claude
+    // paths are untouched. Vision-capable gate: if Claude were somehow text-only
+    // useEyes already covers it, so this only adds the past-image case.
+    const isOAuthClaude = isClaude && (() => {
+      const req = (requestedClaudeAuthMode as string) || (keys.claudeAuthMode as string) || 'auto';
+      const mode = req !== 'auto' ? req : (keys.claudeOAuthToken ? 'oauth' : 'api-key');
+      return mode === 'oauth' && !!keys.claudeOAuthToken;
+    })();
+    const oauthPastImageEyes = isOAuthClaude && !!eyesEnabled && !useEyes;
+
     // Accumulator for sense-bridge events emitted at the start of each
     // provider branch's stream. One entry per newly-generated description.
     // The frontend matches by (messageId, attachmentId or name) and stores
@@ -1663,8 +1680,14 @@ export async function POST(req: Request) {
               // and substitute the raw bytes with a text description. The
               // description is stored on the attachment so subsequent turns
               // re-use it without re-calling the bridge model.
+              const isImage = !!(mimeType && mimeType.startsWith('image/'));
+              // Current turn = the last message in the request (the user's live
+              // message). Its images must stay native — only PAST images get the
+              // OAuth-Claude description treatment.
+              const isPastMessage = index < messages.length - 1;
+              const wantEyes = isImage && (useEyes || (oauthPastImageEyes && isPastMessage));
               const wantBridge =
-                (useEyes    && mimeType && mimeType.startsWith('image/')) ? 'eyes'    :
+                wantEyes ? 'eyes'    :
                 (useEars    && mimeType && mimeType.startsWith('audio/')) ? 'ears'    :
                 (useWatcher && mimeType && mimeType.startsWith('video/')) ? 'watcher' :
                 null;
@@ -1692,6 +1715,7 @@ export async function POST(req: Request) {
                   zaiKey: keys.glm || '',
                   geminiKey: keys.gemini || '',
                   mimoKey: keys.mimo || '',
+                  oauthToken: keys.claudeOAuthToken || '',
                 });
                 contentStr +=
                   `\n\n<image_description filename="${att.name || 'image'}" via="${eyesModel}">\n` +
@@ -4371,6 +4395,7 @@ export async function POST(req: Request) {
                             zaiKey: keys.glm || '',
                             geminiKey: keys.gemini || '',
                             mimoKey: keys.mimo || '',
+                            oauthToken: keys.claudeOAuthToken || '',
                           });
                           resultText =
                             `Image "${p}" (${bin.mimeType}, ${bin.data.length} bytes) — described via ${eyesModel}:\n\n` +
