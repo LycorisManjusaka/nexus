@@ -804,6 +804,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // attachmentInstructionTokens) can update the bar WITHOUT triggering a
   // disk-save / updatedAt bump. Skipped during streaming to avoid per-frame
   // churn (the bar jumps to the final value when the reply completes).
+  // Reusable-thinking token count for a message. DERIVED from the actual
+  // `thoughtProcess` text so it stays correct when the "Save & reuse thinking
+  // process" toggle is flipped AFTER generation (or on conversations loaded
+  // from disk). The pre-baked `m.thinkingTokens` is only a cache — and it's
+  // baked to 0 whenever a message was produced/saved with the toggle off, so
+  // relying on it made toggling the setting on afterward add nothing. Prefer
+  // the live text; fall back to the cached count only when no text is present.
+  const msgThinkingTokens = (m: any): number => {
+    if (typeof m.thoughtProcess === 'string' && m.thoughtProcess)
+      return Math.ceil(m.thoughtProcess.length / 4);
+    return m.thinkingTokens || 0;
+  };
+
   useEffect(() => {
     if (loading) return;
     let total = 0;
@@ -816,8 +829,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // total (so the context bar reflects them) but honoring a per-message
       // `thinkingExcluded` opt-out, and kept out of the conversation-text
       // subtotal (convoTotal) just like attachment tokens are.
-      if (saveThinkingToLog && m.thinkingTokens && !m.thinkingExcluded) {
-        total += m.thinkingTokens;
+      if (saveThinkingToLog && !m.thinkingExcluded) {
+        total += msgThinkingTokens(m);
       }
       if (m.attachments) {
         m.attachments.forEach((att: any) => {
@@ -843,8 +856,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
     // Reusable thinking is bucketed with attachments: it shows in the "Att"
     // segment and (like attachments) is excluded from the auto-trim threshold,
-    // honoring the per-message `thinkingExcluded` opt-out.
-    if (saveThinkingToLog && m.thinkingTokens && !m.thinkingExcluded) t += m.thinkingTokens;
+    // honoring the per-message `thinkingExcluded` opt-out. Derived from the live
+    // thinking text (see msgThinkingTokens) so the count tracks the toggle.
+    if (saveThinkingToLog && !m.thinkingExcluded) t += msgThinkingTokens(m);
     return t;
   };
   const computeMsgTokens = (m: any) => computeMsgTextTokens(m) + computeMsgAttachTokens(m);
@@ -1583,7 +1597,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               content: finalText,
               tokens: fallbackTokens,
               textTokens: fallbackTokens,
-              thinkingTokens: saveThinkingToLog ? thinkingTokens : 0,
+              // Store the ACTUAL thinking-token count (not zeroed when the
+              // reuse toggle happens to be off at generation time) so flipping
+              // "Save & reuse thinking process" on later recomputes correctly.
+              // Whether it COUNTS toward context is gated by saveThinkingToLog
+              // at display time, not baked in here.
+              thinkingTokens,
               // Total generation time (ms) for this turn — shown in the meta
               // bar, saved to the log, hidden from the entity.
               generationMs: Date.now() - genStartTime,
