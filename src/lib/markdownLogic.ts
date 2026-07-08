@@ -18,14 +18,19 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
   messages.forEach(m => {
     let content = m.content || '';
     let header = '';
-    // Optional "[YYYY-MM-DD HH:MM:SS]" line placed directly under the "## Name"
+    // Optional "[YYYY-MM-DD HH:MM:SS]" line placed directly under the "[Name]:"
     // header — before any [thinking] block or body text — when the user has
     // "Save timestamps to .md" enabled.
     const tsLine = (saveTimestamps && m.timestamp) ? `${formatTimestampTag(m.timestamp)}\n` : '';
 
+    // Speaker header format: "[Name]:" on its own line, followed by a blank
+    // line, then (optional timestamp / thinking) + body. parseMarkdown reads
+    // this back; a trailing colon after the closing bracket is what marks a
+    // line as a speaker header (distinguishing it from "[thinking]" and
+    // "[YYYY-MM-DD …]" lines, which have no trailing colon).
     if (m.role === 'assistant') {
       header = customAiName ? customAiName : m.name;
-      let entry = `## ${header}\n${tsLine}`;
+      let entry = `[${header}]:\n\n${tsLine}`;
       // Include thinking block if enabled and present
       if (saveThinking && m.thoughtProcess) {
         entry += `[thinking]\n${m.thoughtProcess}\n[/thinking]\n\n`;
@@ -39,16 +44,16 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
 
       if (uniqueTags.length === 0) {
         header = m.name || 'User';
-        md += `## ${header}\n${tsLine}${content}\n\n`;
+        md += `[${header}]:\n\n${tsLine}${content}\n\n`;
       } else if (uniqueTags.length === 1) {
         header = uniqueTags[0];
         let singleTagPattern = new RegExp(`\\[${escapeRegExp(header)}\\]\\s*`, 'g');
         let newContent = content.replace(singleTagPattern, '').trim();
-        md += `## ${header}\n${tsLine}${newContent}\n\n`;
+        md += `[${header}]:\n\n${tsLine}${newContent}\n\n`;
       } else {
         header = uniqueTags.join(', ');
         let newContent = content.replace(/(\[.*?\])\s*\n\s*/g, '$1\n').trim();
-        md += `## ${header}\n${tsLine}${newContent}\n\n`;
+        md += `[${header}]:\n\n${tsLine}${newContent}\n\n`;
       }
     }
   });
@@ -73,12 +78,12 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
   // The ONLY headers that legitimately start a new message: the entity /
   // assistant (customAiName), the built-in "User" fallback header, and every
   // speaker registered in character_map.json (passed in as validUserNames). A
-  // "## X" line is a message boundary only when X — or, for a multi-speaker
-  // header, EVERY comma/、-separated part of X — is one of those known names.
-  // Any other "## ..." line is treated as ordinary body text of the current
-  // message and kept verbatim (the "## " prefix is NOT stripped). This stops
-  // markdown sub-headings inside a message (e.g. "## Summary") from being
-  // misread as new turns.
+  // "[X]:" line (current format) — or a legacy "## X" line (older exports) — is
+  // a message boundary only when X, or for a multi-speaker header EVERY comma/、
+  // -separated part of X, is one of those known names. Any other such line is
+  // treated as ordinary body text of the current message and kept verbatim.
+  // This stops markdown sub-headings (e.g. "## Summary") and bracketed body
+  // lines (e.g. "[Note]:") inside a message from being misread as new turns.
   const validSet = new Set(
     [customAiName || '', 'User', ...validUserNames].filter(Boolean).map(norm)
   );
@@ -173,10 +178,24 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith('## ')) {
-      let parsedHeader = line.substring(3).trim();
-      if (parsedHeader.endsWith(':')) {
-        parsedHeader = parsedHeader.substring(0, parsedHeader.length - 1).trim();
+
+    // Current format: "[Name]:" alone on a line. The trailing ":" right after
+    // the closing bracket is the marker — a "[thinking]" or "[2026-… …]" line
+    // has no trailing colon, so those are never mistaken for headers. Inline
+    // text like "[Alice]: hi" also isn't a header (something follows the ":").
+    const bracketMatch = line.match(/^\[(.+)\]:[ \t]*$/);
+    // Legacy format: "## Name" (kept so older exports still import).
+    const isHash = !bracketMatch && line.startsWith('## ');
+
+    if (bracketMatch || isHash) {
+      let parsedHeader: string;
+      if (bracketMatch) {
+        parsedHeader = bracketMatch[1].trim();
+      } else {
+        parsedHeader = line.substring(3).trim();
+        if (parsedHeader.endsWith(':')) {
+          parsedHeader = parsedHeader.substring(0, parsedHeader.length - 1).trim();
+        }
       }
 
       if (isRecognizedHeader(parsedHeader)) {
@@ -186,8 +205,8 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
         currentHeader = parsedHeader;
         currentContent = [];
       } else {
-        // Not a known speaker — this "## ..." line belongs to the current
-        // message body. Push it unchanged (keep the "## ").
+        // Not a known speaker — this line belongs to the current message body.
+        // Push it unchanged (keep the original "[…]:" or "## " text).
         currentContent.push(line);
       }
     } else {

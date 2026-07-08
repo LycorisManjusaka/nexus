@@ -2644,7 +2644,15 @@ export async function POST(req: Request) {
                   resultContent = `Error: ${e?.message || 'tool execution failed'}`;
                 }
                 toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: resultContent });
-                if (attachmentEvent) enqueue(attachmentEvent);
+                // NOTE: deliberately NOT emitting `attachmentEvent` — a file the
+                // entity reads/creates/edits should NOT be pinned as a persistent
+                // attachment on its message (which would re-enter the context
+                // window every turn). The tool_result above already gives the
+                // model the file content for THIS turn; on later turns it re-reads
+                // on demand. This matches the OAuth path, which never attached
+                // tool files either. (attachmentEvent is still built above but
+                // intentionally left unused.)
+                void attachmentEvent;
                 if (actLabel) enqueue({ type: 'tool_activity', tool: null });
               }
               currentMessages.push({ role: 'user', content: toolResultBlocks });
@@ -3306,7 +3314,12 @@ export async function POST(req: Request) {
                     result = { error: e?.message || 'tool execution failed' };
                   }
                   fnRespParts.push({ functionResponse: { name: fc.name, response: result } });
-                  if (attachmentEvent) enqueue(attachmentEvent);
+                  // Deliberately NOT emitting `attachmentEvent` — see the note on
+                  // the Claude path: tool files are not pinned as persistent
+                  // message attachments (no context-window re-entry every turn),
+                  // matching the OAuth path. The functionResponse above already
+                  // hands the model the content for this turn.
+                  void attachmentEvent;
                   if (actLabel) enqueue({ type: 'tool_activity', tool: null });
                 }
                 contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts] }];
@@ -4619,7 +4632,12 @@ export async function POST(req: Request) {
                     name: tc.name,
                     content: resultText,
                   }];
-                  if (attachmentEvent) enqueue(attachmentEvent);
+                  // Deliberately NOT emitting `attachmentEvent` — see the note on
+                  // the Claude path: tool files are not pinned as persistent
+                  // message attachments (no context-window re-entry every turn),
+                  // matching the OAuth path. The tool result above already hands
+                  // the model the content for this turn.
+                  void attachmentEvent;
                   if (actLabel) enqueue({ type: 'tool_activity', tool: null });
                 }
 
