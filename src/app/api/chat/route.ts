@@ -11,6 +11,8 @@ import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
+import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMessage';
+import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { GoogleGenAI } from '@google/genai';
 import Anthropic from '@anthropic-ai/sdk';
@@ -39,6 +41,7 @@ function toolActivityLabel(name: string): string | null {
     case 'Glob': return 'searching for files';
     case 'Grep': return 'searching file contents';
     case 'Delete': return 'deleting a file';
+    case 'Bash': return 'running a shell command';
     case 'read_conversation': return 'reading a past conversation';
     case 'web_search': case 'WebSearch': return 'searching the web';
     case 'web_fetch': case 'WebFetch': return 'fetching a web page';
@@ -200,8 +203,9 @@ async function streamClaudeViaAgentSDK(args: {
   subagentModel: string;           // model the child runs on ('' = cheap default)
   subagentFamily: string;          // provider family of the child model ('' = Claude)
   keys: any;                       // API keys, for routing a non-Claude subagent
+  injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, keys } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -699,6 +703,26 @@ async function streamClaudeViaAgentSDK(args: {
           return real === sandboxRoot || real.startsWith(sandboxRoot + pathModule.sep);
         };
         const canUseTool = async (_toolName: string, input: Record<string, unknown>) => {
+          // Mid-turn partner interjection (OAuth path). canUseTool fires before
+          // EVERY tool call, so it's our reliable mid-loop hook. If the partner
+          // queued a note while the entity was working, deliver it by pausing
+          // THIS one tool call with the note as the denial reason — the model
+          // reads it, then simply re-issues the same call to proceed (or adjusts
+          // course). Draining removes it, so the retry isn't paused again.
+          // Gated on pausedForRendezvous === 0 so a running subagent's tool
+          // calls don't swallow a note meant for the parent entity.
+          if (injectTurnId && pausedForRendezvous === 0) {
+            const injected = drainInjections(injectTurnId);
+            if (injected.length) {
+              try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+              return {
+                behavior: 'deny',
+                message:
+                  frameInjection(injected, I.injectionFraming) +
+                  (I.injectionRetryNote ? `\n\n${I.injectionRetryNote}` : ''),
+              } as any;
+            }
+          }
           if (agentFullSystemAccess) return { behavior: 'allow', updatedInput: input } as any;
           for (const field of ['file_path', 'path', 'notebook_path']) {
             const v = (input as any)?.[field];
@@ -975,6 +999,9 @@ async function streamClaudeViaAgentSDK(args: {
         // Stop the stall watchdog on every exit path — a leaked interval
         // would keep firing enqueue() against a closed controller.
         clearInterval(stallTimer);
+        // Discard any interjection that arrived too late to be delivered (e.g.
+        // after the entity's last tool call) so it can't leak into a later turn.
+        clearInjections(injectTurnId);
       }
     },
   });
@@ -1464,6 +1491,11 @@ export async function POST(req: Request) {
       // Routes the child to that provider's endpoint+key, independent of the
       // parent's provider. Empty = inherit the parent's family.
       subagentFamily = '',
+      // Per-turn id for mid-turn "partner interjections". The frontend
+      // generates it before sending and can POST /api/chat/inject { turnId,
+      // text } while this request streams; the running tool loop drains those
+      // messages at its next model-call boundary. Empty = feature not used.
+      injectTurnId = '',
     } = await req.json();
     const keys = await loadKeys();
 
@@ -1861,6 +1893,7 @@ export async function POST(req: Request) {
           subagentModel,
           subagentFamily,
           keys,
+          injectTurnId,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -2105,6 +2138,18 @@ export async function POST(req: Request) {
               type: 'object',
               properties: { path: { type: 'string', description: 'Path of the file to delete.' } },
               required: ['path'],
+            },
+          });
+          claudeTools.push({
+            name: 'Bash',
+            description: I.toolBashDesc,
+            input_schema: {
+              type: 'object',
+              properties: {
+                command: { type: 'string', description: 'The shell command to run.' },
+                timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 60000, max 600000).' },
+              },
+              required: ['command'],
             },
           });
         }
@@ -2438,7 +2483,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'read_conversation', 'AskQuestion', 'spawn_subagent']);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'AskQuestion', 'spawn_subagent']);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // Turn finished. If it was cut off at the token cap (thinking +
@@ -2588,6 +2633,17 @@ export async function POST(req: Request) {
                     const p = String(tu.input?.path || '');
                     const del = await deleteWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
                     resultContent = del.ok ? `OK: deleted ${p}.` : `Error: ${del.error || 'delete failed'}`;
+                  } else if (tu.name === 'Bash') {
+                    // DANGEROUS shell execution — only present when agentDangerousTools
+                    // gated the tool in above. cwd = the entity's workspace.
+                    const cmd = String(tu.input?.command || '');
+                    if (!cmd.trim()) {
+                      resultContent = 'Error: Bash requires a non-empty "command".';
+                    } else {
+                      const cwd = await ensureWorkspace(folderName);
+                      const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(tu.input?.timeout_ms) || undefined });
+                      resultContent = sh.output;
+                    }
                   } else if (tu.name === 'read_conversation') {
                     // Pull a past conversation by name for this turn only.
                     // Inactive ("non-public") conversations are refused inside
@@ -2654,6 +2710,14 @@ export async function POST(req: Request) {
                 // intentionally left unused.)
                 void attachmentEvent;
                 if (actLabel) enqueue({ type: 'tool_activity', tool: null });
+              }
+              // Mid-turn partner interjection: if a note was queued while these
+              // tools ran, append it as a text block on the same user turn that
+              // carries the tool results, so the model sees it on its next step.
+              const injectedClaude = drainInjections(injectTurnId);
+              if (injectedClaude.length) {
+                toolResultBlocks.push({ type: 'text', text: frameInjection(injectedClaude, I.injectionFraming) });
+                enqueue({ type: 'injection_delivered', count: injectedClaude.length });
               }
               currentMessages.push({ role: 'user', content: toolResultBlocks });
               // …and around the loop again. Next iteration the model sees the
@@ -2801,6 +2865,26 @@ export async function POST(req: Request) {
             },
           ],
         });
+        // Dangerous tool: Bash/Shell — gated per-Entity, like Delete on the
+        // other paths.
+        if (agentDangerousTools) {
+          geminiTools.push({
+            functionDeclarations: [
+              {
+                name: 'Bash',
+                description: I.toolBashDesc,
+                parameters: {
+                  type: 'OBJECT',
+                  properties: {
+                    command: { type: 'STRING', description: 'The shell command to run.' },
+                    timeout_ms: { type: 'NUMBER', description: 'Optional timeout in milliseconds (default 60000, max 600000).' },
+                  },
+                  required: ['command'],
+                },
+              },
+            ],
+          });
+        }
       }
       if (enableReadConversation) {
         geminiTools.push({
@@ -3258,6 +3342,17 @@ export async function POST(req: Request) {
                       const gr = await grepWorkspaceFiles(folderName, pat, { filePattern: filePat, flags });
                       if (!gr.ok) result = { error: gr.error };
                       else result = { matches: gr.matches };
+                    } else if (fc.name === 'Bash') {
+                      // DANGEROUS shell execution — only present when
+                      // agentDangerousTools gated the tool in above.
+                      const cmd = String(fc.args?.command || '');
+                      if (!cmd.trim()) {
+                        result = { error: 'Bash requires a non-empty "command".' };
+                      } else {
+                        const cwd = await ensureWorkspace(folderName);
+                        const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(fc.args?.timeout_ms) || undefined });
+                        result = { output: sh.output };
+                      }
                     } else if (fc.name === 'read_conversation') {
                       // Pull a past conversation by name for this turn only.
                       // Inactive ("non-public") conversations are refused inside
@@ -3322,7 +3417,14 @@ export async function POST(req: Request) {
                   void attachmentEvent;
                   if (actLabel) enqueue({ type: 'tool_activity', tool: null });
                 }
-                contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts] }];
+                // Mid-turn partner interjection: append as a text part on the
+                // same user turn that carries the function responses.
+                const injectedGemini = drainInjections(injectTurnId);
+                const injectParts = injectedGemini.length
+                  ? [{ text: frameInjection(injectedGemini, I.injectionFraming) }]
+                  : [];
+                if (injectedGemini.length) enqueue({ type: 'injection_delivered', count: injectedGemini.length });
+                contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts, ...injectParts] }];
                 continue; // loop — model will continue with the function responses visible
               }
 
@@ -3642,6 +3744,21 @@ export async function POST(req: Request) {
                 type: 'object',
                 properties: { path: { type: 'string', description: 'Path of the file to delete.' } },
                 required: ['path'],
+              },
+            },
+          });
+          localTools.push({
+            type: 'function',
+            function: {
+              name: 'Bash',
+              description: I.toolBashDesc,
+              parameters: {
+                type: 'object',
+                properties: {
+                  command: { type: 'string', description: 'The shell command to run.' },
+                  timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 60000, max 600000).' },
+                },
+                required: ['command'],
               },
             },
           });
@@ -4518,6 +4635,17 @@ export async function POST(req: Request) {
                       const p = String(parsed.path || '');
                       const del = await deleteWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
                       resultText = del.ok ? `OK: deleted ${p}.` : `Error: ${del.error || 'delete failed'}`;
+                    } else if (tc.name === 'Bash') {
+                      // DANGEROUS shell execution — only present when
+                      // agentDangerousTools gated the tool in above.
+                      const cmd = String(parsed.command || '');
+                      if (!cmd.trim()) {
+                        resultText = 'Error: Bash requires a non-empty "command".';
+                      } else {
+                        const cwd = await ensureWorkspace(folderName);
+                        const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(parsed.timeout_ms) || undefined });
+                        resultText = sh.output;
+                      }
                     } else if (tc.name === 'web_search') {
                       // Universal NEXUS web search (DuckDuckGo, keyless). Runs
                       // here on the server; results are fed back to the model AND
@@ -4658,6 +4786,14 @@ export async function POST(req: Request) {
                     parts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
                   }
                   msgs = [...msgs, { role: 'user', content: parts }];
+                }
+
+                // Mid-turn partner interjection: append as a user message after
+                // the tool results, so the model sees it on its next iteration.
+                const injectedOai = drainInjections(injectTurnId);
+                if (injectedOai.length) {
+                  msgs = [...msgs, { role: 'user', content: frameInjection(injectedOai, I.injectionFraming) }];
+                  enqueue({ type: 'injection_delivered', count: injectedOai.length });
                 }
 
                 continue; // loop — next iteration sees tool results

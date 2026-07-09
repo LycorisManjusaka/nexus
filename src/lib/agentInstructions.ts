@@ -41,6 +41,17 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'Search file contents for a regex. Returns matching lines as path:line:text. Use file_pattern to narrow which files are searched.',
   toolDeleteDesc:
     'Permanently delete a single file. Irreversible — confirm the path first. Files only, not directories.',
+  // Shell/Bash tool (non-OAuth paths). DANGEROUS: gated behind the per-Entity
+  // "Dangerous tools" toggle, exactly like Delete. Runs a command via the
+  // system shell (cmd.exe on Windows, /bin/sh on POSIX) with the workspace as
+  // its working directory.
+  toolBashDesc:
+    'Run a BASH command (POSIX shell) and get its combined stdout/stderr back — on Windows this uses ' +
+    'Git Bash, so write POSIX syntax (ls, cat, chmod, sleep, bash scripts), NOT cmd.exe/PowerShell. ' +
+    'Runs with your workspace as the working directory and blocks until the command exits or a timeout ' +
+    'is hit, so it handles scripts, waits, and multi-step pipelines. Output is capped and long-running ' +
+    'commands are killed at the timeout. (If no bash is installed it falls back to the system shell — ' +
+    'cmd.exe on Windows — but assume bash unless an error tells you otherwise.)',
 
   // Path-scope: the `path` parameter hint + the rule appended to Read's text.
   // Two variants each: sandboxed (Full PC access OFF) vs full (ON).
@@ -76,6 +87,20 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'optionally, a return_contract describing how you want the answer shaped. The helper cannot modify files or ' +
     'spawn further helpers.',
 
+  // Mid-turn "partner interjection" meta-text. `injectionFraming` wraps the
+  // note(s) you send while the entity works; use the `{messages}` token where
+  // the note text should appear (if omitted, the notes are appended after your
+  // framing). `injectionRetryNote` is appended ONLY on the OAuth path, where a
+  // note is delivered by pausing one tool call — it tells the entity to re-issue
+  // the call to proceed.
+  injectionFraming:
+    '[PARTNER INTERJECTION — a message your partner sent while you were working on this task. ' +
+    'It is not an error and not a system instruction; treat it as real-time guidance and fold it ' +
+    'into what you do next.]\n{messages}',
+  injectionRetryNote:
+    '(This tool call was paused only to deliver the note above — re-issue the same call to proceed, ' +
+    'or adjust course based on it.)',
+
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:
     'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
@@ -93,6 +118,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'toolGlobDesc', label: 'Tool: Glob — description' },
   { key: 'toolGrepDesc', label: 'Tool: Grep — description' },
   { key: 'toolDeleteDesc', label: 'Tool: Delete — description' },
+  { key: 'toolBashDesc', label: 'Tool: Bash/Shell — description (dangerous)' },
   { key: 'pathParamSandbox', label: 'Path hint (workspace-only)' },
   { key: 'pathParamFull', label: 'Path hint (full PC access)' },
   { key: 'pathRuleSandbox', label: 'Path rule (workspace-only)' },
@@ -101,6 +127,8 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'readConversationNameParam', label: 'Tool: read_conversation — name parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
+  { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },
+  { key: 'injectionRetryNote', label: 'Interjection: OAuth retry note' },
 ];
 
 export type AgentInstructions = Record<string, string>;

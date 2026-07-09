@@ -210,6 +210,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // turn may genuinely be stuck and a rerun is warranted. Display-only.
   const [liveToolActivity, setLiveToolActivity] = useState<string | null>(null);
   const [stallIdleSeconds, setStallIdleSeconds] = useState<number | null>(null);
+  // Mid-turn "partner interjection": a per-turn id (also sent in the request
+  // body) lets you POST a message to /api/chat/inject WHILE the entity is
+  // working; the running tool loop folds it in at its next model-call boundary.
+  // `injectTurnId` is non-null only while a turn is in flight. `interjectText`
+  // is the input box; `interjectStatus` shows a brief send/deliver confirmation.
+  const [injectTurnId, setInjectTurnId] = useState<string | null>(null);
+  const [interjectText, setInterjectText] = useState('');
+  const [interjectStatus, setInterjectStatus] = useState<string | null>(null);
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
@@ -1176,6 +1184,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setActiveSubagent(null);
     setLiveToolActivity(null);
     setStallIdleSeconds(null);
+    setInjectTurnId(null);
+    setInterjectStatus(null);
+  };
+
+  // Send a mid-turn interjection to the running turn. Fire-and-forget POST to
+  // /api/chat/inject; the backend queues it and the tool loop folds it in at
+  // its next model-call boundary.
+  const sendInterjection = async () => {
+    const text = interjectText.trim();
+    if (!text || !injectTurnId) return;
+    setInterjectText('');
+    setInterjectStatus('sent — will reach the entity at its next step…');
+    try {
+      const r = await fetch('/api/chat/inject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId: injectTurnId, text }),
+      });
+      if (!r.ok) setInterjectStatus('could not queue the message (turn may have ended)');
+    } catch {
+      setInterjectStatus('could not queue the message');
+    }
   };
 
   const generateAiResponse = async (history: any[]) => {
@@ -1188,6 +1218,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // `generationMs` — a display-only indicator, persisted to the log but
     // never sent back to the entity (reconstruction uses only message content).
     const genStartTime = Date.now();
+    // Fresh per-turn id for mid-turn interjections. Local const for the body
+    // (needs the value synchronously); mirrored into state so the interject
+    // input can address this specific turn.
+    const turnId = `turn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    setInjectTurnId(turnId);
+    setInterjectText('');
+    setInterjectStatus(null);
 
     const msgId = (Date.now() + 1).toString();
     const newAiMessage = {
@@ -1304,7 +1341,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4 };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -1505,6 +1542,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 if (rec) { rec.result = data.result || ''; rec.via = data.via || null; }
                 else subagentRuns.push({ task: data.task || '', result: data.result || '', via: data.via || null });
                 setActiveSubagent(null);
+              } else if (data.type === 'injection_delivered') {
+                // A queued partner interjection was folded into the entity's
+                // context at a tool-loop boundary.
+                setInterjectStatus('✓ delivered to the entity');
               } else if (data.type === 'tool_activity') {
                 // OAuth path: the model started (tool name) or finished (null)
                 // a tool call — reflect it in the loading indicator.
@@ -1654,6 +1695,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setActiveSubagent(null);
     setLiveToolActivity(null);
     setStallIdleSeconds(null);
+    setInjectTurnId(null);
+    setInterjectStatus(null);
   };
 
   const handleRerun = async (msgId: string) => {
@@ -2298,6 +2341,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       : `${stallIdleSeconds}s`}{' '}
                     — it may be stuck. Keep waiting, or Stop and rerun.
                   </span>
+                )}
+                {/* Mid-turn interjection: send a note to the entity WHILE it
+                    works. Lands at the next tool-loop step (OAuth: at its next
+                    tool call). If it makes no further tool calls this turn, the
+                    note won't land — send it as a normal next message instead. */}
+                {injectTurnId && (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      value={interjectText}
+                      onChange={(e) => setInterjectText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendInterjection(); } }}
+                      placeholder="Interject while it works… (delivered at its next step)"
+                      className="text-xs px-2 py-1 w-72 max-w-[60vw] rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
+                    />
+                    <button
+                      type="button"
+                      onClick={sendInterjection}
+                      disabled={!interjectText.trim()}
+                      className="text-xs px-2 py-1 rounded-md border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-40"
+                    >
+                      Send
+                    </button>
+                    {interjectStatus && (
+                      <span className="text-[10px] text-muted-foreground">{interjectStatus}</span>
+                    )}
+                  </div>
                 )}
               </div>
             </motion.div>
