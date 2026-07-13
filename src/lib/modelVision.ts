@@ -131,6 +131,12 @@ export const AUDIO_CAPABLE_MODELS = new Set<string>([
 export function isAudioCapable(specificModel: string | undefined | null): boolean {
   if (!specificModel) return false;
   if (AUDIO_CAPABLE_MODELS.has(specificModel)) return true;
+  // ByteDance Seed 2.0 *Lite* is the omni-modal tier — it natively understands
+  // audio (image_url/video_url/input_audio all work). The pro/mini/code tiers do
+  // NOT accept audio, so match ONLY the lite snapshots (date-versioned ids like
+  // seed-2-0-lite-260428). Without this, the ears bridge wrongly engages over a
+  // model that can already hear.
+  if (specificModel.toLowerCase().includes('seed-2-0-lite')) return true;
   // Local models with audio support are rare and not auto-detected here —
   // user can disable the ears feature per-conversation if their local build
   // actually supports audio.
@@ -158,5 +164,9 @@ export const VIDEO_CAPABLE_MODELS = new Set<string>([
 export function isVideoCapable(specificModel: string | undefined | null): boolean {
   if (!specificModel) return false;
   if (VIDEO_CAPABLE_MODELS.has(specificModel)) return true;
+  // ByteDance Seed 2.0 *Lite* (omni tier) natively watches video. Match only the
+  // lite snapshots — pro/mini/code stay default-deny (their video support is
+  // unconfirmed, and a false positive would 400 on send). Mirrors isAudioCapable.
+  if (specificModel.toLowerCase().includes('seed-2-0-lite')) return true;
   return false;
 }

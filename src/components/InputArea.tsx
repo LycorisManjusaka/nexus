@@ -4,7 +4,7 @@ import React, { useState, useRef } from 'react';
 import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 
-const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode }: any, ref: any) {
+const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
   const [text, setText] = useState('');
   const [userName, setUserName] = useState('');
   // Characters from local_data/character_map.json, for the speaker dropdown.
@@ -56,6 +56,71 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     return () => {
       clearInterval(id);
       window.removeEventListener('nx-chara-changed', onCharaChanged as EventListener);
+    };
+  }, []);
+
+  // ── Draft autosave / restore ──────────────────────────────────────────────
+  // Persist the in-progress message so a page reload (or crash) doesn't lose it.
+  // localStorage only — one small string per conversation, no server/disk cost.
+  // Debounced (write 800 ms after typing stops) so we don't thrash on every
+  // keystroke; a beforeunload/unmount flush guarantees a draft survives an
+  // immediate reload or a conversation switch. Attachments are intentionally NOT
+  // saved (base64 blobs would blow the ~5 MB localStorage quota). Disabled in
+  // VRChat mode, where the input is a live transcript, not a user draft.
+  const draftKey = convoId ? `nexus_draft_${convoId}` : null;
+  const draftStateRef = useRef({ text, draftKey, vrchatMode });
+  draftStateRef.current = { text, draftKey, vrchatMode };
+  const prevDraftKeyRef = useRef<string | null>(null);
+
+  // Write a draft. `allowRemove` clears an emptied draft — used ONLY on the
+  // timer-based debounce path. The reload/unmount flush passes allowRemove=false
+  // (save-only): React StrictMode does mount→cleanup→mount, and the cleanup runs
+  // while `text` is still '' (the restored value hasn't committed), so a
+  // remove-on-empty there would wipe the freshly restored draft.
+  const writeDraft = (key: string | null, value: string, vr: boolean, allowRemove: boolean) => {
+    if (vr || !key) return;
+    try {
+      if (value.trim()) { localStorage.setItem(key, value); console.debug('[draft] save', key, `${value.length} chars`); }
+      else if (allowRemove) { localStorage.removeItem(key); console.debug('[draft] clear', key); }
+    } catch (e) { console.debug('[draft] write failed', e); }
+  };
+
+  // Restore this conversation's draft when the conversation changes; flush the
+  // outgoing one first so nothing typed in the last debounce window is lost.
+  React.useEffect(() => {
+    const prevKey = prevDraftKeyRef.current;
+    if (prevKey && prevKey !== draftKey) {
+      // `text` state still holds the OUTGOING conversation's draft at this point
+      // (the setText below hasn't run yet this tick). Save-only.
+      writeDraft(prevKey, draftStateRef.current.text, draftStateRef.current.vrchatMode, false);
+    }
+    prevDraftKeyRef.current = draftKey;
+    if (vrchatMode) return;
+    let saved = '';
+    try { if (draftKey) saved = localStorage.getItem(draftKey) || ''; } catch { /* ignore */ }
+    console.debug('[draft] restore', { convoId, draftKey, foundChars: saved.length });
+    setText(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convoId]);
+
+  // Debounced save 800 ms after typing stops (this path may clear an emptied draft).
+  React.useEffect(() => {
+    if (vrchatMode || !draftKey) return;
+    const t = setTimeout(() => writeDraft(draftKey, text, vrchatMode, true), 800);
+    return () => clearTimeout(t);
+  }, [text, draftKey, vrchatMode]);
+
+  // Flush on reload/close AND on unmount (covers a conversation switch that
+  // remounts this component). SAVE-ONLY — never removes (see writeDraft note).
+  React.useEffect(() => {
+    const saveOnly = () => {
+      const s = draftStateRef.current;
+      writeDraft(s.draftKey, s.text, s.vrchatMode, false);
+    };
+    window.addEventListener('beforeunload', saveOnly);
+    return () => {
+      window.removeEventListener('beforeunload', saveOnly);
+      saveOnly();
     };
   }, []);
 
@@ -236,6 +301,37 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         URL.revokeObjectURL(objectUrl);
       }
 
+      // Auto-split oversize videos. OpenAI-compatible providers reject any single
+      // inline `data:` URI over 20 MiB; when this common setting is on (default),
+      // re-encode at CRF 28 server-side and, if still too big, split into
+      // <name>_part1.mp4, … each under the cap. Falls back to the original file
+      // on any failure (the send-time preflight will then surface the size error).
+      const autoSplit = globalSettings?.autoSplitVideos !== false;
+      if (isVideo && autoSplit && dataUrl && dataUrl.length > 20 * 1024 * 1024) {
+        try {
+          const fd = new FormData();
+          fd.append('file', file, file.name);
+          const res = await fetch('/api/attachments/split-video', { method: 'POST', body: fd });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data.parts) && data.parts.length > 0) {
+              const perPartTokens = Math.max(1, Math.ceil((tokens || 1000) / data.parts.length));
+              return data.parts.map((p: any) => ({
+                id: uuidv4(),
+                name: p.name,
+                type: p.mimeType || 'video/mp4',
+                size: p.size || 0,
+                isText: false, isImage: false, isAudio: false, isVideo: true,
+                textData: null,
+                dataUrl: p.dataUrl,
+                tokens: perPartTokens,
+                fileObj: null,
+              }));
+            }
+          }
+        } catch { /* fall through and return the original, unsplit video */ }
+      }
+
       return {
         id: uuidv4(),
         name: finalName,
@@ -248,7 +344,8 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       };
     }));
 
-    setAttachments(prev => [...prev, ...newAttachments]);
+    // A video may expand into several parts, so flatten before appending.
+    setAttachments(prev => [...prev, ...newAttachments.flat()]);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -292,6 +389,8 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     onSend(finalText, attachments);
     setText('');
     setAttachments([]);
+    // Sent — drop the saved draft so a reload doesn't restore an already-sent message.
+    try { if (draftKey) localStorage.removeItem(draftKey); } catch { /* ignore */ }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

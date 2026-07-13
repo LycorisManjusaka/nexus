@@ -234,6 +234,67 @@ async function callGeminiVideo(params: {
  * eyes/ears. Video descriptions are slow to generate (5-30 s typical), so the
  * cache hit on subsequent turns is a significant UX improvement.
  */
+async function callSeedVideo(params: {
+  videoBase64: string;
+  videoMimeType: string;
+  watcherPrompt: string;
+  watcherModel: string;
+  bytedanceKey: string;
+  attachmentName?: string;
+}): Promise<BridgeResult> {
+  const { videoBase64, videoMimeType, watcherPrompt, watcherModel, bytedanceKey, attachmentName } = params;
+  const tag = `[watcher/seed ${attachmentName || '(unnamed)'}]`;
+  const decodedBytes = Math.floor(videoBase64.length * 0.75);
+  console.log(`${tag} POST → ByteDance ModelArk · model=${watcherModel} · mime=${videoMimeType} · decoded≈${(decodedBytes / 1024 / 1024).toFixed(2)} MiB`);
+  const dataUrl = `data:${videoMimeType};base64,${videoBase64}`;
+  // ByteDance Seed 2.0 Lite (omni-modal) via BytePlus ModelArk's OpenAI-compatible
+  // endpoint. Uses the `video_url` content part (same convention as DashScope /
+  // MiMo). Reasoning is built in; no thinking toggle.
+  const body = {
+    model: watcherModel,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: watcherPrompt },
+          { type: 'video_url', video_url: { url: dataUrl } },
+        ],
+      },
+    ],
+    stream: false,
+    temperature: 0.3,
+    top_p: 0.9,
+  };
+  const t0 = Date.now();
+  const res = await fetch('https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${bytedanceKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const elapsedMs = Date.now() - t0;
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error(`${tag} HTTP ${res.status} after ${elapsedMs} ms · FULL BODY:\n${errText}`);
+    const cleanMsg = parseUpstreamError(errText, res.status);
+    return {
+      description: `[video "${attachmentName || 'unnamed'}" — ${watcherModel} could not describe it: ${cleanMsg}]`,
+      fromCache: false,
+      error: cleanMsg,
+    };
+  }
+  const data = await res.json();
+  const description = (data?.choices?.[0]?.message?.content || '').trim();
+  if (!description) {
+    console.error(`${tag} HTTP 200 but empty content. Raw body: ${JSON.stringify(data).slice(0, 500)}`);
+    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty' };
+  }
+  console.log(`${tag} OK in ${elapsedMs} ms · ${description.length} chars described`);
+  return { description, fromCache: false };
+}
+
 export async function describeVideo(params: {
   videoBase64: string;
   videoMimeType: string;
@@ -242,9 +303,10 @@ export async function describeVideo(params: {
   qwenKey: string;
   geminiKey: string;
   mimoKey?: string;
+  bytedanceKey?: string;
   attachmentName?: string;
 }): Promise<BridgeResult> {
-  const { videoBase64, videoMimeType, watcherPrompt, watcherModel, qwenKey, geminiKey, mimoKey, attachmentName } = params;
+  const { videoBase64, videoMimeType, watcherPrompt, watcherModel, qwenKey, geminiKey, mimoKey, bytedanceKey, attachmentName } = params;
   const logName = attachmentName || '(unnamed)';
 
   if (!watcherPrompt || !watcherPrompt.trim()) {
@@ -280,9 +342,12 @@ export async function describeVideo(params: {
     } else if (lower.startsWith('mimo')) {
       if (!mimoKey) return { description: '[video — watcher needs MiMo API key in Settings]', fromCache: false, error: 'no_key' };
       result = await callMimoVideo({ videoBase64, videoMimeType, watcherPrompt, watcherModel, mimoKey, attachmentName });
+    } else if (lower.startsWith('seed')) {
+      if (!bytedanceKey) return { description: '[video — watcher needs ByteDance API key in Settings]', fromCache: false, error: 'no_key' };
+      result = await callSeedVideo({ videoBase64, videoMimeType, watcherPrompt, watcherModel, bytedanceKey, attachmentName });
     } else {
       return {
-        description: `[video — watcher model "${watcherModel}" not recognised (must start with "qwen", "gemini", or "mimo")]`,
+        description: `[video — watcher model "${watcherModel}" not recognised (must start with "qwen", "gemini", "mimo", or "seed")]`,
         fromCache: false, error: 'bad_model',
       };
     }

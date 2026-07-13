@@ -1774,6 +1774,7 @@ export async function POST(req: Request) {
                   qwenKey: keys.qwen || '',
                   geminiKey: keys.gemini || '',
                   mimoKey: keys.mimo || '',
+                  bytedanceKey: keys.bytedance || '',
                 });
                 contentStr +=
                   `\n\n<audio_description filename="${att.name || 'audio'}" via="${earsModel}">\n` +
@@ -1800,6 +1801,7 @@ export async function POST(req: Request) {
                   qwenKey: keys.qwen || '',
                   geminiKey: keys.gemini || '',
                   mimoKey: keys.mimo || '',
+                  bytedanceKey: keys.bytedance || '',
                   attachmentName: att.name,
                 });
                 contentStr +=
@@ -3920,7 +3922,12 @@ export async function POST(req: Request) {
             if (media.name) parts.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
             parts.push({
               type: 'input_audio',
-              input_audio: { data: dataUrl, format: audioFormatOf(media.mimeType) },
+              // OpenAI's `input_audio.data` spec wants RAW base64. Qwen/MiMo
+              // tolerate a full `data:` URL here, but ByteDance/Ark strictly
+              // schema-validates it as pure base64 and nulls the whole message
+              // otherwise ("messages[i] … expected an object, but got null").
+              // So send raw base64 for ByteDance, the prefixed URL for the rest.
+              input_audio: { data: isBytedance ? media.base64Data : dataUrl, format: audioFormatOf(media.mimeType) },
             });
           } else if (media.mimeType.startsWith('video/')) {
             // DashScope/Qwen video input — same shape as image_url but with a

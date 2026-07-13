@@ -416,6 +416,21 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
+                  checked={globalSettings.autoSplitVideos ?? true}
+                  onChange={e => setGlobalSettings({...globalSettings, autoSplitVideos: e.target.checked})}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">Auto-split large videos</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                Videos whose base64 size exceeds 20&nbsp;MiB are re-encoded server-side at <code>-crf 28</code>; if still oversize they&apos;re split into <code>&lt;name&gt;_part1.mp4</code>, <code>_part2.mp4</code>, … each under the provider cap. Requires <code>ffmpeg</code> on the machine.
+              </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
                   checked={globalSettings.saveTimestampsToMd ?? false}
                   onChange={e => setGlobalSettings({...globalSettings, saveTimestampsToMd: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"

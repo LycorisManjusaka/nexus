@@ -220,6 +220,62 @@ async function callGeminiAudio(params: {
  * Cached on disk under local_data/ears_cache/<sha256>.txt — same image-cache
  * pattern as the eyes feature.
  */
+async function callSeedAudio(params: {
+  audioBase64: string;
+  audioMimeType: string;
+  earsPrompt: string;
+  earsModel: string;
+  bytedanceKey: string;
+}): Promise<BridgeResult> {
+  const { audioBase64, audioMimeType, earsPrompt, earsModel, bytedanceKey } = params;
+  // ByteDance Seed 2.0 Lite (omni-modal) via BytePlus ModelArk. Ark's supported
+  // content types are exactly: text, image_url, video_url, input_audio, file — so
+  // audio uses OpenAI's `input_audio` part. The catch: Ark schema-validates
+  // `input_audio.data` as PURE base64 (no `data:<mime>;base64,` prefix) with a
+  // separate short `format`. Qwen/MiMo tolerate the full data URL, but Ark
+  // rejects the prefixed string and nulls the whole message ("messages[i] …
+  // expected an object, but got null"). Send raw base64 here. No thinking toggle.
+  const body = {
+    model: earsModel,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: earsPrompt },
+          { type: 'input_audio', input_audio: { data: audioBase64, format: audioFormatOf(audioMimeType) } },
+        ],
+      },
+    ],
+    stream: false,
+    temperature: 0.3,
+    top_p: 0.9,
+  };
+  const res = await fetch('https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${bytedanceKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error(`[ears/seed] HTTP ${res.status} · FULL BODY:\n${errText}`);
+    const cleanMsg = parseUpstreamError(errText, res.status);
+    return {
+      description: `[audio — ${earsModel} could not describe it: ${cleanMsg}]`,
+      fromCache: false,
+      error: cleanMsg,
+    };
+  }
+  const data = await res.json();
+  const description = (data?.choices?.[0]?.message?.content || '').trim();
+  if (!description) {
+    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty' };
+  }
+  return { description, fromCache: false };
+}
+
 export async function describeAudio(params: {
   audioBase64: string;
   audioMimeType: string;
@@ -228,8 +284,9 @@ export async function describeAudio(params: {
   qwenKey: string;
   geminiKey: string;
   mimoKey?: string;
+  bytedanceKey?: string;
 }): Promise<BridgeResult> {
-  const { audioBase64, audioMimeType, earsPrompt, earsModel, qwenKey, geminiKey, mimoKey } = params;
+  const { audioBase64, audioMimeType, earsPrompt, earsModel, qwenKey, geminiKey, mimoKey, bytedanceKey } = params;
 
   if (!earsPrompt || !earsPrompt.trim()) {
     return { description: '[audio — ears prompt is empty]', fromCache: false, error: 'no_prompt' };
@@ -261,9 +318,12 @@ export async function describeAudio(params: {
     } else if (lower.startsWith('mimo')) {
       if (!mimoKey) return { description: '[audio — ears needs MiMo API key in Settings]', fromCache: false, error: 'no_key' };
       result = await callMimoAudio({ audioBase64, audioMimeType, earsPrompt, earsModel, mimoKey });
+    } else if (lower.startsWith('seed')) {
+      if (!bytedanceKey) return { description: '[audio — ears needs ByteDance API key in Settings]', fromCache: false, error: 'no_key' };
+      result = await callSeedAudio({ audioBase64, audioMimeType, earsPrompt, earsModel, bytedanceKey });
     } else {
       return {
-        description: `[audio — ears model "${earsModel}" not recognised (must start with "qwen", "gemini", or "mimo")]`,
+        description: `[audio — ears model "${earsModel}" not recognised (must start with "qwen", "gemini", "mimo", or "seed")]`,
         fromCache: false, error: 'bad_model',
       };
     }

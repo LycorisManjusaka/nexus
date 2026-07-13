@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import MessageBubble from './MessageBubble';
 import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
+import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock } from 'lucide-react';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -2441,7 +2442,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
               </div>
             )}
-            <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={loading} aiName={localAiName} vrchatMode={vrchatMode} />
+            <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={loading} aiName={localAiName} vrchatMode={vrchatMode} globalSettings={globalSettings} convoId={convoId} />
           </div>
         </div>
       </div>
@@ -2870,27 +2871,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <span className="block">• <span className="font-mono">local:&lt;model&gt;</span> (e.g. <span className="font-mono">local:qwen2-vl-7b-instruct</span>) → a vision model loaded in <span className="font-semibold">LM Studio</span> (JIT loading on).</span>
                         <span className="block mt-1">GLM ids use the Z.AI key; Gemini the Google key; MiMo the MiMo key — set whichever you pick in Preferences.</span>
                       </p>
-                      <input
-                        list="eyes-model-list"
+                      <EditableCombo
                         value={eyesModel}
-                        onChange={(e) => setEyesModel(e.target.value)}
+                        onChange={setEyesModel}
                         placeholder="e.g. claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo"
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                        options={[
+                          // No-key options first — what you want when only OAuth
+                          // Claude and/or local models are available.
+                          { value: 'claude-haiku-4-5', label: 'OAuth Claude — Haiku 4.5 (no key, cheapest)' },
+                          { value: 'claude-opus-4-8', label: 'OAuth Claude — Opus 4.8 (no key, richest)' },
+                          { value: 'local:qwen2-vl-7b-instruct', label: 'Local LM Studio (no key — replace with your loaded model)' },
+                          { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
+                          { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
+                          { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
+                          { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Google key)' },
+                          { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Google key)' },
+                          { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview (Google key)' },
+                          { value: 'mimo-v2.5', label: 'mimo-v2.5 (MiMo key)' },
+                        ]}
                       />
-                      <datalist id="eyes-model-list">
-                        {/* No-key options first — these are what you want when only
-                            OAuth Claude and/or local models are available. */}
-                        <option value="claude-haiku-4-5">OAuth Claude — Haiku 4.5 (no key, cheapest)</option>
-                        <option value="claude-opus-4-8">OAuth Claude — Opus 4.8 (no key, richest)</option>
-                        <option value="local:qwen2-vl-7b-instruct">Local LM Studio (no key — replace with your loaded model)</option>
-                        <option value="glm-5v-turbo">glm-5v-turbo (Z.AI key)</option>
-                        <option value="glm-4.6v-flash">glm-4.6v-flash (Z.AI key)</option>
-                        <option value="glm-4.6v">glm-4.6v (Z.AI key)</option>
-                        <option value="gemini-3.5-flash">gemini-3.5-flash (Google key)</option>
-                        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Google key)</option>
-                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview (Google key)</option>
-                        <option value="mimo-v2.5">mimo-v2.5 (MiMo key)</option>
-                      </datalist>
                     </div>
                   </>
                 )}
@@ -2939,6 +2939,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                         <option value="mimo-v2.5">mimo-v2.5 (Xiaomi)</option>
+                        <option value="seed-2-0-lite-260428">seed-2-0-lite (ByteDance — omnimodal)</option>
                       </select>
                     </div>
                   </>
@@ -2988,6 +2989,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
                         <option value="qwen3.5-omni-plus">qwen3.5-omni-plus (higher quality)</option>
                         <option value="mimo-v2.5">mimo-v2.5 (Xiaomi)</option>
+                        <option value="seed-2-0-lite-260428">seed-2-0-lite (ByteDance — omnimodal)</option>
                       </select>
                     </div>
                   </>
@@ -3309,20 +3311,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'ByteDance' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">ByteDance (Seed) Model</label>
-                    <input
-                      type="text"
+                    <EditableCombo
                       value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      list="bytedance-model-suggestions"
+                      onChange={setSpecificModel}
+                      mono
                       placeholder="e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)"
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                      options={[
+                        { value: 'seed-2-0-pro-260328', label: 'Seed 2.0 Pro (text + image)' },
+                        { value: 'seed-2-0-lite-260428', label: 'Seed 2.0 Lite (omnimodal — image, audio, video)' },
+                        { value: 'seed-2-0-mini-260428', label: 'Seed 2.0 Mini' },
+                        { value: 'seed-2-0-code-preview-260328', label: 'Seed 2.0 Code (preview)' },
+                      ]}
                     />
-                    <datalist id="bytedance-model-suggestions">
-                      <option value="seed-2-0-pro-260328">Seed 2.0 Pro</option>
-                      <option value="seed-2-0-lite-260428">Seed 2.0 Lite</option>
-                      <option value="seed-2-0-mini-260428">Seed 2.0 Mini</option>
-                      <option value="seed-2-0-code-preview-260328">Seed 2.0 Code (preview)</option>
-                    </datalist>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       Served by BytePlus ModelArk at <span className="font-mono">ark.ap-southeast.bytepluses.com/api/v3</span> (key in Preferences). ModelArk calls a model by its <strong>versioned Model ID</strong> (the display name won&apos;t work). Known IDs are suggested above — pick one, or paste a newer snapshot / your own <span className="font-mono">ep-…</span> endpoint ID. Seed 2.0 accepts image input natively (no Eyes bridge needed). Reasoning is built-in; no thinking toggle is sent.
                     </div>
