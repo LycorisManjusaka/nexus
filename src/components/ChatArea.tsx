@@ -3063,7 +3063,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       } else if (newAiName === 'GLM' && !specificModel?.startsWith('glm')) {
                         setSpecificModel('glm-5.2');
                       } else if (newAiName === 'Grok' && !specificModel?.startsWith('grok')) {
-                        setSpecificModel('grok-4.3');
+                        setSpecificModel('grok-4.5');
                       } else if (newAiName === 'Kimi' && !specificModel?.toLowerCase().includes('kimi')) {
                         setSpecificModel('moonshotai/Kimi-K2.6');
                       } else if (newAiName === 'Cohere' && !specificModel?.startsWith('command-')) {
@@ -3261,7 +3261,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="grok-4.3">Grok 4.3 (flagship)</option>
+                      <option value="grok-4.5">Grok 4.5 (flagship)</option>
+                      <option value="grok-4.3">Grok 4.3</option>
                       <option value="grok-4.20-0309-reasoning">Grok 4.20 — Reasoning</option>
                       <option value="grok-4.20-0309-non-reasoning">Grok 4.20 — Non-reasoning (fast)</option>
                       <option value="grok-4-1-fast-non-reasoning">Grok 4.1 Fast (legacy)</option>
@@ -3318,6 +3319,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       placeholder="e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)"
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                       options={[
+                        { value: 'dola-seed-2-1-turbo-260628', label: 'Seed 2.1 Turbo (image + video, ½-price of Pro)' },
                         { value: 'seed-2-0-pro-260328', label: 'Seed 2.0 Pro (text + image)' },
                         { value: 'seed-2-0-lite-260428', label: 'Seed 2.0 Lite (omnimodal — image, audio, video)' },
                         { value: 'seed-2-0-mini-260428', label: 'Seed 2.0 Mini' },

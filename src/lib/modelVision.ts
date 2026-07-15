@@ -39,7 +39,10 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'glm-5v-turbo',
 
   // ── Grok (xAI) ─────────────────────────────────────────────────────────────
-  // 4.x family supports vision. code-fast / 4.1-fast are conservative defaults.
+  // 4.x family supports vision (text + image → text). code-fast / 4.1-fast are
+  // conservative defaults. Grok is multimodal but NOT omnimodal — no native
+  // audio/video in the chat API, so none appear in the audio/video sets.
+  'grok-4.5',
   'grok-4.3',
   'grok-4.20-reasoning',
   'grok-4.20-non-reasoning',
@@ -98,11 +101,12 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
   if (lowered.includes('-vl') || lowered.includes('mmproj') || lowered.includes('vision')) {
     return true;
   }
-  // ByteDance Seed 2.0 family (BytePlus ModelArk) is multimodal across every
-  // snapshot (pro/lite/mini/code all accept image_url). IDs are date-versioned
-  // (seed-2-0-pro-260328, seed-2-0-lite-260428, …) so match by family prefix
-  // rather than pinning exact snapshot ids into the set above.
-  if (lowered.includes('seed-2-0')) return true;
+  // ByteDance Seed 2.x family (BytePlus ModelArk / Volcengine) is multimodal
+  // across every snapshot — Seed 2.0 (pro/lite/mini/code) and Seed 2.1
+  // (pro/turbo) all accept image_url. IDs are date-versioned and regionally
+  // prefixed (seed-2-0-pro-260328 int'l "dola-…"; dola-seed-2-1-turbo-260628),
+  // so match by family fragment rather than pinning exact snapshot ids.
+  if (lowered.includes('seed-2-0') || lowered.includes('seed-2-1')) return true;
 
   return false;
 }
@@ -164,9 +168,13 @@ export const VIDEO_CAPABLE_MODELS = new Set<string>([
 export function isVideoCapable(specificModel: string | undefined | null): boolean {
   if (!specificModel) return false;
   if (VIDEO_CAPABLE_MODELS.has(specificModel)) return true;
-  // ByteDance Seed 2.0 *Lite* (omni tier) natively watches video. Match only the
-  // lite snapshots — pro/mini/code stay default-deny (their video support is
-  // unconfirmed, and a false positive would 400 on send). Mirrors isAudioCapable.
+  // ByteDance Seed 2.0 *Lite* (omni tier) natively watches video. Among Seed 2.0,
+  // match only the lite snapshots — pro/mini/code stay default-deny (their video
+  // support is unconfirmed, and a false positive would 400 on send).
   if (specificModel.toLowerCase().includes('seed-2-0-lite')) return true;
+  // The entire Seed 2.1 line (pro + turbo, e.g. dola-seed-2-1-turbo-260628)
+  // supports text + image + VIDEO input. Audio is NOT supported on Seed 2.1
+  // (that stays exclusive to Seed 2.0 Lite), so it's absent from isAudioCapable.
+  if (specificModel.toLowerCase().includes('seed-2-1')) return true;
   return false;
 }

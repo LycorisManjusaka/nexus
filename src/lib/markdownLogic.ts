@@ -61,7 +61,9 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
 }
 
 export function parseMarkdown(markdown: string, customAiName?: string, validUserNames: string[] = []) {
-  const lines = markdown.split('\n');
+  // Split on CRLF or LF so a "[Name]:\r" header from a Windows-edited file still
+  // matches the header regex (a stray trailing \r otherwise breaks recognition).
+  const lines = markdown.split(/\r?\n/);
   const messages: any[] = [];
   let currentHeader = '';
   let currentContent: string[] = [];
@@ -176,39 +178,36 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
     });
   };
 
+  // Flush content that appeared BEFORE the first recognized speaker header (or an
+  // entire header-less file) as an initial "User" message, so imported content is
+  // never silently dropped. No-op when there's nothing but whitespace.
+  const flushOrphan = () => {
+    if (!currentHeader && currentContent.join('\n').trim()) {
+      currentHeader = 'User';
+      addMessage();
+      currentContent = [];
+    }
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Current format: "[Name]:" alone on a line. The trailing ":" right after
-    // the closing bracket is the marker — a "[thinking]" or "[2026-… …]" line
-    // has no trailing colon, so those are never mistaken for headers. Inline
-    // text like "[Alice]: hi" also isn't a header (something follows the ":").
+    // A new message starts ONLY at a "[Name]:" line — the name alone on the line,
+    // trailing colon, nothing after it — AND only when the name is a recognized
+    // speaker (entity / "User" / character_map). NOTHING else is a boundary:
+    // markdown headings ("## Layer 1: …"), "[thinking]", "[YYYY-MM-DD …]", and
+    // unrecognized "[x]:" lines are all ordinary body text. (The legacy "## Name"
+    // speaker format is intentionally no longer honored — only "[Name]:".)
     const bracketMatch = line.match(/^\[(.+)\]:[ \t]*$/);
-    // Legacy format: "## Name" (kept so older exports still import).
-    const isHash = !bracketMatch && line.startsWith('## ');
 
-    if (bracketMatch || isHash) {
-      let parsedHeader: string;
-      if (bracketMatch) {
-        parsedHeader = bracketMatch[1].trim();
+    if (bracketMatch && isRecognizedHeader(bracketMatch[1].trim())) {
+      if (currentHeader) {
+        addMessage();
       } else {
-        parsedHeader = line.substring(3).trim();
-        if (parsedHeader.endsWith(':')) {
-          parsedHeader = parsedHeader.substring(0, parsedHeader.length - 1).trim();
-        }
+        flushOrphan();
       }
-
-      if (isRecognizedHeader(parsedHeader)) {
-        if (currentHeader) {
-          addMessage();
-        }
-        currentHeader = parsedHeader;
-        currentContent = [];
-      } else {
-        // Not a known speaker — this line belongs to the current message body.
-        // Push it unchanged (keep the original "[…]:" or "## " text).
-        currentContent.push(line);
-      }
+      currentHeader = bracketMatch[1].trim();
+      currentContent = [];
     } else {
       currentContent.push(line);
     }
@@ -216,7 +215,52 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
 
   if (currentHeader) {
     addMessage();
+  } else {
+    // No recognized "[Name]:" header anywhere — import the whole file as one
+    // "User" message rather than producing nothing.
+    flushOrphan();
   }
 
   return messages;
+}
+
+// Explain WHY parseMarkdown produced the message count it did — used by the .md
+// import flow to log a precise reason when a file yields 0 messages instead of
+// failing silently. Mirrors the header-recognition logic above (same norm /
+// validSet / comma-split rules), scanning for every "[Name]:" and legacy "## Name"
+// line and reporting whether each is a recognized speaker.
+export function diagnoseMarkdown(
+  markdown: string,
+  customAiName?: string,
+  validUserNames: string[] = [],
+): {
+  messageCount: number;
+  recognizedNames: string[];
+  headersFound: { text: string; recognized: boolean }[];
+  nonEmpty: boolean;
+} {
+  const norm = (s: string) =>
+    s.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).trim().toLowerCase();
+  const recognizedNames = [customAiName || '', 'User', ...validUserNames].filter(Boolean);
+  const validSet = new Set(recognizedNames.map(norm));
+  const isRecognized = (h: string): boolean => {
+    const parts = h.split(/[,、]/).map(norm).filter(Boolean);
+    return parts.length > 0 && parts.every((p) => validSet.has(p));
+  };
+
+  const headersFound: { text: string; recognized: boolean }[] = [];
+  for (const line of markdown.split(/\r?\n/)) {
+    // Mirror parseMarkdown: only "[Name]:" lines are candidate speaker headers.
+    const bracketMatch = line.match(/^\[(.+)\]:[ \t]*$/);
+    if (bracketMatch) {
+      headersFound.push({ text: bracketMatch[1].trim(), recognized: isRecognized(bracketMatch[1].trim()) });
+    }
+  }
+
+  return {
+    messageCount: parseMarkdown(markdown, customAiName, validUserNames).length,
+    recognizedNames,
+    headersFound,
+    nonEmpty: markdown.trim().length > 0,
+  };
 }

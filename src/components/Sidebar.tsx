@@ -4,7 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PlusCircle, MessageSquare, Settings, Trash2, Folder, MoreVertical, Copy, Pencil, FolderPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Hash } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
-import { parseMarkdown } from '@/lib/markdownLogic';
+import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
+import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 
 interface SidebarProps {
@@ -284,7 +285,12 @@ export default function Sidebar({
 
   const handleAutoImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0 || !activeFolder) return;
+    if (!files || files.length === 0) return;
+    if (!activeFolder) {
+      console.warn('[md-import] Refused: no active folder selected. Open/select a Digital Identity first, then import.');
+      alert('Select a folder (Digital Identity) first, then import.');
+      return;
+    }
 
     const extractNum = (str: string) => {
       const normalized = str.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
@@ -303,6 +309,7 @@ export default function Sidebar({
     // update and deterministic "open the first imported file" UX.
     (async () => {
       const newIds: string[] = [];
+      const importErrors: string[] = [];
       // Fetch the registered speaker names from character_map.json once. Only
       // these names (plus the entity/assistant name and the built-in "User")
       // are allowed to start a new message when parsing "## X" headers — any
@@ -323,7 +330,29 @@ export default function Sidebar({
           const text = await file.text();
           const title = file.name.replace(/\.[^/.]+$/, "");
           const parsed = parseMarkdown(text, activeFolder.name, validUserNames);
-          if (parsed.length === 0) continue;
+          if (parsed.length === 0) {
+            // Explain the refusal instead of silently skipping. The usual cause:
+            // the file's speaker headers don't match a recognized name (the
+            // target folder's entity name, "User", or a character_map speaker).
+            const diag = diagnoseMarkdown(text, activeFolder.name, validUserNames);
+            const unrecognized = diag.headersFound.filter(h => !h.recognized).map(h => h.text);
+            let reason: string;
+            if (!diag.nonEmpty) {
+              reason = 'file is empty / whitespace only';
+            } else if (diag.headersFound.length === 0) {
+              reason = 'no speaker headers found — expected "[Name]:" on its own line (or legacy "## Name")';
+            } else {
+              reason = `no header matched a recognized speaker (unrecognized: ${unrecognized.map(n => `"${n}"`).join(', ')})`;
+            }
+            console.warn(
+              `[md-import] "${file.name}" → 0 messages, SKIPPED. Reason: ${reason}.\n` +
+              `  Headers in file: ${diag.headersFound.length ? diag.headersFound.map(h => `${h.recognized ? '✓' : '✗'} "${h.text}"`).join(', ') : '(none)'}\n` +
+              `  Recognized names (folder entity + "User" + character_map): ${diag.recognizedNames.map(n => `"${n}"`).join(', ')}\n` +
+              `  Fix: rename the header to "${activeFolder.name}", add the speaker to character_map.json, or use "User".`
+            );
+            importErrors.push(`${file.name}: ${reason}`);
+            continue;
+          }
 
           // Compute tokens for every imported message — parseMarkdown produces
           // tokens:0 since it doesn't know which model is in use. Without this
@@ -364,10 +393,20 @@ export default function Sidebar({
           });
           newIds.push(convoId);
         } catch (err: any) {
+          console.error(`[md-import] "${file.name}" threw during import:`, err);
+          importErrors.push(`${file.name}: ${err?.message || err}`);
           alert(`Failed to import "${file.name}": ${err?.message || err}`);
         }
       }
-      if (newIds.length === 0) return;
+      if (newIds.length === 0) {
+        console.warn(`[md-import] Nothing imported (${filesArray.length} file(s) tried).${importErrors.length ? ' Reasons:\n  - ' + importErrors.join('\n  - ') : ''}`);
+        alert(
+          importErrors.length
+            ? `Import added nothing.\n\n${importErrors.join('\n')}\n\nSee the browser console for full details.`
+            : 'Import added nothing — see the browser console for details.'
+        );
+        return;
+      }
 
       // Pin all imports to the TOP of the convoOrder, in sorted order
       // (highest-numbered first since we sorted descending above).
@@ -453,20 +492,11 @@ export default function Sidebar({
         </div>
         
         <div className="flex gap-2 items-center">
-          <div className="relative flex-1">
-            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-muted-foreground">
-              <Folder size={16} />
-            </div>
-            <select 
-              value={activeFolderId || ''}
-              onChange={(e) => setActiveFolderId(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all"
-            >
-              {folders.map(f => (
-                <option key={f.id} value={f.id}>{f.name}</option>
-              ))}
-            </select>
-          </div>
+          <IdentityDropdown
+            folders={folders}
+            activeFolderId={activeFolderId}
+            onSelect={setActiveFolderId}
+          />
           
           {activeFolder && (
             <div className="relative shrink-0">

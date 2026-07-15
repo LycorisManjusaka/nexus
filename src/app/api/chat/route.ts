@@ -15,6 +15,111 @@ import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMe
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { GoogleGenAI } from '@google/genai';
+import sharp from 'sharp';
+
+// Anthropic rejects any image whose longest edge exceeds 2000px on many-image
+// requests, and internally downscales anything over ~1568px for token counting
+// anyway. So downscale oversized images to a 1568px long edge before sending —
+// this satisfies both limits with margin and matches Anthropic's own downscale,
+// meaning no extra quality loss. Unlike the client-side PNG→JPEG (fresh PNG
+// attachments only), this runs server-side on EVERY image the Claude paths send:
+// fresh attachments, .md imports, and historical turns alike. Input format is
+// preserved (keeps PNG transparency); on any decode/format failure the original
+// bytes are sent unchanged rather than dropping the image.
+const CLAUDE_MAX_EDGE = 1568;
+async function shrinkImageForClaude(
+  base64Data: string,
+  mimeType: string,
+): Promise<{ data: string; media_type: string }> {
+  try {
+    const buf = Buffer.from(base64Data, 'base64');
+    const meta = await sharp(buf).metadata();
+    const w = meta.width || 0;
+    const h = meta.height || 0;
+    if (!w || !h || Math.max(w, h) <= CLAUDE_MAX_EDGE) {
+      return { data: base64Data, media_type: mimeType };
+    }
+    const out = await sharp(buf)
+      .resize({ width: CLAUDE_MAX_EDGE, height: CLAUDE_MAX_EDGE, fit: 'inside', withoutEnlargement: true })
+      .toBuffer(); // no format method → sharp preserves the input format
+    return { data: out.toString('base64'), media_type: mimeType };
+  } catch {
+    return { data: base64Data, media_type: mimeType };
+  }
+}
+
+// ── Grok native web + X search (xAI Responses API) ───────────────────────────
+// xAI's real search (web_search + x_search server-side tools) lives ONLY on the
+// /v1/responses endpoint — the old chat/completions `search_parameters` "Live
+// Search" was deprecated (→ 410). The Responses shape differs from chat: `input`
+// not `messages`, and the answer is nested at output[].content[].text (the
+// top-level `output_text` is null on xAI). Citations come as a top-level
+// `citations[]` and/or per-span `annotations[]`. This is a NON-streaming call:
+// the answer + citations arrive together, then we emit them as NEXUS SSE events.
+async function runGrokNativeSearch(params: {
+  apiKey: string;
+  model: string;
+  input: { role: string; content: string }[];
+  enqueue: (obj: any) => void;
+}): Promise<void> {
+  const { apiKey, model, input, enqueue } = params;
+  let res: Response;
+  try {
+    res = await fetch('https://api.x.ai/v1/responses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        input,
+        tools: [{ type: 'web_search' }, { type: 'x_search' }],
+      }),
+    });
+  } catch (e: any) {
+    enqueue({ type: 'text', content: `[Grok native search could not connect: ${e?.message || 'network error'}]` });
+    return;
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error(`[grok/search] HTTP ${res.status} · ${errText.slice(0, 500)}`);
+    enqueue({ type: 'text', content: `[Grok native search error ${res.status}: ${errText.slice(0, 300)}]` });
+    return;
+  }
+  const data = await res.json().catch(() => ({} as any));
+
+  let text = '';
+  const citations: { url: string; title?: string }[] = [];
+  // Text + inline annotations from the message item(s) in output[].
+  if (Array.isArray(data.output)) {
+    for (const item of data.output) {
+      if (item?.type === 'message' && Array.isArray(item.content)) {
+        for (const c of item.content) {
+          if ((c?.type === 'output_text' || c?.type === 'text') && typeof c.text === 'string') text += c.text;
+          if (Array.isArray(c?.annotations)) {
+            for (const a of c.annotations) {
+              const url = a?.url || a?.url_citation?.url;
+              if (url) citations.push({ url, title: a?.title || a?.url_citation?.title });
+            }
+          }
+        }
+      }
+    }
+  }
+  // Top-level citations[] (Grok style): array of URL strings or {url,title}.
+  if (Array.isArray(data.citations)) {
+    for (const c of data.citations) {
+      if (typeof c === 'string') citations.push({ url: c });
+      else if (c?.url) citations.push({ url: c.url, title: c.title });
+    }
+  }
+
+  enqueue({ type: 'text', content: text.trim() || '[Grok returned no answer from native search.]' });
+
+  if (citations.length) {
+    const seen = new Set<string>();
+    const deduped = citations.filter(c => c.url && !seen.has(c.url) && (seen.add(c.url), true));
+    if (deduped.length) enqueue({ type: 'web_sources', sources: deduped });
+  }
+}
 import Anthropic from '@anthropic-ai/sdk';
 
 // Adaptive-thinking depth control for Claude. `output_config.effort` (API key)
@@ -225,9 +330,11 @@ async function streamClaudeViaAgentSDK(args: {
       if (media.name) {
         contentBlocks.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
       }
+      // Downscale oversized images to stay under Anthropic's 2000px many-image cap.
+      const img = await shrinkImageForClaude(media.base64Data, media.mimeType);
       contentBlocks.push({
         type: 'image',
-        source: { type: 'base64', media_type: media.mimeType, data: media.base64Data },
+        source: { type: 'base64', media_type: img.media_type, data: img.data },
       });
     }
   }
@@ -1318,7 +1425,7 @@ async function runModelSelectorPreflight(args: {
   const body: any = {
     model: isKimi ? resolveKimiModel(specificModel) : (specificModel || (
       isGLM      ? 'glm-4.7' :
-      isGrok     ? 'grok-4.3' :
+      isGrok     ? 'grok-4.5' :
       isCohere   ? 'command-a-plus-05-2026' :
       isMinimax  ? 'MiniMax-M3' :
       isDeepSeek ? 'deepseek-v4-flash' :
@@ -1916,7 +2023,7 @@ export async function POST(req: Request) {
       const modelSupportsThinking = thinkingModels.some(m => claudeModel.includes(m));
       const enableThinking = useThinking && modelSupportsThinking;
 
-      const anthropicMessages = processedMessages.map((m: any) => {
+      const anthropicMessages = await Promise.all(processedMessages.map(async (m: any) => {
         const contentArr: any[] = [];
 
         // For assistant messages with saved thinking blocks (for Claude continuity)
@@ -1930,17 +2037,20 @@ export async function POST(req: Request) {
           }
         }
 
-        m.mediaFiles?.forEach((media: any) => {
+        for (const media of (m.mediaFiles || [])) {
           if (media.mimeType.startsWith('image/')) {
             if (media.name) {
               contentArr.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
             }
+            // Downscale oversized images so no dimension exceeds Anthropic's
+            // 2000px many-image limit (targets a 1568px long edge).
+            const img = await shrinkImageForClaude(media.base64Data, media.mimeType);
             contentArr.push({
               type: 'image',
-              source: { type: 'base64', media_type: media.mimeType, data: media.base64Data }
+              source: { type: 'base64', media_type: img.media_type, data: img.data }
             });
           }
-        });
+        }
 
         if (m.content) {
           contentArr.push({ type: 'text', text: m.content });
@@ -1952,7 +2062,7 @@ export async function POST(req: Request) {
           role: m.role === 'user' ? 'user' : 'assistant',
           content: contentArr
         };
-      });
+      }));
 
       // Claude prompt caching: convert the `system` field into an array of
       // text blocks with `cache_control: { type: 'ephemeral' }`. Anthropic
@@ -3615,7 +3725,7 @@ export async function POST(req: Request) {
                           : {};
       const localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
-        isGrok     ? 'grok-4.3' :
+        isGrok     ? 'grok-4.5' :
         isCohere   ? 'command-a-plus-05-2026' :
         // Case-sensitive per MiniMax docs: capital M's, lowercase i, hyphen.
         isMinimax  ? 'MiniMax-M3' :
@@ -4403,6 +4513,33 @@ export async function POST(req: Request) {
           if (layer1C !== null) {
             enqueue({ type: 'creativity_prefix', label: creativityDisplayPattern.replace('{C}', layer1C.toFixed(2)) });
           }
+
+          // ── Grok native web + X search fork ─────────────────────────────────
+          // When web search is on for a Grok conversation, run xAI's server-side
+          // web_search + x_search via /v1/responses instead of the normal
+          // chat/completions tool loop (whose only web option here is the flaky
+          // keyless DuckDuckGo tool). Non-streaming, then close the stream.
+          // Text-only input (images are dropped for the search query); workspace
+          // tools / thinking are not part of this scoped search turn.
+          if (isGrok && modelParams.enableWebSearch) {
+            const grokInput = baseOaiMessages.map((m: any) => ({
+              role: m.role,
+              content: typeof m.content === 'string'
+                ? m.content
+                : (Array.isArray(m.content)
+                    ? m.content.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('\n')
+                    : String(m.content ?? '')),
+            }));
+            try {
+              await runGrokNativeSearch({ apiKey: keys.grok || '', model: localModel, input: grokInput, enqueue });
+            } catch (e: any) {
+              enqueue({ type: 'text', content: `[Grok native search failed: ${e?.message || 'unknown error'}]` });
+            }
+            controller.enqueue(`data: [DONE]\n\n`);
+            controller.close();
+            return;
+          }
+
           const MAX_CONTINUATIONS = 2;
           const MAX_TOOL_ITERATIONS = 8;
           const tagState = { inThink: false, textTail: '' };
