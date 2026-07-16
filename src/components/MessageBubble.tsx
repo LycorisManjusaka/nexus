@@ -55,6 +55,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   React.useEffect(() => { ttsStateRef.current = ttsState; }, [ttsState]);
   // Track the auto-play timer so a manual click (or unmount) can cancel it.
   const autoPlayTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Wraps this bubble's rendered content — used to tell whether a text
+  // selection belongs to THIS message before "Read Aloud" reads the selection.
+  const contentRef = React.useRef<HTMLDivElement>(null);
 
   // Flip on with `window.__ttsDebug = true` in the browser console to trace
   // why auto-play / streaming TTS did or didn't start. No-op in production
@@ -552,6 +555,37 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     let segments: any[] = [];
     const defaultUserVoice = globalSettings?.userVoice || { engine: 0, char_idx: 1, style_idx: 0, speed: 1.0 };
 
+    // Selection-aware Read Aloud: if the user has highlighted text INSIDE this
+    // bubble (and we're not in VRChat mode), speak only the selection — resolved
+    // to the correct speaker's voice — instead of the whole message. Anything
+    // else (no selection, or selection in another bubble) falls through to the
+    // default full-message behavior below.
+    //
+    // `ttsSource` replaces `msg.content` as the text the segment builder reads;
+    // `seedTag` carries the [name] speaker in effect at the selection's start so
+    // a partial selection of a multi-speaker user message still uses the right
+    // voice.
+    let ttsSource = msg.content || '';
+    let seedTag = '';
+    if (!isVRChatMode && typeof window !== 'undefined') {
+      const sel = window.getSelection();
+      const selText = sel && sel.rangeCount > 0 ? sel.toString() : '';
+      const node = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).commonAncestorContainer : null;
+      if (selText.trim() && node && contentRef.current && contentRef.current.contains(node)) {
+        ttsSource = selText;
+        // Seed the speaker tag from the last [name] before the selection so a
+        // mid-message selection of a user turn keeps the right voice.
+        if (msg.role === 'user') {
+          const probe = selText.trim().slice(0, 24);
+          const at = (msg.content || '').indexOf(probe);
+          if (at > 0) {
+            const tags = (msg.content || '').slice(0, at).match(/\[([^\]]*)\]/g);
+            if (tags && tags.length) seedTag = tags[tags.length - 1].slice(1, -1);
+          }
+        }
+      }
+    }
+
     // Pull the user-character voices from character_map.json so [name] tags can
     // resolve to a user character's voice without needing a dummy folder.
     // Fetched once per TTS click — cheap and always fresh (style index reflects
@@ -589,19 +623,19 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       // — at the start of its reply. Hearing the date read out loud breaks
       // immersion, so strip them all here while keeping them visible in the
       // bubble.
-      const cleaned = stripLeadingTimestamps(msg.content || '');
+      const cleaned = stripLeadingTimestamps(ttsSource);
       // If the whole message was nothing but timestamps, there's nothing to say.
-      if (!isOnlyTimestamps(msg.content || '') && cleaned.trim()) {
+      if (!isOnlyTimestamps(ttsSource) && cleaned.trim()) {
         segments.push({ text: cleaned, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch });
       }
     } else {
       const regex = /\[(.*?)\]/g;
       let lastIndex = 0;
       let match;
-      let currentTag = '';
+      let currentTag = seedTag;
 
-      while ((match = regex.exec(msg.content)) !== null) {
-        const textBefore = msg.content.slice(lastIndex, match.index).trim();
+      while ((match = regex.exec(ttsSource)) !== null) {
+        const textBefore = ttsSource.slice(lastIndex, match.index).trim();
         if (textBefore) {
           let voice = defaultUserVoice;
           if (currentTag) {
@@ -615,7 +649,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         lastIndex = regex.lastIndex;
       }
 
-      const textAfter = msg.content.slice(lastIndex).trim();
+      const textAfter = ttsSource.slice(lastIndex).trim();
       if (textAfter) {
         let voice = defaultUserVoice;
         if (currentTag) {
@@ -626,8 +660,15 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         segments.push({ text: textAfter, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch: tagPitch });
       }
 
-      if (segments.length === 0 && msg.content.trim()) {
-        segments.push({ text: msg.content.trim(), engine: defaultUserVoice.engine || 0, char_idx: defaultUserVoice.char_idx || 0, style_idx: defaultUserVoice.style_idx || 0, speed: defaultUserVoice.speed || 1.0, pitch: defaultUserVoice.pitch ?? 0.0 });
+      if (segments.length === 0 && ttsSource.trim()) {
+        // Fallback: untagged selection/message → seed voice from seedTag if any.
+        let voice = defaultUserVoice;
+        if (seedTag) {
+          const v = lookupVoiceForTag(seedTag);
+          if (v) voice = v;
+        }
+        const fbPitch = seedTag ? (folders?.find((f: any) => f.name === seedTag)?.settings?.voicePitch ?? voice.pitch ?? 0.0) : (voice.pitch ?? 0.0);
+        segments.push({ text: ttsSource.trim(), engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch: fbPitch });
       }
     }
     
@@ -1074,7 +1115,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 </div>
               </details>
             )}
-            <div className={`px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed shadow-sm w-fit max-w-full overflow-hidden ${
+            <div ref={contentRef} className={`px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed shadow-sm w-fit max-w-full overflow-hidden ${
               isUser
                 ? 'bg-primary text-primary-foreground rounded-tr-sm ml-auto'
                 : 'bg-card border border-border text-card-foreground rounded-tl-sm mr-auto'
@@ -1114,7 +1155,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             isUser ? 'right-full mr-2' : 'left-full ml-2'
           }`}>
             {ttsState === 'idle' ? (
-              <button onClick={handleTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-muted-foreground hover:text-green-500`} title="Read Aloud">
+              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-muted-foreground hover:text-green-500`} title="Read Aloud (select text to read only the selection)">
                 <Volume2 size={14} />
               </button>
             ) : (

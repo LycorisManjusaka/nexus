@@ -1430,7 +1430,7 @@ async function runModelSelectorPreflight(args: {
       isMinimax  ? 'MiniMax-M3' :
       isDeepSeek ? 'deepseek-v4-flash' :
       isQwen     ? 'qwen3.6-plus' :
-      isOpenAI   ? 'gpt-5.4' :
+      isOpenAI   ? 'gpt-5.6-terra' :
       isMimo     ? 'mimo-v2.5' :
       isBytedance ? 'seed-2-0-pro-260328' :
                    'local-model'
@@ -3731,7 +3731,7 @@ export async function POST(req: Request) {
         isMinimax  ? 'MiniMax-M3' :
         isDeepSeek ? 'deepseek-v4-flash' :
         isQwen     ? 'qwen3.6-plus' :
-        isOpenAI   ? 'gpt-5.4' :
+        isOpenAI   ? 'gpt-5.6-terra' :
         isMimo     ? 'mimo-v2.5' :
         isBytedance ? 'seed-2-0-pro-260328' :
                      'local-model'

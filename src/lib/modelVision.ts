@@ -68,6 +68,9 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // file input is NOT supported on this endpoint (that's the realtime/audio
   // models), so they stay out of the audio/video sets below and the ears/
   // watcher bridges handle those modalities.
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
   'gpt-5.5',
   'gpt-5.4',
   'gpt-5.4-mini',

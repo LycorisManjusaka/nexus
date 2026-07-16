@@ -99,6 +99,9 @@ MiniMax  | MiniMax-M3                   | on  | MiniMax M3
 MiniMax  | MiniMax-M2.7                 | on  | MiniMax M2.7
 
 # ── OpenAI (ChatGPT / GPT-5 family) ────────────────────────────────
+ChatGPT  | gpt-5.6-sol                  | on  | GPT-5.6 Sol
+ChatGPT  | gpt-5.6-terra                | on  | GPT-5.6 Terra
+ChatGPT  | gpt-5.6-luna                 | off | GPT-5.6 Luna
 ChatGPT  | gpt-5.5                      | on  | GPT-5.5
 ChatGPT  | gpt-5.4                      | on  | GPT-5.4
 ChatGPT  | gpt-5.4-mini                 | off | GPT-5.4 Mini
@@ -3071,7 +3074,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       } else if (newAiName === 'Minimax' && !specificModel?.toLowerCase().startsWith('minimax')) {
                         setSpecificModel('MiniMax-M3');
                       } else if (newAiName === 'ChatGPT' && !specificModel?.toLowerCase().startsWith('gpt')) {
-                        setSpecificModel('gpt-5.4');
+                        setSpecificModel('gpt-5.6-terra');
                       } else if (newAiName === 'MiMo' && !specificModel?.toLowerCase().startsWith('mimo')) {
                         setSpecificModel('mimo-v2.5');
                       } else if (newAiName === 'ByteDance' && !specificModel?.toLowerCase().startsWith('seed')) {
@@ -3282,7 +3285,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="gpt-5.5">GPT-5.5 (flagship)</option>
+                      <option value="gpt-5.6-sol">GPT-5.6 Sol (flagship, deepest reasoning)</option>
+                      <option value="gpt-5.6-terra">GPT-5.6 Terra (balanced, ~2× cheaper)</option>
+                      <option value="gpt-5.6-luna">GPT-5.6 Luna (fast, budget)</option>
+                      <option value="gpt-5.5">GPT-5.5</option>
                       <option value="gpt-5.4">GPT-5.4</option>
                       <option value="gpt-5.4-mini">GPT-5.4 Mini (fast, cheaper)</option>
                     </select>

@@ -319,7 +319,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">platform.openai.com</span>. Required for the ChatGPT (GPT-5) family — GPT-5.5, GPT-5.4, GPT-5.4 Mini.
+                Get one at <span className="font-mono">platform.openai.com</span>. Required for the ChatGPT (GPT-5) family — GPT-5.6 Sol / Terra / Luna, GPT-5.5, GPT-5.4, GPT-5.4 Mini.
               </div>
             </div>
             <div>
