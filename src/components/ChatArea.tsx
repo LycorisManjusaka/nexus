@@ -6,8 +6,9 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3 } from 'lucide-react';
 import SystemPromptUpdater from './SystemPromptUpdater';
+import StatsModal from './StatsModal';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
@@ -1959,6 +1960,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
 
   // Recompute tokens for every visible piece — system prompt, attachment
   // instruction, every message body, plus the timestamp tags that are
@@ -2201,6 +2203,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             title={`Open this entity's workspace folder in file explorer (local_data/agent_workspaces/${folderName}/)`}
           >
             <FolderOpen size={16} />
+          </button>
+          <button
+            onClick={() => setStatsOpen(true)}
+            className="p-1.5 text-muted-foreground hover:text-emerald-500 transition-colors"
+            title="Statistics — billing reports across all entities, conversations, months, and model families"
+          >
+            <BarChart3 size={16} />
           </button>
           <button
             onClick={() => setSysPromptUpdaterOpen(true)}
@@ -3887,6 +3896,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setMessages(prev => [...prev, ...toAdd]);
         }}
       />
+
+      <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />
 
       <SystemPromptUpdater
         open={sysPromptUpdaterOpen}
