@@ -10,7 +10,8 @@ import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, 
 import SystemPromptUpdater from './SystemPromptUpdater';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
-import { stripLeadingTimestamps } from '@/lib/timestampStrip';
+import { stripAllTimestamps } from '@/lib/timestampStrip';
+import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { injectLayer4Index } from '@/lib/layer4';
 import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
@@ -86,6 +87,7 @@ Grok     | grok-4-1-fast-non-reasoning  | off | Grok 4.1 Fast
 Grok     | grok-code-fast-1             | off | Grok Code Fast 1
 
 # ── Kimi (Moonshot) ────────────────────────────────────────────────
+Kimi     | moonshotai/Kimi-K3           | on  | Kimi K3
 Kimi     | moonshotai/Kimi-K2.6         | on  | Kimi K2.6 Thinking
 Kimi     | moonshotai/Kimi-K2.5         | on  | Kimi K2.5 Thinking
 
@@ -1497,15 +1499,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 currentThought += data.content;
               } else if (data.type === 'text') {
                 currentText += data.content;
-                // Strip leading "[YYYY-MM-DD HH:MM:SS]" stacks CONTINUOUSLY as
-                // the reply streams in (gated on the global setting, default
-                // ON). Doing it here — rather than once at finalization — keeps
-                // msg.content monotonic so the streaming-TTS offset tracking in
-                // MessageBubble stays valid. A late one-shot strip shrank the
-                // content mid-playback and made VRChat TTS stop after the first
-                // line.
+                // Strip "[YYYY-MM-DD HH:MM:SS]" tags CONTINUOUSLY as the reply
+                // streams in (gated on the global setting, default ON) — not just
+                // a leading stack but ANY tag, wherever it appears, including the
+                // mid-message ones agentic models (e.g. Kimi K3) emit at the
+                // start of each output segment, such as the continuation right
+                // after a tool call.
+                //
+                // Per-chunk stripping stays streaming-TTS-safe: a tag is only
+                // removed the instant it completes, at the growing TAIL — always
+                // ahead of the position TTS has already spoken. The already-
+                // emitted prefix was stripped in earlier ticks and is never
+                // rewritten, so it stays monotonic (the failure mode a late
+                // one-shot finalize-strip once caused). msg.content therefore
+                // never carries a timestamp into TTS, the saved log, or the
+                // context replayed to the model.
                 if (globalSettings?.removeTimestamps !== false) {
-                  currentText = stripLeadingTimestamps(currentText);
+                  currentText = stripAllTimestamps(currentText);
                 }
                 // User-configurable regex filter (Settings → Custom regex
                 // filter). Applied continuously like the timestamp strip so the
@@ -1633,6 +1643,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // continuously as the reply streamed in (see the `text` branch above),
       // so currentText is final. A one-shot strip here would shrink content
       // after TTS started and break the streaming-TTS offset tracking.
+      // currentText is already timestamp-clean: the per-chunk strip above ran on
+      // the whole reply as it streamed, removing every tag (leading or mid).
       const finalText = currentText;
       const fallbackTokens = Math.ceil((finalText || '').length / 4);
       setMessages(prev => prev.map(m =>
@@ -2052,13 +2064,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let changed = 0;
     const next = messages.map((m) => {
       if (m.role !== 'assistant' || typeof m.content !== 'string') return m;
-      const cleaned = stripLeadingTimestamps(m.content);
+      // Strip ALL timestamps (anywhere), so mid-message ones left by agentic
+      // turns are cleaned from existing conversations too — not just leading.
+      const cleaned = stripAllTimestamps(m.content);
       if (cleaned === m.content) return m;
       changed++;
       return { ...m, content: cleaned };
     });
     if (changed === 0) {
-      alert('No leading timestamp stacks found in this conversation.');
+      alert('No timestamps found in this conversation.');
       return;
     }
     setMessages(next);
@@ -2127,6 +2141,40 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 title={`Fatigue level: ${fatigue}% — original (non-copied) messages ${tokenBreakdown.original.toLocaleString()} ÷ (max context ${max.toLocaleString()} − fixed overhead ${tokenBreakdown.sys.toLocaleString()}: system prompt + all instructions) tokens. How "tired" the entity is this session. 0% right after a fresh start ("sleep"); grows as original messages accumulate and can exceed 100% once they fill the remaining window. Copied messages and attachments are not counted.`}
               >
                 {fatigue}%
+              </span>
+            );
+          })()}
+          {/* Conversation cost — sum of the estimated USD cost of every NEW
+              (original, non-copied) assistant message, priced from each one's
+              own token usage × modelPricing.json. Shows only "$"; the total is
+              in the hover tooltip. Copied and local-model messages are excluded;
+              messages on unpriced models are skipped (and flagged in the tip). */}
+          {(() => {
+            let total = 0;
+            let anyPriced = false;
+            let anyUnpriced = false;
+            for (const m of messages) {
+              if (m.role !== 'assistant' || m.modelFamily === 'Local') continue;
+              if (!isMessageOriginal(m.id)) continue; // ignore copied
+              const modelId = m.modelSpecific || '';
+              if (!resolvePrice(modelId)) {
+                if (m.cacheUsage) anyUnpriced = true;
+                continue;
+              }
+              const c = messageCost(m.cacheUsage, modelId, m.textTokens ?? m.tokens);
+              if (c) { total += c.usd; anyPriced = true; }
+            }
+            if (!anyPriced && !anyUnpriced) return null;
+            const tip =
+              `Estimated cost of this conversation's new (non-copied) assistant replies: ${fmtUSD(total)}` +
+              (anyUnpriced ? `\n(excludes messages on models with no price in src/lib/modelPricing.json)` : '') +
+              `\nOAuth Claude is priced the same as the Claude API. Local models are ignored.`;
+            return (
+              <span
+                className="text-sm font-semibold tabular-nums cursor-default text-emerald-600 dark:text-emerald-400"
+                title={tip}
+              >
+                $
               </span>
             );
           })()}
@@ -3068,7 +3116,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       } else if (newAiName === 'Grok' && !specificModel?.startsWith('grok')) {
                         setSpecificModel('grok-4.5');
                       } else if (newAiName === 'Kimi' && !specificModel?.toLowerCase().includes('kimi')) {
-                        setSpecificModel('moonshotai/Kimi-K2.6');
+                        setSpecificModel('moonshotai/Kimi-K3');
                       } else if (newAiName === 'Cohere' && !specificModel?.startsWith('command-')) {
                         setSpecificModel('command-a-plus-05-2026');
                       } else if (newAiName === 'Minimax' && !specificModel?.toLowerCase().startsWith('minimax')) {
@@ -3246,7 +3294,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="moonshotai/Kimi-K2.6">Kimi K2.6 (latest — 256K context, multimodal)</option>
+                      <option value="moonshotai/Kimi-K3">Kimi K3 (flagship — always-on reasoning, native vision)</option>
+                      <option value="moonshotai/Kimi-K2.6">Kimi K2.6 (256K context, multimodal)</option>
                       <option value="moonshotai/Kimi-K2.5">Kimi K2.5 (agentic, multimodal)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">

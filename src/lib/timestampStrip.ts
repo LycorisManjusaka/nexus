@@ -45,3 +45,32 @@ export function isOnlyTimestamps(text: string): boolean {
   if (!t) return false;
   return ONLY_TIMESTAMPS_RE.test(t);
 }
+
+/**
+ * Remove EVERY timestamp tag anywhere in the string — leading, trailing, or in
+ * the middle — not just a leading stack. Needed because reasoning/agentic models
+ * (e.g. Kimi K3) tend to emit a fresh "[YYYY-MM-DD HH:MM:SS]" at the start of
+ * each output segment, including the continuation AFTER a tool call, which lands
+ * mid-message and slips past `stripLeadingTimestamps`. Over many turns these pile
+ * up and bloat the context window.
+ *
+ * Applied to the assistant's finalized message text (what gets saved to the log
+ * and replayed to the model) and to TTS input — NOT to tool-call arguments, so
+ * a model can still deliberately write a timestamp into a file it edits.
+ *
+ * Whole-line timestamps take their line with them; inline tags are removed in
+ * place. Leftover blank-line runs and a leading gap are tidied so the text reads
+ * naturally.
+ */
+export function stripAllTimestamps(text: string): string {
+  if (!text) return text;
+  return text
+    // A line that is nothing but a timestamp (optionally indented) → drop the
+    // whole line, newline included.
+    .replace(/^[ \t]*\[\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\][ \t]*(?:\r?\n|$)/gm, '')
+    // Any remaining inline timestamp tag → remove it plus trailing spaces.
+    .replace(/\[\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}(?::\d{2})?\][ \t]*/g, '')
+    // Tidy up: collapse 3+ newlines to a single blank line; trim a leading gap.
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\s+/, '');
+}

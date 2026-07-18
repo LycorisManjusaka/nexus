@@ -6,7 +6,8 @@ import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import { stripLeadingTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
+import { stripLeadingTimestamps, stripAllTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
+import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal }: any) {
@@ -617,13 +618,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       const activeFolder = folders?.find((f: any) => f.name === folderName);
       const voice = activeFolder?.settings?.aiVoice || { engine: 0, char_idx: 0, style_idx: 0, speed: 1.0 };
       const pitch = activeFolder?.settings?.voicePitch ?? 0.0;
-      // Strip leading "[YYYY-MM-DD HH:MM:SS]" timestamp tag(s) before sending
-      // to TTS. The dateTimeVisibility feature injects these into prompts, and
-      // the AI sometimes echoes them back — occasionally a whole STACK of them
-      // — at the start of its reply. Hearing the date read out loud breaks
-      // immersion, so strip them all here while keeping them visible in the
-      // bubble.
-      const cleaned = stripLeadingTimestamps(ttsSource);
+      // Strip "[YYYY-MM-DD HH:MM:SS]" timestamp tags before sending to TTS.
+      // The dateTimeVisibility feature injects these into prompts, and the AI
+      // echoes them back — sometimes a whole STACK, sometimes mid-message after
+      // a tool call. Hearing the date read out loud breaks immersion, so strip
+      // them ALL (anywhere, not just leading) from the spoken text. This is the
+      // complete-message path, so an all-strip is offset-safe here.
+      const cleaned = stripAllTimestamps(ttsSource);
       // If the whole message was nothing but timestamps, there's nothing to say.
       if (!isOnlyTimestamps(ttsSource) && cleaned.trim()) {
         segments.push({ text: cleaned, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch });
@@ -921,6 +922,30 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             ↵ continued ×{msg.continuationCount}
           </span>
         )}
+        {/* Estimated cost of this turn — shows only a "$" glyph; the actual USD
+            figure is in the hover tooltip (per request). Priced from this
+            message's own token usage (cacheUsage) × the model's row in
+            modelPricing.json. Skipped for local models. A model with no price
+            row shows a muted "$" whose tooltip points at the JSON to edit. */}
+        {!isUser && msg.modelFamily !== 'Local' && (() => {
+          const modelId = msg.modelSpecific || '';
+          if (!resolvePrice(modelId)) {
+            return (
+              <span
+                className="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground/50 font-mono cursor-default"
+                title={`No price configured for "${modelId || 'this model'}".\nAdd it in src/lib/modelPricing.json`}
+              >$</span>
+            );
+          }
+          const cost = messageCost(msg.cacheUsage, modelId, displayTokens);
+          if (!cost) return null;
+          return (
+            <span
+              className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-mono cursor-default"
+              title={cost.breakdown}
+            >$</span>
+          );
+        })()}
       </div>
 
       {/* Web-search sources — clickable proof that the model actually consulted

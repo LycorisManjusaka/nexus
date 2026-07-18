@@ -160,7 +160,7 @@ function toolActivityLabel(name: string): string | null {
 // using keys.kimi. Model IDs are normalized to the bare Moonshot form
 // ("moonshotai/Kimi-K2.6" → "kimi-k2.6"); the dropdown may store either form.
 function resolveKimiModel(model: string | undefined | null): string {
-  if (!model) return 'kimi-k2.6';
+  if (!model) return 'kimi-k3';
   // Strip any "moonshotai/" namespace and lowercase → Moonshot's bare id.
   return model.replace(/^moonshotai\//i, '').toLowerCase();
 }
@@ -1411,8 +1411,13 @@ async function runModelSelectorPreflight(args: {
   // error. Skip the toggle for Omni; reasoning is built into those models.
   const isOmni = (specificModel || '').toLowerCase().includes('omni');
   const extra: any = {};
+  // Kimi K3 does NOT use the K2.x `thinking` param — reasoning is always on and
+  // configured via the top-level `reasoning_effort` field (only 'max' today). It
+  // also fixes temperature/top_p server-side, so those are omitted below.
+  const selKimiK3 = isKimi && /k3/i.test(resolveKimiModel(specificModel));
   if ((isQwen || isDeepSeek) && !isOmni) extra.enable_thinking = false;
-  if (isGLM || isKimi) extra.thinking = { type: 'disabled' };
+  if (isGLM || (isKimi && !selKimiK3)) extra.thinking = { type: 'disabled' };
+  if (selKimiK3) extra.reasoning_effort = 'max';
   if (isCohere) extra.reasoning_effort = 'none';
   // OpenAI GPT-5 family: DO NOT set `reasoning_effort` here. This selector always
   // sends a forced `select_model` function tool, and gpt-5.x on
@@ -1442,7 +1447,11 @@ async function runModelSelectorPreflight(args: {
     // GPT-5 reasoning models reject a non-default temperature and use
     // `max_completion_tokens` instead of `max_tokens`. Every other
     // OpenAI-compatible provider accepts the classic pair.
-    ...(isOpenAI ? { max_completion_tokens: 512 } : { temperature: 0.0, max_tokens: 512 }),
+    ...(isOpenAI
+      ? { max_completion_tokens: 512 }
+      : selKimiK3
+        ? { max_tokens: 512 }                       // K3 fixes temp/top_p — omit them
+        : { temperature: 0.0, max_tokens: 512 }),
     ...extra,
     tools: [{
       type: 'function',
@@ -4229,8 +4238,19 @@ export async function POST(req: Request) {
         // model / quantization, or via a `/no_think`-style hint in the prompt).
         // Z.AI / GLM uses a different shape: `thinking: { type: 'enabled' | 'disabled' }`
         // (object, not boolean). Reuses the same UI toggle since semantics match.
-        // Kimi K2.6 uses the exact same shape, so it shares this branch.
-        if (isGLM || isKimi) {
+        // Kimi K2.x uses the exact same shape, so it shares this branch.
+        //
+        // Kimi K3 is the EXCEPTION and must NOT use the K2.x `thinking` param:
+        // its reasoning is ALWAYS on and is configured via the top-level
+        // `reasoning_effort` field (only 'max' is supported today). It also fixes
+        // temperature (1.0) and top_p (0.95) server-side — sending either 400s —
+        // so we strip both. Net: the Thinking-Mode toggle has no effect on K3.
+        const isKimiK3 = isKimi && /kimi-k3/i.test(String(requestBody.model || ''));
+        if (isKimiK3) {
+          requestBody.reasoning_effort = 'max';
+          delete requestBody.temperature;
+          delete requestBody.top_p;
+        } else if (isGLM || isKimi) {
           requestBody.thinking = {
             type: modelParams.qwenEnableThinking !== false ? 'enabled' : 'disabled',
           };
@@ -4243,7 +4263,7 @@ export async function POST(req: Request) {
         //   • Thinking OFF → temperature must be 0.6
         // Override both the user's temperature and any Creativity-Control value
         // (2·C), which would otherwise trip the 400.
-        if (isKimi) {
+        if (isKimi && !isKimiK3) {
           requestBody.temperature = modelParams.qwenEnableThinking !== false ? 1 : 0.6;
         }
         // MiMo (Xiaomi) only accepts temperature within [0, 1.5] and 400s
@@ -4260,18 +4280,30 @@ export async function POST(req: Request) {
         if (isCohere) {
           requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'none';
         }
-        // OpenAI GPT-5 family uses the standard `reasoning_effort` field. Valid
-        // values are 'minimal' | 'low' | 'medium' | 'high' (no 'none'); map the
+        // OpenAI GPT-5 family uses the standard `reasoning_effort` field. Map the
         // shared Thinking-Mode toggle to high (on) / minimal (off).
         //
-        // CRITICAL: gpt-5.x on /v1/chat/completions 400s when `reasoning_effort`
-        // is combined with function tools ("Function tools with reasoning_effort
-        // are not supported ... Please use /v1/responses instead"). When tools
-        // are attached (workspace Read/Write/… or web_search/web_fetch), omit
-        // `reasoning_effort` entirely — GPT-5 still reasons at its default effort,
-        // and tool use takes priority. Only send the hint when there are no tools.
-        if (isOpenAI && !requestBody.tools) {
-          requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'minimal';
+        // CRITICAL — function tools + reasoning on /v1/chat/completions:
+        // These models 400 when function tools are attached while reasoning is
+        // active ("Function tools with reasoning_effort are not supported … use
+        // /v1/responses or set reasoning_effort to 'none'"). The catch: gpt-5.6
+        // reasoning models default to reasoning ON, so simply OMITTING the field
+        // is NOT enough — the model still reasons and the request 400s. gpt-5.6
+        // fixes this by accepting reasoning_effort:'none', which must be sent
+        // EXPLICITLY to turn reasoning off for the tool turn. Older gpt-5.4/5.5
+        // don't accept 'none', so for them we omit the field (their default
+        // behavior with tools worked). Net effect on 5.6+tools: tools work, but
+        // the model does NOT reason on that turn — reasoning+tools together needs
+        // the /v1/responses API (not used here).
+        if (isOpenAI) {
+          if (requestBody.tools) {
+            if (/gpt-5\.6/i.test(requestBody.model || '')) {
+              requestBody.reasoning_effort = 'none';
+            }
+            // older gpt-5.x with tools: leave reasoning_effort unset (omitted).
+          } else {
+            requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'minimal';
+          }
         }
 
         // ── Web search ──────────────────────────────────────────────────────
