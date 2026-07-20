@@ -1,0 +1,338 @@
+// ───────────────────────────────────────────────────────────────────────────
+// Conversation full-text search backend.
+//
+// Shared by the human-facing /api/search endpoint and the entity-facing
+// `search_conversations` agent tool. Scans every conversation of one entity
+// (folder), returns matching excerpts trimmed around each hit, grouped by
+// conversation and ordered by the shared title convention.
+//
+// Author resolution: a message's real speaker for a user turn lives in a
+// "[name]" tag, validated against the set of known entity / identity names so
+// stray tags like "[boxart]" are never mistaken for a speaker.
+//
+// Privacy: `excludeInactive` skips conversations marked inactive (active ===
+// false). The entity tool sets this so the model can neither search nor read
+// non-public conversations — matching read_conversation's contract.
+// ───────────────────────────────────────────────────────────────────────────
+
+import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import path from 'path';
+import { compareConvoTitles } from './convoSort';
+
+const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
+const LOGS_DIR = path.join(DATA_DIR, 'logs');
+const FOLDERS_DIR = path.join(DATA_DIR, 'folders');
+const CHARACTER_MAP = path.join(DATA_DIR, 'character_map.json');
+const USER_SETTINGS = path.join(DATA_DIR, 'user_settings.json');
+
+// Snippet window: characters of context kept on each side of the match, clamped
+// to the match's own line so a snippet never bleeds across line breaks.
+const MAX_BEFORE = 90;
+const MAX_AFTER = 150;
+const MAX_SNIPPETS_PER_MESSAGE = 3;
+
+export interface SearchSnippet {
+  messageIndex: number;
+  author: string;
+  timestamp: number | null;
+  text: string; // trimmed, single line, with … where content was cut
+}
+export interface SearchGroup {
+  convoId: string;
+  convoTitle: string;
+  active: boolean;
+  matches: SearchSnippet[];
+}
+export interface SearchResult {
+  query: string;
+  folder: string;
+  results: SearchGroup[];
+  conversationsMatched: number;
+  conversationsSearched: number;
+  totalMatches: number;
+}
+
+// Stream a file in 1MB chunks looking for `needleLower` (case-insensitive),
+// stopping at the first hit. Memory stays ~chunk-sized regardless of file size,
+// so a 200MB log is never loaded whole just to decide it doesn't match. A small
+// tail overlap carries across chunk boundaries so a term split between two
+// chunks is still found.
+function rawFileContains(filePath: string, needleLower: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlap = Math.max(0, needleLower.length - 1);
+    let tail = '';
+    let done = false;
+    const stream = createReadStream(filePath, { encoding: 'utf8', highWaterMark: 1 << 20 });
+    const finish = (v: boolean) => { if (done) return; done = true; try { stream.destroy(); } catch {} resolve(v); };
+    stream.on('data', (chunk: string | Buffer) => {
+      const c = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      if ((tail + c).toLowerCase().includes(needleLower)) return finish(true);
+      tail = overlap ? c.slice(-overlap) : '';
+    });
+    stream.on('end', () => finish(false));
+    stream.on('error', () => finish(false));
+  });
+}
+
+// Comparison key for a speaker name: letters/digits only, lowercased. Strips
+// decoration/spacing so "[👤 User]" matches "User" and "[ つよ ]" matches "つよ".
+function nameKey(s: string): string {
+  return (s || '').replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+}
+
+// The set of legitimate speaker-name keys: every NEXUS entity (folder + its
+// aiName) plus the identities from character_map / user_settings.
+async function loadValidNameKeys(): Promise<Set<string>> {
+  const keys = new Set<string>();
+  const add = (v?: string | null) => { const k = nameKey(String(v || '')); if (k) keys.add(k); };
+  add('User');
+  try {
+    const files = await fs.readdir(FOLDERS_DIR);
+    await Promise.all(files.filter((f) => f.endsWith('.json')).map(async (f) => {
+      try {
+        const parsed = JSON.parse(await fs.readFile(path.join(FOLDERS_DIR, f), 'utf-8'));
+        add(parsed.name || f.replace(/\.json$/, ''));
+        add(parsed?.settings?.aiName);
+        add(parsed?.settings?.customAiName);
+      } catch {}
+    }));
+  } catch {}
+  try {
+    const cm = JSON.parse(await fs.readFile(CHARACTER_MAP, 'utf-8'));
+    for (const r of cm.rules || []) add(r?.name);
+    add(cm.fallback); add(cm.humanLabel);
+  } catch {}
+  try {
+    const us = JSON.parse(await fs.readFile(USER_SETTINGS, 'utf-8'));
+    add(us.userName);
+  } catch {}
+  return keys;
+}
+
+// All bracket tags in a message body with their positions, e.g. "[つよ]".
+function speakerTags(content: string): { index: number; name: string }[] {
+  const out: { index: number; name: string }[] = [];
+  const re = /\[([^\]\n]{1,40})\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) out.push({ index: m.index, name: m[1].trim() });
+  return out;
+}
+
+// The speaker governing text at `pos`: the last recognized [name] tag at or
+// before that position. Null when none qualifies.
+function governingSpeaker(tags: { index: number; name: string }[], pos: number, valid: Set<string>): string | null {
+  let found: string | null = null;
+  for (const t of tags) {
+    if (t.index > pos) break;
+    if (valid.has(nameKey(t.name))) found = t.name;
+  }
+  return found;
+}
+
+// Copied-message gate (mirrors ChatArea.isMessageOriginal / the billing stats).
+// The clone workflow carries earlier messages into a new conversation as
+// "copied" context; those live under a "first original" marker. Searching them
+// would surface the SAME text once per conversation that carries it — the
+// duplicates the entity reported. We only search ORIGINAL messages:
+//   - firstOriginalIsNext && no marker → everything is copied (all skipped)
+//   - no marker                        → everything is original
+//   - marker set                       → original at/after the marker index
+function makeIsOriginal(log: any, messages: any[]): (idx: number) => boolean {
+  const markerId = log.firstOriginalMessageId || null;
+  const isNext = log.firstOriginalIsNext === true;
+  if (isNext && !markerId) return () => false;
+  if (!markerId) return () => true;
+  const markerIdx = messages.findIndex((m) => m.id === markerId);
+  if (markerIdx < 0) return () => true;
+  return (idx: number) => idx >= markerIdx;
+}
+
+function snippetsForMessage(content: string, lowerContent: string, needle: string): { text: string; matchIdx: number }[] {
+  const out: { text: string; matchIdx: number }[] = [];
+  let from = 0;
+  let coveredUntil = -1;
+  while (out.length < MAX_SNIPPETS_PER_MESSAGE) {
+    const idx = lowerContent.indexOf(needle, from);
+    if (idx < 0) break;
+    from = idx + needle.length;
+    if (idx <= coveredUntil) continue;
+
+    const lineStart = content.lastIndexOf('\n', idx - 1) + 1;
+    let lineEnd = content.indexOf('\n', idx + needle.length);
+    if (lineEnd < 0) lineEnd = content.length;
+
+    const start = Math.max(lineStart, idx - MAX_BEFORE);
+    const end = Math.min(lineEnd, idx + needle.length + MAX_AFTER);
+    coveredUntil = end;
+
+    let text = content.slice(start, end).trim();
+    if (start > 0) text = '…' + text;
+    if (end < content.length) text = text + '…';
+    out.push({ text, matchIdx: idx });
+  }
+  return out;
+}
+
+export async function searchConversations(
+  folderName: string,
+  query: string,
+  opts?: { excludeInactive?: boolean },
+): Promise<SearchResult> {
+  const q = String(query || '').trim();
+  const excludeInactive = !!opts?.excludeInactive;
+  const empty: SearchResult = { query: q, folder: folderName, results: [], conversationsMatched: 0, conversationsSearched: 0, totalMatches: 0 };
+  if (!folderName || !q) return empty;
+
+  const dir = path.join(LOGS_DIR, String(folderName));
+  let files: string[] = [];
+  try { files = (await fs.readdir(dir)).filter((f) => !f.startsWith('.') && f.endsWith('.json')); }
+  catch { return empty; }
+
+  const needle = q.toLowerCase();
+  const validNameKeys = await loadValidNameKeys();
+  let searched = 0;
+
+  // Conversation logs can be HUGE (VRChat entities reach 1.6GB across a folder,
+  // with single 200MB files full of inline base64 images). Reading and
+  // JSON.parse-ing all of them at once — the old Promise.all — spiked memory
+  // into the gigabytes and hung the tool/endpoint. Now each file is: (1) header
+  // read (4KB) for the active flag, (2) STREAM-scanned for the term (chunked,
+  // never loaded whole), and only (3) fully read + parsed if it actually
+  // contains the term. A small concurrency pool bounds how many files are in
+  // flight at once.
+  const scanFile = async (fn: string): Promise<SearchGroup | null> => {
+    const fp = path.join(dir, fn);
+
+    // (1) Cheap header-only active check — read just the first 4KB.
+    let active = true;
+    try {
+      const fh = await fs.open(fp, 'r');
+      try {
+        const buf = Buffer.alloc(4096);
+        const { bytesRead } = await fh.read(buf, 0, 4096, 0);
+        const head = buf.subarray(0, bytesRead).toString('utf-8');
+        const m = head.match(/"active"\s*:\s*(true|false)/);
+        if (m) active = m[1] === 'true';
+      } finally { await fh.close(); }
+    } catch { return null; }
+    if (excludeInactive && !active) return null; // non-public: not searched
+    searched++;
+
+    // (2) Streaming pre-filter — bail without ever loading the file whole.
+    if (!(await rawFileContains(fp, needle))) return null;
+
+    // (3) Only matching files pay the full read + parse cost.
+    let raw: string;
+    try { raw = await fs.readFile(fp, 'utf-8'); } catch { return null; }
+    if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+    let log: any;
+    try { log = JSON.parse(raw); } catch { return null; }
+    raw = ''; // release the (possibly huge) raw string before per-message work
+
+    const messages: any[] = Array.isArray(log.messages) ? log.messages : [];
+    const isOriginal = makeIsOriginal(log, messages);
+    const snippets: SearchSnippet[] = [];
+    messages.forEach((m, idx) => {
+      if (!isOriginal(idx)) return; // skip copied (carried-over) messages
+      const content = typeof m.content === 'string' ? m.content : '';
+      if (!content) return;
+      const lower = content.toLowerCase();
+      if (!lower.includes(needle)) return;
+
+      const isUser = m.role === 'user';
+      const tags = isUser ? speakerTags(content) : [];
+      const storedName: string | null =
+        typeof m.name === 'string' && nameKey(m.name) && nameKey(m.name) !== 'user' ? m.name : null;
+
+      for (const s of snippetsForMessage(content, lower, needle)) {
+        let author: string;
+        if (isUser) author = governingSpeaker(tags, s.matchIdx, validNameKeys) || storedName || 'User';
+        else author = m.name || m.role || 'assistant';
+        snippets.push({ messageIndex: idx, author, timestamp: typeof m.timestamp === 'number' ? m.timestamp : null, text: s.text });
+      }
+    });
+
+    if (snippets.length === 0) return null;
+    return {
+      convoId: log.id || fn.replace(/\.json$/, ''),
+      convoTitle: log.title || 'Untitled',
+      active,
+      matches: snippets, // already top-to-bottom by message order
+    };
+  };
+
+  // Bounded-concurrency pool: at most CONCURRENCY files are read/parsed at once,
+  // so a folder of 200MB files can't all land in memory simultaneously.
+  const CONCURRENCY = 4;
+  const groups: (SearchGroup | null)[] = new Array(files.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      const i = next++;
+      groups[i] = await scanFile(files[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, files.length) }, worker));
+
+  const results = (groups.filter(Boolean) as SearchGroup[]).sort((a, b) => compareConvoTitles(a.convoTitle, b.convoTitle));
+  const totalMatches = results.reduce((s, g) => s + g.matches.length, 0);
+
+  return {
+    query: q,
+    folder: folderName,
+    results,
+    conversationsMatched: results.length,
+    conversationsSearched: searched,
+    totalMatches,
+  };
+}
+
+// Render a SearchResult as a compact text report for an agent tool result.
+// Capped so a broad query can't flood the model's context; teaches the
+// read_conversation follow-up. `format` for timestamps is done inline (UTC-free
+// local formatting isn't available server-side without a dep, so we use a short
+// ISO-ish slice of the locale string).
+const TOOL_MAX_CONVOS = 25;
+const TOOL_MAX_SNIPPETS_PER_CONVO = 8;
+
+function fmtTs(ts: number | null): string {
+  if (ts == null) return '';
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+export function formatSearchForTool(r: SearchResult): string {
+  if (r.totalMatches === 0) {
+    return `No matches for "${r.query}" across your ${r.conversationsSearched} conversation(s).`;
+  }
+  const lines: string[] = [];
+  lines.push(
+    `${r.totalMatches} match(es) in ${r.conversationsMatched} conversation(s) ` +
+    `(of ${r.conversationsSearched} searched) for "${r.query}", oldest-naming first:`,
+  );
+  const shownConvos = r.results.slice(0, TOOL_MAX_CONVOS);
+  for (const g of shownConvos) {
+    lines.push('');
+    lines.push(`### ${g.convoTitle}`);
+    const shown = g.matches.slice(0, TOOL_MAX_SNIPPETS_PER_CONVO);
+    for (const m of shown) {
+      const ts = fmtTs(m.timestamp);
+      const meta = ts ? `${m.author} · ${ts}` : m.author;
+      lines.push(`- [${meta}] ${m.text}`);
+    }
+    if (g.matches.length > shown.length) {
+      lines.push(`- …and ${g.matches.length - shown.length} more in this conversation.`);
+    }
+  }
+  if (r.results.length > shownConvos.length) {
+    lines.push('');
+    lines.push(`…and ${r.results.length - shownConvos.length} more conversation(s) with matches (narrow the query to see them).`);
+  }
+  lines.push('');
+  lines.push(
+    'To pull any of these into full context, call read_conversation with the exact title shown after "###".',
+  );
+  return lines.join('\n');
+}

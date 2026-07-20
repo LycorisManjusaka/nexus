@@ -123,6 +123,19 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     if (onAudioStateChange) {
       onAudioStateChange(msg.id, ttsState !== 'idle');
     }
+    // ALWAYS clear this message's "playing" flag when the effect is torn down —
+    // on unmount, or before msg.id/ttsState is superseded. Without this, a
+    // bubble that unmounts mid-playback (conversation switch, or auto-trim
+    // dropping a copied message while its TTS is still going) leaves the
+    // parent's audioPlayingStates[msg.id] stuck true. That pins isAudioPlaying
+    // true forever, which silently blocks the VRChat send queue: captures keep
+    // enqueuing and clearing kohai.txt but never send, until a reboot resets the
+    // map. Reporting false on cleanup closes that leak. (A transient false→true
+    // during a normal ttsState change is coalesced within one React batch, so
+    // it can't spuriously fire a queued send.)
+    return () => {
+      if (onAudioStateChange) onAudioStateChange(msg.id, false);
+    };
   }, [ttsState, msg.id, onAudioStateChange]);
 
   // Keep editContent in sync with msg.content (e.g. after streaming finishes)
@@ -243,6 +256,23 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     isCurrentlyPlayingRef.current = true;
     const audio1 = new Audio(url);
     currentAudioRef.current = audio1;
+    // Advance-the-chain handler. It MUST be attached BEFORE play()/awaits: in
+    // VRChat dual-device mode we `await` the second device's play() promise
+    // below, and a short clip can fire its 'ended' event DURING that await —
+    // i.e. before a handler assigned afterwards exists. The missed event left
+    // isCurrentlyPlayingRef stuck true and stalled the whole chain (first
+    // phrase plays, then silence with the button stuck on "playing"). Setting
+    // it up-front, with a one-shot guard, closes that race.
+    let advanced = false;
+    const advance = () => {
+      if (advanced) return;
+      advanced = true;
+      URL.revokeObjectURL(url);
+      currentAudioRef.current = null;
+      currentAudioRef2.current = null;
+      streamingPlayNext(signal);
+    };
+    audio1.onended = advance;
     if (isVRChatMode && globalSettings?.device1Id && typeof (audio1 as any).setSinkId === 'function') {
       try { await (audio1 as any).setSinkId(globalSettings.device1Id); } catch {}
     }
@@ -270,18 +300,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         return;
       }
       if (ttsDebug) console.debug('[tts] audio.play() rejected (non-fatal, skipping segment)', { name: e?.name, message: e?.message });
-      URL.revokeObjectURL(url);
-      currentAudioRef.current = null;
-      currentAudioRef2.current = null;
-      streamingPlayNext(signal);
+      // play() failed → 'ended' will never fire, so advance the chain manually
+      // (the one-shot guard prevents a double-advance).
+      audio1.onended = null;
+      advance();
       return;
     }
-    audio1.onended = () => {
-      URL.revokeObjectURL(url);
-      currentAudioRef.current = null;
-      currentAudioRef2.current = null;
-      streamingPlayNext(signal);
-    };
   };
 
   const synthesizeStreamingSegment = async (segment: any, signal: AbortSignal, seq: number) => {

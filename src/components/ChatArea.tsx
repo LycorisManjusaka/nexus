@@ -6,9 +6,10 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3 } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search } from 'lucide-react';
 import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
+import SearchModal from './SearchModal';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
@@ -1063,10 +1064,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'vrchat_capture') {
-          // Text comes from the input box (kept live by the logs poll), NOT from
-          // the image event anymore. Snapshot it now, then clear the input +
-          // source files so the photo is sent with exactly what was visible.
-          const text = (inputApiRef.current?.getText?.() || '').trim() || '（添付画像）';
+          // Snapshot the visible input (may include manual typing). The final
+          // text is resolved just before enqueue via an ATOMIC consume of
+          // kohai/ear (see below) so no un-polled speech is lost.
+          const inputTextSnapshot = (inputApiRef.current?.getText?.() || '').trim();
           const isClaude = localAiName?.toLowerCase().includes('claude');
           const targetMaxDim = isClaude ? 1568 : 3072;
 
@@ -1132,16 +1133,30 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             dataUrl,
             tokens
           };
+          // Resolve the text ATOMICALLY: consume kohai/ear (read + truncate in
+          // one server op) so anything spoken during this handler's async work
+          // (PNG→JPEG conversion can take ~1s, during which new speech may land)
+          // is captured, not wiped. Prefer that freshest transcript; fall back
+          // to the input snapshot (which may hold manual typing) and finally to
+          // the placeholder. This is the fix for "kohai.txt cleared but the
+          // picture/text never sent" — the consume and the clear are now the
+          // same operation, so nothing is discarded uncaptured.
+          let consumedText = '';
+          try {
+            const r = await fetch('/api/vrchat/logs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ consume: true }),
+            });
+            if (r.ok) consumedText = ((await r.json())?.text || '').trim();
+          } catch { /* transient — fall back to the input snapshot below */ }
+
+          const text = consumedText || inputTextSnapshot || '（添付画像）';
           setVrchatQueue(prev => [...prev, { text, attachment }]);
-          // The snapshot is committed to the queue — clear the visible input and
-          // the source transcript so it isn't re-read/re-sent.
+          // Reset the visible input + poll baseline; kohai/ear are already
+          // truncated by the consume above (no separate clear needed).
           inputApiRef.current?.setText?.('');
           lastVrchatLogRef.current = '';
-          fetch('/api/vrchat/logs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ clear: true }),
-          }).catch(() => {});
         }
       } catch (e) {
         console.error("VRChat SSE Parse Error:", e);
@@ -1961,6 +1976,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // Recompute tokens for every visible piece — system prompt, attachment
   // instruction, every message body, plus the timestamp tags that are
@@ -2203,6 +2219,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             title={`Open this entity's workspace folder in file explorer (local_data/agent_workspaces/${folderName}/)`}
           >
             <FolderOpen size={16} />
+          </button>
+          <button
+            onClick={() => setSearchOpen(true)}
+            className="p-1.5 text-muted-foreground hover:text-sky-500 transition-colors"
+            title={`Search — find text across all of ${folderName}'s conversations`}
+          >
+            <Search size={16} />
           </button>
           <button
             onClick={() => setStatsOpen(true)}
@@ -3898,6 +3921,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       />
 
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />
+
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} folderName={folderName} />
 
       <SystemPromptUpdater
         open={sysPromptUpdaterOpen}

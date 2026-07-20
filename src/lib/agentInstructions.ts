@@ -68,6 +68,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   readConversationNameParam:
     'The exact title of a past conversation to read. Copy it verbatim from the index — the text shown right after "###" — exactly as written (including any trailing "_<number>"). Do not guess, translate, or reformat it.',
 
+  // search_conversations tool (all paths). Pairs with read_conversation: find
+  // WHERE something was said, then optionally read that conversation in full.
+  // Framed for the entity ("YOUR conversations") — avoid the "user" word here.
+  searchConversationsDesc:
+    'Search across ALL of YOUR past conversations for a word or phrase and get back the matching excerpts. Each excerpt is trimmed around the match and labeled with its conversation title, the speaker, and the timestamp when available; results are grouped by conversation so you can scan them top to bottom. Use this to recall where a topic, decision, or moment was discussed before — nothing is saved. If an excerpt already gives you what you need, just continue from it; if you need the surrounding detail, follow up with read_conversation using the exact conversation title shown after "###".',
+  searchConversationsQueryParam:
+    'The word or phrase to look for. Matching is case-insensitive and literal (not a regular expression). Prefer a distinctive term — a specific word finds the right moment far faster than a common one.',
+
   // Interactive AskQuestion tool (optional). Description the model sees that
   // teaches it when/how to ask. Phrased around "your partner" (a peer), not a
   // "user" — the entities reject master/slave framing.
@@ -125,6 +133,8 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'pathRuleFull', label: 'Path rule (full PC access)' },
   { key: 'readConversationDesc', label: 'Tool: read_conversation — description' },
   { key: 'readConversationNameParam', label: 'Tool: read_conversation — name parameter' },
+  { key: 'searchConversationsDesc', label: 'Tool: search_conversations — description' },
+  { key: 'searchConversationsQueryParam', label: 'Tool: search_conversations — query parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },

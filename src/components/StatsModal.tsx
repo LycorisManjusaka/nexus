@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, BarChart3, RefreshCw, Copy, Check, Loader2 } from 'lucide-react';
 import { fmtUSD } from '@/lib/modelPricing';
+import { compareConvoTitles } from '@/lib/convoSort';
 
 // Rich billing-statistics window. Pulls the full priced dataset from /api/stats
 // once, then aggregates it locally into six report layouts. Every table is
@@ -91,30 +92,19 @@ function enumerateBuckets(startTs: number, endTs: number, firstDay: number): { k
 
 // ── Grid + copy helpers ─────────────────────────────────────────────────────
 
-// Order conversation titles by the "<name>_<number>-<index>" convention,
-// comparing each part in turn: name (locale), then number, then index — so
-// 先輩_1-1 < 先輩_1-2 < 先輩_3. A bare "<name>_<number>" (no index) sorts before
-// its "-N" siblings. Titles that don't fit the pattern fall to the end, ordered
-// naturally.
-function parseConvoTitle(t: string): { name: string; num: number; idx: number; matched: boolean } {
-  const m = t.match(/^(.*)_(\d+)(?:-(\d+))?$/);
-  if (!m) return { name: t, num: Infinity, idx: Infinity, matched: false };
-  return { name: m[1], num: parseInt(m[2], 10), idx: m[3] !== undefined ? parseInt(m[3], 10) : -1, matched: true };
-}
-function compareConvoTitles(a: string, b: string): number {
-  const pa = parseConvoTitle(a);
-  const pb = parseConvoTitle(b);
-  const byName = pa.name.localeCompare(pb.name, undefined, { numeric: true, sensitivity: 'base' });
-  if (byName !== 0) return byName;
-  if (pa.num !== pb.num) return pa.num - pb.num;
-  if (pa.idx !== pb.idx) return pa.idx - pb.idx;
-  return a.localeCompare(b, undefined, { numeric: true });
-}
-
 type Grid = string[][]; // grid[0] = header row
 
-function cellUSD(v: number): string {
-  return v > 0 ? fmtUSD(v) : '';
+// Plain-number formatter for table cells — no "$", so the copied TSV drops
+// straight into Excel as real numbers you can sum/chart. Same precision ladder
+// as fmtUSD (more decimals for tiny amounts). Zero → blank cell.
+function fmtNum(v: number): string {
+  if (!isFinite(v) || v <= 0) return '0.00';
+  if (v >= 1) return v.toFixed(2);
+  if (v >= 0.01) return v.toFixed(4);
+  return v.toFixed(6);
+}
+function cellNum(v: number): string {
+  return v > 0 ? fmtNum(v) : '';
 }
 
 function gridToTSV(g: Grid): string {
@@ -201,9 +191,9 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       }
       const rows = Array.from(byConvo.values()).sort((a, b) => compareConvoTitles(a.title, b.title));
       grid = [['Conversation', 'Cost (USD)']];
-      for (const row of rows) grid.push([row.title, cellUSD(row.usd)]);
+      for (const row of rows) grid.push([row.title, cellNum(row.usd)]);
       const total = rows.reduce((s, r) => s + r.usd, 0);
-      grid.push(['TOTAL', fmtUSD(total)]);
+      grid.push(['TOTAL', fmtNum(total)]);
     }
 
     else if (report === 'entity-months') {
@@ -216,9 +206,9 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       const byBucket = new Map<number, number>();
       for (const r of used) { const b = bucketOf(r.ts as number, firstDay); byBucket.set(b.key, (byBucket.get(b.key) || 0) + r.usd); }
       grid = [['Month', 'Cost (USD)']];
-      for (const b of buckets) grid.push([b.label, cellUSD(byBucket.get(b.key) || 0)]);
+      for (const b of buckets) grid.push([b.label, cellNum(byBucket.get(b.key) || 0)]);
       const total = used.reduce((s, r) => s + r.usd, 0);
-      grid.push(['TOTAL', fmtUSD(total)]);
+      grid.push(['TOTAL', fmtNum(total)]);
     }
 
     else if (report === 'family-months') {
@@ -231,9 +221,9 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       const byBucket = new Map<number, number>();
       for (const r of used) { const b = bucketOf(r.ts as number, firstDay); byBucket.set(b.key, (byBucket.get(b.key) || 0) + r.usd); }
       grid = [['Month', `${family} — Cost (USD)`]];
-      for (const b of buckets) grid.push([b.label, cellUSD(byBucket.get(b.key) || 0)]);
+      for (const b of buckets) grid.push([b.label, cellNum(byBucket.get(b.key) || 0)]);
       const total = used.reduce((s, r) => s + r.usd, 0);
-      grid.push(['TOTAL', fmtUSD(total)]);
+      grid.push(['TOTAL', fmtNum(total)]);
     }
 
     else if (report === 'all-entity-month' || report === 'all-family-month') {
@@ -262,13 +252,13 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         cols.forEach((c, i) => {
           const v = cell.get(key(b.key, c)) || 0;
           colTotals[i] += v; rowTotal += v;
-          row.push(cellUSD(v));
+          row.push(cellNum(v));
         });
-        row.push(fmtUSD(rowTotal));
+        row.push(fmtNum(rowTotal));
         grand += rowTotal;
         grid.push(row);
       }
-      grid.push(['TOTAL', ...colTotals.map((v) => fmtUSD(v)), fmtUSD(grand)]);
+      grid.push(['TOTAL', ...colTotals.map((v) => fmtNum(v)), fmtNum(grand)]);
     }
 
     else if (report === 'family-entity') {
@@ -287,13 +277,13 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         cols.forEach((c, i) => {
           const v = cell.get(key(e, c)) || 0;
           colTotals[i] += v; rowTotal += v;
-          row.push(cellUSD(v));
+          row.push(cellNum(v));
         });
-        row.push(fmtUSD(rowTotal));
+        row.push(fmtNum(rowTotal));
         grand += rowTotal;
         grid.push(row);
       }
-      grid.push(['TOTAL', ...colTotals.map((v) => fmtUSD(v)), fmtUSD(grand)]);
+      grid.push(['TOTAL', ...colTotals.map((v) => fmtNum(v)), fmtNum(grand)]);
       note = 'Columns are model families; a Claude row is split into OAuth vs API by each conversation\'s billing mode.';
     }
 

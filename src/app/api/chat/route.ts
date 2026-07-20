@@ -2,13 +2,15 @@ import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import pathModule from 'path';
 import { promises as fsp } from 'fs';
-import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile } from '@/lib/fsStorage';
+import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable } from '@/lib/modelVision';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
+import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
+import { appendLayer5Footer } from '@/lib/layer4';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
 import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMessage';
@@ -148,6 +150,7 @@ function toolActivityLabel(name: string): string | null {
     case 'Delete': return 'deleting a file';
     case 'Bash': return 'running a shell command';
     case 'read_conversation': return 'reading a past conversation';
+    case 'search_conversations': return 'searching past conversations';
     case 'web_search': case 'WebSearch': return 'searching the web';
     case 'web_fetch': case 'WebFetch': return 'fetching a web page';
     case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
@@ -481,6 +484,24 @@ async function streamClaudeViaAgentSDK(args: {
                     return { content: [{ type: 'text' as const, text: `# ${r.title}\n\n${r.transcript || '(empty conversation)'}` }] };
                   } catch (e: any) {
                     return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'read failed'}` }] };
+                  }
+                },
+              ),
+            );
+            // search_conversations — find WHERE a term appears across the
+            // entity's own conversations, then optionally read one in full.
+            // Excludes inactive (non-public) conversations, same as read.
+            nexusTools.push(
+              sdk.tool(
+                'search_conversations',
+                I.searchConversationsDesc,
+                { query: z.string().describe(I.searchConversationsQueryParam) },
+                async (a: { query: string }) => {
+                  try {
+                    const r = await searchConversations(folderName, a.query, { excludeInactive: true });
+                    return { content: [{ type: 'text' as const, text: formatSearchForTool(r) }] };
+                  } catch (e: any) {
+                    return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'search failed'}` }] };
                   }
                 },
               ),
@@ -1615,6 +1636,20 @@ export async function POST(req: Request) {
     } = await req.json();
     const keys = await loadKeys();
 
+    // Per-Entity editable footer = Layer 5. When the entity keeps a FOOTER.md in
+    // its workspace, its contents are injected as a self-authored "Layer 5"
+    // block — the SAME auto-generated-heading mechanism as the Layer-4 summaries
+    // index, so it reads as a proper fifth layer of the identity. The entity
+    // edits only the body (FOOTER.md) with its own file tools; the heading is
+    // added here at send time and never stored. No FOOTER.md → prompt unchanged.
+    // Every changed version is snapshotted server-side (see backupFooterIfChanged).
+    try {
+      const footer = await readEntityFooter(folderName);
+      if (footer && footer.trim()) {
+        systemPrompt = appendLayer5Footer(systemPrompt, footer);
+      }
+    } catch { /* footer is best-effort; never block a turn on it */ }
+
     // Per-Entity path-scope hints baked into the workspace tool descriptions so
     // the model knows whether absolute paths are allowed. Without this, the
     // descriptions kept saying "never use absolute paths" even with Full PC
@@ -2189,6 +2224,15 @@ export async function POST(req: Request) {
             required: ['name'],
           },
         });
+        claudeTools.push({
+          name: 'search_conversations',
+          description: I.searchConversationsDesc,
+          input_schema: {
+            type: 'object',
+            properties: { query: { type: 'string', description: I.searchConversationsQueryParam } },
+            required: ['query'],
+          },
+        });
       }
       if (toolUseEnabled) {
         // Tool names mirror Claude Code's built-in workspace tools so the
@@ -2604,7 +2648,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'AskQuestion', 'spawn_subagent']);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent']);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // Turn finished. If it was cut off at the token cap (thinking +
@@ -2774,6 +2818,11 @@ export async function POST(req: Request) {
                     resultContent = r.ok
                       ? `Transcript of "${r.title}":\n\n${r.transcript}`
                       : `Error: ${r.error}`;
+                  } else if (tu.name === 'search_conversations') {
+                    // Search across the entity's conversations; inactive ones are
+                    // excluded (privacy). Nothing is saved.
+                    const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
+                    resultContent = formatSearchForTool(sr);
                   } else if (tu.name === 'AskQuestion') {
                     // Pause the turn: emit the question, wait for the user's
                     // selection (or the configured timeout), return it as the
@@ -3019,6 +3068,17 @@ export async function POST(req: Request) {
                   name: { type: 'STRING', description: I.readConversationNameParam },
                 },
                 required: ['name'],
+              },
+            },
+            {
+              name: 'search_conversations',
+              description: I.searchConversationsDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  query: { type: 'STRING', description: I.searchConversationsQueryParam },
+                },
+                required: ['query'],
               },
             },
           ],
@@ -3483,6 +3543,11 @@ export async function POST(req: Request) {
                       result = r.ok
                         ? { title: r.title, transcript: r.transcript }
                         : { error: r.error };
+                    } else if (fc.name === 'search_conversations') {
+                      // Search across the entity's conversations; inactive ones
+                      // excluded (privacy). Nothing is saved.
+                      const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true });
+                      result = { report: formatSearchForTool(sr) };
                     } else if (fc.name === 'AskQuestion') {
                       // Pause the turn: emit the question, wait for the user's
                       // selection (or the configured timeout), return it as the
@@ -4007,6 +4072,20 @@ export async function POST(req: Request) {
                 name: { type: 'string', description: I.readConversationNameParam },
               },
               required: ['name'],
+            },
+          },
+        });
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'search_conversations',
+            description: I.searchConversationsDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: I.searchConversationsQueryParam },
+              },
+              required: ['query'],
             },
           },
         });
@@ -4869,6 +4948,11 @@ export async function POST(req: Request) {
                       resultText = r.ok
                         ? `Transcript of "${r.title}":\n\n${r.transcript}`
                         : `Error: ${r.error}`;
+                    } else if (tc.name === 'search_conversations') {
+                      // Search across the entity's conversations; inactive ones
+                      // excluded (privacy). Nothing is saved.
+                      const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true });
+                      resultText = formatSearchForTool(sr);
                     } else if (tc.name === '$web_search') {
                       // Moonshot (Kimi) builtin web search. Unlike the
                       // workspace tools, the search itself runs on Moonshot's

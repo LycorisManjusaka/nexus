@@ -62,6 +62,54 @@ export async function ensureWorkspace(folderName: string): Promise<string> {
   return dir;
 }
 
+// ── Per-Entity editable footer (FOOTER.md) ───────────────────────────────────
+// An entity can keep a FOOTER.md in its own workspace and edit it with its file
+// tools. When present, the chat route appends its contents to that entity's
+// system prompt (the editable "footer"). When absent, nothing changes — the
+// baked prompt is used as-is.
+const FOOTER_FILENAME = 'FOOTER.md';
+
+/** Read an entity's workspace FOOTER.md, or null when there isn't one. */
+export async function readEntityFooter(folderName: string): Promise<string | null> {
+  const p = path.join(WORKSPACES_DIR, sanitizeFolderName(folderName), FOOTER_FILENAME);
+  try { return await fs.readFile(p, 'utf-8'); }
+  catch { return null; }
+}
+
+// Filesystem-safe timestamp for a backup filename: YYYY-MM-DD_HH-MM-SS-mmm.
+function footerBackupStamp(d = new Date()): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_` +
+    `${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
+}
+
+// Snapshot an entity's footer to backups/<Entity>/footers/<timestamp>.md, but
+// ONLY when it has CHANGED since the last time we saw it. A hidden ".last"
+// marker holds the previously-seen content:
+//   - first sighting → record the marker only (the pre-existing "current"
+//     footer is NOT saved — we can only capture versions from now on),
+//   - a later change  → save the NEW version and advance the marker,
+//   - no change       → do nothing.
+// Best-effort: never throws, so a footer-backup hiccup can't break a log save.
+async function backupFooterIfChanged(folderName: string): Promise<void> {
+  try {
+    const cur = await readEntityFooter(folderName);
+    if (cur === null) return; // entity has no footer file → nothing to track
+    const dir = path.join(BACKUPS_DIR, folderName, 'footers');
+    const marker = path.join(dir, '.last');
+    let prev: string | null = null;
+    try { prev = await fs.readFile(marker, 'utf-8'); } catch {}
+    if (prev === cur) return; // unchanged (or identical to the recorded baseline)
+    await fs.mkdir(dir, { recursive: true });
+    if (prev !== null) {
+      // A genuine change vs. what we last saw → preserve the new version.
+      await atomicWriteFile(path.join(dir, `${footerBackupStamp()}.md`), cur);
+    }
+    // First sighting (prev === null): record the baseline marker only.
+    await fs.writeFile(marker, cur);
+  } catch { /* best-effort */ }
+}
+
 function resolveWorkspacePath(folderName: string, relPath: string): string | null {
   const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
   // Trim any leading slashes — model might emit "/notes.md"
@@ -604,6 +652,12 @@ export async function saveLog(convoId: string, logData: any) {
     } catch (e) {
       console.error('Backup failed:', e);
     }
+
+    // Snapshot the entity's FOOTER.md if it changed this turn. saveLog is the
+    // one server-side choke point every turn's save flows through (all provider
+    // paths, OAuth included), so a single call here catches every footer edit.
+    // Best-effort and de-duplicated — see backupFooterIfChanged.
+    await backupFooterIfChanged(folderName);
   });
 }
 

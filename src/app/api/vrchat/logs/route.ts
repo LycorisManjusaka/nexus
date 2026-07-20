@@ -64,13 +64,22 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/vrchat/logs  { clear: true }
-//   → empties kohai.txt + ear_log.txt. Called right after the merged transcript
-//     has been committed to a message so the same speech isn't re-read into the
-//     input on the next poll.
+// POST /api/vrchat/logs
+//   { consume: true } → read-AND-clear in one atomic op; RETURNS { ok, text }.
+//       Used at image-capture time so whatever is in kohai/ear right now is
+//       grabbed and truncated together — closing the race where speech that
+//       reached the files but hadn't yet been polled into the input box would
+//       be wiped without being captured (data loss).
+//   { clear: true }   → empties kohai.txt + ear_log.txt (returns no text).
+//       Used on a normal manual send, where the text was already committed to
+//       the message from the visible input.
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
+    if (body?.consume) {
+      const text = mergeVrchatLogs({ consume: true }); // truncates + returns
+      return NextResponse.json({ ok: true, text });
+    }
     if (body?.clear) {
       mergeVrchatLogs({ consume: true }); // read-and-discard truncates both files
       return NextResponse.json({ ok: true });

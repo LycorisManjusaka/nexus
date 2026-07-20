@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { kohaiPath, earLogPath, speakersJsonPath } from './voicechangerPaths';
+import { kohaiPath, earLogPath, speakersJsonPath, VOICECHANGER_DIR } from './voicechangerPaths';
 import { resolveCharaByIds, getCharaFallback } from './charaResolver';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -65,6 +65,13 @@ function isNoiseLine(text: string, noise: Set<string>): boolean {
 //   • true → empties both files, used when the merged text has been committed
 //     to a message (clear-on-send) so the same speech isn't sent twice.
 // ───────────────────────────────────────────────────────────────────────────
+
+// Filesystem-safe timestamp for a backup filename: YYYY-MM-DD_HH-MM-SS-mmm.
+function footerLikeStamp(d = new Date()): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_` +
+    `${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
+}
 
 function getStyleName(engine: string, charId: string, styleId: string): string {
   try {
@@ -134,24 +141,58 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
     } catch (e) { /* ignore */ }
   }
 
-  // Optionally empty both files (clear-on-send).
+  // Optionally empty both files (clear-on-send). BEFORE truncating, snapshot
+  // each file's raw content to voicechanger/<name>_backup/<date_time>.txt so a
+  // cleared transcript is never truly lost — even if a downstream bug clears the
+  // files without actually sending the message. Best-effort; a backup failure
+  // must not stop the clear.
   if (consume) {
-    [kohaiFile, earFile].forEach((p) => {
-      if (fs.existsSync(p)) {
-        try { fs.writeFileSync(p, ''); } catch (e) { /* ignore */ }
-      }
+    const stamp = footerLikeStamp();
+    ([{ file: kohaiFile, name: 'kohai' }, { file: earFile, name: 'ear' }]).forEach(({ file, name }) => {
+      if (!fs.existsSync(file)) return;
+      try {
+        const raw = fs.readFileSync(file, 'utf-8');
+        if (raw.trim()) {
+          const backupDir = path.join(VOICECHANGER_DIR, `${name}_backup`);
+          try {
+            fs.mkdirSync(backupDir, { recursive: true });
+            fs.writeFileSync(path.join(backupDir, `${stamp}.txt`), raw);
+          } catch (e) { /* backup best-effort */ }
+        }
+      } catch (e) { /* read best-effort */ }
+      try { fs.writeFileSync(file, ''); } catch (e) { /* ignore */ }
     });
   }
 
   if (linesData.length === 0) return '';
 
-  // Sort chronologically by the HH:MM:SS timestamp.
-  linesData.sort((a, b) => a.time.localeCompare(b.time));
+  // Sort chronologically — but the log timestamps are wall-clock HH:MM:SS with
+  // NO date, so a plain string sort mis-orders a midnight rollover: "00:00:18"
+  // sorts before "23:59:29" and the post-midnight speech jumps to the top.
+  //
+  // The live buffer is short (it's truncated on send), so it can't legitimately
+  // span 12 hours. Therefore any line more than 12h EARLIER than the latest
+  // timestamp is really on the far side of midnight — i.e. a day later — so we
+  // add 24h to its sort key. A same-day buffer (no rollover) is untouched.
+  const toSec = (t: string) => {
+    const [h, m, s] = t.split(':').map(Number);
+    return (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
+  };
+  const WRAP_THRESHOLD = 12 * 3600; // 12h
+  const DAY = 24 * 3600;
+  const raw = linesData.map((r) => toSec(r.time));
+  const maxRaw = Math.max(...raw);
+  // Decorate with a rollover-aware key + original index (stable tiebreak so
+  // same-second lines keep their file/insertion order).
+  const ordered = linesData
+    .map((r, i) => ({ r, i, key: raw[i] + (maxRaw - raw[i] > WRAP_THRESHOLD ? DAY : 0) }))
+    .sort((a, b) => a.key - b.key || a.i - b.i)
+    .map((d) => d.r);
 
   // Format with `[Name] text`, grouping consecutive lines from the same speaker.
   const parts: string[] = [];
   let lastSpeaker: string | null = null;
-  for (const row of linesData) {
+  for (const row of ordered) {
     if (row.speaker !== lastSpeaker) {
       parts.push(`\n[${row.speaker}] ${row.text}`);
     } else {

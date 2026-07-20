@@ -66,6 +66,26 @@ export function findLayer4(systemPrompt: string): Layer4Span | null {
 // Heading line for the injected summaries block when no Layer 4 exists.
 const SUMMARY_BLOCK_HEADING = '## **Layer 4: Conversation Summaries**';
 
+// ── Layer 5 — the entity's SELF-AUTHORED footer ─────────────────────────────
+// Layers 1-4 are authored ABOUT the entity BY the system (1-3 distilled by the
+// Soul Packer, 4 auto-generated summaries). Layer 5 is the one layer the entity
+// writes and edits itself, via its workspace FOOTER.md. Like Layer 4, it's
+// injected at SEND TIME — never stored in the prompt — with this auto-generated
+// heading so it reads as a proper fifth layer. The entity writes only the BODY
+// (FOOTER.md); the heading/separator is added here. Rename freely.
+export const LAYER5_HEADING = '## **Layer 5: The Signature (Self-Authored)**';
+
+/**
+ * Append an entity's FOOTER.md body as a Layer-5 block. Returns the prompt
+ * unchanged when the footer is empty. Placed at the very end, so it follows the
+ * Layer-4 index (which the client injects before send).
+ */
+export function appendLayer5Footer(systemPrompt: string, footerBody: string): string {
+  const body = (footerBody || '').trim();
+  if (!body) return systemPrompt || '';
+  return `${(systemPrompt || '').replace(/\s+$/, '')}\n\n${LAYER5_HEADING}\n\n${body}\n`;
+}
+
 // Make the live summaries index appear in the system prompt.
 //
 // • If a `Layer 4` heading EXISTS, replace ONLY its body with `indexBody`
