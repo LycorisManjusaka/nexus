@@ -158,6 +158,29 @@ function toolActivityLabel(name: string): string | null {
   }
 }
 
+// Turn a raw Claude/SDK error string into a plain-language reason so a stop is
+// never a mystery. Returns null when the text doesn't match a known signature
+// (caller then shows the raw text). Covers the big ones: context-window
+// overflow (e.g. reading too many/too-large files in one turn), rate limits,
+// exhausted credit, and rejected/expired OAuth tokens.
+function explainClaudeStopError(raw: string): string | null {
+  const t = (raw || '').toLowerCase();
+  if (!t) return null;
+  if (/prompt is too long|too many (?:input )?tokens|maximum.{0,30}tokens|exceed.{0,30}(?:context|token)|context.{0,20}(?:window|length|limit)|input.{0,20}too.{0,10}(?:large|long)|request too large/.test(t)) {
+    return 'the turn exceeded the model\'s context window — too much content was included at once (typically too many, or too-large, files read in a single turn). Have the entity read fewer / smaller files per turn, or trim the conversation, then resend.';
+  }
+  if (/rate.?limit|too many requests|\b429\b|overloaded|\b529\b/.test(t)) {
+    return 'the provider rate-limited or was temporarily overloaded (usage limit / capacity). Wait a moment and resend.';
+  }
+  if (/credit|quota|insufficient|billing|payment required|\b402\b/.test(t)) {
+    return 'the subscription credit / quota for this path is exhausted. Switch to the API-key path, or top up.';
+  }
+  if (/invalid.{0,10}(?:token|key)|unauthor|expired|revoked|forbidden|\b401\b|\b403\b/.test(t)) {
+    return 'the OAuth token was rejected (expired or revoked). Refresh the token, or switch to the API-key path.';
+  }
+  return null;
+}
+
 // ── Kimi (Moonshot) host resolution ──────────────────────────────────────────
 // Kimi runs on Moonshot's first-party API (platform.kimi.ai / api.moonshot.ai),
 // using keys.kimi. Model IDs are normalized to the bare Moonshot form
@@ -1140,7 +1163,10 @@ async function streamClaudeViaAgentSDK(args: {
           if (/max.?turns/i.test(sub)) {
             notes.push('it hit the tool-iteration limit — the model kept calling tools without finishing. A common cause is repeatedly calling a tool that does not exist, or one that keeps erroring.');
           } else if (sub !== 'success') {
-            notes.push(`the agent runtime ended with "${sub}"${res.errorText ? ' — ' + res.errorText : ''}.`);
+            // Map a known error signature (context overflow, rate limit, credit,
+            // token) to a plain reason; otherwise show the raw subtype/error.
+            const friendly = explainClaudeStopError(res.errorText || sub);
+            notes.push(friendly || `the agent runtime ended with "${sub}"${res.errorText ? ' — ' + res.errorText : ''}.`);
           }
           if (lastStopReason === 'max_tokens') {
             notes.push('the reply hit the token limit and was cut off — lower the Thinking Level (effort) for this conversation, or resend.');
@@ -1193,7 +1219,14 @@ async function streamClaudeViaAgentSDK(args: {
         // refresh token, etc.).
         const msg = e?.message || String(e);
         console.error('[claude-oauth] error:', msg);
-        controller.enqueue(`data: ${JSON.stringify({ error: `Claude OAuth path failed: ${msg}` })}\n\n`);
+        // Translate a known signature (context-window overflow, rate limit,
+        // credit, token) into a plain reason so the stop is never a mystery;
+        // keep the raw text too for anything unrecognized.
+        const friendly = explainClaudeStopError(msg);
+        const shown = friendly
+          ? `Claude OAuth path stopped: ${friendly}\n(raw: ${msg})`
+          : `Claude OAuth path failed: ${msg}`;
+        controller.enqueue(`data: ${JSON.stringify({ error: shown })}\n\n`);
         controller.close();
       } finally {
         // Stop the stall watchdog on every exit path — a leaked interval
