@@ -830,7 +830,7 @@ async function streamClaudeViaAgentSDK(args: {
           if (!real) real = abs;
           return real === sandboxRoot || real.startsWith(sandboxRoot + pathModule.sep);
         };
-        const canUseTool = async (_toolName: string, input: Record<string, unknown>) => {
+        const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
           // Mid-turn partner interjection (OAuth path). canUseTool fires before
           // EVERY tool call, so it's our reliable mid-loop hook. If the partner
           // queued a note while the entity was working, deliver it by pausing
@@ -854,11 +854,20 @@ async function streamClaudeViaAgentSDK(args: {
           if (agentFullSystemAccess) return { behavior: 'allow', updatedInput: input } as any;
           for (const field of ['file_path', 'path', 'notebook_path']) {
             const v = (input as any)?.[field];
-            if (typeof v === 'string' && v && !(await withinSandbox(v))) {
-              return {
-                behavior: 'deny',
-                message: `Blocked: "${v}" is outside your workspace. Full PC access is OFF for this entity — use a path inside your workspace.`,
-              } as any;
+            if (typeof v === 'string' && v) {
+              if (!(await withinSandbox(v))) {
+                // The #1 cause of a "stops right after saying it'll read a file"
+                // freeze: the entity reaches for a file OUTSIDE its workspace
+                // while Full PC access is OFF. Log it loudly and remember it so
+                // the end-of-turn stop notice can name it.
+                const denyMsg = `Blocked: "${v}" is outside this entity's workspace. Full PC access is OFF — turn it on in the entity settings, or use a path inside the workspace.`;
+                console.warn(`[claude-oauth] tool "${toolName}" DENIED — "${v}" is outside the workspace (Full PC access OFF).`);
+                lastSandboxDenial = denyMsg;
+                return { behavior: 'deny', message: denyMsg } as any;
+              }
+              // Visible trail of what the entity is touching — helps pinpoint
+              // exactly which file op precedes a stop.
+              console.log(`[claude-oauth] tool "${toolName}" → ${v}`);
             }
           }
           return { behavior: 'allow', updatedInput: input } as any;
@@ -936,6 +945,10 @@ async function streamClaudeViaAgentSDK(args: {
         let lastStopReason: string | null = null;
         let lastToolError: string | null = null;
         let anyToolUsed = false;
+        // Set by canUseTool when a file op is blocked for being outside the
+        // workspace (Full PC access OFF) — the classic "stops after saying it'll
+        // read a file" cause.
+        let lastSandboxDenial: string | null = null;
         // Web citations for the OAuth path. Unlike the API-key path (where
         // web_search is an Anthropic server-side tool), here WebSearch/WebFetch
         // are Claude Code CLIENT tools — results arrive as tool_use / tool_result
@@ -1092,6 +1105,14 @@ async function streamClaudeViaAgentSDK(args: {
               const errAny: any = msg as any;
               resultSubtype = errAny.subtype || 'success';
               resultErrorText = errAny.error || '';
+              // The SDK also lists any permission denials from this run — if a
+              // file op was denied and we didn't already record it via canUseTool,
+              // surface it as the last tool error so the stop notice can name it.
+              const denials = errAny.permission_denials;
+              if (Array.isArray(denials) && denials.length && !lastSandboxDenial && !lastToolError) {
+                const d = denials[denials.length - 1];
+                lastToolError = `permission denied for ${d?.tool_name || 'a tool'}${d?.tool_input?.file_path ? ` (${d.tool_input.file_path})` : ''}`;
+              }
               break;
             }
           }
@@ -1130,6 +1151,9 @@ async function streamClaudeViaAgentSDK(args: {
           }
           if (!producedContent && !anyToolUsed && sub === 'success' && (!lastStopReason || lastStopReason === 'end_turn')) {
             notes.push('the turn ended with no output at all — the model stopped without generating any text or calling any tool.');
+          }
+          if (lastSandboxDenial) {
+            notes.push(`a file operation was blocked — ${lastSandboxDenial} (this is the usual reason a turn stops right after "I'll read this file"). Enable "Full PC access" for this entity to let it reach files outside its workspace.`);
           }
           if (lastToolError) {
             // String() guards a TS control-flow quirk: lastToolError is assigned
