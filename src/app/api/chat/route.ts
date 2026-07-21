@@ -926,6 +926,16 @@ async function streamClaudeViaAgentSDK(args: {
         // Non-null while a tool_use block is open/executing; cleared when
         // visible text/thinking resumes.
         let shownToolActivity: string | null = null;
+        // Why the turn ended — surfaced explicitly so an OAuth stop is never a
+        // silent freeze. `lastStopReason` = the model's stop_reason (end_turn /
+        // max_tokens / refusal / pause_turn / tool_use). `lastToolError` = the
+        // text of the most recent FAILED tool call — e.g. the model calling a
+        // tool that doesn't exist makes Claude Code return an is_error
+        // tool_result. `anyToolUsed` distinguishes a truly empty turn from a
+        // (legitimate) tool-only turn that produced no text.
+        let lastStopReason: string | null = null;
+        let lastToolError: string | null = null;
+        let anyToolUsed = false;
         // Web citations for the OAuth path. Unlike the API-key path (where
         // web_search is an Anthropic server-side tool), here WebSearch/WebFetch
         // are Claude Code CLIENT tools — results arrive as tool_use / tool_result
@@ -953,6 +963,9 @@ async function streamClaudeViaAgentSDK(args: {
                 : Array.isArray(b.content)
                   ? b.content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).join('\n')
                   : '';
+              // A failed tool call (e.g. calling a non-existent tool) comes back
+              // as is_error — capture it so the stop notice can name the cause.
+              if (b.is_error && txt.trim()) lastToolError = txt.trim();
               const urls = txt.match(/https?:\/\/[^\s)\]"'<>]+/g);
               if (urls) for (const u of urls) addOauthSource(u.replace(/[.,;]+$/, ''));
             }
@@ -1000,6 +1013,7 @@ async function streamClaudeViaAgentSDK(args: {
               } else if (ev.type === 'content_block_start') {
                 curBlockType = ev.content_block?.type || null;
                 if (curBlockType === 'tool_use' || curBlockType === 'server_tool_use' || curBlockType === 'mcp_tool_use') {
+                  anyToolUsed = true;
                   // Surface what the model is doing so the loading label reflects
                   // the tool call instead of a silent generic "thinking...".
                   // MCP tools arrive as `mcp__nexus__AskQuestion` — strip the
@@ -1069,6 +1083,10 @@ async function streamClaudeViaAgentSDK(args: {
                 cumUsage.cacheRead = Number(u.cache_read_input_tokens || cumUsage.cacheRead);
                 cumUsage.cacheCreate = Number(u.cache_creation_input_tokens || cumUsage.cacheCreate);
               }
+              // Capture the model's stop_reason from each assistant turn; the
+              // LAST one is why the overall turn ended.
+              const sr = (msg as any).message?.stop_reason;
+              if (sr) lastStopReason = sr;
             } else if (msg.type === 'result') {
               // Result message signals the end of this query. SDK closes after.
               const errAny: any = msg as any;
@@ -1090,8 +1108,38 @@ async function streamClaudeViaAgentSDK(args: {
         // identically — it sees precisely what the user sees.
         void resumeSessionId; // retained in the request body for back-compat; unused
         const res = await consume(null);
-        if (res.subtype && res.subtype !== 'success') {
-          enqueue({ error: `Agent SDK result: ${res.subtype} ${res.errorText || ''}`.trim() });
+
+        // Explain WHY the turn stopped whenever it didn't end cleanly, so an
+        // OAuth stop is never an unexplained freeze. Combines the SDK result
+        // subtype, the model's stop_reason, whether any text/tool ran, and the
+        // last failed-tool error (which names a call to a non-existent tool).
+        {
+          const sub = res.subtype || 'success';
+          const notes: string[] = [];
+          if (/max.?turns/i.test(sub)) {
+            notes.push('it hit the tool-iteration limit — the model kept calling tools without finishing. A common cause is repeatedly calling a tool that does not exist, or one that keeps erroring.');
+          } else if (sub !== 'success') {
+            notes.push(`the agent runtime ended with "${sub}"${res.errorText ? ' — ' + res.errorText : ''}.`);
+          }
+          if (lastStopReason === 'max_tokens') {
+            notes.push('the reply hit the token limit and was cut off — lower the Thinking Level (effort) for this conversation, or resend.');
+          } else if (lastStopReason === 'refusal') {
+            notes.push('the model declined to continue (stop_reason: refusal).');
+          } else if (lastStopReason === 'pause_turn') {
+            notes.push('the model paused a long-running turn (stop_reason: pause_turn) and did not resume — resend to continue.');
+          }
+          if (!producedContent && !anyToolUsed && sub === 'success' && (!lastStopReason || lastStopReason === 'end_turn')) {
+            notes.push('the turn ended with no output at all — the model stopped without generating any text or calling any tool.');
+          }
+          if (lastToolError) {
+            // String() guards a TS control-flow quirk: lastToolError is assigned
+            // inside the harvestOauthBlocks closure, which CFA can't see, so it
+            // wrongly narrows the type here. The runtime value is a real string.
+            notes.push(`last tool error → ${String(lastToolError).replace(/\s+/g, ' ').slice(0, 240)}`);
+          }
+          if (notes.length > 0) {
+            enqueue({ type: 'text', content: (producedContent ? '\n\n' : '') + `⚠️ _[Turn stopped: ${notes.join(' ')}]_` });
+          }
         }
 
         if (capturedSessionId) {
