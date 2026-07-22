@@ -20,7 +20,9 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
 
   // ── Google Gemini ──────────────────────────────────────────────────────────
   // All current Gemini models support vision.
+  'gemini-3.6-flash',
   'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-3.1-pro-preview',
 
@@ -124,7 +126,9 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
 
 export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // Google Gemini — all current models handle audio inline.
+  'gemini-3.6-flash',
   'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-3.1-pro-preview',
 
@@ -157,7 +161,9 @@ export function isAudioCapable(specificModel: string | undefined | null): boolea
 // bridge.
 
 export const VIDEO_CAPABLE_MODELS = new Set<string>([
+  'gemini-3.6-flash',
   'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-3.1-pro-preview',
   'qwen3.5-omni-flash',
