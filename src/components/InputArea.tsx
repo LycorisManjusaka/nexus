@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
+import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
   const [text, setText] = useState('');
@@ -238,14 +239,12 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           }
         }
 
-        // Fallback path (non-image media OR conversion skipped/failed): read original
-        if (!dataUrl) {
-          const reader = new FileReader();
-          dataUrl = await new Promise((resolve) => {
-            reader.onload = (e) => resolve(e.target?.result as string);
-            reader.readAsDataURL(file);
-          });
-        }
+        // NOTE: a FileReader used to read EVERY non-converted file into a base64
+        // `data:` URL right here. It's gone. Payloads now upload as raw bytes to
+        // the content-addressed store, so a 500 MB video no longer becomes a
+        // ~680 MB string in the page just to be attached. `dataUrl` is now set
+        // only when the canvas conversion above produced one — and that payload
+        // is already downscaled, so converting it back to bytes is cheap.
 
         const objectUrl = URL.createObjectURL(file);
 
@@ -306,8 +305,13 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       // re-encode at CRF 28 server-side and, if still too big, split into
       // <name>_part1.mp4, … each under the cap. Falls back to the original file
       // on any failure (the send-time preflight will then surface the size error).
+      // Threshold is expressed in RAW bytes now that we no longer build a base64
+      // string to measure. 15 MiB raw encodes to just over the 20 MiB base64 cap
+      // (base64 length = ceil(n/3)*4), so this is the same trigger point as the
+      // old `dataUrl.length > 20 MiB` check — just without materializing the
+      // string to find out.
       const autoSplit = globalSettings?.autoSplitVideos !== false;
-      if (isVideo && autoSplit && dataUrl && dataUrl.length > 20 * 1024 * 1024) {
+      if (isVideo && autoSplit && file.size > 15 * 1024 * 1024) {
         try {
           const fd = new FormData();
           fd.append('file', file, file.name);
@@ -316,6 +320,8 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             const data = await res.json();
             if (Array.isArray(data.parts) && data.parts.length > 0) {
               const perPartTokens = Math.max(1, Math.ceil((tokens || 1000) / data.parts.length));
+              // The split route already wrote each part into the store, so the
+              // parts arrive as refs — no payload crosses back to the browser.
               return data.parts.map((p: any) => ({
                 id: uuidv4(),
                 name: p.name,
@@ -323,7 +329,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
                 size: p.size || 0,
                 isText: false, isImage: false, isAudio: false, isVideo: true,
                 textData: null,
-                dataUrl: p.dataUrl,
+                ref: p.ref,
                 tokens: perPartTokens,
                 fileObj: null,
               }));
@@ -332,13 +338,49 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         } catch { /* fall through and return the original, unsplit video */ }
       }
 
+      // Externalize the payload. Text attachments are deliberately excluded:
+      // `textData` is small, is injected into the prompt verbatim every turn,
+      // and externalizing it would buy a disk read per turn and a fetch per
+      // preview in exchange for nothing.
+      //
+      // Uploading the original File streams the bytes with no conversion at
+      // all. The one exception is a canvas-converted PNG→JPEG, which exists
+      // only as a data URL — but it's already downscaled, so turning it back
+      // into bytes is cheap.
+      let ref: string | null = null;
+      if (!isText) {
+        const payload: Blob | null = dataUrl ? dataUrlToBlob(dataUrl) : file;
+        if (payload) {
+          const stored = await uploadAttachment(payload, finalType);
+          if (stored) {
+            ref = stored.ref;
+            if (stored.size) finalSize = stored.size;
+          }
+        }
+        // Safety net: the upload failed AND there's no in-page copy (no canvas
+        // conversion happened), so read the file inline the way this always
+        // used to. Without this, a storage failure would produce an attachment
+        // carrying no payload at all.
+        if (!ref && !dataUrl) {
+          const reader = new FileReader();
+          dataUrl = await new Promise((resolve) => {
+            reader.onload = (e) => resolve(e.target?.result as string);
+            reader.readAsDataURL(file);
+          });
+        }
+      }
+
       return {
         id: uuidv4(),
         name: finalName,
         type: finalType,
         size: finalSize,
         isText, isImage, isAudio, isVideo,
-        textData, dataUrl,
+        textData,
+        // Exactly one of these carries the payload. `ref` is the normal case;
+        // `dataUrl` is the fallback when the upload failed, so a storage problem
+        // degrades to the old inline behavior instead of losing the attachment.
+        ...(ref ? { ref } : dataUrl ? { dataUrl } : {}),
         tokens,
         fileObj: file
       };

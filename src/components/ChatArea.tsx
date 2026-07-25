@@ -15,9 +15,22 @@ import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
+import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { injectLayer4Index } from '@/lib/layer4';
 import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
 import LiveSession from './LiveSession';
+
+// V8 refuses to materialize a single string longer than 2^29-24 characters
+// (536,870,888 ≈ 512 MiB). Because a conversation is persisted as ONE
+// JSON.stringify of every message plus every inline base64 attachment, a
+// media-heavy conversation eventually crosses that line and the stringify
+// throws `RangeError: Invalid string length`. This is an engine limit — it
+// cannot be raised, and the same ceiling applies again server-side when
+// /api/logs does `await req.json()`.
+const MAX_JS_STRING_LENGTH = 536_870_888;
+// Below the hard ceiling but close enough that the next attachment is likely
+// to be fatal. Used to warn while saving still works, and to gate sending.
+const SAVE_SIZE_WARN_THRESHOLD = Math.floor(MAX_JS_STRING_LENGTH * 0.9);
 
 const DEFAULT_CREATIVITY_INSTRUCTION =
 `Based on the conversation and this message, call set_creativity with the single most appropriate value for C:
@@ -45,6 +58,7 @@ const CLOUD_MODELS_FILL =
 
 # ── Claude (Anthropic) ─────────────────────────────────────────────
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
+Claude   | claude-opus-5                | on  | Claude Opus 5 Thinking
 Claude   | claude-opus-4-8              | on  | Claude Opus 4.8 Thinking
 Claude   | claude-opus-4-7              | on  | Claude Opus 4.7 Thinking
 Claude   | claude-sonnet-5              | on  | Claude Sonnet 5 Thinking
@@ -180,6 +194,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
   const [loading, setLoading] = useState(false);
+  // Non-fatal auto-save notice. A save that fails must never take the app down
+  // with it, so problems surface here instead of throwing out of the effect.
+  // Two severities, because they mean genuinely different things:
+  //   'error' — the turn on screen is NOT on disk; the user must act.
+  //   'warn'  — the save succeeded, but the conversation is near the size
+  //             ceiling and the next attachment is likely to break it.
+  const [saveError, setSaveError] = useState<{ level: 'warn' | 'error'; text: string } | null>(null);
+  // Byte length of the most recent serialized conversation. Fed by the save
+  // effect (which stringifies anyway, so this is free) and read by handleSend
+  // to warn BEFORE a large attachment makes the conversation unsavable.
+  const savedBytesRef = useRef(0);
   const [totalTokens, setTotalTokens] = useState(0);
   const [conversationTokens, setConversationTokens] = useState(0);
   const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
@@ -307,6 +332,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [autoModelSelectAllowedModels, setAutoModelSelectAllowedModels] = useState(
     "# family | specificModel | on/off | optional display label\n" +
     "Claude | claude-fable-5 | on | Claude Fable 5 Thinking\n" +
+    "Claude | claude-opus-5 | on | Claude Opus 5 Thinking\n" +
     "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
     "Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking\n" +
     "Claude | claude-sonnet-5 | on | Claude Sonnet 5 Thinking\n" +
@@ -579,6 +605,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // happens once at the end on the concatenated buffer.
     (async () => {
       let data: any = null;
+      // Bytes actually downloaded for this conversation. Hoisted out of the try
+      // so it survives to the apply step, where it seeds the save-size guard.
+      let totalBytes = 0;
       try {
         const r = await fetch(`/api/logs/${convoId}`, { signal: ac.signal });
         if (!r.ok || !r.body) {
@@ -606,6 +635,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // because incremental JSON parsing buys us nothing here — the bar
         // is meant to track download time, which is the dominant cost.
         const totalSize = chunks.reduce((s, c) => s + c.byteLength, 0);
+        totalBytes = totalSize;
         const merged = new Uint8Array(totalSize);
         let off = 0;
         for (const c of chunks) { merged.set(c, off); off += c.byteLength; }
@@ -628,6 +658,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         return;
       }
       if (data) {
+        // Seed the size tracker from what we just downloaded. Opening a
+        // conversation deliberately skips the auto-save (see below), so without
+        // this savedBytesRef would stay 0 until the first save actually runs —
+        // and the pre-flight guard in handleSend would stay silent for exactly
+        // the send most likely to break: the first attachment added to an
+        // already-huge conversation right after opening it.
+        savedBytesRef.current = totalBytes;
         // Opening a conversation must not bump updatedAt. Applying the loaded
         // state below re-fires the auto-save effect; this flag makes that one
         // run skip its POST so the file's mtime/contents stay untouched.
@@ -806,14 +843,65 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         const { autoPlay, streaming, ...rest } = m;
         return rest;
       });
+      // Serializing the whole conversation — every message plus every inline
+      // base64 attachment — can exceed V8's max string length once enough media
+      // has accumulated (see MAX_JS_STRING_LENGTH). JSON.stringify then throws
+      // SYNCHRONOUSLY, and because this runs inside an effect the throw unwinds
+      // React during commit: the entire app goes white and the un-saved turn
+      // still in memory is lost. A failing save must degrade to a warning, never
+      // to a crash — the conversation stays on screen either way.
+      let body: string;
+      try {
+        body = JSON.stringify({
+          id: convoId,
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+        });
+      } catch (e: any) {
+        // eslint-disable-next-line no-console
+        console.error('[auto-save] could not serialize conversation:', e);
+        setSaveError({
+          level: 'error',
+          text:
+            `This conversation is too large to save — it exceeds the browser's hard ~512 MB limit on a single string, which inline attachments (video/audio/images) count against. ` +
+            `Nothing on screen has been lost, but new turns will not reach the disk until the conversation shrinks. ` +
+            `Remove attachments from older messages, or continue in a new conversation. The last successful save on disk is intact.`
+        });
+        return;
+      }
+
+      savedBytesRef.current = body.length;
+      if (body.length > SAVE_SIZE_WARN_THRESHOLD) {
+        setSaveError({
+          level: 'warn',
+          text:
+            `This conversation is ${(body.length / 1024 / 1024).toFixed(0)} MB, approaching the browser's hard ~512 MB save limit. ` +
+            `Saving still works, but one more large attachment will break it. Remove attachments from older messages, or start a new conversation.`
+        });
+      } else {
+        setSaveError(null);
+      }
+
       fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+        body
+      })
+        .then(res => {
+          if (!res.ok) {
+            setSaveError({
+              level: 'error',
+              text: `The server rejected this save (HTTP ${res.status}). Nothing on screen has been lost, but this turn is not on disk yet.`
+            });
+          }
         })
-      });
+        .catch(err => {
+          // eslint-disable-next-line no-console
+          console.error('[auto-save] POST failed:', err);
+          setSaveError({
+            level: 'error',
+            text: 'Could not reach the local server to save this conversation. Nothing on screen has been lost, but this turn is not on disk yet.'
+          });
+        });
     }
   }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
@@ -977,6 +1065,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const handleSend = async (text: string, attachments: any[]) => {
     if (!text.trim() && attachments.length === 0) return;
 
+    // Pre-flight size check. Attachments are persisted as inline base64, so
+    // every one of them counts against V8's ~512 MB max-string-length ceiling
+    // for the whole conversation. Warn HERE — before the model is called and
+    // billed — rather than letting the turn complete and then discovering at
+    // save time that it cannot be written to disk. savedBytesRef is the size of
+    // the last serialized save; adding the incoming dataUrls approximates the
+    // size this turn would produce.
+    const incomingBytes = attachments.reduce(
+      (sum: number, a: any) => sum + (typeof a?.dataUrl === 'string' ? a.dataUrl.length : 0),
+      0
+    );
+    if (savedBytesRef.current > 0 && savedBytesRef.current + incomingBytes > SAVE_SIZE_WARN_THRESHOLD) {
+      const projectedMB = ((savedBytesRef.current + incomingBytes) / 1024 / 1024).toFixed(0);
+      const ok = window.confirm(
+        `This conversation would grow to about ${projectedMB} MB.\n\n` +
+        `The browser cannot save a conversation larger than ~512 MB (a hard limit on string size, which inline video/audio/image attachments count against). ` +
+        `Sending this may produce a reply that CANNOT be written to disk.\n\n` +
+        `Recommended: remove attachments from older messages, or continue in a new conversation.\n\n` +
+        `Send anyway?`
+      );
+      if (!ok) return;
+    }
+
     // VRChat mode: the transcript just committed to this message is now "spent",
     // so clear the source files (kohai/ear) and reset the poll baseline. The
     // next poll will only repopulate the input once new speech arrives.
@@ -1127,12 +1238,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             }
           } catch (e) { }
 
+          // Externalize the capture before it enters the message. VRChat
+          // sessions generate a screenshot per turn, and inlining them is what
+          // grew the VRChat entity folders to gigabytes in the first place.
+          // Falls back to inline on upload failure so a capture is never lost.
+          let capturedRef: string | null = null;
+          try {
+            const blob = dataUrlToBlob(dataUrl);
+            if (blob) {
+              const stored = await uploadAttachment(blob, mime);
+              if (stored) capturedRef = stored.ref;
+            }
+          } catch { /* fall through to the inline payload below */ }
+
           const attachment = {
             id: Date.now().toString(),
             name: filename,
             type: mime,
             isImage: true,
-            dataUrl,
+            ...(capturedRef ? { ref: capturedRef } : { dataUrl }),
             tokens
           };
           // Resolve the text ATOMICALLY: consume kohai/ear (read + truncate in
@@ -1808,15 +1932,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const msg = messages.find(m => m.id === msgId);
     const att = msg?.attachments?.find((a: any) => a.id === attId);
     if (!att) return;
-    const sizeLabel = att.dataUrl
-      ? `≈${Math.ceil((att.dataUrl.length * 3) / 4 / 1024).toLocaleString()} KB`
-      : att.textData
-        ? `${att.textData.length.toLocaleString()} chars`
+    // attachmentByteSize reads a real `size` when the payload is externalized
+    // and falls back to deriving it from the inline base64 length.
+    const bytes = attachmentByteSize(att);
+    const sizeLabel = att.textData
+      ? `${att.textData.length.toLocaleString()} chars`
+      : bytes
+        ? `≈${Math.ceil(bytes / 1024).toLocaleString()} KB`
         : '';
     const ok = window.confirm(
       `Permanently remove attachment "${att.name}" from this conversation?` +
       (sizeLabel ? ` (${sizeLabel})` : '') +
-      '\n\nThis is irreversible — the attachment data will be deleted from the saved log. ' +
+      '\n\nThis removes it from this conversation. ' +
       'Use the eye icon instead if you only want to exclude it from the AI\'s context.'
     );
     if (!ok) return;
@@ -1840,14 +1967,64 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     URL.revokeObjectURL(url);
   };
 
-  const handleExportJson = () => {
+  // Pull externalized attachment payloads back inline, so an exported file stays
+  // SELF-CONTAINED. Conversations store media as content-addressed refs, but an
+  // export exists to be portable — a JSON full of refs is useless on another
+  // machine, or after a GC pass reclaims the payloads. Re-inlining as base64
+  // reproduces exactly the shape the importer already understands.
+  //
+  // Sequential on purpose. A media-heavy conversation holds hundreds of MB, and
+  // fetching every payload in parallel would spike memory for no benefit.
+  const inlineAttachmentsForExport = async (
+    src: any[]
+  ): Promise<{ messages: any[]; failed: string[] }> => {
+    const failed: string[] = [];
+    const out: any[] = [];
+    for (const m of src) {
+      if (!m.attachments?.length) { out.push(m); continue; }
+      const atts: any[] = [];
+      for (const a of m.attachments) {
+        // Already inline (or text-only) — nothing to resolve.
+        if (!a.ref || a.dataUrl) { atts.push(a); continue; }
+        try {
+          const res = await fetch(`/api/attachments/${a.ref}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          const dataUrl: string = await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(fr.result as string);
+            fr.onerror = () => reject(fr.error);
+            fr.readAsDataURL(blob);
+          });
+          const { ref, ...rest } = a;
+          atts.push({ ...rest, dataUrl });
+        } catch (e) {
+          // Keep the ref rather than dropping the attachment: a pointer that
+          // can still be resolved on this machine beats silently erasing the
+          // fact that the attachment ever existed.
+          // eslint-disable-next-line no-console
+          console.error(`[export] could not inline "${a.name}" (${a.ref})`, e);
+          failed.push(a.name || a.ref);
+          atts.push(a);
+        }
+      }
+      out.push({ ...m, attachments: atts });
+    }
+    return { messages: out, failed };
+  };
+
+  const handleExportJson = async () => {
+    if (isExportingJson) return;
+    setIsExportingJson(true);
+    try {
+    const { messages: exportMessages, failed } = await inlineAttachmentsForExport(messages);
     const safeName = (title || 'conversation').replace(/[\\/:*?"<>|]+/g, '_');
     const logData = {
       id: convoId,
       folderName,
       aiName: localAiName,
       title,
-      messages,
+      messages: exportMessages,
       systemPrompt,
       toolUseEnabled,
       agentFullSystemAccess,
@@ -1877,13 +2054,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       seedValue,
       updatedAt: Date.now(),
     };
-    const blob = new Blob([JSON.stringify(logData, null, 2)], { type: 'application/json' });
+    // Re-inlining restores the very size problem that externalizing solved, so
+    // this stringify can hit V8's max string length on a large conversation.
+    // It's a one-off, user-initiated action — fail with an explanation rather
+    // than throwing into a click handler and silently downloading nothing,
+    // which is what happened before.
+    let json: string;
+    try {
+      json = JSON.stringify(logData, null, 2);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[export] serialization failed:', e);
+      alert(
+        'This conversation is too large to export as a single JSON file.\n\n' +
+        'Re-inlining its attachments exceeds the browser\'s hard ~512 MB limit on one string. ' +
+        'Export as Markdown instead (attachments are not included), or remove some attachments first.'
+      );
+      return;
+    }
+    const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${safeName}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    if (failed.length) {
+      alert(
+        `Exported, but ${failed.length} attachment${failed.length === 1 ? '' : 's'} could not be included ` +
+        `and remain${failed.length === 1 ? 's' : ''} as a reference only:\n\n` +
+        failed.slice(0, 10).join('\n') +
+        (failed.length > 10 ? `\n…and ${failed.length - 10} more` : '')
+      );
+    }
+    } finally {
+      setIsExportingJson(false);
+    }
   };
 
   // Send the user's AskUserQuestion selection back to the paused server
@@ -1976,6 +2182,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [toolsOpen, setToolsOpen] = useState(false);
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
+  // JSON export is async now (it re-fetches externalized attachment payloads to
+  // keep the exported file self-contained), so it needs a busy state.
+  const [isExportingJson, setIsExportingJson] = useState(false);
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -2303,8 +2512,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           <button onClick={handleExport} className="p-1.5 text-muted-foreground hover:text-foreground transition-colors" title="Export as Markdown">
             <Download size={16} />
           </button>
-          <button onClick={handleExportJson} className="p-1.5 text-muted-foreground hover:text-foreground transition-colors text-[10px] font-bold tracking-wider" title="Export as JSON">
-            JSON
+          <button
+            onClick={handleExportJson}
+            disabled={isExportingJson}
+            className="p-1.5 text-muted-foreground hover:text-foreground transition-colors text-[10px] font-bold tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Export as JSON (attachments are included inline, so this can take a moment)"
+          >
+            {isExportingJson ? '…' : 'JSON'}
           </button>
         </div>
       </div>
@@ -2345,6 +2559,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               Stop
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Auto-save failure notice. Deliberately NOT dismissed automatically:
+          while this is visible, what's on screen is newer than what's on disk,
+          and the user needs to act (remove attachments / start a new
+          conversation) before the turn can be persisted. */}
+      {saveError && (
+        <div className={`shrink-0 px-6 py-2 border-b flex items-start gap-3 ${
+          saveError.level === 'error'
+            ? 'border-red-500/40 bg-red-500/10'
+            : 'border-amber-500/40 bg-amber-500/10'
+        }`}>
+          <span className={`text-sm leading-5 shrink-0 ${saveError.level === 'error' ? 'text-red-500' : 'text-amber-500'}`}>⚠</span>
+          <span className={`text-xs leading-5 flex-1 ${
+            saveError.level === 'error'
+              ? 'text-red-700 dark:text-red-300'
+              : 'text-amber-700 dark:text-amber-300'
+          }`}>
+            <span className="font-semibold">
+              {saveError.level === 'error' ? 'Conversation not saved. ' : 'Approaching the save size limit. '}
+            </span>
+            {saveError.text}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSaveError(null)}
+            className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors shrink-0 ${
+              saveError.level === 'error'
+                ? 'bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25'
+                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25'
+            }`}
+            title="Hide this notice (the underlying problem is not fixed)"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -2965,6 +3215,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           // No-key options first — what you want when only OAuth
                           // Claude and/or local models are available.
                           { value: 'claude-haiku-4-5', label: 'OAuth Claude — Haiku 4.5 (no key, cheapest)' },
+                          { value: 'claude-opus-5', label: 'OAuth Claude — Opus 5 (no key, flagship)' },
                           { value: 'claude-opus-4-8', label: 'OAuth Claude — Opus 4.8 (no key, richest)' },
                           { value: 'local:qwen2-vl-7b-instruct', label: 'Local LM Studio (no key — replace with your loaded model)' },
                           { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
@@ -3192,6 +3443,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
                       <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, flagship)</option>
+                      <option value="claude-opus-5">Claude Opus 5 (adaptive thinking)</option>
                       <option value="claude-opus-4-8">Claude Opus 4.8 (thinking)</option>
                       <option value="claude-opus-4-7">Claude Opus 4.7 (thinking)</option>
                       <option value="claude-sonnet-5">Claude Sonnet 5 (adaptive thinking, 1M ctx)</option>

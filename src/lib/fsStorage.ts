@@ -1,5 +1,8 @@
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import { createHash } from 'crypto';
 import path from 'path';
+import { putDataUrl } from './attachmentStore';
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const SETTINGS_DIR = path.join(DATA_DIR, 'settings');
@@ -573,6 +576,69 @@ async function atomicWriteFile(filePath: string, data: string) {
   }
 }
 
+// Hash a file WITHOUT reading it into a string. Used by the backup identity
+// check below: conversations with inline base64 media reach hundreds of MB, and
+// `await fs.readFile(path, 'utf-8')` on one of those allocates a full-size
+// string just to answer "did this change?" — memory that a large conversation
+// cannot spare. Streaming keeps the cost at one 64 KB buffer. Returns null if
+// the file can't be read, which callers treat as "assume changed".
+async function hashFileStreaming(filePath: string): Promise<string | null> {
+  try {
+    const hash = createHash('sha1');
+    const stream = createReadStream(filePath);
+    for await (const chunk of stream) hash.update(chunk);
+    return hash.digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Move any still-inline attachment payload into the content-addressed store.
+ *
+ * Attachments normally arrive already externalized — the browser uploads them
+ * at attach time. But old-format conversations can reappear at any point:
+ * restoring one of the pre-migration backups, importing a JSON export (which
+ * deliberately re-inlines payloads so the exported file stays self-contained),
+ * or syncing a file from a machine running older code. Without this, such a
+ * conversation would stay inline forever and quietly grow back toward the size
+ * ceiling until someone remembered to re-run the migration script.
+ *
+ * Mutates `logData` in place (saveLog already does this for updatedAt/active).
+ * Best-effort throughout: a storage failure leaves that attachment inline
+ * rather than failing the save. Cheap no-op in the normal case — the loop just
+ * finds nothing to do.
+ *
+ * NOTE this fixes what is STORED, not what was transmitted: the browser has
+ * already sent its inline copy by the time we get here, and will keep sending
+ * it until the conversation is reloaded. It also cannot help a conversation
+ * past V8's string cap, since that payload can never reach the server at all —
+ * only the migration script, which works on the file directly, handles those.
+ */
+async function externalizeInlineAttachments(logData: any): Promise<number> {
+  if (!Array.isArray(logData?.messages)) return 0;
+  let moved = 0;
+  for (const msg of logData.messages) {
+    if (!Array.isArray(msg?.attachments)) continue;
+    for (const att of msg.attachments) {
+      // Text attachments keep `textData` inline by design, and anything with a
+      // ref is already done.
+      if (!att || att.ref || typeof att.dataUrl !== 'string' || !att.dataUrl) continue;
+      try {
+        const stored = await putDataUrl(att.dataUrl);
+        if (!stored) continue;
+        att.ref = stored.ref;
+        if (!att.size) att.size = stored.size;
+        delete att.dataUrl;
+        moved++;
+      } catch (e) {
+        console.error(`[attachments] could not externalize "${att.name || 'unnamed'}" during save:`, e);
+      }
+    }
+  }
+  return moved;
+}
+
 export async function saveLog(convoId: string, logData: any) {
   await ensureDirs();
   const folderName = logData.folderName || 'Default';
@@ -609,6 +675,17 @@ export async function saveLog(convoId: string, logData: any) {
         if (m) logData.active = m[1] === 'true';
       } catch {}
     }
+    // Convert any old-format inline payloads before serializing, so a restored
+    // backup or an imported JSON export doesn't get written back inline.
+    try {
+      const moved = await externalizeInlineAttachments(logData);
+      if (moved > 0) {
+        console.log(`[attachments] externalized ${moved} inline attachment(s) while saving ${convoId}`);
+      }
+    } catch (e) {
+      console.error('[attachments] externalize pass failed (saving as-is):', e);
+    }
+
     // Hoist the small metadata fields the header parser cares about to the very
     // FRONT of the object, ahead of large fields like `systemPrompt` and the
     // `messages` array. The header parser (readLogHeaderMetadata) only reads the
@@ -637,17 +714,45 @@ export async function saveLog(convoId: string, logData: any) {
       await fs.mkdir(backupDir, { recursive: true });
 
       const files = await fs.readdir(backupDir);
-      const convoBackups = files.filter(f => f.startsWith(`${convoId}_`)).sort();
+      // `.endsWith('.json')` keeps the sidecar hash files below out of the list
+      // (they share the `${convoId}_` prefix and would otherwise sort last and
+      // be mistaken for the latest backup).
+      const convoBackups = files.filter(f => f.startsWith(`${convoId}_`) && f.endsWith('.json')).sort();
+
+      // "Has anything changed since the last backup?" used to be answered with
+      // `latestData === currentJson`, which read the previous backup back into
+      // memory in full. On a 500 MB conversation that is a 500 MB read plus a
+      // 500 MB resident string on EVERY turn — pure overhead for a boolean, and
+      // one more large allocation on a path that is already close to V8's
+      // max-string-length wall.
+      //
+      // Instead each backup gets a tiny `<file>.sha1` sidecar. The fast path now
+      // reads ~40 bytes. Backups written before this change have no sidecar, so
+      // the first save after upgrading stream-hashes the existing file once
+      // (bounded memory) and writes the sidecar; every save after that is cheap.
+      const currentHash = createHash('sha1').update(currentJson).digest('hex');
 
       let shouldBackup = true;
       if (convoBackups.length > 0) {
-        const latestBackup = convoBackups[convoBackups.length - 1];
-        const latestData = await fs.readFile(path.join(backupDir, latestBackup), 'utf-8');
-        if (latestData === currentJson) shouldBackup = false;
+        const latestPath = path.join(backupDir, convoBackups[convoBackups.length - 1]);
+        let latestHash: string | null = null;
+        try {
+          latestHash = (await fs.readFile(`${latestPath}.sha1`, 'utf-8')).trim();
+        } catch {
+          latestHash = await hashFileStreaming(latestPath);
+          if (latestHash) {
+            try { await fs.writeFile(`${latestPath}.sha1`, latestHash); } catch {}
+          }
+        }
+        // A null hash means the previous backup was unreadable — treat that as
+        // "changed" so we err toward keeping a backup rather than skipping one.
+        if (latestHash !== null && latestHash === currentHash) shouldBackup = false;
       }
 
       if (shouldBackup) {
-        await atomicWriteFile(path.join(backupDir, `${convoId}_${currentDate}.json`), currentJson);
+        const outPath = path.join(backupDir, `${convoId}_${currentDate}.json`);
+        await atomicWriteFile(outPath, currentJson);
+        try { await fs.writeFile(`${outPath}.sha1`, currentHash); } catch {}
       }
     } catch (e) {
       console.error('Backup failed:', e);

@@ -9,6 +9,7 @@ import remarkBreaks from 'remark-breaks';
 import { stripLeadingTimestamps, stripAllTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
+import { attachmentSrc } from '@/lib/attachmentUrl';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal }: any) {
   const isUser = msg.role === 'user';
@@ -810,19 +811,30 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   };
 
   const getAttachmentPreview = (att: any) => {
-    if (att.isImage && att.dataUrl) {
-      return <img 
-        src={att.dataUrl} 
-        alt={att.name} 
-        className="max-w-xs max-h-48 rounded-md mt-2 object-contain bg-black/5 cursor-zoom-in hover:opacity-90 transition-opacity" 
-        onClick={() => setZoomImage(att.dataUrl)}
+    // An attachment's bytes live in ONE of two places, and both are supported
+    // permanently — not as a migration window:
+    //   • `ref`     — content-addressed payload served by /api/attachments/<ref>.
+    //   • `dataUrl` — inline base64, the original format. Every existing backup
+    //                 is in this shape, and a restored backup has to still work.
+    // Preferring `ref` keeps the heavy path off the page: a `data:` URL has to
+    // be held in the document as a string, while a URL streams and caches.
+    // `loading="lazy"` means off-screen attachments cost nothing at all, which
+    // is most of why media-heavy conversations felt heavy.
+    const src = attachmentSrc(att);
+    if (att.isImage && src) {
+      return <img
+        src={src}
+        alt={att.name}
+        loading="lazy"
+        className="max-w-xs max-h-48 rounded-md mt-2 object-contain bg-black/5 cursor-zoom-in hover:opacity-90 transition-opacity"
+        onClick={() => setZoomImage(src)}
       />;
     }
-    if (att.isVideo && att.dataUrl) {
-      return <video src={att.dataUrl} controls className="max-w-xs rounded-md mt-2" />;
+    if (att.isVideo && src) {
+      return <video src={src} controls preload="metadata" className="max-w-xs rounded-md mt-2" />;
     }
-    if (att.isAudio && att.dataUrl) {
-      return <audio src={att.dataUrl} controls className="mt-2 w-full max-w-xs" />;
+    if (att.isAudio && src) {
+      return <audio src={src} controls preload="metadata" className="mt-2 w-full max-w-xs" />;
     }
     if (att.isText && att.textData) {
       const truncated = att.textData.length > 500;

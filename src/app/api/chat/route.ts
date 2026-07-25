@@ -10,6 +10,26 @@ import { describeVideo } from '@/lib/videoBridge';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
+import { readAttachmentBase64, putBytes } from '@/lib/attachmentStore';
+
+// Payload field for an attachment the AI produced by reading an image from the
+// workspace. These are persisted into the conversation like any other
+// attachment, so they go into the content-addressed store rather than being
+// inlined as base64. Falls back to an inline data URL if storage fails — a disk
+// problem should degrade the format, not lose the tool result.
+async function toolAttachmentPayload(
+  data: Buffer,
+  mimeType: string,
+  base64: string
+): Promise<{ ref: string } | { dataUrl: string }> {
+  try {
+    const { ref } = await putBytes(data, mimeType);
+    return { ref };
+  } catch (e) {
+    console.error('[attachments] could not store tool image, inlining instead:', e);
+    return { dataUrl: `data:${mimeType};base64,${base64}` };
+  }
+}
 import { appendLayer5Footer } from '@/lib/layer4';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
@@ -742,7 +762,7 @@ async function streamClaudeViaAgentSDK(args: {
         // pass it to Sonnet/Haiku; default 'high' = same as omitting it.
         // Sonnet 5 is adaptive+effort like Opus 4.7/4.8, so it takes the effort
         // control too. (The classic non-adaptive Sonnet 4.6/Haiku do not.)
-        const isAdaptiveOauth = isFable5Oauth || /opus-4-?7|opus-4-?8|sonnet-?5/.test(model || '');
+        const isAdaptiveOauth = isFable5Oauth || /opus-4-?7|opus-4-?8|opus-?5|sonnet-?5/.test(model || '');
         const isSonnet5Oauth = /sonnet-?5/.test(model || '');
         let oauthEffort = sanitizeClaudeEffort(modelParams?.claudeEffort);
         // Sonnet 5 tops out at 'xhigh' (no 'max' tier) — clamp to avoid a 400.
@@ -1956,12 +1976,42 @@ export async function POST(req: Request) {
           if (att.excluded) continue;
           if (att.isText && att.textData) {
             contentStr += `\n\n<attached_file name="${att.name}">\n${att.textData}\n</attached_file>`;
-          } else if (att.dataUrl) {
+          } else if (att.dataUrl || att.ref) {
             try {
-              const parts = att.dataUrl.split(',');
-              if (parts.length !== 2) continue;
-              const mimeType = parts[0].split(';')[0].split(':')[1];
-              const base64Data = parts[1];
+              // An attachment's bytes arrive in one of two shapes, and both are
+              // supported permanently:
+              //   • `dataUrl` — inline base64. The original format, and still
+              //     what the browser sends for a brand-new attachment.
+              //   • `ref`     — content-addressed store. The payload was written
+              //     once and is read from local disk here instead of being
+              //     re-uploaded inside every request body, every turn.
+              // This is the single point where inbound attachments are turned
+              // into bytes; everything downstream works off `mediaFiles`.
+              let mimeType: string | undefined;
+              let base64Data: string | undefined;
+              if (att.dataUrl) {
+                const parts = att.dataUrl.split(',');
+                if (parts.length !== 2) continue;
+                mimeType = parts[0].split(';')[0].split(':')[1];
+                base64Data = parts[1];
+              } else {
+                const stored = await readAttachmentBase64(att.ref);
+                // A missing payload must not abort the whole turn — skip this
+                // one attachment and let the rest of the message through.
+                if (!stored) {
+                  console.warn(`[attachments] payload missing for ref ${att.ref} ("${att.name || 'unnamed'}") — skipping this attachment`);
+                  continue;
+                }
+                // Prefer the attachment's recorded type: the ref's extension is
+                // a lossy round-trip of the mime (image/jpg and image/jpeg both
+                // become .jpg), while `type` is what the file actually declared.
+                mimeType = att.type || stored.mimeType;
+                base64Data = stored.base64;
+              }
+              // Guards the degenerate case of an unparseable data URL header.
+              // Previously such an attachment fell through with an undefined
+              // mime and was pushed to the provider as broken media.
+              if (!mimeType || !base64Data) continue;
 
               // Sense-bridging: when the active primary model can't accept a
               // given media type, route through the corresponding bridge model
@@ -2249,6 +2299,11 @@ export async function POST(req: Request) {
 
       const isOpus47 = claudeModel.includes('opus-4-7') || claudeModel.includes('opus-4.7');
       const isOpus48 = claudeModel.includes('opus-4-8') || claudeModel.includes('opus-4.8');
+      // Claude Opus 5 (July 2026): flagship Opus — same adaptive-thinking + effort
+      // request surface as Opus 4.8 (rejects classic enabled/budget_tokens and
+      // sampling params). Full effort range including 'max' (unlike Sonnet 5), 1M
+      // context, 128k output, vision. Priced identically to Opus 4.8 ($5/$25).
+      const isOpus5 = claudeModel.includes('opus-5') || claudeModel.includes('opus5');
       // Claude Sonnet 5 (June 2026): adaptive thinking with selectable effort,
       // same request shape as Opus 4.7/4.8 (classic enabled/budget_tokens is
       // rejected). Its top effort tier is 'xhigh' (NOT 'max'), so clamp below.
@@ -2263,7 +2318,7 @@ export async function POST(req: Request) {
       // Newer Opus models (4.7, 4.8) and Fable/Mythos 5 reject the classic
       // `thinking: { type: 'enabled', budget_tokens }` shape and require the
       // adaptive format with an `output_config.effort` control instead.
-      const isAdaptiveThinking = isOpus47 || isOpus48 || isFable5 || isSonnet5;
+      const isAdaptiveThinking = isOpus47 || isOpus48 || isOpus5 || isFable5 || isSonnet5;
       // Fable/Mythos 5 cannot disable thinking, so force it on regardless of the
       // UI toggle. (Also keeps temperature off, which adaptive models reject.)
       const claudeThinkingOn = enableThinking || isFable5;
@@ -2806,7 +2861,7 @@ export async function POST(req: Request) {
                             type: bin.mimeType,
                             size: bin.data.length,
                             isImage: true,
-                            dataUrl: `data:${bin.mimeType};base64,${base64}`,
+                            ...(await toolAttachmentPayload(bin.data, bin.mimeType, base64)),
                             tokens: Math.max(1, Math.ceil(bin.data.length / 750)),
                             excluded: false,
                             toolAction: 'read',
@@ -3543,7 +3598,7 @@ export async function POST(req: Request) {
                               type: bin.mimeType,
                               size: bin.data.length,
                               isImage: true,
-                              dataUrl: `data:${bin.mimeType};base64,${base64}`,
+                              ...(await toolAttachmentPayload(bin.data, bin.mimeType, base64)),
                               tokens: Math.max(1, Math.ceil(bin.data.length / 750)),
                               excluded: false,
                               toolAction: 'read',
@@ -4895,7 +4950,7 @@ export async function POST(req: Request) {
                             attachment: {
                               name: p, type: bin.mimeType, size: bin.data.length,
                               isImage: true,
-                              dataUrl: `data:${bin.mimeType};base64,${base64}`,
+                              ...(await toolAttachmentPayload(bin.data, bin.mimeType, base64)),
                               tokens: Math.max(1, Math.ceil(eyesResult.description.length / 4)),
                               excluded: false, toolAction: 'read',
                             },
@@ -4912,7 +4967,12 @@ export async function POST(req: Request) {
                             type: 'file_attachment',
                             attachment: {
                               name: p, type: bin.mimeType, size: bin.data.length,
-                              isImage: true, dataUrl,
+                              // `dataUrl` above still feeds pendingImageInjects
+                              // (the provider needs the bytes in the follow-up
+                              // message); only the PERSISTED attachment becomes
+                              // a ref.
+                              isImage: true,
+                              ...(await toolAttachmentPayload(bin.data, bin.mimeType, base64)),
                               tokens: Math.max(1, Math.ceil(bin.data.length / 750)),
                               excluded: false, toolAction: 'read',
                             },

@@ -1,14 +1,15 @@
 {
   "_README": "Per-model API prices in USD per 1,000,000 tokens. EDIT THIS FILE to fix/add prices — keys are the model id (lowercased; any leading 'moonshotai/' is stripped automatically). Each entry: input = normal (uncached) input, cachedInput = cache-hit input (cheaper), cacheWrite = one-time cache-creation surcharge (Anthropic only; 0 for providers that don't charge it), output = generated tokens. A model NOT listed here shows a muted '$' whose tooltip tells you to add it. Local models are ignored entirely. CONFIDENCE: gpt-5.6-*, claude-fable-5, and dola-seed-2-1-turbo are from published prices; Claude opus/sonnet/haiku use the standard Anthropic structure (cached=0.1x input, cacheWrite=1.25x input) with generation-4 numbers; EVERYTHING ELSE (Kimi, Gemini, Grok, GLM, DeepSeek, Qwen, MiniMax, Cohere, MiMo, older GPT-5) is a ROUGH ESTIMATE — verify against each provider's pricing page and correct here.",
-
-  "claude-opus-4-8":        { "input": 15,   "cachedInput": 1.5,  "cacheWrite": 18.75, "output": 75 },
-  "claude-opus-4-7":        { "input": 15,   "cachedInput": 1.5,  "cacheWrite": 18.75, "output": 75 },
-  "claude-sonnet-5":        { "input": 3,    "cachedInput": 0.3,  "cacheWrite": 3.75,  "output": 15 },
+  
+  "claude-fable-5":         { "input": 10,   "cachedInput": 1.0,  "cacheWrite": 18.75,  "output": 50 },
+  "claude-mythos-5":        { "input": 10,   "cachedInput": 1.0,  "cacheWrite": 18.75,  "output": 50 },
+  "claude-opus-5":          { "input": 5,    "cachedInput": 0.5,  "cacheWrite": 6.25,  "output": 25 },
+  "claude-opus-4-8":        { "input": 5,   "cachedInput": 0.5,  "cacheWrite": 6.25, "output": 25 },
+  "claude-opus-4-7":        { "input": 5,   "cachedInput": 0.5,  "cacheWrite": 6.25, "output": 25 },
+  "claude-sonnet-5":        { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 4,  "output": 10 },
   "claude-sonnet-4-6":      { "input": 3,    "cachedInput": 0.3,  "cacheWrite": 3.75,  "output": 15 },
-  "claude-haiku-4-5":       { "input": 1,    "cachedInput": 0.1,  "cacheWrite": 1.25,  "output": 5 },
-  "claude-haiku-4-5-20251001":       { "input": 1,    "cachedInput": 0.1,  "cacheWrite": 1.25,  "output": 5 },
-  "claude-fable-5":         { "input": 10,   "cachedInput": 1.0,  "cacheWrite": 12.5,  "output": 50 },
-  "claude-mythos-5":        { "input": 10,   "cachedInput": 1.0,  "cacheWrite": 12.5,  "output": 50 },
+  "claude-haiku-4-5":       { "input": 3,    "cachedInput": 0.3,  "cacheWrite": 2.2,  "output": 5 },
+  "claude-haiku-4-5-20251001":       { "input": 1,    "cachedInput": 0.1,  "cacheWrite": 2,  "output": 5 },
 
   "gpt-5.6-sol":            { "input": 5,    "cachedInput": 0.5,  "cacheWrite": 0, "output": 30 },
   "gpt-5.6-terra":          { "input": 2.5,  "cachedInput": 0.25, "cacheWrite": 0, "output": 15 },
