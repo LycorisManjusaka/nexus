@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
+import path from 'path';
 import { mergeVrchatLogs } from '@/lib/vrchatLogs';
 import {
   VOICECHANGER_DIR,
@@ -83,6 +84,33 @@ export async function POST(req: Request) {
     if (body?.clear) {
       mergeVrchatLogs({ consume: true }); // read-and-discard truncates both files
       return NextResponse.json({ ok: true });
+    }
+    // Clear ONE file. The `clear` above always truncates both, which is right
+    // when a message has just been sent — but the manual buttons need to drop
+    // only your own speech, or only what was heard, independently. Mirrors the
+    // clear_kohai.bat / clear_ear.bat pair in the voicechanger folder.
+    if (body?.clearKohai || body?.clearEar) {
+      const target = body.clearKohai ? kohaiPath() : earLogPath();
+      const label = body.clearKohai ? 'kohai.txt' : 'ear_log.txt';
+      if (!voicechangerAvailable()) {
+        return NextResponse.json({ ok: false, error: 'voicechanger folder not found' }, { status: 404 });
+      }
+      let had = 0;
+      try { had = fs.statSync(target).size; } catch { /* missing = already empty */ }
+      // Back up before truncating, the same discipline the capture path uses —
+      // an accidental click should never be unrecoverable.
+      if (had > 0) {
+        try {
+          const dir = path.join(VOICECHANGER_DIR, body.clearKohai ? 'kohai_backup' : 'ear_backup');
+          fs.mkdirSync(dir, { recursive: true });
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          fs.copyFileSync(target, path.join(dir, `${stamp}_manual.txt`));
+        } catch { /* best effort — never block the clear */ }
+      }
+      try { fs.writeFileSync(target, '', 'utf-8'); } catch (e: any) {
+        return NextResponse.json({ ok: false, error: e?.message || `could not clear ${label}` }, { status: 500 });
+      }
+      return NextResponse.json({ ok: true, cleared: label, bytes: had });
     }
     return NextResponse.json({ ok: false, error: 'no action' }, { status: 400 });
   } catch (e: any) {

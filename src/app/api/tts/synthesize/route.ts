@@ -3,6 +3,7 @@ import fs from 'fs';
 import { convertEnglishToKatakana } from '@/lib/ttsEnToKatakana';
 import { speakersJsonPath } from '@/lib/voicechangerPaths';
 import { loadTtsDictPairs, applyTtsDict } from '@/lib/ttsDictionary';
+import { ensureEngineRunning } from '@/lib/ttsEngines';
 
 // A segment produces ZERO phonemes — and crashes the OpenJTalk-based engines —
 // when it contains no kana, kanji, or alphanumeric characters. Coeiroink fails
@@ -56,6 +57,16 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
     // Skip unspeakable (phoneme-less) chunks. Returning null tells the caller to
     // drop this segment instead of pushing a buffer — prevents the 500 above.
     if (!hasSpeakableContent(text)) return null;
+
+    // Start the engine if it isn't running and the user configured its path in
+    // Preferences → VRChat & Audio. Deliberately placed AFTER the speakable
+    // check so a punctuation-only chunk never boots an engine.
+    //
+    // Never throws and never blocks the no-configuration case: if the engine is
+    // already up this is a cached no-op, and if there's no path we fall through
+    // and let the normal connection error surface exactly as before.
+    const ensured = await ensureEngineRunning(engine);
+    if (!ensured.ok && ensured.error) console.warn(`[tts] ${ensured.error}`);
 
     if (engine === 0) {
       const vvData = JSON.parse(fs.readFileSync(speakersJsonPath(), 'utf8'));

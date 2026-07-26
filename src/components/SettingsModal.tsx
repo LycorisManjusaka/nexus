@@ -1,8 +1,20 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, KeyRound, Volume2, User } from 'lucide-react';
+import { X, Save, KeyRound, Volume2, SlidersHorizontal } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
+
+// Preferences is split into tabs because the three groups have nothing to do
+// with each other and the API-key list alone is twelve providers long. Add a
+// new tab by extending this list and adding a matching `{tab === '...' && (…)}`
+// block in the body.
+const TABS = [
+  { id: 'keys',   label: 'API Keys',       icon: KeyRound },
+  { id: 'vrchat', label: 'VRChat & Audio', icon: Volume2 },
+  { id: 'other',  label: 'Other',          icon: SlidersHorizontal },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
 
 export default function SettingsModal({ onClose, globalSettings, setGlobalSettings }: any) {
   // claudeAuthMode + claudeOAuthToken are OPT-IN additions for using your
@@ -17,9 +29,24 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const [loading, setLoading] = useState(true);
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [charaList, setCharaList] = useState<{ name: string; engine: string; charId: string }[]>([]);
-  const [currentChara, setCurrentChara] = useState<string>('');
-  const [charaError, setCharaError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabId>('keys');
+
+  // TTS engine executables. Stored SERVER-SIDE (local_data/tts_engines.json),
+  // not in globalSettings, because the auto-start happens on the server — see
+  // src/lib/ttsEngines.ts. `engineStatus` is a live up/down probe so you can see
+  // at a glance whether an engine is currently running.
+  const [enginePaths, setEnginePaths] = useState<Record<string, string>>({});
+  const [engineStatus, setEngineStatus] = useState<any[]>([]);
+
+  const refreshEngines = () => {
+    fetch('/api/tts/engines')
+      .then(r => r.json())
+      .then(d => {
+        setEnginePaths(d.paths || {});
+        setEngineStatus(d.status || []);
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
     fetch('/api/keys').then(r => r.json()).then(data => {
@@ -48,39 +75,14 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
       }
     };
     getDevices();
+    refreshEngines();
   }, []);
 
-  // Load the list of characters from character_map.json + the currently active one
-  useEffect(() => {
-    Promise.all([
-      fetch('/api/chara/list').then(r => r.json()).catch(() => ({ characters: [] })),
-      fetch('/api/chara/current').then(r => r.json()).catch(() => ({})),
-    ]).then(([list, current]) => {
-      setCharaList(list?.characters || []);
-      if (current?.name) setCurrentChara(current.name);
-      if (list?.error) setCharaError(list.error);
-    });
-  }, []);
-
-  const handleCharaSelect = async (newName: string) => {
-    if (!newName) return;
-    setCurrentChara(newName);  // optimistic
-    setCharaError(null);
-    try {
-      const r = await fetch('/api/chara/select', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-      // Tell the rest of the app (specifically InputArea) to refresh now
-      // instead of waiting for its 30-second poll cycle.
-      window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: newName } }));
-    } catch (e: any) {
-      setCharaError(e.message || 'Failed to switch character');
-    }
-  };
+  // The "User Identity / Active Character" section used to live here, along with
+  // its own /api/chara/list + /api/chara/current fetches and a select handler.
+  // Removed: the chat input block already has a full character selector (it
+  // calls /api/chara/select itself), so this was a duplicate control — and two
+  // API calls on every open of this modal.
 
   const requestAudioPermission = async () => {
     try {
@@ -94,11 +96,19 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   };
 
   const saveKeys = async () => {
-    await fetch('/api/keys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(keys)
-    });
+    // Engine paths save alongside the keys so "Save Changes" means one thing.
+    await Promise.all([
+      fetch('/api/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(keys)
+      }),
+      fetch('/api/tts/engines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: enginePaths })
+      }),
+    ]);
     onClose();
   };
 
@@ -114,42 +124,28 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
           </button>
         </div>
 
-        <div className="p-6 space-y-6 overflow-y-auto">
-
-          <div className="space-y-4">
-            <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
-              <User size={16} /> User Identity
-            </h3>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Active Character</label>
-              <select
-                value={currentChara}
-                onChange={(e) => handleCharaSelect(e.target.value)}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+        {/* Tab bar */}
+        <div className="px-6 pt-3 border-b border-border bg-secondary/10 shrink-0 flex gap-1">
+          {TABS.map(t => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`px-3 py-2 text-xs font-semibold rounded-t-md flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
+                  active
+                    ? 'border-indigo-500 text-indigo-500 bg-background'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                }`}
               >
-                {charaList.length === 0 && (
-                  <option value="">— no characters in character_map.json —</option>
-                )}
-                {/* Allow keeping a selection that no longer exists in the map */}
-                {currentChara && !charaList.some(c => c.name === currentChara) && (
-                  <option value={currentChara}>{currentChara} (not in map)</option>
-                )}
-                {charaList.map(c => (
-                  <option key={c.name} value={c.name}>
-                    {c.name} ({c.engine === '0' ? 'voicevox' : c.engine === '1' ? 'coeiroink' : `eng=${c.engine}`}/{c.charId})
-                  </option>
-                ))}
-              </select>
-              {charaError && (
-                <div className="text-[10px] text-red-500 mt-1">{charaError}</div>
-              )}
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Switching here writes to <span className="font-mono">voicechanger/chara_settings.json</span> immediately.
-                The display name above the chat input updates within a moment.
-                Edit <span className="font-mono">local_data/character_map.json</span> to add more characters.
-              </div>
-            </div>
-          </div>
+                <Icon size={14} /> {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="p-6 space-y-6 overflow-y-auto">
 
           {/* The "Context Management" section was moved per-folder (Folder
               Settings → Context Management) so each AI entity can have its
@@ -162,6 +158,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               themes are now driven per-folder via Folder Settings → Theme
               (custom CSS), which makes a global light/dark toggle meaningless. */}
 
+          {tab === 'keys' && (
           <div className="space-y-4">
             <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
               <KeyRound size={16} /> API Keys
@@ -349,8 +346,10 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </div>
             </div>
           </div>
+          )}
 
-          <div className="space-y-4 pt-4 border-t border-border">
+          {tab === 'vrchat' && (
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
                 <Volume2 size={16} /> VRChat & Audio Routing
@@ -397,6 +396,69 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 ))}
               </select>
             </div>
+
+            <div className="pt-2 border-t border-border space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-semibold text-foreground">TTS Engine Executables</h4>
+                <button
+                  onClick={refreshEngines}
+                  className="text-[10px] bg-muted px-2 py-1 rounded hover:bg-muted/70 transition text-muted-foreground"
+                  title="Re-check which engines are currently running"
+                >
+                  Refresh status
+                </button>
+              </div>
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Full path to each engine&apos;s <code>.exe</code>. When TTS needs an engine that isn&apos;t
+                running, Nexus starts it automatically and waits for it to finish loading.
+                Leave a field empty to disable auto-start for that engine.
+              </p>
+
+              {[
+                { key: 'voicevox',    label: 'VOICEVOX',    port: '50021', ph: 'C:\\path\\to\\VOICEVOX\\VOICEVOX.exe' },
+                { key: 'coeiroink',   label: 'COEIROINK',   port: '50032', ph: 'C:\\path\\to\\COEIROINK\\COEIROINK.exe' },
+                { key: 'aivisspeech', label: 'AivisSpeech', port: '10101', ph: 'C:\\path\\to\\AivisSpeech\\AivisSpeech.exe' },
+              ].map(eng => {
+                const st = engineStatus.find((s: any) => s.key === eng.key);
+                return (
+                  <div key={eng.key}>
+                    <label className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-2">
+                      {eng.label}
+                      <span className="font-mono text-[10px] opacity-60">:{eng.port}</span>
+                      {st && (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
+                            st.running
+                              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-muted text-muted-foreground'
+                          }`}
+                        >
+                          {st.running ? 'running' : 'stopped'}
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      type="text"
+                      value={enginePaths[eng.key] ?? ''}
+                      onChange={e => setEnginePaths({ ...enginePaths, [eng.key]: e.target.value })}
+                      placeholder={eng.ph}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* ── Add further VRChat / audio-routing settings below this line ── */}
+
+          </div>
+          )}
+
+          {tab === 'other' && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
+              <SlidersHorizontal size={16} /> Other
+            </h3>
             <div>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
@@ -481,6 +543,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </div>
             </div>
           </div>
+          )}
 
         </div>
 

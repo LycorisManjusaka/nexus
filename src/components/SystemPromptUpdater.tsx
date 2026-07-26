@@ -267,6 +267,29 @@ export default function SystemPromptUpdater({
   // pane becomes editable again and the diff recomputes against the final text.
   const [streamingUpdate, setStreamingUpdate] = useState(false);
 
+  // Resume support. When a run dies partway (OAuth Claude hitting a limit, a
+  // dropped connection, Stop pressed), the right pane holds real work that
+  // would otherwise be thrown away — the next run starts from an empty accumulator
+  // and overwrites it. With this on, that text is handed to the agent as
+  // already-completed output and it continues from where it stopped.
+  const [resumeFromRight, setResumeFromRight] = useState(false);
+
+  // A draft that already contains a Layer 3 heading is almost certainly a
+  // COMPLETE previous result, not a truncated run — resuming from that would
+  // tell the agent to "continue" a finished document. So the toggle only arms
+  // itself when the text looks genuinely cut short. It stays user-overridable.
+  const rightLooksTruncated = useMemo(() => {
+    const t = rightText.trim();
+    if (!t) return false;
+    return !/^#{1,4}\s*\*{0,2}\s*(Layer|レイヤー)\s*3/mi.test(t);
+  }, [rightText]);
+
+  useEffect(() => {
+    // Don't fight the user mid-stream (rightText changes on every chunk).
+    if (streamingUpdate) return;
+    setResumeFromRight(rightLooksTruncated);
+  }, [rightLooksTruncated, streamingUpdate]);
+
   const [header, setHeader] = useState('');
   const [footer, setFooter] = useState('');
   const [focusPoint, setFocusPoint] = useState('');
@@ -308,13 +331,16 @@ export default function SystemPromptUpdater({
   const [selectedAgentType, setSelectedAgentType] = useState<string>('');
   const userPickedTypeRef = useRef(false);
 
-  // Updater model override — default ON (GLM-5.2). Independent of the
-  // conversation's own model.
+  // Updater model override — GLM-5.2, independent of the conversation's own
+  // model. Persisted PER ENTITY (folder settings): these were hardcoded to true
+  // on every mount, so turning one off lasted only until the window was
+  // reopened. Default stays ON for a folder that has never set it, so existing
+  // entities behave exactly as before.
   const [forceGlmForUpdates, setForceGlmForUpdates] = useState<boolean>(true);
   const effectiveAiName = forceGlmForUpdates ? 'GLM' : aiName;
   const effectiveSpecificModel = forceGlmForUpdates ? 'glm-5.2' : specificModel;
 
-  // Summary writer model override — default MiMo V2.5 Pro.
+  // Summary writer model override — MiMo V2.5 Pro. Persisted the same way.
   const [forceMimoForSummary, setForceMimoForSummary] = useState<boolean>(true);
   const summaryAiName = forceMimoForSummary ? 'MiMo' : effectiveAiName;
   const summarySpecificModel = forceMimoForSummary ? 'mimo-v2.5-pro' : effectiveSpecificModel;
@@ -375,14 +401,22 @@ export default function SystemPromptUpdater({
         const hydratedFocus = folder?.settings?.systemPromptFocusPoint ?? '';
         const hydratedSummaryInstr = folder?.settings?.summaryInstructions ?? '';
         const hydratedSummaryHint = folder?.settings?.summaryIndexHint ?? DEFAULT_SUMMARY_INDEX_HINT;
+        // `!== false` rather than `?? true`: an explicitly saved false must
+        // survive, while a folder that has never had the setting keeps the
+        // historical default of ON.
+        const hydratedForceGlm = folder?.settings?.forceGlmForUpdates !== false;
+        const hydratedForceMimo = folder?.settings?.forceMimoForSummary !== false;
         setHeader(hydratedHeader);
         setFooter(hydratedFooter);
         setFocusPoint(hydratedFocus);
         setSummaryInstructions(hydratedSummaryInstr);
         setSummaryIndexHint(hydratedSummaryHint);
+        setForceGlmForUpdates(hydratedForceGlm);
+        setForceMimoForSummary(hydratedForceMimo);
         lastSavedFolderRef.current = JSON.stringify({
           header: hydratedHeader, footer: hydratedFooter, focusPoint: hydratedFocus,
           summaryInstructions: hydratedSummaryInstr, summaryIndexHint: hydratedSummaryHint,
+          forceGlmForUpdates: hydratedForceGlm, forceMimoForSummary: hydratedForceMimo,
         });
         setStatusMessage(
           nextRaw
@@ -610,7 +644,10 @@ export default function SystemPromptUpdater({
   useEffect(() => {
     if (!open || !folder) return;
     if (lastSavedFolderRef.current === null) return;
-    const snapshot = JSON.stringify({ header, footer, focusPoint, summaryInstructions, summaryIndexHint });
+    const snapshot = JSON.stringify({
+      header, footer, focusPoint, summaryInstructions, summaryIndexHint,
+      forceGlmForUpdates, forceMimoForSummary,
+    });
     if (snapshot === lastSavedFolderRef.current) return;
     const h = setTimeout(async () => {
       setAutoSaveState('saving');
@@ -621,13 +658,16 @@ export default function SystemPromptUpdater({
           systemPromptFocusPoint: focusPoint,
           summaryInstructions,
           summaryIndexHint,
+          forceGlmForUpdates,
+          forceMimoForSummary,
         });
         lastSavedFolderRef.current = snapshot;
         setAutoSaveState('saved');
       } catch { setAutoSaveState('error'); }
     }, 800);
     return () => clearTimeout(h);
-  }, [open, folder, folderName, header, footer, focusPoint, summaryInstructions, summaryIndexHint, saveFolderSettings]);
+  }, [open, folder, folderName, header, footer, focusPoint, summaryInstructions, summaryIndexHint,
+      forceGlmForUpdates, forceMimoForSummary, saveFolderSettings]);
 
   // ── Conversation log formatting ──────────────────────────────────────────
   const conversationLogText = useMemo(() => {
@@ -724,6 +764,9 @@ export default function SystemPromptUpdater({
       : 'Refining Layers 1-3 from the prompt itself (no conversation log)…');
 
     const focus = focusPoint.trim();
+    // Snapshot BEFORE anything can overwrite the pane. Streaming assigns into
+    // rightText from the first chunk, so reading it later would be too late.
+    const resumeText = resumeFromRight ? rightText.trim() : '';
     const userMsg = [
       `[ユーザーからの指示]`,
       `対象：${baseName}`,
@@ -765,8 +808,30 @@ export default function SystemPromptUpdater({
       ...(withConversation
         ? [`=== 新しい会話ログ ===`, conversationLogText || '(なし)', ``]
         : [`（新しい会話ログはありません ― 既存プロンプト自体の整理が目的です）`, ``]),
+      // ── Resume block ──────────────────────────────────────────────────────
+      // Handed to the agent as TEXT inside the user message, deliberately NOT as
+      // an assistant prefill. Prefill is what the token-cap continuation loop
+      // below uses, but Claude rejects prefill outright while extended thinking
+      // is enabled — which is exactly the configuration that produced the
+      // truncated run this feature exists to rescue. A textual resume works on
+      // every provider.
+      ...(resumeText ? [
+        `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
+        `※以下は前回の実行で既に生成された、完成済みの部分です。`,
+        `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
+        resumeText,
+        ``,
+      ] : []),
       `=== 出力 ===`,
-      `Layer 1〜3 を指定フォーマットで出力してください。Layer 4 は出力しないこと。`,
+      ...(resumeText
+        ? [
+            `上記「すでに生成済みの出力」の**続きのみ**を出力してください。`,
+            `最初から全体を書き直さないこと。途中で切れている箇所に自然に接続する形で書き始めてください。`,
+            `残りの Layer（および未完了の節）を最後まで出力してください。Layer 4 は出力しないこと。`,
+          ]
+        : [
+            `Layer 1〜3 を指定フォーマットで出力してください。Layer 4 は出力しないこと。`,
+          ]),
       `すべての出力が完了したら、最後の行に必ず半角で「${END_SENTINEL}」とだけ記述して終了してください。`,
     ].join('\n');
 
@@ -774,8 +839,10 @@ export default function SystemPromptUpdater({
     let outputChars = 0;
     // Live text accumulated across all continuation rounds. Streamed straight
     // into the right pane as it arrives (raw — sentinel/logs are tidied up only
-    // at the end). The first chunk replaces any previous draft.
-    let liveAccum = '';
+    // at the end). Normally the first chunk replaces any previous draft; when
+    // resuming, it is SEEDED with the salvaged text so the pane keeps showing
+    // the whole document and the final result is partial + continuation.
+    let liveAccum = resumeText ? resumeText + '\n' : '';
     const onProgress = (t: number, o: number, chunk?: string) => {
       thinkingChars += t;
       outputChars += o;
@@ -789,7 +856,9 @@ export default function SystemPromptUpdater({
     };
 
     const MAX_CONTINUATIONS = 6;
-    let accum = '';
+    // Seeded on resume so the salvaged part is included in the saved result,
+    // not just in the live preview.
+    let accum = resumeText ? resumeText + '\n' : '';
     try {
       for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
         if (controller.signal.aborted) break;
@@ -875,7 +944,10 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title]);
+    // resumeFromRight / rightText are read at call time to build the resume
+    // block — without them here the callback would close over stale values and
+    // silently resume from an out-of-date pane (or not resume at all).
+  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
@@ -1267,6 +1339,36 @@ export default function SystemPromptUpdater({
                 </button>
               </div>
             </div>
+
+            {/* Resume: rescue a run that died partway (a truncated OAuth Claude
+                turn, a dropped connection, Stop). Auto-armed only when the
+                right pane looks cut short, so a normal re-run over a COMPLETE
+                draft isn't turned into "continue a finished document". */}
+            {rightText.trim() && !streamingUpdate && (
+              <label
+                className={`mb-2 flex items-start gap-2 cursor-pointer select-none rounded px-2 py-1.5 border ${
+                  resumeFromRight
+                    ? 'border-amber-500/40 bg-amber-500/10'
+                    : 'border-border bg-muted/20'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={resumeFromRight}
+                  onChange={(e) => setResumeFromRight(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-amber-500 mt-0.5 shrink-0"
+                />
+                <span className="text-[11px] leading-relaxed">
+                  <span className="font-semibold">Continue from the right-side text</span>
+                  {' — '}
+                  the agent receives it as already-finished output and writes only what
+                  follows, instead of starting over.
+                  {rightLooksTruncated
+                    ? <span className="text-amber-600 dark:text-amber-400"> Right side looks truncated (no Layer 3), so this was enabled automatically.</span>
+                    : <span className="text-muted-foreground"> Right side looks complete — leave this off for a normal re-run.</span>}
+                </span>
+              </label>
+            )}
 
             <div className="grid grid-cols-2 gap-3">
               {/* Left = current */}

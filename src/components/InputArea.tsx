@@ -8,6 +8,44 @@ import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
   const [text, setText] = useState('');
   const [userName, setUserName] = useState('');
+  // Which VRChat transcript file is being cleared right now ('kohai' | 'ear').
+  const [clearing, setClearing] = useState<string | null>(null);
+
+  /**
+   * Discard the pending transcript for ONE side.
+   *
+   * The server backs the file up before truncating, so a mis-click is
+   * recoverable from voicechanger/{kohai,ear}_backup/. Also clears the poll
+   * baseline so the input box doesn't immediately re-fill from the text that
+   * was just discarded.
+   */
+  const clearVrchatLog = async (which: 'kohai' | 'ear') => {
+    setClearing(which);
+    try {
+      const r = await fetch('/api/vrchat/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(which === 'kohai' ? { clearKohai: true } : { clearEar: true }),
+      });
+      const d = await r.json();
+      if (!d.ok) {
+        alert(`Could not clear ${which === 'kohai' ? 'kohai.txt' : 'ear_log.txt'}: ${d.error || 'unknown error'}`);
+      } else {
+        // Refresh the visible transcript NOW rather than waiting for the next
+        // poll. The poll deliberately ignores an EMPTY transcript (so it can't
+        // wipe something typed by hand while the files are empty) — which meant
+        // clearing the last remaining text left it stuck on screen until the
+        // next utterance arrived.
+        try {
+          const g = await fetch('/api/vrchat/logs');
+          if (g.ok) setText(((await g.json())?.text || '').trim());
+        } catch { /* the next poll will catch up */ }
+      }
+    } catch (e: any) {
+      alert(`Could not clear: ${e.message}`);
+    }
+    setClearing(null);
+  };
   // Characters from local_data/character_map.json, for the speaker dropdown.
   const [charaList, setCharaList] = useState<{ name: string; engine: string; charId: string }[]>([]);
   const [attachments, setAttachments] = useState<any[]>([]);
@@ -34,8 +72,10 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     // User name comes from the active TTS character (voicechanger/chara_settings.json
     // resolved through local_data/character_map.json). Refresh on mount, every 30s
     // (catches changes made by voice_changer.py externally), and immediately when
-    // SettingsModal dispatches an nx-chara-changed event after the user picks a
-    // new character in the User Identity dropdown.
+    // The selector below dispatches an nx-chara-changed event after a pick, so
+    // any other mounted copy of this component resyncs immediately rather than
+    // waiting for its next poll. (Preferences used to host a duplicate of this
+    // dropdown and fire the same event; that control has been removed.)
     const fetchName = () => {
       fetch('/api/chara/current').then(r => r.json()).then(data => {
         if (data?.name) setUserName(data.name);
@@ -485,13 +525,40 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         </div>
       )}
       <div className="flex items-end gap-2 p-2">
-        <button 
-          onClick={() => fileInputRef.current?.click()}
-          className="p-3 text-muted-foreground hover:text-foreground hover:bg-muted rounded-xl transition-colors"
-          disabled={disabled}
-        >
-          <Paperclip size={20} />
-        </button>
+        <div className="flex flex-col items-center gap-1">
+          {/* VRChat-only: drop the pending transcript for one side without
+              touching the other. `{clear:true}` (used on send) always truncates
+              BOTH files, which is wrong when you only want to discard, say,
+              mis-recognized speech of your own. Equivalent to the
+              clear_kohai.bat / clear_ear.bat pair, and backed up the same way. */}
+          {vrchatMode && (
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={() => clearVrchatLog('kohai')}
+                disabled={disabled || !!clearing}
+                className="px-2 py-1 text-sm rounded bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-40 transition-colors leading-none"
+                title="Clear kohai.txt — discard your own pending recognized speech (backed up first)"
+              >
+                {clearing === 'kohai' ? '…' : '🗣️🗑️'}
+              </button>
+              <button
+                onClick={() => clearVrchatLog('ear')}
+                disabled={disabled || !!clearing}
+                className="px-2 py-1 text-sm rounded bg-sky-500/15 hover:bg-sky-500/25 disabled:opacity-40 transition-colors leading-none"
+                title="Clear ear_log.txt — discard pending speech heard from others (backed up first)"
+              >
+                {clearing === 'ear' ? '…' : '👂🗑️'}
+              </button>
+            </div>
+          )}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="p-3 text-muted-foreground hover:text-foreground hover:bg-muted rounded-xl transition-colors"
+            disabled={disabled}
+          >
+            <Paperclip size={20} />
+          </button>
+        </div>
         <input 
           type="file" 
           multiple 

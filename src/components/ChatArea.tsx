@@ -6,10 +6,11 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines } from 'lucide-react';
 import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
+import AudioSessionModal from './AudioSessionModal';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
@@ -2188,6 +2189,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [audioSessionOpen, setAudioSessionOpen] = useState(false);
 
   // Recompute tokens for every visible piece — system prompt, attachment
   // instruction, every message body, plus the timestamp tags that are
@@ -2437,6 +2439,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             title={`Search — find text across all of ${folderName}'s conversations`}
           >
             <Search size={16} />
+          </button>
+          <button
+            onClick={() => setAudioSessionOpen(true)}
+            className="p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
+            title="Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine"
+          >
+            <AudioLines size={16} />
           </button>
           <button
             onClick={() => setStatsOpen(true)}
@@ -4185,6 +4194,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} folderName={folderName} />
+
+      {/* Mounted only while open: the panel probes every service on mount
+          (each process probe is a PowerShell spawn), so it must not run in the
+          background of every conversation. */}
+      {audioSessionOpen && <AudioSessionModal onClose={() => setAudioSessionOpen(false)} />}
 
       <SystemPromptUpdater
         open={sysPromptUpdaterOpen}
