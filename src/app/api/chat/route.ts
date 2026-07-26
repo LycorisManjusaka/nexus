@@ -2340,15 +2340,22 @@ export async function POST(req: Request) {
           // "stopped mid-sentence". Anthropic's documented remedy is to raise
           // max_tokens or lower effort (you CANNOT prefill-continue a thinking
           // response). So scale the ceiling generously with effort, capped to
-          // each model's real output limit (Fable 5 → 128k; Opus 4.7/4.8 → 64k).
+          // each model's real output limit.
+          // CORRECTED: every adaptive model NEXUS exposes tops out at 128k
+          // output, not 64k — Opus 5, Opus 4.7, Opus 4.8, Sonnet 5, Fable 5 and
+          // Mythos 5 are all 128k. The old 64k floor meant a complex Opus 5 turn
+          // at the default 'high' effort could burn the entire budget on thinking
+          // and return NOTHING — a full-price turn with zero output, which is the
+          // worst possible failure mode (a truncated turn wastes 100% of what it
+          // spent, whereas an unused ceiling costs nothing).
           // It's a cap, not a reservation — unused tokens are never billed, so a
           // high ceiling only matters when the model genuinely needs the room.
-          const modelMaxOut = isFable5 ? 128000 : 64000;
+          const modelMaxOut = 128000;
           const effortCeil =
             claudeEffort === 'max'    ? 128000 :
-            claudeEffort === 'xhigh'  ? 96000  :
-            claudeEffort === 'high'   ? 64000  :
-            claudeEffort === 'medium' ? 48000  :
+            claudeEffort === 'xhigh'  ? 128000 :
+            claudeEffort === 'high'   ? 96000  :
+            claudeEffort === 'medium' ? 64000  :
                                         32000;  // low
           claudeParams.max_tokens = Math.min(modelMaxOut, effortCeil);
         } else {
@@ -2357,7 +2364,19 @@ export async function POST(req: Request) {
         // temperature must NOT be sent when thinking is enabled (any model)
       } else {
         claudeParams.max_tokens = 8000;
-        if (!isAdaptiveThinking) {
+        if (isAdaptiveThinking) {
+          // Thinking OFF must be stated EXPLICITLY, not by omission. On Opus 5
+          // thinking is ON BY DEFAULT — omitting the field runs adaptive anyway
+          // (a change from Opus 4.7/4.8, where omitting it meant no thinking).
+          // Leaving it out therefore gave Opus 5 users silent thinking against
+          // the 8000-token no-thinking budget: thinking eats the budget and the
+          // answer truncates, with the UI toggle apparently doing nothing.
+          // `disabled` is accepted on Opus 5 only at effort 'high' or below, so
+          // do NOT send output_config here — the server default is 'high'.
+          // (Fable/Mythos 5 reject `disabled` outright, but they force
+          // claudeThinkingOn above and never reach this branch.)
+          claudeParams.thinking = { type: 'disabled' };
+        } else {
           claudeParams.temperature = modelParams.temperature;
         }
       }
@@ -2570,7 +2589,11 @@ export async function POST(req: Request) {
           model: claudeModel,
           system: enhancedSystemPrompt,
           messages: layer1Msgs,
-          max_tokens: 4000,
+          // Shares the thinking+output budget like the main call below. 4000 was
+          // too tight once adaptive thinking was enabled — thinking could consume
+          // it before the forced set_creativity tool call was emitted, silently
+          // losing the creativity value. Unused ceiling is never billed.
+          max_tokens: 16000,
           tools: [creativityToolDef],
           tool_choice: { type: 'tool', name: 'set_creativity' },
         };

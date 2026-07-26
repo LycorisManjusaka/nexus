@@ -3883,10 +3883,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         </div>
                       )}
                       {/* Thinking-depth (effort) — only the adaptive models
-                          (Opus 4.7/4.8, Fable 5) support output_config.effort.
-                          Applies to BOTH billing modes (API output_config and
-                          the Agent SDK effort option). 'high' = API default. */}
-                      {/fable-?5|mythos-?5|opus-4-?7|opus-4-?8/.test(specificModel || '') && (
+                          (Opus 5, Opus 4.7/4.8, Sonnet 5, Fable 5) support
+                          output_config.effort. Applies to BOTH billing modes
+                          (API output_config and the Agent SDK effort option).
+                          'high' = API default.
+                          MUST stay in sync with the server's adaptive-model
+                          regexes in api/chat/route.ts (`isAdaptiveThinking`
+                          and `isAdaptiveOauth`) — when this gate misses a
+                          model, the server still sends effort but the user has
+                          no way to change it off the 'high' default. That's
+                          what hid Opus 5's effort control. */}
+                      {/fable-?5|mythos-?5|opus-4-?7|opus-4-?8|opus-?5|sonnet-?5/.test(specificModel || '') && (
                         <div className="mt-1">
                           <label className="text-xs font-medium text-muted-foreground block mb-1">
                             Thinking Level (effort)
@@ -3903,9 +3910,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             <option value="max">Max — absolute maximum capability</option>
                           </select>
                           <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                            Controls adaptive-thinking depth on Opus 4.7/4.8 and Fable 5. Works in both
+                            Controls adaptive-thinking depth on Opus 5, Opus 4.7/4.8, Sonnet 5 and Fable 5. Works in both
                             Token-paid and Monthly-paid modes. <span className="font-mono">High</span> is the API default;
                             higher levels spend more tokens, lower levels are faster/cheaper.
+                            Thinking and the visible answer share one output budget — if a turn ends with
+                            &ldquo;hit the token limit&rdquo;, lower this or expect a bigger cap.
+                            Sonnet 5 has no <span className="font-mono">Max</span> tier (clamped to X-High server-side).
                           </div>
                         </div>
                       )}

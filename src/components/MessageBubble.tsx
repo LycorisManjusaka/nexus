@@ -936,7 +936,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             `  uncached (full):  ${cu.uncachedInputTokens.toLocaleString()}` +
             (cu.cacheCreationTokens > 0 ? `\n  cache write:      ${cu.cacheCreationTokens.toLocaleString()} (1.25× one-shot)` : '') +
             `\nOutput: ${cu.outputTokens.toLocaleString()} tokens` +
-            `\nProvider: ${cu.providerHint || 'unknown'}`;
+            `\n  (includes thinking + files written / tool calls —\n   the plain token count on the left is visible text only)` +
+            `\nProvider: ${cu.providerHint || 'unknown'}` +
+            `\nTotals cover every API call in this turn (tool loops + subagents).`;
           return (
             <span
               className={`px-2 py-0.5 rounded-full font-mono ${
@@ -949,6 +951,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               {cu.totalInputTokens.toLocaleString()} in
               {hit && (
                 <span className="ml-1 opacity-80">· {cu.cachedInputTokens.toLocaleString()} cached ({pct}%)</span>
+              )}
+              {/* Real billed output from the provider — includes thinking tokens
+                  and tool_use payloads (file contents the entity wrote). This is
+                  the number that drives cost. Shown here because it used to be
+                  hover-only, while the prominent count next to it is textTokens
+                  (visible text only, for context-window accounting). */}
+              {cu.outputTokens > 0 && (
+                <span className="ml-1 opacity-80">· {cu.outputTokens.toLocaleString()} out</span>
               )}
             </span>
           );
