@@ -1,7 +1,10 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
+// Reused rather than reimplemented: the Audio Session panel already solved
+// "who owns this port?" for the voicechanger services.
+import { findPidByPort } from './audioServices';
 
 // Auto-start for the local TTS engines.
 //
@@ -231,4 +234,148 @@ export async function ensureEngineRunning(engine: number): Promise<EnsureResult>
   } finally {
     state.inFlight.delete(engine);
   }
+}
+
+// ── Explicit lifecycle control (Start / Stop / Restart) ──────────────────────
+//
+// WHY STOP WORKS BY PORT, NOT BY REMEMBERED PID:
+// engines are spawned `detached` + `unref()` so they survive a dev-server reload
+// — and the child handle is thrown away, so Nexus keeps no record of what it
+// started. Asking Windows "who is listening on :10101?" instead means Stop works
+// for an engine Nexus never started, or started before it was last restarted.
+// That is the whole point: previously the engine could not be stopped at all,
+// even by closing Nexus.
+
+export interface EngineActionResult { ok: boolean; message: string; }
+
+/** Host + port from an engine's base URL. */
+export function engineEndpoint(engine: number): { host: string; port: number } | null {
+  const def = ENGINES[engine];
+  if (!def) return null;
+  try {
+    const u = new URL(def.base);
+    const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+    return { host: u.hostname.toLowerCase(), port };
+  } catch {
+    return null;
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0']);
+
+/**
+ * Only engines on THIS machine may be killed. AivisSpeech's base can be pointed
+ * elsewhere via NEXUS_AIVISSPEECH_URL — without this guard, "stop the engine on
+ * port 10101" would find and kill a LOCAL process while the real engine runs on
+ * another host.
+ */
+export function isLocalEngine(engine: number): boolean {
+  const ep = engineEndpoint(engine);
+  return !!ep && LOOPBACK_HOSTS.has(ep.host);
+}
+
+function killTree(pid: number): Promise<void> {
+  // /T kills the child processes too: the VOICEVOX-family apps are a GUI shell
+  // plus a separate engine worker, and killing only the port owner can orphan it.
+  return new Promise(resolve => {
+    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => resolve());
+  });
+}
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Launch an engine and return IMMEDIATELY.
+ *
+ * Deliberately does NOT wait for boot the way `ensureEngineRunning` does: an
+ * engine takes up to 90s to load its models, and blocking the HTTP response for
+ * that long freezes the settings panel — including the Stop button. Readiness is
+ * reported by the caller's status poll instead.
+ */
+export async function startEngine(engine: number): Promise<EngineActionResult> {
+  const def = ENGINES[engine];
+  if (!def) return { ok: false, message: `Unknown engine ${engine}` };
+  if (await isEngineUp(engine)) return { ok: true, message: 'already running' };
+
+  const paths = await loadEnginePaths();
+  const exePath = normalizeExePath(paths[def.key] || '');
+  if (!exePath) return { ok: false, message: `No executable path is configured for ${def.name}.` };
+  if (!fs.existsSync(exePath)) return { ok: false, message: `${def.name}: executable not found at "${exePath}"` };
+
+  // An explicit Start is a deliberate user action — clear the auto-start failure
+  // cooldown so it always actually tries rather than replaying a stale error.
+  state.failedUntil.delete(engine);
+
+  try {
+    const child = spawn(exePath, [], { cwd: path.dirname(exePath), detached: true, stdio: 'ignore' });
+    child.unref();
+  } catch (e: any) {
+    return { ok: false, message: `${def.name}: failed to launch (${e.message})` };
+  }
+  console.log(`[tts-engine] start requested: ${def.name}`);
+  return { ok: true, message: 'starting… (loading voice models can take up to a minute)' };
+}
+
+export async function stopEngine(engine: number): Promise<EngineActionResult> {
+  const def = ENGINES[engine];
+  if (!def) return { ok: false, message: `Unknown engine ${engine}` };
+  if (!isLocalEngine(engine)) {
+    return { ok: false, message: `${def.name} is configured at ${def.base}. Nexus only stops engines running on this machine.` };
+  }
+
+  // Drop the positive health cache FIRST. Otherwise synthesis could still treat
+  // a just-killed engine as healthy for up to HEALTH_CACHE_MS.
+  state.healthyUntil.delete(engine);
+  state.failedUntil.delete(engine);
+
+  if (!(await isEngineUp(engine))) return { ok: true, message: 'already stopped' };
+
+  const ep = engineEndpoint(engine)!;
+  const pid = await findPidByPort(ep.port);
+  if (!pid) {
+    return { ok: false, message: `${def.name} is answering on :${ep.port} but the owning process could not be identified.` };
+  }
+
+  await killTree(pid);
+  for (let i = 0; i < 20; i++) {
+    await sleep(300);
+    if (!(await isEngineUp(engine))) {
+      state.healthyUntil.delete(engine);
+      console.log(`[tts-engine] stopped ${def.name} (pid ${pid})`);
+      return { ok: true, message: 'stopped' };
+    }
+  }
+  return { ok: false, message: `${def.name}: PID ${pid} did not exit.` };
+}
+
+/**
+ * Stop, wait for the port to actually be released, then start.
+ *
+ * This is the button for "I installed new voices and need the engine to reload".
+ * Clicking Stop then Start by hand tends to fail: the new instance races the old
+ * one for the port before Windows has released it, and dies on bind.
+ */
+export async function restartEngine(engine: number): Promise<EngineActionResult> {
+  const def = ENGINES[engine];
+  if (!def) return { ok: false, message: `Unknown engine ${engine}` };
+
+  if (await isEngineUp(engine)) {
+    const stopped = await stopEngine(engine);
+    if (!stopped.ok) return { ok: false, message: `restart aborted — ${stopped.message}` };
+  }
+
+  // Wait for the listening socket to be released, not merely for the health
+  // endpoint to stop answering.
+  const ep = engineEndpoint(engine);
+  if (ep && isLocalEngine(engine)) {
+    for (let i = 0; i < 20; i++) {
+      if (!(await findPidByPort(ep.port))) break;
+      await sleep(300);
+    }
+  }
+
+  const started = await startEngine(engine);
+  return started.ok
+    ? { ok: true, message: 'restarting… (loading voice models can take up to a minute)' }
+    : started;
 }

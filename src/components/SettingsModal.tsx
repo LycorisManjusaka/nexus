@@ -37,15 +37,61 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // at a glance whether an engine is currently running.
   const [enginePaths, setEnginePaths] = useState<Record<string, string>>({});
   const [engineStatus, setEngineStatus] = useState<any[]>([]);
+  // Which engine row has an action in flight, and the last message from it.
+  const [engineBusy, setEngineBusy] = useState<string | null>(null);
+  const [engineMsg, setEngineMsg] = useState<Record<string, string>>({});
+  const enginePollRef = React.useRef<any>(null);
 
-  const refreshEngines = () => {
+  const refreshEngines = React.useCallback((withPaths = false) => {
     fetch('/api/tts/engines')
       .then(r => r.json())
       .then(d => {
-        setEnginePaths(d.paths || {});
+        // Stored paths are adopted ONLY on the initial load. A status refresh —
+        // manual or polled — must never overwrite a path the user has typed but
+        // not saved yet. Same trap the Audio Session panel hit with its 2s poll.
+        if (withPaths) setEnginePaths(d.paths || {});
         setEngineStatus(d.status || []);
       })
       .catch(() => {});
+  }, []);
+
+  // Start is fire-and-forget on the server (loading voice models can take ~90s),
+  // so the panel polls instead of blocking. Self-cancels once the window passes.
+  const pollEngines = React.useCallback(() => {
+    if (enginePollRef.current) clearInterval(enginePollRef.current);
+    const until = Date.now() + 95000;
+    enginePollRef.current = setInterval(() => {
+      if (Date.now() > until) {
+        clearInterval(enginePollRef.current);
+        enginePollRef.current = null;
+        return;
+      }
+      refreshEngines();
+    }, 2500);
+  }, [refreshEngines]);
+
+  useEffect(() => () => {
+    if (enginePollRef.current) clearInterval(enginePollRef.current);
+  }, []);
+
+  const engineAction = async (engine: number, key: string, action: 'start' | 'stop' | 'restart') => {
+    setEngineBusy(key);
+    setEngineMsg(prev => ({ ...prev, [key]: action === 'stop' ? 'stopping…' : 'starting…' }));
+    try {
+      const d = await fetch('/api/tts/engines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, engine }),
+      }).then(r => r.json());
+      setEngineMsg(prev => ({ ...prev, [key]: d?.message || (d?.ok ? 'done' : 'failed') }));
+      // Only a launch needs the boot poll; a stop has already been confirmed.
+      if (d?.ok && action !== 'stop') pollEngines();
+    } catch (e: any) {
+      setEngineMsg(prev => ({ ...prev, [key]: e?.message || 'request failed' }));
+    } finally {
+      setEngineBusy(null);
+      refreshEngines();
+    }
   };
 
   useEffect(() => {
@@ -75,7 +121,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
       }
     };
     getDevices();
-    refreshEngines();
+    refreshEngines(true);
   }, []);
 
   // The "User Identity / Active Character" section used to live here, along with
@@ -401,7 +447,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-semibold text-foreground">TTS Engine Executables</h4>
                 <button
-                  onClick={refreshEngines}
+                  onClick={() => refreshEngines()}
                   className="text-[10px] bg-muted px-2 py-1 rounded hover:bg-muted/70 transition text-muted-foreground"
                   title="Re-check which engines are currently running"
                 >
@@ -420,22 +466,51 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 { key: 'aivisspeech', label: 'AivisSpeech', port: '10101', ph: 'C:\\path\\to\\AivisSpeech\\AivisSpeech.exe' },
               ].map(eng => {
                 const st = engineStatus.find((s: any) => s.key === eng.key);
+                const busy = engineBusy === eng.key;
+                const running = !!st?.running;
+                const configured = !!(enginePaths[eng.key] || '').trim();
+                const btn = 'text-[10px] px-2 py-1 rounded transition disabled:opacity-35 disabled:cursor-not-allowed';
                 return (
                   <div key={eng.key}>
-                    <label className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-2">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-2 flex-wrap">
                       {eng.label}
                       <span className="font-mono text-[10px] opacity-60">:{eng.port}</span>
                       {st && (
                         <span
                           className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${
-                            st.running
+                            running
                               ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
                               : 'bg-muted text-muted-foreground'
                           }`}
                         >
-                          {st.running ? 'running' : 'stopped'}
+                          {running ? 'running' : 'stopped'}
                         </span>
                       )}
+                      <span className="flex-1" />
+                      {/* Start needs a configured path; Stop finds the process by
+                          port, so it works even for an engine Nexus didn't start.
+                          Stop is withheld for a non-loopback engine — see
+                          isLocalEngine in src/lib/ttsEngines.ts. */}
+                      <button
+                        onClick={() => engineAction(st?.engine ?? 0, eng.key, 'start')}
+                        disabled={busy || running || !configured}
+                        title={!configured ? 'Set the executable path first' : running ? 'Already running' : 'Launch this engine'}
+                        className={`${btn} bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25`}
+                      >Start</button>
+                      <button
+                        onClick={() => engineAction(st?.engine ?? 0, eng.key, 'stop')}
+                        disabled={busy || !running || (st && st.local === false)}
+                        title={st && st.local === false
+                          ? `Configured at ${st.base} — Nexus only stops engines on this machine`
+                          : 'Kill whatever is listening on this port'}
+                        className={`${btn} bg-rose-500/15 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25`}
+                      >Stop</button>
+                      <button
+                        onClick={() => engineAction(st?.engine ?? 0, eng.key, 'restart')}
+                        disabled={busy || !configured}
+                        title="Stop, wait for the port to be released, then start again — use this after installing new voices"
+                        className={`${btn} bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25`}
+                      >Restart</button>
                     </label>
                     <input
                       type="text"
@@ -444,6 +519,9 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                       placeholder={eng.ph}
                       className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
                     />
+                    {engineMsg[eng.key] && (
+                      <p className="text-[10px] text-muted-foreground mt-1 font-mono">{engineMsg[eng.key]}</p>
+                    )}
                   </div>
                 );
               })}
