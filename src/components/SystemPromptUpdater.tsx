@@ -211,6 +211,31 @@ function splitOffChangelog(text: string): { changelog: string; core: string } {
 // model's token cap → we prefill-continue. Stripped before saving.
 const END_SENTINEL = '<<<NEXUS_END>>>';
 
+// ── Soul-packer model shortlist ──────────────────────────────────────────────
+// Only these four families produce usable system-prompt updates; the others
+// either flatten the Layer structure or paraphrase the identity away. Kept as a
+// fixed list rather than the full model table so the choice stays a deliberate
+// one. `authMode` is Claude-only — it picks the billing path (see the chat
+// route's resolvedClaudeAuthMode); everything else leaves it undefined and gets
+// the route's usual 'auto'.
+interface UpdaterModelDef {
+  key: string;
+  label: string;
+  /** Family label — the chat route matches this case-insensitively. */
+  aiName: string;
+  model: string;
+  authMode?: 'oauth' | 'api-key';
+}
+const UPDATER_MODELS: UpdaterModelDef[] = [
+  { key: 'claude-opus-5-oauth', label: 'Claude Opus 5 (OAuth path)', aiName: 'Claude',   model: 'claude-opus-5',       authMode: 'oauth' },
+  { key: 'kimi-k3',             label: 'Kimi K3',                    aiName: 'Kimi',     model: 'moonshotai/Kimi-K3' },
+  { key: 'glm-5.2',             label: 'GLM 5.2',                    aiName: 'GLM',      model: 'glm-5.2' },
+  { key: 'deepseek-v4-pro',     label: 'DeepSeek V4 Pro',            aiName: 'DeepSeek', model: 'deepseek-v4-pro' },
+];
+const DEFAULT_UPDATER_MODEL_KEY = 'deepseek-v4-pro';
+const DEFAULT_UPDATER_MODEL =
+  UPDATER_MODELS.find(m => m.key === DEFAULT_UPDATER_MODEL_KEY) as UpdaterModelDef;
+
 // ── Main modal ──────────────────────────────────────────────────────────────
 interface Props {
   open: boolean;
@@ -331,19 +356,31 @@ export default function SystemPromptUpdater({
   const [selectedAgentType, setSelectedAgentType] = useState<string>('');
   const userPickedTypeRef = useRef(false);
 
-  // Updater model override — GLM-5.2, independent of the conversation's own
-  // model. Persisted PER ENTITY (folder settings): these were hardcoded to true
-  // on every mount, so turning one off lasted only until the window was
-  // reopened. Default stays ON for a folder that has never set it, so existing
-  // entities behave exactly as before.
-  const [forceGlmForUpdates, setForceGlmForUpdates] = useState<boolean>(true);
-  const effectiveAiName = forceGlmForUpdates ? 'GLM' : aiName;
-  const effectiveSpecificModel = forceGlmForUpdates ? 'glm-5.2' : specificModel;
+  // Updater model override, independent of the conversation's own model.
+  // Persisted PER ENTITY (folder settings).
+  //
+  // The checkbox used to hardcode GLM-5.2; it now selects from the shortlist
+  // below. Only these four families produce usable soul-packer output — the
+  // rest either lose Layer structure or paraphrase the identity away — so this
+  // is a fixed list rather than the full model table.
+  const [forceUpdaterModel, setForceUpdaterModel] = useState<boolean>(true);
+  const [updaterModelKey, setUpdaterModelKey] = useState<string>(DEFAULT_UPDATER_MODEL_KEY);
+  const updaterModel = useMemo(
+    () => UPDATER_MODELS.find(m => m.key === updaterModelKey) ?? DEFAULT_UPDATER_MODEL,
+    [updaterModelKey]
+  );
+  const effectiveAiName = forceUpdaterModel ? updaterModel.aiName : aiName;
+  const effectiveSpecificModel = forceUpdaterModel ? updaterModel.model : specificModel;
+  // Claude has two billing paths and the shortlist entry names which one. Left
+  // undefined for every other model so the route keeps its usual 'auto'.
+  const effectiveAuthMode = forceUpdaterModel ? updaterModel.authMode : undefined;
 
-  // Summary writer model override — MiMo V2.5 Pro. Persisted the same way.
+  // Summary writer model override — MiMo V2.5 Pro. Unchanged.
   const [forceMimoForSummary, setForceMimoForSummary] = useState<boolean>(true);
   const summaryAiName = forceMimoForSummary ? 'MiMo' : effectiveAiName;
   const summarySpecificModel = forceMimoForSummary ? 'mimo-v2.5-pro' : effectiveSpecificModel;
+  // When the summary inherits the updater's model it must inherit its auth path too.
+  const summaryAuthMode = forceMimoForSummary ? undefined : effectiveAuthMode;
 
   const titleParsed = useMemo(() => parseTitleIndex(title), [title]);
   const currentIndex = titleParsed?.index ?? 1;
@@ -404,19 +441,33 @@ export default function SystemPromptUpdater({
         // `!== false` rather than `?? true`: an explicitly saved false must
         // survive, while a folder that has never had the setting keeps the
         // historical default of ON.
-        const hydratedForceGlm = folder?.settings?.forceGlmForUpdates !== false;
+        // The override checkbox was once `forceGlmForUpdates`. Read the new key
+        // when present, otherwise inherit the old one so an entity that had the
+        // override turned OFF stays off. The MODEL is not migrated: a folder
+        // with no `updaterModelKey` gets the current default (DeepSeek V4 Pro)
+        // rather than being pinned to the GLM the old flag implied.
+        const hydratedForceUpdater =
+          folder?.settings?.forceUpdaterModel !== undefined
+            ? folder.settings.forceUpdaterModel !== false
+            : folder?.settings?.forceGlmForUpdates !== false;
+        const savedKey = folder?.settings?.updaterModelKey;
+        const hydratedUpdaterKey = UPDATER_MODELS.some(m => m.key === savedKey)
+          ? savedKey
+          : DEFAULT_UPDATER_MODEL_KEY;
         const hydratedForceMimo = folder?.settings?.forceMimoForSummary !== false;
         setHeader(hydratedHeader);
         setFooter(hydratedFooter);
         setFocusPoint(hydratedFocus);
         setSummaryInstructions(hydratedSummaryInstr);
         setSummaryIndexHint(hydratedSummaryHint);
-        setForceGlmForUpdates(hydratedForceGlm);
+        setForceUpdaterModel(hydratedForceUpdater);
+        setUpdaterModelKey(hydratedUpdaterKey);
         setForceMimoForSummary(hydratedForceMimo);
         lastSavedFolderRef.current = JSON.stringify({
           header: hydratedHeader, footer: hydratedFooter, focusPoint: hydratedFocus,
           summaryInstructions: hydratedSummaryInstr, summaryIndexHint: hydratedSummaryHint,
-          forceGlmForUpdates: hydratedForceGlm, forceMimoForSummary: hydratedForceMimo,
+          forceUpdaterModel: hydratedForceUpdater, updaterModelKey: hydratedUpdaterKey,
+          forceMimoForSummary: hydratedForceMimo,
         });
         setStatusMessage(
           nextRaw
@@ -646,7 +697,7 @@ export default function SystemPromptUpdater({
     if (lastSavedFolderRef.current === null) return;
     const snapshot = JSON.stringify({
       header, footer, focusPoint, summaryInstructions, summaryIndexHint,
-      forceGlmForUpdates, forceMimoForSummary,
+      forceUpdaterModel, updaterModelKey, forceMimoForSummary,
     });
     if (snapshot === lastSavedFolderRef.current) return;
     const h = setTimeout(async () => {
@@ -658,7 +709,11 @@ export default function SystemPromptUpdater({
           systemPromptFocusPoint: focusPoint,
           summaryInstructions,
           summaryIndexHint,
-          forceGlmForUpdates,
+          forceUpdaterModel,
+          updaterModelKey,
+          // Written alongside the new key so an older Nexus build reading this
+          // folder still sees a sensible override flag.
+          forceGlmForUpdates: forceUpdaterModel,
           forceMimoForSummary,
         });
         lastSavedFolderRef.current = snapshot;
@@ -667,7 +722,7 @@ export default function SystemPromptUpdater({
     }, 800);
     return () => clearTimeout(h);
   }, [open, folder, folderName, header, footer, focusPoint, summaryInstructions, summaryIndexHint,
-      forceGlmForUpdates, forceMimoForSummary, saveFolderSettings]);
+      forceUpdaterModel, updaterModelKey, forceMimoForSummary, saveFolderSettings]);
 
   // ── Conversation log formatting ──────────────────────────────────────────
   const conversationLogText = useMemo(() => {
@@ -688,6 +743,8 @@ export default function SystemPromptUpdater({
     runModel: string,
     onProgress: (thinkingDelta: number, outputDelta: number, textChunk?: string) => void,
     signal?: AbortSignal,
+    // Claude only: forces the billing path. Omitted → the route's usual 'auto'.
+    runAuthMode?: 'oauth' | 'api-key',
   ): Promise<string> => {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -701,6 +758,7 @@ export default function SystemPromptUpdater({
         toolUseEnabled: false,
         modelParams: { ...modelParams, claudeThinking: false },
         specificModel: runModel,
+        ...(runAuthMode ? { claudeAuthMode: runAuthMode } : {}),
         dateTimeVisibility: 'none',
         creativityControlEnabled: false,
         seedEnabled: false,
@@ -869,7 +927,7 @@ export default function SystemPromptUpdater({
           ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
           : [{ role: 'user', content: userMsg, timestamp: Date.now() },
              { role: 'assistant', content: accum, timestamp: Date.now() }];
-        const piece = await streamChat(messages, activeAgent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal);
+        const piece = await streamChat(messages, activeAgent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;        // finished cleanly
         if (!piece.trim()) break;                       // model produced nothing new
@@ -947,7 +1005,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText]);
+  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
@@ -994,7 +1052,7 @@ export default function SystemPromptUpdater({
     try {
       const accum = await streamChat(
         [{ role: 'user', content: userMsg, timestamp: Date.now() }],
-        summaryAgentPrompt, summaryAiName, summarySpecificModel, onProgress, controller.signal,
+        summaryAgentPrompt, summaryAiName, summarySpecificModel, onProgress, controller.signal, summaryAuthMode,
       );
       if (!accum.trim()) {
         if (controller.signal.aborted) {
@@ -1027,7 +1085,7 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel]);
+  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the
@@ -1162,8 +1220,8 @@ export default function SystemPromptUpdater({
                 </div>
                 <div className="opacity-70">
                   Model:{' '}
-                  {forceGlmForUpdates
-                    ? <span className="text-indigo-500">{effectiveAiName} / {effectiveSpecificModel} <span className="opacity-70">(overriding {aiName}/{specificModel})</span></span>
+                  {forceUpdaterModel
+                    ? <span className="text-indigo-500">{effectiveAiName} / {effectiveSpecificModel}{effectiveAuthMode === 'oauth' ? ' (OAuth)' : ''} <span className="opacity-70">(overriding {aiName}/{specificModel})</span></span>
                     : <span>{aiName} / {specificModel}</span>}
                   {' '}· {baseName}_{currentIndex} → _{currentIndex + 1} · Folder: {folderName}
                 </div>
@@ -1226,19 +1284,36 @@ export default function SystemPromptUpdater({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-          {/* Model-override row */}
-          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={forceGlmForUpdates}
-              onChange={(e) => setForceGlmForUpdates(e.target.checked)}
-              className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
-            />
-            <span className="font-medium">Force GLM-5.2 for updater (ignore conversation model)</span>
+          {/* Model-override row. The checkbox no longer names a model — it
+              chooses between the shortlist below and the conversation's own
+              model from System Instructions → Generation Parameters. */}
+          <div className="flex items-center gap-2 text-sm flex-wrap">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={forceUpdaterModel}
+                onChange={(e) => setForceUpdaterModel(e.target.checked)}
+                className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+              />
+              <span className="font-medium">Use a dedicated updater model (ignore conversation model)</span>
+            </label>
+            <select
+              value={updaterModelKey}
+              onChange={(e) => setUpdaterModelKey(e.target.value)}
+              disabled={!forceUpdaterModel}
+              title="Only these families produce usable soul-packer output"
+              className="px-2 py-1 bg-background border border-border rounded text-xs outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {UPDATER_MODELS.map(m => (
+                <option key={m.key} value={m.key}>{m.label}</option>
+              ))}
+            </select>
             <span className="text-[10px] text-muted-foreground">
-              Default ON. When OFF, agent runs use <span className="font-mono">{aiName} / {specificModel}</span>.
+              {forceUpdaterModel
+                ? <>Runs as <span className="font-mono">{effectiveAiName} / {effectiveSpecificModel}</span>.</>
+                : <>OFF — agent runs use <span className="font-mono">{aiName} / {specificModel}</span>.</>}
             </span>
-          </label>
+          </div>
 
           {/* Agent-type selector */}
           <div className="flex flex-col gap-1.5 px-3 py-2 border border-border rounded bg-muted/10">
