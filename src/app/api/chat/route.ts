@@ -1208,7 +1208,13 @@ async function streamClaudeViaAgentSDK(args: {
             notes.push(`last tool error → ${String(lastToolError).replace(/\s+/g, ' ').slice(0, 240)}`);
           }
           if (notes.length > 0) {
-            enqueue({ type: 'text', content: (producedContent ? '\n\n' : '') + `⚠️ _[Turn stopped: ${notes.join(' ')}]_` });
+            // A DIAGNOSTIC, not part of the reply. Emitted as its own event type
+            // rather than appended to the text stream so it never enters the
+            // message body: text would be persisted to the log, replayed to the
+            // model on every later turn, and billed as context — an explanation
+            // of a failure teaching the model about a failure. The client shows
+            // it beside the message instead.
+            enqueue({ type: 'notice', content: `Turn stopped: ${notes.join(' ')}` });
           }
         }
 

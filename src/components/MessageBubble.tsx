@@ -1008,6 +1008,24 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         )}
       </div>
 
+      {/* Turn-stopped diagnostics. Deliberately rendered OUTSIDE the message
+          body: this is Nexus talking to the user about why a turn ended, not
+          something the entity said. Keeping it separate is what lets it stay
+          out of the reply text, the outgoing context and the token count. */}
+      {!isUser && Array.isArray(msg.notices) && msg.notices.length > 0 && (
+        <div className="mb-2 max-w-2xl rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+          {msg.notices.map((n: string, i: number) => (
+            <div key={i} className="flex gap-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+              <span aria-hidden>⚠️</span>
+              <span>{n}</span>
+            </div>
+          ))}
+          <div className="mt-1 text-[10px] text-amber-700/60 dark:text-amber-300/50">
+            Shown to you only — not part of the conversation or the context sent to the model.
+          </div>
+        </div>
+      )}
+
       {/* Web-search sources — clickable proof that the model actually consulted
           live pages. Only shown for AI messages that carried citations. If a
           model claims it searched the web but no sources appear here, treat its

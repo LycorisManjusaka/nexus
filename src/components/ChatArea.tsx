@@ -22,6 +22,16 @@ import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agen
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import LiveSession from './LiveSession';
 
+// Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
+// are baked into the body of every affected message already on disk. This
+// removes them from the copy sent upstream. Anchored on the "]_" closing pair
+// rather than a bare "]" because the notice quotes file paths, which can
+// themselves contain brackets.
+const TURN_NOTICE_RE = /\n*⚠️\s*_\[Turn stopped:[\s\S]*?\]_[ \t]*/g;
+function stripTurnNotices(s: string): string {
+  return s.includes('[Turn stopped:') ? s.replace(TURN_NOTICE_RE, '').trimEnd() : s;
+}
+
 // V8 refuses to materialize a single string longer than 2^29-24 characters
 // (536,870,888 ≈ 512 MiB). Because a conversation is persisted as ONE
 // JSON.stringify of every message plus every inline base64 attachment, a
@@ -1535,8 +1545,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // re-use the persisted description instead of re-calling the
           // bridge model.
           id: m.id,
+          // Turns that stopped BEFORE this became a separate event still carry
+          // the "⚠️ _[Turn stopped: …]_" text inside their body. Strip it on the
+          // way out so those old turns stop replaying a failure explanation to
+          // the model every single turn. Non-destructive: only this outgoing
+          // copy is cleaned, the stored log is untouched.
+          content: stripTurnNotices(m.content || ''),
           role: m.role,
-          content: m.content || '',
           timestamp: m.timestamp,
         };
         if (m.attachments?.length) {
@@ -1633,6 +1648,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // are the clickable proof that the model actually consulted live pages
       // (vs. hallucinating "news"). Display-only — NOT in slimHistory.
       let webSources: { url: string; title?: string }[] | null = null;
+      // Turn-stopped diagnostics ("a file operation was blocked…", "hit the
+      // token limit…"). Display-only, exactly like webSources: kept off the
+      // message body so they are never persisted into the reply text, never
+      // replayed to the model, and never counted as tokens.
+      const notices: string[] = [];
       // Attachments collected from tool calls during this turn, to be
       // attached to the assistant message.
       const toolAttachments: any[] = [];
@@ -1723,6 +1743,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   webSources = data.sources
                     .filter((s: any) => s && typeof s.url === 'string')
                     .map((s: any) => ({ url: s.url, ...(s.title ? { title: String(s.title) } : {}) }));
+                }
+              } else if (data.type === 'notice') {
+                // Turn-stopped diagnostics. Collected separately from `currentText`
+                // so they stay out of the message body — and therefore out of the
+                // log, out of the context sent on later turns, and out of the
+                // token count.
+                if (typeof data.content === 'string' && data.content.trim()) {
+                  notices.push(data.content.trim());
                 }
               } else if (data.type === 'session_id') {
                 // Claude OAuth path emits this so we can resume the
@@ -1914,6 +1942,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } : {}),
               ...(cacheUsage ? { cacheUsage } : {}),
               ...(webSources ? { webSources } : {}),
+              ...(notices.length > 0 ? { notices } : {}),
               ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
               ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
             }
