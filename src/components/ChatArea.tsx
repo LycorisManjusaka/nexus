@@ -6,7 +6,7 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check } from 'lucide-react';
 import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
@@ -19,6 +19,7 @@ import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { injectLayer4Index } from '@/lib/layer4';
 import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
+import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import LiveSession from './LiveSession';
 
 // V8 refuses to materialize a single string longer than 2^29-24 characters
@@ -191,7 +192,7 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
   return out;
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
   const [loading, setLoading] = useState(false);
@@ -1044,24 +1045,115 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, firstOriginalMessageId, folders, folderName, systemTokens, attachmentInstructionTokens, saveThinkingToLog, loading]);
 
+  // Which deep-link target has already been handled. Declared above both scroll
+  // effects because the auto-scroll below has to know a link is still pending.
+  const scrolledToRef = useRef<string | null>(null);
+  const deepLinkScrollPending = !!scrollToMessageId && scrolledToRef.current !== scrollToMessageId;
+  // Transient "copied ✓" feedback for the link buttons ('convo' | message id).
+  const [copiedLink, setCopiedLink] = useState<string | null>(null);
+
   // Scroll to bottom only when new messages arrive or AI is generating
   useEffect(() => {
     if (scrollRef.current) {
       const isGenerating = loading;
       const lengthIncreased = messages.length > prevMessagesLengthRef.current;
 
-      if (isGenerating || lengthIncreased) {
+      // A pending deep-link scroll owns the viewport. Without this guard the
+      // initial load (0 → N messages) counts as "length increased", slams to the
+      // bottom, and the link's smooth scroll then animates all the way back up
+      // through a long conversation.
+      if ((isGenerating || lengthIncreased) && !deepLinkScrollPending) {
         scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       }
     }
     prevMessagesLengthRef.current = messages.length;
-  }, [messages, loading]);
+  }, [messages, loading, deepLinkScrollPending]);
 
   // Sync browser tab title with current conversation
   useEffect(() => {
     document.title = title ? `${title} — Nexus` : 'Nexus';
     return () => { document.title = 'Nexus'; };
   }, [title]);
+
+  // ── Deep-link scroll target ──────────────────────────────────────────────
+  // Runs after messages render. `messages.length` is in the deps because on a
+  // cold load this effect fires first with an empty list — the anchor simply
+  // doesn't exist yet, and the next run (once messages arrive) finds it.
+  // Reports back either way so the caller can clear its pending state and,
+  // when the id is genuinely absent, say so instead of leaving the user at the
+  // bottom of the wrong place wondering.
+  useEffect(() => {
+    if (!scrollToMessageId) return;
+    if (scrolledToRef.current === scrollToMessageId) return;
+    if (messages.length === 0) return;            // not loaded yet — wait for the next run
+
+    const el = document.getElementById(messageAnchorId(scrollToMessageId));
+    if (!el) {
+      // Messages are present but this id isn't among them: deleted or wrong link.
+      scrolledToRef.current = scrollToMessageId;
+      onScrolledToMessage?.(false);
+      return;
+    }
+    scrolledToRef.current = scrollToMessageId;
+
+    // Brief highlight so the eye lands on the right message in a long thread.
+    el.classList.add('ring-2', 'ring-indigo-500/70', 'rounded-xl');
+    const clearRing = setTimeout(
+      () => el.classList.remove('ring-2', 'ring-indigo-500/70', 'rounded-xl'),
+      2600,
+    );
+
+    // Scrolling ONCE is not enough, and neither is a fixed retry window.
+    // Attachments and lazy-loaded images keep changing the document height for
+    // SECONDS after first paint, which silently pushes the target off screen —
+    // measured on a real image-heavy conversation, the message ended up 232px
+    // above the fold and then drifted again after a 1.8s retry loop had given
+    // up. So the correction is driven by LAYOUT (ResizeObserver) rather than by
+    // a timer, and it yields immediately to any deliberate scroll by the user.
+    let cancelled = false;
+    const container: HTMLElement | null = scrollRef.current;
+    const CENTRE_TOLERANCE_PX = 120;
+
+    const recentre = () => {
+      if (cancelled) return;
+      const node = document.getElementById(messageAnchorId(scrollToMessageId));
+      if (!node) return;
+      const r = node.getBoundingClientRect();
+      // A message taller than the viewport can never be perfectly centred, so
+      // this settles rather than looping: scrollIntoView is idempotent once the
+      // browser has done its best.
+      if (Math.abs(r.top + r.height / 2 - window.innerHeight / 2) > CENTRE_TOLERANCE_PX) {
+        node.scrollIntoView({ block: 'center' });
+      }
+    };
+
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // The user's own scroll wins — never fight the wheel.
+    const release = () => { cancelled = true; };
+    container?.addEventListener('wheel', release, { passive: true });
+    container?.addEventListener('touchstart', release, { passive: true });
+
+    const ro = new ResizeObserver(recentre);
+    if (container) {
+      ro.observe(container);
+      // The scroller's own box rarely changes; it's the content inside that
+      // grows as images decode, so observe that too.
+      if (container.firstElementChild) ro.observe(container.firstElementChild);
+    }
+    // Hard stop: stop chasing the layout after a few seconds either way.
+    const end = setTimeout(() => { cancelled = true; ro.disconnect(); }, 6000);
+
+    onScrolledToMessage?.(true);
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+      clearTimeout(end);
+      clearTimeout(clearRing);
+      container?.removeEventListener('wheel', release);
+      container?.removeEventListener('touchstart', release);
+    };
+  }, [scrollToMessageId, messages.length, onScrolledToMessage]);
 
   const handleSend = async (text: string, attachments: any[]) => {
     if (!text.trim() && attachments.length === 0) return;
@@ -2314,7 +2406,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     <div className="flex-1 flex flex-col h-full relative bg-background">
       {/* Header */}
       <div className="h-14 border-b border-border flex items-center justify-between px-6 bg-secondary/30 backdrop-blur-md sticky top-0 z-10 shrink-0">
-        <h2 className="font-semibold text-lg">{title}</h2>
+        <h2 className="font-semibold text-lg flex items-center gap-2">
+          {title}
+          {/* Copies /c/<folder>/<convoId> — the UUID form, which survives a
+              rename. Title-based links would rot the moment this is renamed. */}
+          <button
+            onClick={() => {
+              const url = absoluteDeepLink(folderName, convoId);
+              navigator.clipboard?.writeText(url).then(
+                () => setCopiedLink('convo'),
+                () => window.prompt('Copy this link:', url),
+              );
+              setTimeout(() => setCopiedLink(null), 1600);
+            }}
+            title="Copy a link to this conversation"
+            className="text-muted-foreground opacity-70 hover:opacity-100 transition"
+          >
+            {copiedLink === 'convo' ? <Check size={14} /> : <Link2 size={14} />}
+          </button>
+        </h2>
         <div className="flex items-center gap-4">
           {(() => {
             // Per-folder max context (was global, moved into Folder Settings).
@@ -2611,7 +2721,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       <div className="flex-1 overflow-y-auto p-6 scroll-smooth custom-scrollbar" ref={scrollRef}>
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.map((msg, msgIdx) => (
-            <React.Fragment key={msg.id}>
+            // The scroll anchor for /c/<folder>/<convoId>/m/<messageId>. Wraps
+            // the marker too so a linked first-original message scrolls to the
+            // divider above it rather than under it.
+            <div key={msg.id} id={messageAnchorId(msg.id)} className="scroll-mt-4">
               {firstOriginalMessageId === msg.id && (
                 <div className="flex items-center gap-3 my-2 select-none" aria-label="First original message marker">
                   <div className="flex-1 h-px bg-indigo-500/40" />
@@ -2638,6 +2751,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 onSetFirstOriginal={() => handleSetFirstOriginal(msg.id)}
                 reuseThinking={saveThinkingToLog}
                 onToggleThinking={() => handleToggleThinking(msg.id)}
+                linkCopied={copiedLink === msg.id}
+                onCopyLink={() => {
+                  const url = absoluteDeepLink(folderName, convoId, msg.id);
+                  navigator.clipboard?.writeText(url).then(
+                    () => setCopiedLink(msg.id),
+                    () => window.prompt('Copy this link:', url),
+                  );
+                  setTimeout(() => setCopiedLink(null), 1600);
+                }}
               />
               {/* Persisted subagent runs (collapsed — task + distilled result). */}
               {Array.isArray(msg.subagentRuns) && msg.subagentRuns.map((sr: any, si: number) => (
@@ -2659,7 +2781,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   ) : null}
                 </div>
               ))}
-            </React.Fragment>
+            </div>
           ))}
           {loading && (
             <motion.div

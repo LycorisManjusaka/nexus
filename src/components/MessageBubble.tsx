@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2 } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -11,7 +11,7 @@ import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
 
-export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal }: any) {
+export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(msg.content);
@@ -992,6 +992,20 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             >$</span>
           );
         })()}
+        {/* Copy a link straight to this message: /c/<folder>/<convoId>/m/<id>.
+            Opening it loads the conversation and scrolls here. */}
+        {/* A lucide glyph, not an emoji: emoji render in their own fixed colors
+            and ignore `text-muted-foreground`, which is what made this sit
+            brighter than the timestamp and token count beside it. */}
+        {onCopyLink && (
+          <button
+            onClick={onCopyLink}
+            title="Copy a link to this message"
+            className="opacity-70 hover:opacity-100 transition"
+          >
+            {linkCopied ? <Check size={12} /> : <Link2 size={12} />}
+          </button>
+        )}
       </div>
 
       {/* Web-search sources — clickable proof that the model actually consulted

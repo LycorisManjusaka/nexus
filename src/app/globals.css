@@ -23,6 +23,12 @@
 
 @layer base {
   :root {
+    /* Tells the browser which palette to draw NATIVE widgets in — the date
+       picker's calendar popup and the little calendar glyph inside
+       <input type="date">, plus scrollbars. Without it the browser assumes
+       light, and in Nexus's dark theme that glyph is drawn dark-on-dark and
+       looks like there is no date picker at all. */
+    color-scheme: light;
     --background: #ffffff;
     --foreground: #09090b;
     --border: #e4e4e7;
@@ -40,6 +46,7 @@
   }
 
   .dark {
+    color-scheme: dark;
     --background: #09090b;
     --foreground: #fafafa;
     --border: #27272a;

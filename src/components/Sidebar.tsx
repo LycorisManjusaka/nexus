@@ -7,6 +7,7 @@ import VoiceSelector from './VoiceSelector';
 import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
 import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
+import { orderFolderConversations } from '@/lib/deepLink';
 
 interface SidebarProps {
   conversations: any[];
@@ -56,14 +57,13 @@ export default function Sidebar({
   const activeFolder = folders.find(f => f.id === activeFolderId);
   const convoOrder = activeFolder?.settings?.convoOrder || [];
   
-  const filteredConvos = [...conversations].filter(c => c.folderName === activeFolder?.name).sort((a, b) => {
-    const indexA = convoOrder.indexOf(a.id);
-    const indexB = convoOrder.indexOf(b.id);
-    if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-    if (indexA !== -1) return -1;
-    if (indexB !== -1) return 1;
-    return b.updatedAt - a.updatedAt;
-  });
+  // Shared with the deep-link router: `/c/<folder>` opens "the top conversation",
+  // which must mean the row the user actually sees first. Two copies of this
+  // comparator would drift apart silently.
+  const filteredConvos = orderFolderConversations(
+    conversations.filter(c => c.folderName === activeFolder?.name),
+    convoOrder,
+  );
 
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);

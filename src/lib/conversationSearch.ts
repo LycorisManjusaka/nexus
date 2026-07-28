@@ -34,11 +34,15 @@ const MAX_SNIPPETS_PER_MESSAGE = 3;
 
 export interface SearchSnippet {
   messageIndex: number;
+  /** Stable message id — what a deep link addresses. Null on very old logs. */
+  messageId: string | null;
   author: string;
   timestamp: number | null;
   text: string; // trimmed, single line, with … where content was cut
 }
 export interface SearchGroup {
+  /** Owning entity. Carried per-group so an all-entities search stays attributable. */
+  folder: string;
   convoId: string;
   convoTitle: string;
   active: boolean;
@@ -46,11 +50,30 @@ export interface SearchGroup {
 }
 export interface SearchResult {
   query: string;
+  /** Single folder searched, or '*' when searching every entity. */
   folder: string;
+  folders: string[];
   results: SearchGroup[];
   conversationsMatched: number;
   conversationsSearched: number;
+  /** Whole conversations skipped because their last activity predates `from`. */
+  conversationsSkippedByDate: number;
+  /**
+   * Messages that MATCHED the query but carry no timestamp, while a date filter
+   * was active. Reported rather than silently dropped: imported .md logs and
+   * older conversations often have no per-message time, and quietly hiding them
+   * would make a date-filtered search look authoritative when it isn't.
+   */
+  messagesSkippedNoTimestamp: number;
   totalMatches: number;
+}
+
+export interface SearchOptions {
+  /** Entity tool: never surface conversations the user marked non-public. */
+  excludeInactive?: boolean;
+  /** Inclusive epoch-ms bounds on message timestamps. */
+  from?: number | null;
+  to?: number | null;
 }
 
 // Stream a file in 1MB chunks looking for `needleLower` (case-insensitive),
@@ -177,11 +200,20 @@ function snippetsForMessage(content: string, lowerContent: string, needle: strin
 export async function searchConversations(
   folderName: string,
   query: string,
-  opts?: { excludeInactive?: boolean },
+  opts?: SearchOptions,
 ): Promise<SearchResult> {
   const q = String(query || '').trim();
   const excludeInactive = !!opts?.excludeInactive;
-  const empty: SearchResult = { query: q, folder: folderName, results: [], conversationsMatched: 0, conversationsSearched: 0, totalMatches: 0 };
+  const from = typeof opts?.from === 'number' ? opts.from : null;
+  const to = typeof opts?.to === 'number' ? opts.to : null;
+  const dateFilterOn = from != null || to != null;
+  let skippedNoTs = 0;
+  let skippedByDate = 0;
+  const empty: SearchResult = {
+    query: q, folder: folderName, folders: [folderName], results: [],
+    conversationsMatched: 0, conversationsSearched: 0,
+    conversationsSkippedByDate: 0, messagesSkippedNoTimestamp: 0, totalMatches: 0,
+  };
   if (!folderName || !q) return empty;
 
   const dir = path.join(LOGS_DIR, String(folderName));
@@ -204,8 +236,11 @@ export async function searchConversations(
   const scanFile = async (fn: string): Promise<SearchGroup | null> => {
     const fp = path.join(dir, fn);
 
-    // (1) Cheap header-only active check — read just the first 4KB.
+    // (1) Cheap header-only check — read just the first 4KB. `saveLog` hoists
+    // header metadata to the front of the file, so `active` and `updatedAt` are
+    // both reliably inside this window.
     let active = true;
+    let updatedAt: number | null = null;
     try {
       const fh = await fs.open(fp, 'r');
       try {
@@ -214,9 +249,21 @@ export async function searchConversations(
         const head = buf.subarray(0, bytesRead).toString('utf-8');
         const m = head.match(/"active"\s*:\s*(true|false)/);
         if (m) active = m[1] === 'true';
+        const u = head.match(/"updatedAt"\s*:\s*(\d+)/);
+        if (u) updatedAt = Number(u[1]);
       } finally { await fh.close(); }
     } catch { return null; }
     if (excludeInactive && !active) return null; // non-public: not searched
+
+    // Conversation-level date pre-filter. `updatedAt` is the LAST activity, so
+    // only the lower bound can rule a file out wholesale: if nothing happened
+    // after `from`, no message inside can be in range. An `updatedAt` past `to`
+    // proves nothing — older messages may still qualify — so it never skips.
+    // Runs before the streaming scan, which is where the real cost is.
+    if (from != null && updatedAt != null && updatedAt < from) {
+      skippedByDate++;
+      return null;
+    }
     searched++;
 
     // (2) Streaming pre-filter — bail without ever loading the file whole.
@@ -240,6 +287,16 @@ export async function searchConversations(
       const lower = content.toLowerCase();
       if (!lower.includes(needle)) return;
 
+      // Date filter applied AFTER the term test, so the "no timestamp" tally
+      // counts only messages that would otherwise have been results — not every
+      // undated message in the corpus.
+      const ts = typeof m.timestamp === 'number' ? m.timestamp : null;
+      if (dateFilterOn) {
+        if (ts == null) { skippedNoTs++; return; }
+        if (from != null && ts < from) return;
+        if (to != null && ts > to) return;
+      }
+
       const isUser = m.role === 'user';
       const tags = isUser ? speakerTags(content) : [];
       const storedName: string | null =
@@ -249,12 +306,19 @@ export async function searchConversations(
         let author: string;
         if (isUser) author = governingSpeaker(tags, s.matchIdx, validNameKeys) || storedName || 'User';
         else author = m.name || m.role || 'assistant';
-        snippets.push({ messageIndex: idx, author, timestamp: typeof m.timestamp === 'number' ? m.timestamp : null, text: s.text });
+        snippets.push({
+          messageIndex: idx,
+          messageId: typeof m.id === 'string' ? m.id : null,
+          author,
+          timestamp: ts,
+          text: s.text,
+        });
       }
     });
 
     if (snippets.length === 0) return null;
     return {
+      folder: folderName,
       convoId: log.id || fn.replace(/\.json$/, ''),
       convoTitle: log.title || 'Untitled',
       active,
@@ -281,10 +345,70 @@ export async function searchConversations(
   return {
     query: q,
     folder: folderName,
+    folders: [folderName],
     results,
     conversationsMatched: results.length,
     conversationsSearched: searched,
+    conversationsSkippedByDate: skippedByDate,
+    messagesSkippedNoTimestamp: skippedNoTs,
     totalMatches,
+  };
+}
+
+/** Every entity that actually has a log directory. */
+export async function listSearchableFolders(): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(LOGS_DIR, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Search several entities and merge into one result.
+ *
+ * Folders run SEQUENTIALLY on purpose. `searchConversations` already runs a
+ * 4-file concurrency pool internally; fanning the folders out in parallel too
+ * would multiply that by the number of entities and reintroduce exactly the
+ * memory blow-up the streaming pre-filter was written to prevent.
+ */
+export async function searchFolders(
+  folderNames: string[],
+  query: string,
+  opts?: SearchOptions,
+): Promise<SearchResult> {
+  const q = String(query || '').trim();
+  const merged: SearchGroup[] = [];
+  let searched = 0;
+  let skippedByDate = 0;
+  let skippedNoTs = 0;
+
+  for (const f of folderNames) {
+    const r = await searchConversations(f, q, opts);
+    merged.push(...r.results);
+    searched += r.conversationsSearched;
+    skippedByDate += r.conversationsSkippedByDate;
+    skippedNoTs += r.messagesSkippedNoTimestamp;
+  }
+
+  // Grouped by entity, then by the shared title convention within each.
+  merged.sort((a, b) =>
+    a.folder === b.folder
+      ? compareConvoTitles(a.convoTitle, b.convoTitle)
+      : a.folder.localeCompare(b.folder)
+  );
+
+  return {
+    query: q,
+    folder: '*',
+    folders: folderNames,
+    results: merged,
+    conversationsMatched: merged.length,
+    conversationsSearched: searched,
+    conversationsSkippedByDate: skippedByDate,
+    messagesSkippedNoTimestamp: skippedNoTs,
+    totalMatches: merged.reduce((s, g) => s + g.matches.length, 0),
   };
 }
 
