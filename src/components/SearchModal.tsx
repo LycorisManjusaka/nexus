@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { X, Search, Loader2, Calendar } from 'lucide-react';
+import { X, Search, Loader2, Calendar, Copy, Check } from 'lucide-react';
 import { format } from 'date-fns';
 import { compareConvoTitles } from '@/lib/convoSort';
-import { buildDeepLink } from '@/lib/deepLink';
+import { buildDeepLink, absoluteDeepLink } from '@/lib/deepLink';
 
 // Full-text search across all conversations of the current entity. Opens from
 // the 🔍 header button, matches message bodies via /api/search, groups hits by
@@ -90,6 +90,8 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
   // Clear stale results when the entity changes underneath us.
   useEffect(() => { setData(null); setError(null); }, [folderName]);
 
+  const [copied, setCopied] = useState(false);
+
   const sortedResults = useMemo(() => {
     if (!data) return [];
     // An all-entities result is already grouped by folder server-side; re-sorting
@@ -97,6 +99,81 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
     if (data.folder === '*') return data.results;
     return [...data.results].sort((a, b) => compareConvoTitles(a.convoTitle, b.convoTitle));
   }, [data]);
+
+  /**
+   * The whole result set as Markdown, links included.
+   *
+   * Uses ABSOLUTE urls rather than the /c/… paths the list renders: this text
+   * is meant to leave Nexus (notes, a document, a message), where a bare path
+   * resolves against the wrong origin and is useless.
+   */
+  function buildMarkdown(): string {
+    if (!data) return '';
+    // Explicit plural, because "match" pluralises to "matches" — a bare +'s'
+    // produced "293 matchs" in the first version.
+    const n = (count: number, singular: string, plural = `${singular}s`) =>
+      `${count} ${count === 1 ? singular : plural}`;
+    const out: string[] = [];
+
+    out.push(`# Search: "${data.query}"`);
+    out.push('');
+    out.push(
+      `${n(data.totalMatches, 'match', 'matches')} in ${n(data.conversationsMatched, 'conversation')} ` +
+      `(of ${data.conversationsSearched} searched) — ` +
+      (data.folder === '*' ? `all entities (${data.folders.length})` : data.folder)
+    );
+    if (dateFilter && (fromDate || toDate)) {
+      out.push(`Date range: ${fromDate || '(any)'} → ${toDate || '(any)'}`);
+    }
+    // The same caveats the panel shows. A pasted report that quietly omitted
+    // them would look more complete than the search actually was.
+    if (data.conversationsSkippedByDate > 0) {
+      out.push(`${n(data.conversationsSkippedByDate, 'conversation')} skipped — no activity after the FROM date.`);
+    }
+    if (data.messagesSkippedNoTimestamp > 0) {
+      out.push(`${n(data.messagesSkippedNoTimestamp, 'matching message')} hidden — no timestamp to compare.`);
+    }
+    out.push('');
+
+    for (const g of sortedResults) {
+      const tags: string[] = [];
+      if (data.folder === '*') tags.push(g.folder);
+      if (!g.active) tags.push('inactive');
+      out.push(`## [${g.convoTitle}](${absoluteDeepLink(g.folder, g.convoId)})${tags.length ? ` — ${tags.join(', ')}` : ''}`);
+      out.push('');
+      for (const m of g.matches) {
+        const url = absoluteDeepLink(g.folder, g.convoId, m.messageId || undefined);
+        const ts = m.timestamp != null ? format(new Date(m.timestamp), 'yyyy-MM-dd HH:mm') : '';
+        const meta = ts ? `${m.author} · ${ts}` : m.author;
+        // Snippets are already single-line from the search lib, but collapse
+        // defensively — a stray newline would break the list item.
+        out.push(`- [${meta}](${url}) — ${m.text.replace(/\s+/g, ' ').trim()}`);
+      }
+      out.push('');
+    }
+    return out.join('\n').trimEnd() + '\n';
+  }
+
+  async function copyResults() {
+    const md = buildMarkdown();
+    if (!md) return;
+    try {
+      await navigator.clipboard.writeText(md);
+    } catch {
+      // Clipboard API needs a secure context and permission. Fall back to the
+      // old selection trick rather than a prompt() box, which mangles and
+      // truncates a report this long.
+      const ta = document.createElement('textarea');
+      ta.value = md;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  }
 
   async function runSearch() {
     const q = query.trim();
@@ -153,7 +230,20 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
           <div className="flex items-center gap-2 font-semibold">
             <Search size={18} /> Search · <span className="opacity-80">{advanced && scope === 'all' ? 'all entities' : folderName}</span>
           </div>
-          <button onClick={onClose} className="p-1 opacity-70 hover:opacity-100"><X size={18} /></button>
+          <div className="flex items-center gap-1">
+            {/* Whole result set as Markdown, with absolute links. Disabled until
+                there is something to copy. */}
+            <button
+              onClick={copyResults}
+              disabled={!data || data.totalMatches === 0 || loading}
+              title="Copy all results as Markdown"
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs opacity-70 hover:opacity-100 hover:bg-white/5 disabled:opacity-25 disabled:cursor-not-allowed"
+            >
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <button onClick={onClose} className="p-1 opacity-70 hover:opacity-100"><X size={18} /></button>
+          </div>
         </div>
 
         {/* Query row */}
