@@ -37,6 +37,34 @@ function stripLeadingPause(text: string): string {
   return (text || '').replace(LEADING_NONSPEAKABLE_RE, '');
 }
 
+/**
+ * Turn a failed engine response into an error that actually says what happened.
+ *
+ * These engines answer a rejection with a status AND a body explaining it —
+ * unknown speaker, model not loaded yet, text it can't read, request too long.
+ * Throwing a bare "audio_query failed" discarded every bit of that, which is
+ * precisely why an AivisSpeech failure during streaming could not be diagnosed
+ * from the log. Now the status, the body, and the request shape travel with it.
+ */
+async function engineError(label: string, res: Response, extra?: Record<string, unknown>): Promise<Error> {
+  let body = '';
+  try { body = (await res.text()).slice(0, 400).replace(/\s+/g, ' ').trim(); } catch { /* body already consumed or empty */ }
+  const bits = Object.entries(extra || {}).map(([k, v]) => `${k}=${v}`).join(' ');
+  return new Error(
+    `${label} → HTTP ${res.status} ${res.statusText || ''}`.trim() +
+    (bits ? ` · ${bits}` : '') +
+    (body ? ` · ${body}` : '')
+  );
+}
+
+// `audio_query` carries the text in the QUERY STRING, and Japanese costs 9
+// characters per character once percent-encoded (3 UTF-8 bytes × "%XX"). The
+// engines are Python/uvicorn, which caps the request line — so a long enough
+// chunk is rejected by the HTTP layer before synthesis is even attempted. This
+// is a prime suspect whenever "context mode" feeds whole paragraphs to
+// AivisSpeech, so log it rather than let it fail silently.
+const LONG_QUERY_WARN_BYTES = 6000;
+
 async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = []): Promise<ArrayBuffer | null> {
     // Per-entity pronunciation dictionary (local_data/tts_dict/<folder>.json):
     // literal CJK-friendly substring replacement, applied FIRST so an entity can
@@ -75,8 +103,16 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const style = char.styles[style_idx] || char.styles[0];
       const speakerId = style.id;
 
-      const queryRes = await fetch(`http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, { method: 'POST' });
-      if (!queryRes.ok) throw new Error('Voicevox audio_query failed');
+      const vvQueryUrl = `http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`;
+      if (vvQueryUrl.length > LONG_QUERY_WARN_BYTES) {
+        console.warn(`[tts] Voicevox audio_query URL is ${vvQueryUrl.length} bytes for ${text.length} chars.`);
+      }
+      const queryRes = await fetch(vvQueryUrl, { method: 'POST' });
+      if (!queryRes.ok) {
+        throw await engineError('Voicevox audio_query', queryRes, {
+          speaker: speakerId, textChars: text.length, urlBytes: vvQueryUrl.length,
+        });
+      }
       const queryJson = await queryRes.json();
 
       queryJson.speedScale = speed;
@@ -85,7 +121,9 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const synthRes = await fetch(`http://127.0.0.1:50021/synthesis?speaker=${speakerId}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryJson)
       });
-      if (!synthRes.ok) throw new Error('Voicevox synthesis failed');
+      if (!synthRes.ok) {
+        throw await engineError('Voicevox synthesis', synthRes, { speaker: speakerId, textChars: text.length });
+      }
 
       return await synthRes.arrayBuffer();
     }
@@ -106,7 +144,11 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const synthRes = await fetch('http://127.0.0.1:50032/v1/synthesis', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
       });
-      if (!synthRes.ok) throw new Error('Coeiroink synthesis failed');
+      if (!synthRes.ok) {
+        throw await engineError('Coeiroink synthesis', synthRes, {
+          styleId: style?.styleId, textChars: text.length,
+        });
+      }
       
       return await synthRes.arrayBuffer();
     }
@@ -126,8 +168,17 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const style = char.styles[style_idx] || char.styles[0];
       const speakerId = style.id;
 
-      const queryRes = await fetch(`${base}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, { method: 'POST' });
-      if (!queryRes.ok) throw new Error('AivisSpeech audio_query failed');
+      const queryUrl = `${base}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`;
+      if (queryUrl.length > LONG_QUERY_WARN_BYTES) {
+        console.warn(`[tts] AivisSpeech audio_query URL is ${queryUrl.length} bytes for ${text.length} chars — long enough to be rejected by the engine's HTTP layer. Consider turning Context mode off for this entity, or shortening the chunk.`);
+      }
+      const queryRes = await fetch(queryUrl, { method: 'POST' });
+      if (!queryRes.ok) {
+        throw await engineError('AivisSpeech audio_query', queryRes, {
+          speaker: speakerId, textChars: text.length, urlBytes: queryUrl.length,
+          styleName: style?.name ?? '?', charName: char?.name ?? '?',
+        });
+      }
       const queryJson = await queryRes.json();
 
       queryJson.speedScale = speed;
@@ -136,7 +187,11 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const synthRes = await fetch(`${base}/synthesis?speaker=${speakerId}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queryJson)
       });
-      if (!synthRes.ok) throw new Error('AivisSpeech synthesis failed');
+      if (!synthRes.ok) {
+        throw await engineError('AivisSpeech synthesis', synthRes, {
+          speaker: speakerId, textChars: text.length,
+        });
+      }
 
       return await synthRes.arrayBuffer();
     } else {
