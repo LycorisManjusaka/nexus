@@ -6,10 +6,11 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail } from 'lucide-react';
 import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
+import MailModal from './MailModal';
 import AudioSessionModal from './AudioSessionModal';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
@@ -243,6 +244,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [pendingAsk, setPendingAsk] = useState<{ askId: string; questions: any[] } | null>(null);
   // Optional subagent (context-firewall helper) tool — OAuth path for now.
   const [subagentEnabled, setSubagentEnabled] = useState(false);
+  const [lettersEnabled, setLettersEnabled] = useState(false);
   // Model the child subagent runs on ('' = cheap default, e.g. Haiku).
   const [subagentModel, setSubagentModel] = useState('');
   // Provider family of the subagent model (routes it to the right endpoint).
@@ -691,6 +693,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAskUserEnabled(data.askUserEnabled === true);
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setSubagentEnabled(data.subagentEnabled === true);
+        setLettersEnabled(data.lettersEnabled === true);
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -754,6 +757,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAskUserEnabled(pick('askUserEnabled', false));
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setSubagentEnabled(pick('subagentEnabled', false));
+        setLettersEnabled(pick('lettersEnabled', false));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -866,7 +870,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -915,7 +919,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           });
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1597,7 +1601,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -2156,6 +2160,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       subagentEnabled,
       subagentModel,
       subagentFamily,
+      lettersEnabled,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -2310,6 +2315,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mailOpen, setMailOpen] = useState(false);
+  // Unread count for the header badge. Refreshed whenever the Mail Manager
+  // loads, and once on mount so waiting mail is visible without opening it.
+  const [mailUnread, setMailUnread] = useState(0);
+  useEffect(() => {
+    // One cheap read on mount so waiting mail is visible without opening the
+    // window. Best-effort: a failure just leaves the badge hidden.
+    let cancelled = false;
+    fetch('/api/letters')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled && d) setMailUnread(d.unread || 0); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [audioSessionOpen, setAudioSessionOpen] = useState(false);
 
   // Recompute tokens for every visible piece — system prompt, attachment
@@ -2585,6 +2604,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             title="Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine"
           >
             <AudioLines size={16} />
+          </button>
+          <button
+            onClick={() => setMailOpen(true)}
+            className="relative p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
+            title="Mail Manager — every letter between identities: read, edit, delete, set read/archived flags, or write one yourself"
+          >
+            <Mail size={16} />
+            {mailUnread > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-[14px] text-black">
+                {mailUnread > 99 ? '99+' : mailUnread}
+              </span>
+            )}
           </button>
           <button
             onClick={() => setStatsOpen(true)}
@@ -3258,6 +3289,44 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       />
                     </div>
                   </div>
+                )}
+              </div>
+
+              {/* ── Letters (mail between Digital Identities) ─────────────────
+                  Storage lives entirely server-side under local_data/letters/
+                  and is reachable ONLY through these four tools — an entity with
+                  Full PC access gains nothing over one without it. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={lettersEnabled}
+                    onChange={(e) => setLettersEnabled(e.target.checked)}
+                    className="accent-amber-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">✉️ Letters (write to the other Digital Identities)</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  OFF (default): no mail tools. ON: this identity gets <span className="font-mono">write_letter</span>,{' '}
+                  <span className="font-mono">list_letters</span>, <span className="font-mono">read_letter</span> and{' '}
+                  <span className="font-mono">archive_letter</span>, and is told at the start of a turn when unread mail is
+                  waiting. Identities never share a conversation, so a letter is the only way one can say something to another.
+                  The sender is always this folder&apos;s name — it can never be forged from the model side. Recipients are every
+                  Digital Identity <em>and</em> every name in <span className="font-mono">character_map.json</span>; writing to a
+                  name that has no folder yet creates one, so no correspondent is second-class.
+                  {' '}Reading is the recipient&apos;s choice — <span className="font-mono">archive_letter</span> lets them decline
+                  without opening, and the sender is told only whether a letter was opened, never that it was set aside.
+                  <em> Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.</em>
+                </p>
+                {lettersEnabled && (
+                  <p className="text-xs text-muted-foreground mt-2 ml-6 leading-relaxed">
+                    Mail lives in <span className="font-mono">local_data/letters/&lt;from&gt;/&lt;to&gt;/</span>. To manage a letter
+                    by hand, create an empty file beside it named{' '}
+                    <span className="font-mono">&lt;letter&gt;.md.read</span> or{' '}
+                    <span className="font-mono">&lt;letter&gt;.md.archived</span> — delete it to undo. Do <strong>not</strong> rename
+                    the <span className="font-mono">.md</span> itself. <span className="font-mono">_status.md</span> in that folder
+                    is a generated overview of every mailbox.
+                  </p>
                 )}
               </div>
 
@@ -4249,6 +4318,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       subagentEnabled,
                       subagentModel,
                       subagentFamily,
+                      lettersEnabled,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,
@@ -4355,6 +4425,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />
 
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} folderName={folderName} />
+      <MailModal open={mailOpen} onClose={() => setMailOpen(false)} onUnreadChange={setMailUnread} />
 
       {/* Mounted only while open: the panel probes every service on mount
           (each process probe is a PowerShell spawn), so it must not run in the

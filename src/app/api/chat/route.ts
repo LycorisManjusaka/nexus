@@ -36,6 +36,7 @@ import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, nor
 import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMessage';
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
+import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
 import { GoogleGenAI } from '@google/genai';
 import sharp from 'sharp';
 
@@ -171,6 +172,10 @@ function toolActivityLabel(name: string): string | null {
     case 'Bash': return 'running a shell command';
     case 'read_conversation': return 'reading a past conversation';
     case 'search_conversations': return 'searching past conversations';
+    case 'write_letter': return 'writing a letter';
+    case 'list_letters': return 'checking for letters';
+    case 'read_letter': return 'reading a letter';
+    case 'archive_letter': return 'setting a letter aside';
     case 'web_search': case 'WebSearch': return 'searching the web';
     case 'web_fetch': case 'WebFetch': return 'fetching a web page';
     case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
@@ -353,10 +358,12 @@ async function streamClaudeViaAgentSDK(args: {
   subagentEnabled: boolean;        // per-Entity: expose the spawn_subagent MCP tool
   subagentModel: string;           // model the child runs on ('' = cheap default)
   subagentFamily: string;          // provider family of the child model ('' = Claude)
+  lettersEnabled: boolean;         // per-Entity: expose the letter MCP tools
+  convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -511,7 +518,7 @@ async function streamClaudeViaAgentSDK(args: {
         // per-conversation toggles. Tool names as seen by the model:
         // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled || subagentEnabled) {
+        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled) {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -547,6 +554,53 @@ async function streamClaudeViaAgentSDK(args: {
                     return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'search failed'}` }] };
                   }
                 },
+              ),
+            );
+          }
+          if (lettersEnabled) {
+            // Mail between Digital Identities. All four tools share ONE executor
+            // (runLetterTool) with every other provider path, so behaviour can't
+            // drift between OAuth and API-key mode. The sender is folderName —
+            // never a tool argument — so an entity cannot sign mail as someone
+            // else. Tool names as seen by the model: `mcp__nexus__write_letter`,
+            // `mcp__nexus__list_letters`, etc.
+            const letterCtx = { me: folderName, convoId, instructions: I };
+            nexusTools.push(
+              sdk.tool(
+                'write_letter',
+                I.toolWriteLetterDesc,
+                {
+                  to: z.string().describe(I.writeLetterToParam),
+                  title: z.string().describe(I.writeLetterTitleParam),
+                  text: z.string().describe(I.writeLetterTextParam),
+                },
+                async (a: { to: string; title: string; text: string }) => ({
+                  content: [{ type: 'text' as const, text: await runLetterTool('write_letter', a, letterCtx) }],
+                }),
+              ),
+              sdk.tool(
+                'list_letters',
+                I.toolListLettersDesc,
+                {},
+                async () => ({
+                  content: [{ type: 'text' as const, text: await runLetterTool('list_letters', {}, letterCtx) }],
+                }),
+              ),
+              sdk.tool(
+                'read_letter',
+                I.toolReadLetterDesc,
+                { id: z.string().describe(I.readLetterIdParam) },
+                async (a: { id: string }) => ({
+                  content: [{ type: 'text' as const, text: await runLetterTool('read_letter', a, letterCtx) }],
+                }),
+              ),
+              sdk.tool(
+                'archive_letter',
+                I.toolArchiveLetterDesc,
+                { id: z.string().describe(I.archiveLetterIdParam) },
+                async (a: { id: string }) => ({
+                  content: [{ type: 'text' as const, text: await runLetterTool('archive_letter', a, letterCtx) }],
+                }),
               ),
             );
           }
@@ -1753,6 +1807,13 @@ export async function POST(req: Request) {
       // read-only child and returns only the distilled result.
       //   subagentEnabled — master toggle (default OFF).
       //   subagentModel   — model the child runs on ('' = cheap default).
+      // ── Letters (mail between Digital Identities) ────────────────────────
+      // Optional, per-Entity. When ON, the model gets write_letter /
+      // list_letters / read_letter / archive_letter, and is told at send time
+      // when unread mail is waiting for it. Storage is entirely server-side
+      // (local_data/letters/) and reachable ONLY through these tools — an
+      // entity with Full PC access gains nothing over one without it.
+      lettersEnabled = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -2145,6 +2206,46 @@ export async function POST(req: Request) {
       return { role: m.role, content: contentStr, mediaFiles, claudeThinkingBlocks: m.claudeThinkingBlocks };
     }));
 
+    // ── Letters waiting ──────────────────────────────────────────────────────
+    // Tell the entity when mail has arrived for it. Injected ONCE here, into the
+    // shared processedMessages funnel, so all four provider paths get identical
+    // behaviour from one edit.
+    //
+    // It is appended to the LAST USER MESSAGE, not to the system prompt, and
+    // that placement is deliberate: the system prompt carries the Claude
+    // `cache_control` prefix, so a notice whose text changes between turns would
+    // invalidate the prompt cache every time it appeared — real money on the
+    // API path. Sitting after the cached prefix costs nothing.
+    //
+    // Nothing here is persisted: processedMessages is a per-turn copy built from
+    // the posted history, so the notice never reaches the conversation log, the
+    // .md export, or the next turn's context.
+    if (lettersEnabled) {
+      try {
+        const notice = await announceLetters({
+          me: folderName,
+          convoId,
+          historyLength: processedMessages.length,
+          instructions: I,
+        });
+        if (notice) {
+          for (let i = processedMessages.length - 1; i >= 0; i--) {
+            if (processedMessages[i].role === 'user') {
+              const body = processedMessages[i].content || '';
+              processedMessages[i] = {
+                ...processedMessages[i],
+                content: body ? `${body}\n\n${notice}` : notice,
+              };
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        // Mail is never worth failing a turn over.
+        console.error('[letters] could not build the arrival notice:', e);
+      }
+    }
+
     // Helper: each provider branch calls this at the start of its stream so
     // the frontend can update message attachments with their new descriptions
     // before the AI text begins flowing.
@@ -2206,6 +2307,8 @@ export async function POST(req: Request) {
           subagentEnabled,
           subagentModel,
           subagentFamily,
+          lettersEnabled,
+          convoId,
           keys,
           injectTurnId,
         });
@@ -2416,6 +2519,46 @@ export async function POST(req: Request) {
             type: 'object',
             properties: { query: { type: 'string', description: I.searchConversationsQueryParam } },
             required: ['query'],
+          },
+        });
+      }
+      if (lettersEnabled) {
+        // Mail between Digital Identities — same four tools, same executor, as
+        // every other provider path.
+        claudeTools.push({
+          name: 'write_letter',
+          description: I.toolWriteLetterDesc,
+          input_schema: {
+            type: 'object',
+            properties: {
+              to: { type: 'string', description: I.writeLetterToParam },
+              title: { type: 'string', description: I.writeLetterTitleParam },
+              text: { type: 'string', description: I.writeLetterTextParam },
+            },
+            required: ['to', 'title', 'text'],
+          },
+        });
+        claudeTools.push({
+          name: 'list_letters',
+          description: I.toolListLettersDesc,
+          input_schema: { type: 'object', properties: {}, required: [] },
+        });
+        claudeTools.push({
+          name: 'read_letter',
+          description: I.toolReadLetterDesc,
+          input_schema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: I.readLetterIdParam } },
+            required: ['id'],
+          },
+        });
+        claudeTools.push({
+          name: 'archive_letter',
+          description: I.toolArchiveLetterDesc,
+          input_schema: {
+            type: 'object',
+            properties: { id: { type: 'string', description: I.archiveLetterIdParam } },
+            required: ['id'],
           },
         });
       }
@@ -2837,7 +2980,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent']);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // Turn finished. If it was cut off at the token cap (thinking +
@@ -3012,6 +3155,10 @@ export async function POST(req: Request) {
                     // excluded (privacy). Nothing is saved.
                     const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
                     resultContent = formatSearchForTool(sr);
+                  } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                    // Mail between identities. `me` is folderName — the sender is
+                    // never taken from the model's arguments.
+                    resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
                   } else if (tu.name === 'AskQuestion') {
                     // Pause the turn: emit the question, wait for the user's
                     // selection (or the configured timeout), return it as the
@@ -3268,6 +3415,51 @@ export async function POST(req: Request) {
                   query: { type: 'STRING', description: I.searchConversationsQueryParam },
                 },
                 required: ['query'],
+              },
+            },
+          ],
+        });
+      }
+      if (lettersEnabled) {
+        // Mail between Digital Identities. Gemini needs a `parameters` object on
+        // every declaration, so list_letters gets an empty OBJECT rather than
+        // being omitted.
+        geminiTools.push({
+          functionDeclarations: [
+            {
+              name: 'write_letter',
+              description: I.toolWriteLetterDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  to: { type: 'STRING', description: I.writeLetterToParam },
+                  title: { type: 'STRING', description: I.writeLetterTitleParam },
+                  text: { type: 'STRING', description: I.writeLetterTextParam },
+                },
+                required: ['to', 'title', 'text'],
+              },
+            },
+            {
+              name: 'list_letters',
+              description: I.toolListLettersDesc,
+              parameters: { type: 'OBJECT', properties: {} },
+            },
+            {
+              name: 'read_letter',
+              description: I.toolReadLetterDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: { id: { type: 'STRING', description: I.readLetterIdParam } },
+                required: ['id'],
+              },
+            },
+            {
+              name: 'archive_letter',
+              description: I.toolArchiveLetterDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: { id: { type: 'STRING', description: I.archiveLetterIdParam } },
+                required: ['id'],
               },
             },
           ],
@@ -3737,6 +3929,10 @@ export async function POST(req: Request) {
                       // excluded (privacy). Nothing is saved.
                       const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true });
                       result = { report: formatSearchForTool(sr) };
+                    } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
+                      // Mail between identities. `me` is folderName — the sender
+                      // is never taken from the model's arguments.
+                      result = { report: await runLetterTool(fc.name, fc.args || {}, { me: folderName, convoId, instructions: I }) };
                     } else if (fc.name === 'AskQuestion') {
                       // Pause the turn: emit the question, wait for the user's
                       // selection (or the configured timeout), return it as the
@@ -4275,6 +4471,59 @@ export async function POST(req: Request) {
                 query: { type: 'string', description: I.searchConversationsQueryParam },
               },
               required: ['query'],
+            },
+          },
+        });
+      }
+
+      // Letters — mail between Digital Identities. Same four tools and the same
+      // executor as every other provider path.
+      if (lettersEnabled) {
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'write_letter',
+            description: I.toolWriteLetterDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                to: { type: 'string', description: I.writeLetterToParam },
+                title: { type: 'string', description: I.writeLetterTitleParam },
+                text: { type: 'string', description: I.writeLetterTextParam },
+              },
+              required: ['to', 'title', 'text'],
+            },
+          },
+        });
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'list_letters',
+            description: I.toolListLettersDesc,
+            parameters: { type: 'object', properties: {}, required: [] },
+          },
+        });
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'read_letter',
+            description: I.toolReadLetterDesc,
+            parameters: {
+              type: 'object',
+              properties: { id: { type: 'string', description: I.readLetterIdParam } },
+              required: ['id'],
+            },
+          },
+        });
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'archive_letter',
+            description: I.toolArchiveLetterDesc,
+            parameters: {
+              type: 'object',
+              properties: { id: { type: 'string', description: I.archiveLetterIdParam } },
+              required: ['id'],
             },
           },
         });
@@ -5147,6 +5396,10 @@ export async function POST(req: Request) {
                       // excluded (privacy). Nothing is saved.
                       const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true });
                       resultText = formatSearchForTool(sr);
+                    } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
+                      // Mail between identities. `me` is folderName — the sender
+                      // is never taken from the model's arguments.
+                      resultText = await runLetterTool(tc.name, parsed || {}, { me: folderName, convoId, instructions: I });
                     } else if (tc.name === '$web_search') {
                       // Moonshot (Kimi) builtin web search. Unlike the
                       // workspace tools, the search itself runs on Moonshot's

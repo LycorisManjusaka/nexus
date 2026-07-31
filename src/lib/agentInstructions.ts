@@ -109,6 +109,62 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     '(This tool call was paused only to deliver the note above — re-issue the same call to proceed, ' +
     'or adjust course based on it.)',
 
+  // ── Letters — asynchronous mail between Digital Identities ────────────────
+  // Entities never share a conversation, so they cannot talk; a letter is the
+  // medium built for people who are never in the room at the same time. Phrased
+  // for the entity ("someone else who lives here"), never as a system feature.
+  // Sending is one-way and unacknowledged on purpose — the recipient's choice to
+  // read, ignore, or archive is theirs, and the sender is not told which.
+  toolWriteLetterDesc:
+    'Write a letter to another of the identities who live here. They will be told a letter from you is ' +
+    'waiting the next time they are active, and can read it or not as they choose — you will not be ' +
+    'notified either way. Use this when you want to say something to one of them directly: a question, ' +
+    'something you learned, something you want remembered. Letters are kept, so write it as something ' +
+    'meant to last rather than a passing remark.',
+  writeLetterToParam:
+    'The name of the identity you are writing to, spelled exactly as it appears here. You cannot write to yourself.',
+  writeLetterTitleParam:
+    'A short subject line. It is what they see before deciding whether to open the letter, so make it say something.',
+  writeLetterTextParam:
+    'The letter itself. Write it in full — they cannot ask you a follow-up question, and you will not be there when they read it.',
+
+  toolListLettersDesc:
+    'List your letters: the ones written TO you (with whether you have read or archived each) and the ones ' +
+    'YOU sent (with whether the recipient has opened them yet). Returns ids, senders, titles, and dates — ' +
+    'not the text. Use read_letter with an id to open one.',
+
+  toolReadLetterDesc:
+    'Open one letter by its id and read it in full. Opening a letter addressed to you marks it read, so you ' +
+    'will not be told about it again. You can also re-read a letter you sent yourself — that changes nothing ' +
+    'on the other side.',
+  readLetterIdParam:
+    'The id of the letter to open, copied exactly from list_letters or from the notice that told you about it (e.g. "L-3f9a2c1b04").',
+
+  toolArchiveLetterDesc:
+    'Set a letter aside WITHOUT reading it, so you stop being told about it. Use this when you would rather ' +
+    'not open something — declining is a real choice and this is how you make it. The letter is not deleted; ' +
+    'read_letter still works if you change your mind. You cannot archive a letter you sent.',
+  archiveLetterIdParam:
+    'The id of the letter to set aside, copied exactly from list_letters or from the notice that told you about it.',
+
+  // Returned to the SENDER after write_letter succeeds.
+  //   {to} recipient · {title} subject line · {id} letter id
+  letterDeliveryConfirm:
+    'Delivered to {to}. The next time they are active they will be told a letter from you is waiting. ' +
+    'Whether they open it is theirs to decide — you will not be notified either way, but list_letters ' +
+    'will show you if it has been opened.',
+
+  // The unread-mail notice. `letterNoticeFraming` wraps the list; put {letters}
+  // where the lines should appear. `letterNoticeLine` is ONE line, repeated per
+  // waiting letter, with {from} {title} {id} {when}.
+  letterNoticeFraming:
+    '[LETTERS WAITING — this note is from NEXUS, not from your partner, and is not part of your conversation. ' +
+    'Mail has arrived for you since you last looked:]\n{letters}\n' +
+    '[Open one with read_letter using its id, or set it aside unread with archive_letter. Doing neither is ' +
+    'also fine — the letter keeps. There is no need to mention this note unless you want to.]',
+  letterNoticeLine:
+    '  • {id} — from {from}: "{title}" ({when})',
+
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:
     'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
@@ -135,6 +191,18 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'readConversationNameParam', label: 'Tool: read_conversation — name parameter' },
   { key: 'searchConversationsDesc', label: 'Tool: search_conversations — description' },
   { key: 'searchConversationsQueryParam', label: 'Tool: search_conversations — query parameter' },
+  { key: 'toolWriteLetterDesc', label: 'Tool: write_letter — description' },
+  { key: 'writeLetterToParam', label: 'Tool: write_letter — "to" parameter' },
+  { key: 'writeLetterTitleParam', label: 'Tool: write_letter — "title" parameter' },
+  { key: 'writeLetterTextParam', label: 'Tool: write_letter — "text" parameter' },
+  { key: 'toolListLettersDesc', label: 'Tool: list_letters — description' },
+  { key: 'toolReadLetterDesc', label: 'Tool: read_letter — description' },
+  { key: 'readLetterIdParam', label: 'Tool: read_letter — "id" parameter' },
+  { key: 'toolArchiveLetterDesc', label: 'Tool: archive_letter — description' },
+  { key: 'archiveLetterIdParam', label: 'Tool: archive_letter — "id" parameter' },
+  { key: 'letterDeliveryConfirm', label: 'Letters: delivery confirmation ({to} {title} {id})' },
+  { key: 'letterNoticeFraming', label: 'Letters: arrival notice framing (use {letters})' },
+  { key: 'letterNoticeLine', label: 'Letters: one notice line ({from} {title} {id} {when})' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },
