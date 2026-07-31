@@ -41,6 +41,9 @@ export default function EditableCombo({
   const [rect, setRect] = useState<DOMRect | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The portalled <ul>. Needed because it lives outside wrapRef in the DOM, so
+  // outside-click and scroll handling must know about it explicitly.
+  const listRef = useRef<HTMLUListElement>(null);
 
   const openMenu = (filter: boolean) => {
     setFilterMode(filter);
@@ -50,19 +53,47 @@ export default function EditableCombo({
 
   useEffect(() => {
     if (!open) return;
+
+    // The list is portalled to <body>, so it is NOT inside wrapRef — treating
+    // "outside wrapRef" as an outside click closed the menu the moment you
+    // grabbed the list's own scrollbar. Both containers count as inside.
+    const isInside = (target: Node | null) =>
+      (!!wrapRef.current && wrapRef.current.contains(target)) ||
+      (!!listRef.current && listRef.current.contains(target));
+
     const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      if (!isInside(e.target as Node)) setOpen(false);
     };
-    const onScroll = () => setOpen(false);
+
+    // Scroll is bound in the CAPTURE phase so we hear the scroll of any ancestor
+    // container, not just the window — a fixed-position list has to react when
+    // the panel behind it moves. But that also means the list's OWN scrolling
+    // arrives here, which used to close the menu as soon as you turned the
+    // wheel over it. Ignore scrolls that originate inside the list.
+    //
+    // For every other scroll, follow the input instead of closing. Closing was
+    // a shortcut for "the list would be detached from its input now"; keeping
+    // the two together is what was actually wanted. We only give up when the
+    // input itself has left the viewport, where there is nothing to point at.
+    const onReposition = (e?: Event) => {
+      if (e && listRef.current && listRef.current.contains(e.target as Node)) return;
+      const el = inputRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight) { setOpen(false); return; }
+      setRect(r);
+    };
+
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+
     document.addEventListener('mousedown', onDoc);
-    window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onScroll);
+    window.addEventListener('scroll', onReposition, true);
+    window.addEventListener('resize', onReposition);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDoc);
-      window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onScroll);
+      window.removeEventListener('scroll', onReposition, true);
+      window.removeEventListener('resize', onReposition);
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
@@ -96,6 +127,7 @@ export default function EditableCombo({
       </button>
       {open && rect && shown.length > 0 && typeof document !== 'undefined' && createPortal(
         <ul
+          ref={listRef}
           style={{ position: 'fixed', top: rect.bottom + 2, left: rect.left, width: rect.width, zIndex: 9999 }}
           className="max-h-64 overflow-auto bg-background border border-border rounded-lg shadow-xl py-1"
         >
