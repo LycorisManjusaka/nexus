@@ -113,6 +113,47 @@ async function backupFooterIfChanged(folderName: string): Promise<void> {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Write an entity's FOOTER.md (its self-authored Layer 5), preserving whatever
+ * was there before.
+ *
+ * This is the HUMAN edit path — the System Prompt Updater window. The entity
+ * writes the same file with its own tools, so an edit here can overwrite text
+ * the entity authored; the previous version is therefore snapshotted
+ * unconditionally rather than through backupFooterIfChanged(), which only fires
+ * when the content differs from the last-seen marker and would silently skip
+ * the snapshot right after a normal save.
+ *
+ * An empty body writes an empty file rather than deleting it: appendLayer5Footer
+ * already treats empty as "no Layer 5", and keeping the file makes the clearing
+ * reversible from the backups.
+ */
+export async function writeEntityFooter(folderName: string, body: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const dir = path.join(WORKSPACES_DIR, sanitizeFolderName(folderName));
+    const file = path.join(dir, FOOTER_FILENAME);
+    const text = String(body ?? '');
+
+    const cur = await readEntityFooter(folderName);
+    if (cur !== null && cur !== text) {
+      // Preserve the version being replaced, then advance the marker so the
+      // saveLog hook doesn't snapshot this same content a second time.
+      const bdir = path.join(BACKUPS_DIR, folderName, 'footers');
+      try {
+        await fs.mkdir(bdir, { recursive: true });
+        await atomicWriteFile(path.join(bdir, `${footerBackupStamp()}.md`), cur);
+        await fs.writeFile(path.join(bdir, '.last'), text);
+      } catch { /* a backup hiccup must not block the edit */ }
+    }
+
+    await fs.mkdir(dir, { recursive: true });
+    await atomicWriteFile(file, text);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'could not write FOOTER.md' };
+  }
+}
+
 function resolveWorkspacePath(folderName: string, relPath: string): string | null {
   const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
   // Trim any leading slashes — model might emit "/notes.md"

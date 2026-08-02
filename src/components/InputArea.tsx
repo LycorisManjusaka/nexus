@@ -4,6 +4,7 @@ import React, { useState, useRef } from 'react';
 import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
+import { SNIFF_BYTES, TEXT_MAX_BYTES, MEDIA_EXT, looksLikeText } from '@/lib/textSniff';
 
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
   const [text, setText] = useState('');
@@ -233,11 +234,28 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
 
   const processFiles = async (files: File[]) => {
     const newAttachments = await Promise.all(files.map(async (file) => {
-      const isText = file.type.startsWith('text/') || /\.(txt|md|csv|json|py|js|ts|jsx|tsx|css|html)$/i.test(file.name);
-      const isImage = file.type.startsWith('image/');
-      const isAudio = file.type.startsWith('audio/');
-      const isVideo = file.type.startsWith('video/');
+      // Media detection first — these three have a native modality and must NOT
+      // be turned into text. `file.type` is unreliable on Windows for anything
+      // uncommon (it is frequently empty), so the extension is a fallback.
+      const ext = (file.name.match(/\.([a-z0-9]+)$/i)?.[1] || '').toLowerCase();
+      const isImage = file.type.startsWith('image/') || MEDIA_EXT.image.has(ext);
+      const isAudio = file.type.startsWith('audio/') || MEDIA_EXT.audio.has(ext);
+      const isVideo = file.type.startsWith('video/') || MEDIA_EXT.video.has(ext);
 
+      // SVG is an image MIME but no provider accepts it as an image, so sending
+      // it down the media path guarantees it is dropped. It is markup — read it.
+      const isSvg = /^image\/svg/i.test(file.type) || ext === 'svg';
+
+      // ANY non-media file is a text candidate. The old rule was an extension
+      // allowlist (txt|md|csv|json|py|js|ts|jsx|tsx|css|html), so a .srt, .log,
+      // .yaml, .sql, .ini, .rs, .go — anything not on the list — was classified
+      // as binary, pushed to the provider as a media block with a mime it does
+      // not accept, and silently dropped. The entity correctly reported that it
+      // could not see the file. Sniffing the bytes is the right test: what makes
+      // a file readable is its contents, not its name.
+      const textCandidate = isSvg || !(isImage || isAudio || isVideo);
+
+      let isText = false;
       let textData = null;
       let dataUrl: string | null = null;
       let tokens = 0;
@@ -245,8 +263,30 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       let finalType = file.type;
       let finalSize = file.size;
 
+      if (textCandidate) {
+        // Sniff a prefix rather than reading the whole file: a 500 MB blob must
+        // never be decoded just to discover it is binary.
+        const probe = new Uint8Array(await file.slice(0, SNIFF_BYTES).arrayBuffer());
+        if (looksLikeText(probe)) {
+          isText = true;
+          if (file.size > TEXT_MAX_BYTES) {
+            // Injected verbatim into the prompt on EVERY turn, so an unbounded
+            // read is a context-window accident waiting to happen. Truncate
+            // loudly — a silent cut would look like the model ignoring content.
+            const head = await file.slice(0, TEXT_MAX_BYTES).text();
+            textData = `${head}\n\n[… truncated by NEXUS: file is ${(file.size / 1048576).toFixed(1)} MB, ` +
+              `only the first ${(TEXT_MAX_BYTES / 1048576).toFixed(0)} MB is attached …]`;
+          } else {
+            textData = await file.text();
+          }
+        }
+        // Genuinely binary: fall through to the payload path. The server turns
+        // any non-media payload into an honest one-line descriptor rather than
+        // dumping mojibake, so the handling lives in one place and old
+        // conversations with an already-attached file get it too.
+      }
+
       if (isText) {
-        textData = await file.text();
         if (aiName) {
           try {
             const res = await fetch('/api/tokens', {

@@ -37,6 +37,7 @@ import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMe
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
+import { looksLikeText, isMediaMime, SNIFF_BYTES, TEXT_MAX_BYTES } from '@/lib/textSniff';
 import { GoogleGenAI } from '@google/genai';
 import sharp from 'sharp';
 
@@ -1813,6 +1814,9 @@ export async function POST(req: Request) {
       // when unread mail is waiting for it. Storage is entirely server-side
       // (local_data/letters/) and reachable ONLY through these tools — an
       // entity with Full PC access gains nothing over one without it.
+      // Manual "continue this reply" — the history ends with the assistant
+      // message being continued, and NEXUS adds the resume turn server-side.
+      continueFromMessage = false,
       lettersEnabled = false,
       subagentEnabled = false,
       subagentModel = '',
@@ -2193,6 +2197,30 @@ export async function POST(req: Request) {
                   generatedAt: Date.now(),
                   error: result.error,
                 });
+              } else if (!isMediaMime(mimeType)) {
+                // NOT image/audio/video — so there is no modality any provider
+                // can consume, and pushing it as a media block means the model
+                // silently receives nothing. (This is what happened to .srt: the
+                // client's old extension allowlist called it binary, and it
+                // arrived here as a media block with mime `application/x-subrip`.)
+                //
+                // Handled here as well as at attach time so that files ALREADY
+                // sitting in old conversations start working too, with no
+                // migration.
+                const raw = Buffer.from(base64Data, 'base64');
+                if (looksLikeText(new Uint8Array(raw.subarray(0, SNIFF_BYTES)))) {
+                  const clipped = raw.subarray(0, TEXT_MAX_BYTES).toString('utf-8');
+                  const note = raw.length > TEXT_MAX_BYTES
+                    ? `\n\n[… truncated by NEXUS: ${(raw.length / 1048576).toFixed(1)} MB total …]`
+                    : '';
+                  contentStr += `\n\n<attached_file name="${att.name}">\n${clipped}${note}\n</attached_file>`;
+                } else {
+                  // Genuinely binary. Mojibake would cost a fortune in tokens and
+                  // convey nothing, so state plainly what arrived.
+                  contentStr +=
+                    `\n\n<attached_file name="${att.name}" type="${mimeType}" bytes="${raw.length}">\n` +
+                    `[binary file — no readable text content]\n</attached_file>`;
+                }
               } else {
                 // Multimodal primary model or toggle off — pass the media
                 // through unchanged. The provider either handles it (vision/
@@ -2243,6 +2271,27 @@ export async function POST(req: Request) {
       } catch (e) {
         // Mail is never worth failing a turn over.
         console.error('[letters] could not build the arrival notice:', e);
+      }
+    }
+
+    // ── Manual continuation ──────────────────────────────────────────────────
+    // The client sent history ending with the assistant message to continue.
+    // The resume instruction is added HERE, as a user turn, rather than by the
+    // client — because for Claude an assistant message in last position is a
+    // prefill, which Anthropic rejects outright while extended thinking is on
+    // (the same restriction the automatic continuation works around). Adding a
+    // user turn after it makes this an ordinary conversation.
+    //
+    // Appended AFTER the letters notice so waiting mail still attaches to the
+    // real user message rather than to this instruction.
+    if (continueFromMessage && processedMessages.length > 0) {
+      const tail = processedMessages[processedMessages.length - 1];
+      if (tail?.role === 'assistant') {
+        processedMessages.push({
+          role: 'user',
+          content: I.continuationInstruction,
+          mediaFiles: [],
+        });
       }
     }
 
@@ -2459,14 +2508,19 @@ export async function POST(req: Request) {
           // spent, whereas an unused ceiling costs nothing).
           // It's a cap, not a reservation — unused tokens are never billed, so a
           // high ceiling only matters when the model genuinely needs the room.
-          const modelMaxOut = 128000;
-          const effortCeil =
-            claudeEffort === 'max'    ? 128000 :
-            claudeEffort === 'xhigh'  ? 128000 :
-            claudeEffort === 'high'   ? 96000  :
-            claudeEffort === 'medium' ? 64000  :
-                                        32000;  // low
-          claudeParams.max_tokens = Math.min(modelMaxOut, effortCeil);
+          // FIXED: the ceiling is no longer scaled by effort. The comment above
+          // is right — an unused ceiling costs nothing, a truncated turn wastes
+          // everything — and the per-effort ladder (low 32k … max 128k)
+          // contradicted it. It was a leftover from when 64k was believed to be
+          // the model limit, and it was the sole cause of "cut off at medium
+          // effort": medium capped thinking+answer at 64k, so a long think left
+          // no room to answer, on a model that thinks more than its predecessor.
+          //
+          // effort ALREADY controls how much the model thinks. max_tokens is a
+          // safety ceiling, not a second depth control, so it is simply the
+          // model's real limit. Cost is unchanged: unused tokens are never
+          // billed, while a truncated turn is billed in full for nothing.
+          claudeParams.max_tokens = 128000;
         } else {
           claudeParams.thinking = { type: 'enabled', budget_tokens: 8000 };
         }
@@ -2823,6 +2877,13 @@ export async function POST(req: Request) {
           // user tool_result turn, then go around. Stops when the model
           // produces a turn with no tool_use blocks (or after a safety cap).
           const MAX_TOOL_ITERATIONS = 8;
+          // Automatic continuation of a reply cut off at the token cap. Counted
+          // separately from tool iterations so a long answer can never exhaust
+          // the tool budget (and vice versa). Six rounds at a 128k ceiling is
+          // far more headroom than any real answer needs; the cap exists only so
+          // a model that will not stop cannot bill forever.
+          const MAX_CONTINUATIONS = 6;
+          let continuations = 0;
           // Use the cached version (last user message has cache_control) so
           // the cache marker propagates through the tool loop too.
           let currentMessages = [...cachedMessages];
@@ -2983,19 +3044,47 @@ export async function POST(req: Request) {
               const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
-                // Turn finished. If it was cut off at the token cap (thinking +
-                // output combined), surface a clear notice so a truncated or
-                // empty reply isn't a silent freeze. We CANNOT auto-continue a
-                // thinking response (Anthropic forbids prefilling when thinking
-                // is on) — the remedy is to lower the Thinking Level or retry.
+                // ── Truncated at the token cap → continue automatically ──────
+                // Every other provider recovers from `finish_reason: length` by
+                // prefilling the assistant turn and going around again. Claude
+                // could not: Anthropic REJECTS a prefilled assistant turn while
+                // extended thinking is enabled, which is exactly the setup that
+                // truncates. So NEXUS used to give up and print a notice telling
+                // you to lower the effort by hand.
+                //
+                // The way through is the same one the Soul Packer's resume uses:
+                // do not prefill. Close the assistant turn normally — including
+                // its signed thinking blocks, exactly as the tool loop below
+                // already echoes them — and then add a USER turn asking for the
+                // continuation. The assistant message is no longer last, so this
+                // is a normal conversation, not a prefill, and the restriction
+                // does not apply.
+                //
+                // Continuations get their own budget so they can never starve
+                // the tool loop, and text keeps streaming into the SAME message
+                // on the client — the user sees one uninterrupted answer.
+                const hadText = assistantBlocks.some(b => b.type === 'text' && (b.text || '').trim());
+                if (stopReason === 'max_tokens' && hadText && continuations < MAX_CONTINUATIONS) {
+                  continuations++;
+                  enqueue({ type: 'tool_activity', tool: `continuing a cut-off reply (${continuations}/${MAX_CONTINUATIONS})` });
+                  currentMessages.push({ role: 'assistant', content: assistantBlocks });
+                  currentMessages.push({ role: 'user', content: I.continuationInstruction });
+                  // Don't spend a tool iteration on a continuation.
+                  iter--;
+                  continue;
+                }
                 if (stopReason === 'max_tokens') {
-                  const hadText = assistantBlocks.some(b => b.type === 'text' && (b.text || '').trim());
+                  // Either nothing was produced to continue FROM (thinking ate
+                  // the whole budget before any text), or the continuation
+                  // budget is exhausted. Both are worth saying out loud.
                   enqueue({
                     type: 'text',
                     content: (hadText ? '\n\n' : '')
                       + '⚠️ _[Response hit the token limit (thinking + output share one budget) and was cut off'
-                      + (hadText ? ' mid-answer' : ' before any answer was produced')
-                      + '. Lower the **Thinking Level (effort)** for this conversation, or resend to retry.]_',
+                      + (hadText
+                          ? ` mid-answer. NEXUS continued it ${MAX_CONTINUATIONS} times and it is still unfinished — lower the **Thinking Level (effort)** or ask for a shorter answer`
+                          : ' before any answer was produced — thinking consumed the whole budget. Lower the **Thinking Level (effort)** for this conversation, or resend to retry')
+                      + '.]_',
                   });
                 }
                 break;

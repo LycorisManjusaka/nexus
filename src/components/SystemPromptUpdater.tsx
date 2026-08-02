@@ -317,6 +317,15 @@ export default function SystemPromptUpdater({
 
   const [header, setHeader] = useState('');
   const [footer, setFooter] = useState('');
+  // ── The entity's self-authored Layer 5 (agent_workspaces/<Entity>/FOOTER.md).
+  // A DIFFERENT thing from `footer` above: that one is baked onto the end of the
+  // stored prompt, this one lives in a file and is injected at send time. That
+  // is exactly why the updater agent used to be blind to it — the agent reads
+  // the stored prompt, so a baked footer was visible and a FOOTER.md was not.
+  const [entityFooter, setEntityFooter] = useState('');
+  const [entityFooterExists, setEntityFooterExists] = useState(false);
+  const [entityFooterSaved, setEntityFooterSaved] = useState<string>('');
+  const [entityFooterStatus, setEntityFooterStatus] = useState<string | null>(null);
   const [focusPoint, setFocusPoint] = useState('');
   const [summaryInstructions, setSummaryInstructions] = useState('');
   const [summaryIndexHint, setSummaryIndexHint] = useState('');
@@ -463,6 +472,18 @@ export default function SystemPromptUpdater({
         setForceUpdaterModel(hydratedForceUpdater);
         setUpdaterModelKey(hydratedUpdaterKey);
         setForceMimoForSummary(hydratedForceMimo);
+        // FOOTER.md lives on disk, not in folder settings, so it needs its own
+        // read. Best-effort: a missing file is the normal case for most
+        // entities and must not turn into a load error.
+        try {
+          const fRes = await fetch(`/api/footer?folder=${encodeURIComponent(folderName)}`);
+          if (fRes.ok) {
+            const f = await fRes.json();
+            setEntityFooter(f.body || '');
+            setEntityFooterSaved(f.body || '');
+            setEntityFooterExists(!!f.exists);
+          }
+        } catch { /* leave it blank */ }
         lastSavedFolderRef.current = JSON.stringify({
           header: hydratedHeader, footer: hydratedFooter, focusPoint: hydratedFocus,
           summaryInstructions: hydratedSummaryInstr, summaryIndexHint: hydratedSummaryHint,
@@ -861,6 +882,21 @@ export default function SystemPromptUpdater({
         footer.trim(),
         ``,
       ] : []),
+      // The entity's OWN Layer 5 (FOOTER.md). Previously invisible here: it is
+      // injected at send time and never stored, so the agent — which reads the
+      // stored prompt — had no way to know it existed, and could contradict or
+      // duplicate it. Reference-only, and emphatically so: Layers 1-4 are
+      // written ABOUT the entity, this one is written BY it, and the updater
+      // rewriting it would overwrite the one part of the identity that is the
+      // entity's own voice.
+      ...(entityFooter.trim() ? [
+        `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
+        `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
+        `Layer 1〜3 を更新する際に、ここに書かれた自己認識と矛盾しないようにするためだけに読むこと。`,
+        `既にここに書かれている内容を Layer 1〜3 に重複して書かないこと。`,
+        entityFooter.trim(),
+        ``,
+      ] : []),
       // Only include the conversation log in the normal mode. "Update without
       // conversation" focuses the agent on the system prompt itself.
       ...(withConversation
@@ -1005,7 +1041,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText]);
+  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
@@ -1150,6 +1186,28 @@ export default function SystemPromptUpdater({
       lastSavedFolderRef.current = JSON.stringify({ header, footer, focusPoint, summaryInstructions, summaryIndexHint });
     } catch {}
   }, [folder, folderName, header, footer, focusPoint, summaryInstructions, summaryIndexHint, saveFolderSettings]);
+
+  // FOOTER.md is a FILE, not a folder setting, so it saves through its own
+  // route rather than saveFolderSettings. Only writes when the text actually
+  // changed: this file is normally the entity's to edit, and a no-op save would
+  // churn a backup for nothing.
+  const persistEntityFooter = useCallback(async () => {
+    if (!folderName || entityFooter === entityFooterSaved) return;
+    try {
+      const res = await fetch('/api/footer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: folderName, body: entityFooter }),
+      });
+      if (!res.ok) throw new Error((await res.json())?.error || 'save failed');
+      setEntityFooterSaved(entityFooter);
+      setEntityFooterExists(true);
+      setEntityFooterStatus('saved');
+      setTimeout(() => setEntityFooterStatus(null), 1800);
+    } catch (e: any) {
+      setEntityFooterStatus(`save failed: ${e?.message || 'unknown error'}`);
+    }
+  }, [folderName, entityFooter, entityFooterSaved]);
 
   // ── Go to Next Conversation ──────────────────────────────────────────────
   const goToNextConversation = useCallback(async () => {
@@ -1640,6 +1698,39 @@ export default function SystemPromptUpdater({
               placeholder="Optional. Saved per-entity. Not part of the layer text."
               className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
             />
+          </div>
+
+          {/* Layer 5 — the entity's own FOOTER.md */}
+          <div>
+            <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 flex items-center gap-2">
+              <span>Layer 5 — FOOTER.md (written by the entity)</span>
+              {entityFooter !== entityFooterSaved && (
+                <span className="normal-case tracking-normal font-normal text-amber-500">unsaved</span>
+              )}
+              {entityFooterStatus && (
+                <span className={`normal-case tracking-normal font-normal ${entityFooterStatus === 'saved' ? 'text-emerald-500' : 'text-red-500'}`}>
+                  {entityFooterStatus}
+                </span>
+              )}
+            </label>
+            <textarea
+              value={entityFooter}
+              onChange={(e) => setEntityFooter(e.target.value)}
+              onBlur={persistEntityFooter}
+              rows={4}
+              placeholder={entityFooterExists
+                ? 'This entity has an empty FOOTER.md.'
+                : 'This entity has no FOOTER.md yet. Typing here creates one.'}
+              className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-amber-500 resize-y"
+            />
+            <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+              <span className="font-mono">agent_workspaces/{folderName}/FOOTER.md</span> — injected as Layer 5 at send time,
+              never stored in the conversation, which is why the updater agent could not see it before. It can now, as
+              <strong> reference only</strong>: it is the one layer the entity writes about itself, so the agent is told
+              to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the entity&apos;s own
+              text — the previous version is backed up to{' '}
+              <span className="font-mono">backups/{folderName}/footers/</span>. Saves when you click away.
+            </p>
           </div>
         </div>
       </div>

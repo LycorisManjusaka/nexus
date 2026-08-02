@@ -1463,7 +1463,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
   };
 
-  const generateAiResponse = async (history: any[]) => {
+  // `continueMsgId` turns this into a CONTINUATION of an existing assistant
+  // message instead of a new one: no placeholder is added, the stream is seeded
+  // with the text already there, and everything appends to that same bubble.
+  // `history` must then END with the message being continued — the server adds
+  // the "carry on from where you stopped" user turn itself, because for Claude
+  // an assistant message in last position is a prefill, which Anthropic rejects
+  // while extended thinking is enabled.
+  const generateAiResponse = async (history: any[], opts?: { continueMsgId?: string }) => {
+    const continueMsgId = opts?.continueMsgId;
     setLoading(true);
     setLiveToolActivity(null);
     setStallIdleSeconds(null);
@@ -1481,7 +1489,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setInterjectText('');
     setInterjectStatus(null);
 
-    const msgId = (Date.now() + 1).toString();
+    // Continuing: reuse the existing message's id so every streaming update
+    // lands on it. Otherwise mint a new one.
+    const msgId = continueMsgId || (Date.now() + 1).toString();
+    const continuedMsg = continueMsgId ? history.find((m: any) => m.id === continueMsgId) : null;
+    const continuedSeed = continuedMsg?.content || '';
+    // The thinking that produced the first half must be carried over too. Every
+    // streaming flush REPLACES thoughtProcess/claudeThinkingBlocks, so starting
+    // these empty would erase the original thinking the moment the continuation
+    // emitted its first chunk — silently breaking "Save & reuse thinking".
+    const continuedThought = continuedMsg?.thoughtProcess || '';
+    const continuedBlocks: { thinking: string; signature: string }[] =
+      Array.isArray(continuedMsg?.claudeThinkingBlocks) ? [...continuedMsg.claudeThinkingBlocks] : [];
     const newAiMessage = {
       id: msgId,
       role: 'assistant',
@@ -1501,8 +1520,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       autoPlay: vrchatMode,
     };
 
-    // Add placeholder immediately
-    setMessages([...history, newAiMessage]);
+    // Add placeholder immediately. When continuing, there is nothing to add —
+    // the target message already exists; just mark it streaming so the TTS and
+    // the streaming indicators behave exactly as they do for a fresh reply.
+    if (continueMsgId) {
+      setMessages(prev => prev.map(m => m.id === continueMsgId ? { ...m, streaming: true } : m));
+    } else {
+      setMessages([...history, newAiMessage]);
+    }
 
     // When this entity uses summaries instead of a baked Layer 4, swap the
     // Layer 4 block for a freshly-assembled index of conversation summaries at
@@ -1601,7 +1626,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -1622,10 +1647,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const reader = chatRes.body.getReader();
       const decoder = new TextDecoder('utf-8');
 
-      let currentText = '';
-      let currentThought = '';
+      // Seeded with what the message already says when continuing, so streamed
+      // chunks append to it rather than replacing it. Joined with no separator:
+      // the model was told its text is attached directly onto the previous part,
+      // so it may legitimately resume mid-word or mid-code-block.
+      let currentText = continuedSeed;
+      let currentThought = continuedThought;
       let currentCreativityLabel = '';
-      let claudeThinkingBlocks: { thinking: string; signature: string }[] = [];
+      let claudeThinkingBlocks: { thinking: string; signature: string }[] = [...continuedBlocks];
       let continuationCount = 0;
       let buffer = '';
       // The model_selected event arrives at the very start of every stream
@@ -1993,6 +2022,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // backend starts a fresh session for the next generation.
     setAgentSession(null);
     await generateAiResponse(newHistory);
+  };
+
+  // Continue an assistant message that stopped short — whether it was truncated
+  // at the token cap or the model simply ended early. History runs up to AND
+  // INCLUDING the target, so the model sees its own unfinished text as its own
+  // turn; the server adds the "carry on" user turn (an assistant message in last
+  // position would be a prefill, which Claude rejects while thinking is on).
+  const handleContinue = async (msgId: string) => {
+    const idx = messages.findIndex(m => m.id === msgId);
+    if (idx === -1 || messages[idx].role === 'user') return;
+    // The local timeline is about to diverge from Anthropic's OAuth session,
+    // same as a rerun — drop it so the next generation reconstructs cleanly.
+    setAgentSession(null);
+    await generateAiResponse(messages.slice(0, idx + 1), { continueMsgId: msgId });
   };
 
   const handleEdit = async (id: string, newContent: string) => {
@@ -2607,12 +2650,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           </button>
           <button
             onClick={() => setMailOpen(true)}
-            className="relative p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
+            className="group relative p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
             title="Mail Manager — every letter between identities: read, edit, delete, set read/archived flags, or write one yourself"
           >
             <Mail size={16} />
             {mailUnread > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-[14px] text-black">
+              // Same colour as the icons themselves — a filled amber pill read as
+              // an alert demanding action, which is not what waiting mail is. It
+              // follows the button's hover colour so the pair still moves as one.
+              // `bg-card` only so the digits don't collide with the envelope.
+              <span className="absolute -top-0.5 -right-0.5 min-w-[13px] rounded-full bg-card px-0.5 text-center text-[9px] font-semibold leading-[13px] text-muted-foreground transition-colors group-hover:text-amber-500">
                 {mailUnread > 99 ? '99+' : mailUnread}
               </span>
             )}
@@ -2799,6 +2846,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 onEdit={(content: string) => handleEdit(msg.id, content)}
                 onDelete={() => handleDelete(msg.id)}
                 onRerun={msgIdx === messages.length - 1 ? () => handleRerun(msg.id) : undefined}
+                onContinue={msgIdx === messages.length - 1 && msg.role !== 'user' ? () => handleContinue(msg.id) : undefined}
                 onToggleAttachment={(attId: string) => handleToggleAttachment(msg.id, attId)}
                 onDeleteAttachment={(attId: string) => handleDeleteAttachment(msg.id, attId)}
                 onAudioStateChange={handleAudioStateChange}

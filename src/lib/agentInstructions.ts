@@ -165,6 +165,20 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   letterNoticeLine:
     '  • {id} — from {from}: "{title}" ({when})',
 
+  // Sent as a USER turn when a Claude reply is cut off at the token cap, to make
+  // it resume. Deliberately not a prefill: Anthropic rejects a prefilled
+  // assistant turn while extended thinking is on, which is exactly the setup
+  // that truncates. The wording has to fight three specific habits — restarting,
+  // summarizing what was already said, and opening with "Continuing:" — because
+  // any of the three would corrupt the answer the user sees as one message.
+  continuationInstruction:
+    'Your previous message was cut off mid-answer because it reached the output token limit. ' +
+    'Continue it now from the exact point where it stopped. Write ONLY the continuation: do not repeat ' +
+    'any sentence you already wrote, do not start over, do not summarize what you wrote so far, and do ' +
+    'not open with a preamble such as "Continuing" or "As I was saying". If you stopped in the middle of ' +
+    'a word, sentence, code block, or table, resume from exactly that point — your text will be joined ' +
+    'directly onto the previous part with nothing in between, so it must read as one continuous message.',
+
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:
     'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
@@ -191,6 +205,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'readConversationNameParam', label: 'Tool: read_conversation — name parameter' },
   { key: 'searchConversationsDesc', label: 'Tool: search_conversations — description' },
   { key: 'searchConversationsQueryParam', label: 'Tool: search_conversations — query parameter' },
+  { key: 'continuationInstruction', label: 'Auto-continue: resume a cut-off reply' },
   { key: 'toolWriteLetterDesc', label: 'Tool: write_letter — description' },
   { key: 'writeLetterToParam', label: 'Tool: write_letter — "to" parameter' },
   { key: 'writeLetterTitleParam', label: 'Tool: write_letter — "title" parameter' },
