@@ -261,6 +261,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // reports no SDK activity at all (stall_warning SSE) — the signal that the
   // turn may genuinely be stuck and a rerun is warranted. Display-only.
   const [liveToolActivity, setLiveToolActivity] = useState<string | null>(null);
+  // The model the SERVER reports for the current turn. Auto-selection can pick a
+  // different model than the conversation is configured with, and the loading
+  // line should name the one actually doing the work.
+  const [liveModel, setLiveModel] = useState<string>('');
   const [stallIdleSeconds, setStallIdleSeconds] = useState<number | null>(null);
   // Mid-turn "partner interjection": a per-turn id (also sent in the request
   // body) lets you POST a message to /api/chat/inject WHILE the entity is
@@ -1441,6 +1445,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setPendingAsk(null);
     setActiveSubagent(null);
     setLiveToolActivity(null);
+    setLiveModel('');
     setStallIdleSeconds(null);
     setInjectTurnId(null);
     setInterjectStatus(null);
@@ -1477,6 +1482,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const continueMsgId = opts?.continueMsgId;
     setLoading(true);
     setLiveToolActivity(null);
+    setLiveModel('');
     setStallIdleSeconds(null);
     abortControllerRef.current = new AbortController();
     // Wall-clock start of this generation. Used to record how long the model
@@ -1763,6 +1769,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } else if (data.type === 'model_selected') {
                 chosenModelFamily = data.family || '';
                 chosenModelSpecific = data.specificModel || '';
+                setLiveModel(chosenModelSpecific);
                 chosenModelThinking = !!data.thinking;
                 chosenModelLabel = data.label || '';
               } else if (data.type === 'cache_usage') {
@@ -2010,6 +2017,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setPendingAsk(null);
     setActiveSubagent(null);
     setLiveToolActivity(null);
+    setLiveModel('');
     setStallIdleSeconds(null);
     setInjectTurnId(null);
     setInterjectStatus(null);
@@ -2916,10 +2924,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <span className="w-2 h-2 bg-primary rounded-full animate-bounce"></span>
               </div>
               <div className="flex flex-col gap-0.5">
+                {/* "<Entity> is using <model> to <action>…"
+                    It used to read "<Family> is <action>ing…" — which named the
+                    wrong actor. The entity is who acts; the model is what it
+                    acts THROUGH, and naming the family ("Claude") also hid which
+                    model was actually running. `liveModel` is the model the
+                    server reported for THIS turn, so auto-selection is
+                    reflected rather than the configured default.
+                    Labels are bare infinitives, because English takes the base
+                    verb after "to" ("…to read a file", not "…to reading"). */}
                 <span className="text-sm font-medium">
                   {liveToolActivity
-                    ? `${localAiName} is ${liveToolActivity}…`
-                    : `${localAiName} is thinking...`}
+                    ? `${folderName} is using ${liveModel || specificModel || 'its model'} to ${liveToolActivity}…`
+                    : `${folderName} is thinking with ${liveModel || specificModel || 'its model'}…`}
                 </span>
                 {stallIdleSeconds !== null && (
                   <span className="text-xs text-amber-500 font-medium">

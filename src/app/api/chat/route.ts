@@ -164,21 +164,24 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
 // return null so we don't override those richer indicators.
 function toolActivityLabel(name: string): string | null {
   switch (name) {
-    case 'Read': return 'reading a file';
-    case 'Write': return 'writing a file';
-    case 'Edit': return 'editing a file';
-    case 'Glob': return 'searching for files';
-    case 'Grep': return 'searching file contents';
-    case 'Delete': return 'deleting a file';
-    case 'Bash': return 'running a shell command';
-    case 'read_conversation': return 'reading a past conversation';
-    case 'search_conversations': return 'searching past conversations';
-    case 'write_letter': return 'writing a letter';
-    case 'list_letters': return 'checking for letters';
-    case 'read_letter': return 'reading a letter';
-    case 'archive_letter': return 'setting a letter aside';
-    case 'web_search': case 'WebSearch': return 'searching the web';
-    case 'web_fetch': case 'WebFetch': return 'fetching a web page';
+    // BARE INFINITIVE, not the -ing form. These are rendered as
+    // "<Entity> is using <model> to <label>…", and English takes the base verb
+    // after "to": "…to read a file", never "…to reading a file".
+    case 'Read': return 'read a file';
+    case 'Write': return 'write a file';
+    case 'Edit': return 'edit a file';
+    case 'Glob': return 'search for files';
+    case 'Grep': return 'search file contents';
+    case 'Delete': return 'delete a file';
+    case 'Bash': return 'run a shell command';
+    case 'read_conversation': return 'read a past conversation';
+    case 'search_conversations': return 'search past conversations';
+    case 'write_letter': return 'write a letter';
+    case 'list_letters': return 'check for letters';
+    case 'read_letter': return 'read a letter';
+    case 'archive_letter': return 'set a letter aside';
+    case 'web_search': case 'WebSearch': return 'search the web';
+    case 'web_fetch': case 'WebFetch': return 'fetch a web page';
     case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
     default: return null;
   }
@@ -1132,7 +1135,7 @@ async function streamClaudeViaAgentSDK(args: {
                   // (question card / subagent chip), so we don't override those.
                   const cleanName = String(ev.content_block?.name || 'a tool').replace(/^mcp__\w+?__/, '');
                   if (cleanName !== 'AskQuestion' && cleanName !== 'spawn_subagent') {
-                    shownToolActivity = toolActivityLabel(cleanName) || `using ${cleanName}`;
+                    shownToolActivity = toolActivityLabel(cleanName) || `run ${cleanName}`;
                     enqueue({ type: 'tool_activity', tool: shownToolActivity });
                   }
                 } else if (shownToolActivity && (curBlockType === 'text' || curBlockType === 'thinking' || curBlockType === 'summarized_thinking')) {
@@ -3066,7 +3069,7 @@ export async function POST(req: Request) {
                 const hadText = assistantBlocks.some(b => b.type === 'text' && (b.text || '').trim());
                 if (stopReason === 'max_tokens' && hadText && continuations < MAX_CONTINUATIONS) {
                   continuations++;
-                  enqueue({ type: 'tool_activity', tool: `continuing a cut-off reply (${continuations}/${MAX_CONTINUATIONS})` });
+                  enqueue({ type: 'tool_activity', tool: `continue a cut-off reply (${continuations}/${MAX_CONTINUATIONS})` });
                   currentMessages.push({ role: 'assistant', content: assistantBlocks });
                   currentMessages.push({ role: 'user', content: I.continuationInstruction });
                   // Don't spend a tool iteration on a continuation.
