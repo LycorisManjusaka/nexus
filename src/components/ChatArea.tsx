@@ -11,6 +11,9 @@ import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
 import MailModal from './MailModal';
+
+// Engine ids as used by the TTS pipeline and local_data/character_map.json.
+const TTS_ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
 import AudioSessionModal from './AudioSessionModal';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
@@ -18,7 +21,7 @@ import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
-import { injectLayer4Index } from '@/lib/layer4';
+import { appendLayer4Index } from '@/lib/layer4';
 import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import LiveSession from './LiveSession';
@@ -1529,18 +1532,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       setMessages([...history, newAiMessage]);
     }
 
-    // When this entity uses summaries instead of a baked Layer 4, swap the
-    // Layer 4 block for a freshly-assembled index of conversation summaries at
-    // send time. The stored systemPrompt keeps its original Layer 4 (and the
-    // manual Layer 5 footer) intact — only the wire copy is rewritten. If the
-    // index fetch fails for any reason we fall back to the unmodified prompt.
+    // When this entity uses summaries instead of a baked Layer 4, APPEND a
+    // freshly-assembled index of conversation summaries at send time. The
+    // stored prompt is not parsed, split, or rewritten — the block simply goes
+    // on the end, and Layer 5 (appended server-side from FOOTER.md) lands after
+    // it. If the index fetch fails we send the prompt unchanged.
     let baseSystemPrompt = systemPrompt;
     if (useSummariesForLayer4) {
       try {
         const idxRes = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}`);
         if (idxRes.ok) {
           const { body } = await idxRes.json();
-          baseSystemPrompt = injectLayer4Index(systemPrompt, body || '');
+          baseSystemPrompt = appendLayer4Index(systemPrompt, body || '');
         }
       } catch (e) {
         console.warn('[summaries] failed to assemble Layer-4 index, sending prompt as-is', e);
@@ -2362,6 +2365,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Unread count for the header badge. Refreshed whenever the Mail Manager
   // loads, and once on mount so waiting mail is visible without opening it.
   const [mailUnread, setMailUnread] = useState(0);
+  // Live TTS pipeline state, reported up by whichever MessageBubble is speaking.
+  // One conversation speaks at a time, so a single slot is enough — a newer play
+  // simply replaces the old reading.
+  const [ttsStatus, setTtsStatus] = useState<any>(null);
+  const handleTtsStatus = React.useCallback((_msgId: string, status: any) => {
+    // Drop the trailing 'inactive, nothing wrong' report so a clean run leaves
+    // no residue; a run that FAILED is kept on screen until dismissed.
+    setTtsStatus(status.active || status.failed > 0 ? status : null);
+  }, []);
   useEffect(() => {
     // One cheap read on mount so waiting mail is visible without opening the
     // window. Best-effort: a failure just leaves the badge hidden.
@@ -2845,6 +2857,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 msg={msg}
                 onEdit={(content: string) => handleEdit(msg.id, content)}
                 onDelete={() => handleDelete(msg.id)}
+                onTtsStatus={handleTtsStatus}
                 onRerun={msgIdx === messages.length - 1 ? () => handleRerun(msg.id) : undefined}
                 onContinue={msgIdx === messages.length - 1 && msg.role !== 'user' ? () => handleContinue(msg.id) : undefined}
                 onToggleAttachment={(attId: string) => handleToggleAttachment(msg.id, attId)}
@@ -2957,6 +2970,77 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           when the flag is active — minimizing visual noise without losing
           discoverability. */}
       <div className="shrink-0 relative">
+        {/* ── Live TTS indicator ──────────────────────────────────────────
+            Mirrors the "Next = First Original" control on the opposite side.
+            Everything shown here already existed inside the synthesis pipeline
+            or in the engine's own HTTP responses — it was going to the console,
+            which is no use during a VRChat session. Hidden entirely until
+            playback starts; kept visible after a failure so the reason does not
+            vanish the moment the queue drains. */}
+        {ttsStatus && (ttsStatus.active || ttsStatus.failed > 0) && (
+          <div className="absolute left-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto max-w-[52%]">
+            <div
+              className={`flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] backdrop-blur-sm ${
+                ttsStatus.failed > 0
+                  ? 'border-red-500/50 bg-red-500/10 text-red-500'
+                  : ttsStatus.engineState === 'launched'
+                    ? 'border-amber-500/50 bg-amber-500/10 text-amber-500'
+                    : 'border-border/50 bg-background/60 text-muted-foreground'
+              }`}
+              title={ttsStatus.lastError
+                ? `Last engine error:\n${ttsStatus.lastError}`
+                : 'Live TTS pipeline state'}
+            >
+              <span>{ttsStatus.active ? '🔊' : '⚠️'}</span>
+              <span className="font-semibold">{TTS_ENGINE_NAMES[ttsStatus.engine] || 'TTS'}</span>
+              <span className="opacity-70">
+                {ttsStatus.engineState === 'launched' ? 'starting…'
+                  : ttsStatus.engineState === 'failed' ? 'not running'
+                  : ttsStatus.engineState === 'running' ? 'up'
+                  : '…'}
+              </span>
+              <span className="opacity-50">·</span>
+              <span>{ttsStatus.mode === 'context' ? 'context' : 'sentence'}</span>
+              <span className="opacity-50">·</span>
+              {/* done / dispatched, so "3/7" reads as "3 of 7 chunks ready" */}
+              <span>chunk {ttsStatus.done}/{ttsStatus.dispatched}</span>
+              {ttsStatus.playing !== null && ttsStatus.playing >= 0 && (
+                <><span className="opacity-50">·</span><span>▶ #{ttsStatus.playing}</span></>
+              )}
+              {ttsStatus.inFlight > 0 && (
+                <><span className="opacity-50">·</span><span className="animate-pulse">synth {ttsStatus.inFlight}</span></>
+              )}
+              {ttsStatus.buffered > 0 && (
+                <><span className="opacity-50">·</span><span>queued {ttsStatus.buffered}</span></>
+              )}
+              {ttsStatus.lastChars > 0 && (
+                <><span className="opacity-50">·</span><span>{ttsStatus.lastChars}ch</span></>
+              )}
+              {ttsStatus.lastMs > 0 && (
+                <><span className="opacity-50">·</span><span>{ttsStatus.lastMs}ms</span></>
+              )}
+              {ttsStatus.skipped > 0 && (
+                <><span className="opacity-50">·</span><span>skipped {ttsStatus.skipped}</span></>
+              )}
+              {ttsStatus.failed > 0 && (
+                <><span className="opacity-50">·</span><span className="font-semibold">failed {ttsStatus.failed}</span></>
+              )}
+              {!ttsStatus.active && ttsStatus.failed > 0 && (
+                <button
+                  onClick={() => setTtsStatus(null)}
+                  className="ml-1 opacity-60 hover:opacity-100"
+                  title="Dismiss"
+                >✕</button>
+              )}
+            </div>
+            {ttsStatus.lastError && (
+              <span className="truncate text-[10px] text-red-400/90" title={ttsStatus.lastError}>
+                {ttsStatus.lastError}
+              </span>
+            )}
+          </div>
+        )}
+
         <div
           className={`absolute right-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto transition-opacity ${
             firstOriginalIsNext && !firstOriginalMessageId

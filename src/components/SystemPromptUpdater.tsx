@@ -316,12 +316,10 @@ export default function SystemPromptUpdater({
   }, [rightLooksTruncated, streamingUpdate]);
 
   const [header, setHeader] = useState('');
-  const [footer, setFooter] = useState('');
   // ── The entity's self-authored Layer 5 (agent_workspaces/<Entity>/FOOTER.md).
-  // A DIFFERENT thing from `footer` above: that one is baked onto the end of the
-  // stored prompt, this one lives in a file and is injected at send time. That
-  // is exactly why the updater agent used to be blind to it — the agent reads
-  // the stored prompt, so a baked footer was visible and a FOOTER.md was not.
+  // Lives in a FILE and is injected at send time, which is exactly why the
+  // updater agent used to be blind to it: the agent reads the STORED prompt, so
+  // a footer baked into that prompt was visible and a FOOTER.md was not.
   const [entityFooter, setEntityFooter] = useState('');
   const [entityFooterExists, setEntityFooterExists] = useState(false);
   const [entityFooterSaved, setEntityFooterSaved] = useState<string>('');
@@ -443,7 +441,6 @@ export default function SystemPromptUpdater({
         setSelectedAgentType(initialType);
 
         const hydratedHeader = folder?.settings?.systemPromptHeader ?? '';
-        const hydratedFooter = folder?.settings?.systemPromptFooter ?? '';
         const hydratedFocus = folder?.settings?.systemPromptFocusPoint ?? '';
         const hydratedSummaryInstr = folder?.settings?.summaryInstructions ?? '';
         const hydratedSummaryHint = folder?.settings?.summaryIndexHint ?? DEFAULT_SUMMARY_INDEX_HINT;
@@ -465,7 +462,6 @@ export default function SystemPromptUpdater({
           : DEFAULT_UPDATER_MODEL_KEY;
         const hydratedForceMimo = folder?.settings?.forceMimoForSummary !== false;
         setHeader(hydratedHeader);
-        setFooter(hydratedFooter);
         setFocusPoint(hydratedFocus);
         setSummaryInstructions(hydratedSummaryInstr);
         setSummaryIndexHint(hydratedSummaryHint);
@@ -485,7 +481,7 @@ export default function SystemPromptUpdater({
           }
         } catch { /* leave it blank */ }
         lastSavedFolderRef.current = JSON.stringify({
-          header: hydratedHeader, footer: hydratedFooter, focusPoint: hydratedFocus,
+          header: hydratedHeader, focusPoint: hydratedFocus,
           summaryInstructions: hydratedSummaryInstr, summaryIndexHint: hydratedSummaryHint,
           forceUpdaterModel: hydratedForceUpdater, updaterModelKey: hydratedUpdaterKey,
           forceMimoForSummary: hydratedForceMimo,
@@ -712,12 +708,12 @@ export default function SystemPromptUpdater({
     return () => clearTimeout(h);
   }, [open, rightText, baseName, currentIndex, streamingUpdate]);
 
-  // ── Auto-save header / footer / focus / summary settings ─────────────────
+  // ── Auto-save header / focus / summary settings ──────────────────────────
   useEffect(() => {
     if (!open || !folder) return;
     if (lastSavedFolderRef.current === null) return;
     const snapshot = JSON.stringify({
-      header, footer, focusPoint, summaryInstructions, summaryIndexHint,
+      header, focusPoint, summaryInstructions, summaryIndexHint,
       forceUpdaterModel, updaterModelKey, forceMimoForSummary,
     });
     if (snapshot === lastSavedFolderRef.current) return;
@@ -726,7 +722,6 @@ export default function SystemPromptUpdater({
       try {
         await saveFolderSettings(folderName, {
           systemPromptHeader: header,
-          systemPromptFooter: footer,
           systemPromptFocusPoint: focusPoint,
           summaryInstructions,
           summaryIndexHint,
@@ -742,7 +737,7 @@ export default function SystemPromptUpdater({
       } catch { setAutoSaveState('error'); }
     }, 800);
     return () => clearTimeout(h);
-  }, [open, folder, folderName, header, footer, focusPoint, summaryInstructions, summaryIndexHint,
+  }, [open, folder, folderName, header, focusPoint, summaryInstructions, summaryIndexHint,
       forceUpdaterModel, updaterModelKey, forceMimoForSummary, saveFolderSettings]);
 
   // ── Conversation log formatting ──────────────────────────────────────────
@@ -875,13 +870,6 @@ export default function SystemPromptUpdater({
       `※これは参照専用です。書き換えたり出力に含めたりしないでください。Layer 1〜3 を更新する際の文脈としてのみ利用してください。`,
       summaryIndexBody || '(まだ要約なし)',
       ``,
-      // The footer is auto-appended to the FINAL prompt. Reference-only too.
-      ...(footer.trim() ? [
-        `=== 参考：フッター（最終プロンプトの末尾に自動付与） ===`,
-        `※参照専用。書き換え・再生成・出力への含有は禁止。文脈把握のためだけに使うこと。`,
-        footer.trim(),
-        ``,
-      ] : []),
       // The entity's OWN Layer 5 (FOOTER.md). Previously invisible here: it is
       // injected at send time and never stored, so the agent — which reads the
       // stored prompt — had no way to know it existed, and could contradict or
@@ -1041,7 +1029,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, footer, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
+  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
@@ -1172,20 +1160,19 @@ export default function SystemPromptUpdater({
     }
   }, [running, runUpdate, runSummaryWrite]);
 
-  // ── Persist header/footer/focus on blur ──────────────────────────────────
+  // ── Persist header/focus on blur ─────────────────────────────────────────
   const persistHeaderFooter = useCallback(async () => {
     if (!folder) return;
     try {
       await saveFolderSettings(folderName, {
         systemPromptHeader: header,
-        systemPromptFooter: footer,
         systemPromptFocusPoint: focusPoint,
         summaryInstructions,
         summaryIndexHint,
       });
-      lastSavedFolderRef.current = JSON.stringify({ header, footer, focusPoint, summaryInstructions, summaryIndexHint });
+      lastSavedFolderRef.current = JSON.stringify({ header, focusPoint, summaryInstructions, summaryIndexHint });
     } catch {}
-  }, [folder, folderName, header, footer, focusPoint, summaryInstructions, summaryIndexHint, saveFolderSettings]);
+  }, [folder, folderName, header, focusPoint, summaryInstructions, summaryIndexHint, saveFolderSettings]);
 
   // FOOTER.md is a FILE, not a folder setting, so it saves through its own
   // route rather than saveFolderSettings. Only writes when the text actually
@@ -1231,7 +1218,7 @@ export default function SystemPromptUpdater({
       });
       if (!saveRes.ok) throw new Error('Failed to save next prompt file');
 
-      // Apply deletion patterns, then sandwich header/footer for the live prompt.
+      // Apply deletion patterns, then prepend the header for the live prompt.
       let processed = rightText;
       for (const raw of deletionPatterns) {
         const m = raw.match(/^\/(.+)\/([a-z]*)$/);
@@ -1244,7 +1231,7 @@ export default function SystemPromptUpdater({
       }
       processed = processed.replace(/\n{3,}/g, '\n\n');
 
-      const fullPrompt = [header, processed, footer].filter((s) => s && s.trim()).join('\n\n');
+      const fullPrompt = [header, processed].filter((s) => s && s.trim()).join('\n\n');
 
       setStatusMessage('Finalizing — cloning conversation…');
       await persistHeaderFooter();
@@ -1255,7 +1242,7 @@ export default function SystemPromptUpdater({
     } finally {
       setLoading(false);
     }
-  }, [baseName, currentIndex, deletionPatterns, footer, header, leftText, rightText, onClose, onFinalize, persistHeaderFooter]);
+  }, [baseName, currentIndex, deletionPatterns, header, leftText, rightText, onClose, onFinalize, persistHeaderFooter]);
 
   if (!open) return null;
 
@@ -1293,7 +1280,7 @@ export default function SystemPromptUpdater({
                 : autoSaveState === 'saved' ? 'text-emerald-500'
                 : autoSaveState === 'error' ? 'text-red-500'
                 : 'text-muted-foreground'}`}
-              title="Left/right prompt files and header/footer/focus point auto-save as you edit."
+              title="Left/right prompt files and header/focus point auto-save as you edit."
             >
               {autoSaveState === 'saving' ? 'Saving…'
                 : autoSaveState === 'saved' ? 'All changes saved'
@@ -1687,20 +1674,12 @@ export default function SystemPromptUpdater({
             </div>
           </div>
 
-          {/* Footer field */}
-          <div>
-            <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 block">Footer (appended to final prompt)</label>
-            <textarea
-              value={footer}
-              onChange={(e) => setFooter(e.target.value)}
-              onBlur={persistHeaderFooter}
-              rows={3}
-              placeholder="Optional. Saved per-entity. Not part of the layer text."
-              className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
-            />
-          </div>
-
-          {/* Layer 5 — the entity's own FOOTER.md */}
+          {/* Layer 5 — the entity's own FOOTER.md.
+              The old "Footer (appended to final prompt)" field lived here. It
+              was removed: it did the same job as FOOTER.md but worse — baked
+              into the stored prompt only at finalize time, invisible at send
+              time, and a second place to look for the same thing. Its content
+              was migrated into each entity's FOOTER.md. */}
           <div>
             <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 flex items-center gap-2">
               <span>Layer 5 — FOOTER.md (written by the entity)</span>

@@ -11,7 +11,7 @@ import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
 
-export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
+export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(msg.content);
@@ -182,6 +182,33 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   // instead of one flat sentence at a time. Set per folder voice at TTS start.
   const streamingContextRef = React.useRef(false);
 
+  // ── Live TTS diagnostics ───────────────────────────────────────────────────
+  // Everything the pipeline knows, pushed up to ChatArea for the on-screen
+  // indicator. Kept in a ref and flushed on change: synthesis runs several
+  // fetches in parallel and the player advances on audio events, so driving
+  // this through state directly would re-render the bubble on every tick.
+  const ttsDiagRef = React.useRef<any>({
+    active: false, engine: null, engineState: 'unknown', engineError: '',
+    mode: 'sentence', dispatched: 0, done: 0, failed: 0, skipped: 0,
+    inFlight: 0, buffered: 0, playing: null, lastChars: 0, lastMs: 0,
+    lastError: '', streamDone: false,
+  });
+  const pushTtsDiag = React.useCallback((patch?: any) => {
+    const d = ttsDiagRef.current;
+    if (patch) Object.assign(d, patch);
+    // Only the STREAMING pipeline owns these refs. The Read Aloud path knows its
+    // own totals up front and sets them directly, so deriving here would reset
+    // it to 0/0 on every push.
+    if (streamingActiveRef.current) {
+      d.inFlight = synthInFlightCountRef.current;
+      d.buffered = audioSlotsRef.current.size;
+      d.dispatched = nextDispatchSeqRef.current;
+      d.playing = isCurrentlyPlayingRef.current ? nextPlaySeqRef.current - 1 : null;
+      d.streamDone = streamingDoneRef.current;
+    }
+    if (onTtsStatus) onTtsStatus(msg.id, { ...d });
+  }, [msg.id, onTtsStatus]);
+
   const takeCompletedFromTail = (text: string): { completed: string; consumed: number } => {
     // Walk every sentence terminator and record the LAST one. The slice up to
     // that point is "safe to speak"; anything after is the in-progress tail
@@ -233,6 +260,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       ttsStateRef.current = 'idle';
       setTtsState('idle');
       abortControllerRef.current = null;
+      pushTtsDiag({ active: false });
     }
   };
 
@@ -312,6 +340,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   const synthesizeStreamingSegment = async (segment: any, signal: AbortSignal, seq: number) => {
     if (signal.aborted) return;
     synthInFlightCountRef.current++;
+    pushTtsDiag({ lastChars: (segment?.text || '').length });
     try {
       const res = await fetch('/api/tts/synthesize', {
         method: 'POST',
@@ -319,21 +348,47 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         body: JSON.stringify({ segments: [segment], folderName }),
         signal,
       });
-      if (!res.ok) { audioSlotsRef.current.set(seq, null); return; }
+      // The engine's own account of itself, sent back on every response.
+      const dec = (v: string | null) => { try { return v ? decodeURIComponent(v) : ''; } catch { return v || ''; } };
+      const engHdr = res.headers.get('X-Tts-Engine');
+      pushTtsDiag({
+        engine: engHdr !== null && engHdr !== '-1' ? Number(engHdr) : ttsDiagRef.current.engine,
+        engineState: res.headers.get('X-Tts-Engine-State') || ttsDiagRef.current.engineState,
+        engineError: dec(res.headers.get('X-Tts-Engine-Error')) || ttsDiagRef.current.engineError,
+        lastMs: Number(res.headers.get('X-Tts-Ms') || 0),
+      });
+      if (!res.ok) {
+        // Previously the body was thrown away and the slot silently skipped —
+        // a failing engine looked exactly like silence. Now the reason surfaces.
+        let why = dec(res.headers.get('X-Tts-Error'));
+        if (!why) { try { why = (await res.json())?.error || ''; } catch { /* not JSON */ } }
+        audioSlotsRef.current.set(seq, null);
+        ttsDiagRef.current.failed++;
+        pushTtsDiag({ lastError: why || `HTTP ${res.status}` });
+        return;
+      }
       const blob = await res.blob();
       if (signal.aborted) return;
+      if (res.headers.get('X-Tts-Skipped') === '1') ttsDiagRef.current.skipped++;
       // The server returns an empty body (0 bytes) when a segment has no
       // speakable phonemes (symbol/emoji/punctuation-only — it would crash
       // OpenJTalk/VITS). Record the slot as a null (skip) so the in-order player
       // advances past it instead of waiting forever for this sequence number.
-      if (blob.size === 0) { audioSlotsRef.current.set(seq, null); return; }
+      if (blob.size === 0) { audioSlotsRef.current.set(seq, null); pushTtsDiag(); return; }
       audioSlotsRef.current.set(seq, URL.createObjectURL(blob));
+      ttsDiagRef.current.done++;
+      pushTtsDiag();
     } catch (e: any) {
       // Ignore aborts — stopTTS will have cleaned up. For any other failure,
       // mark the slot skipped so it doesn't block the playback order.
-      if (!signal.aborted) audioSlotsRef.current.set(seq, null);
+      if (!signal.aborted) {
+        audioSlotsRef.current.set(seq, null);
+        ttsDiagRef.current.failed++;
+        pushTtsDiag({ lastError: e?.message || 'request failed' });
+      }
     } finally {
       synthInFlightCountRef.current--;
+      pushTtsDiag();
       // Kick the in-order player if idle. If something is already playing, the
       // onended chain will pick this up once earlier sequences have played.
       if (!signal.aborted && !isCurrentlyPlayingRef.current) {
@@ -418,6 +473,11 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // click during the await window can't spawn a parallel pipeline.
     ttsStateRef.current = 'playing';
     setTtsState('playing');
+    // Fresh run — reset the diagnostics so the indicator reflects THIS play.
+    ttsDiagRef.current = { active: true, engine: null, engineState: 'unknown', engineError: '',
+      mode: 'sentence', dispatched: 0, done: 0, failed: 0, skipped: 0, inFlight: 0,
+      buffered: 0, playing: null, lastChars: 0, lastMs: 0, lastError: '', streamDone: false };
+    pushTtsDiag();
     const ac = new AbortController();
     abortControllerRef.current = ac;
     streamingSignalRef.current = ac.signal;
@@ -436,6 +496,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // Context mode: explicit per-voice flag, else default ON for AivisSpeech
     // (engine 2) since that's where larger chunks pay off.
     streamingContextRef.current = voice.contextChunks ?? (voice.engine === 2);
+    pushTtsDiag({ mode: streamingContextRef.current ? 'context' : 'sentence', engine: voice.engine });
 
     streamingActiveRef.current = true;
     streamingDoneRef.current = !msgStreamingRef.current;
@@ -496,6 +557,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   };
 
   const stopTTS = () => {
+    pushTtsDiag({ active: false });
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -574,6 +636,11 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // catches whichever one wrote those refs last.
     ttsStateRef.current = 'playing';
     setTtsState('playing');
+    // Fresh run — reset the diagnostics so the indicator reflects THIS play.
+    ttsDiagRef.current = { active: true, engine: null, engineState: 'unknown', engineError: '',
+      mode: 'sentence', dispatched: 0, done: 0, failed: 0, skipped: 0, inFlight: 0,
+      buffered: 0, playing: null, lastChars: 0, lastMs: 0, lastError: '', streamDone: false };
+    pushTtsDiag();
     const ac = new AbortController();
     abortControllerRef.current = ac;
     const signal = ac.signal;
@@ -781,10 +848,21 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       }
     };
 
-    // Asynchronously fetch sentences
+    // Asynchronously fetch sentences.
+    //
+    // This is the NON-streaming path (the Read Aloud button): sentences are
+    // known up front, so `dispatched` is the real total rather than a running
+    // count. Diagnostics are reported here as well as in the streaming path —
+    // instrumenting only one of the two would leave the indicator stuck at
+    // "chunk 0/0" for the button most used from the UI.
+    const dec = (v: string | null) => { try { return v ? decodeURIComponent(v) : ''; } catch { return v || ''; } };
+    ttsDiagRef.current.dispatched = sentences.length;
+    pushTtsDiag({ mode: 'sentence' });
     for (let i = 0; i < sentences.length; i++) {
       if (signal.aborted) break;
       currentIndex = i + 1;
+      ttsDiagRef.current.inFlight = 1;
+      pushTtsDiag({ lastChars: (sentences[i]?.text || '').length });
       try {
         const res = await fetch('/api/tts/synthesize', {
           method: 'POST',
@@ -792,22 +870,48 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           body: JSON.stringify({ segments: [sentences[i]], folderName }),
           signal
         });
-        if (!res.ok) continue;
+        const engHdr = res.headers.get('X-Tts-Engine');
+        pushTtsDiag({
+          engine: engHdr !== null && engHdr !== '-1' ? Number(engHdr) : ttsDiagRef.current.engine,
+          engineState: res.headers.get('X-Tts-Engine-State') || ttsDiagRef.current.engineState,
+          engineError: dec(res.headers.get('X-Tts-Engine-Error')) || ttsDiagRef.current.engineError,
+          lastMs: Number(res.headers.get('X-Tts-Ms') || 0),
+        });
+        if (!res.ok) {
+          let why = dec(res.headers.get('X-Tts-Error'));
+          if (!why) { try { why = (await res.json())?.error || ''; } catch { /* not JSON */ } }
+          ttsDiagRef.current.failed++;
+          pushTtsDiag({ lastError: why || `HTTP ${res.status}` });
+          continue;
+        }
         const blob = await res.blob();
         // Skip empty (0-byte) responses — the server returns no body for
         // phoneme-less segments. Queuing an empty blob stalls playback.
-        if (blob.size === 0) continue;
+        if (res.headers.get('X-Tts-Skipped') === '1' || blob.size === 0) {
+          ttsDiagRef.current.skipped++;
+          pushTtsDiag();
+          continue;
+        }
         const url = URL.createObjectURL(blob);
         audioQueue.push(url);
-        
+        ttsDiagRef.current.done++;
+        pushTtsDiag();
+
         // Start playing immediately if we aren't already
         if (!isCurrentlyPlaying && !signal.aborted) {
           playNext();
         }
       } catch(e: any) {
-         if (e.name !== 'AbortError') console.error(e);
+         if (e.name !== 'AbortError') {
+           console.error(e);
+           ttsDiagRef.current.failed++;
+           pushTtsDiag({ lastError: e?.message || 'request failed' });
+         }
+      } finally {
+        ttsDiagRef.current.inFlight = 0;
       }
     }
+    pushTtsDiag();
   };
 
   const getAttachmentPreview = (att: any) => {

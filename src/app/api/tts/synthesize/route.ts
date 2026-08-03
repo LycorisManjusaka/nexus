@@ -65,7 +65,19 @@ async function engineError(label: string, res: Response, extra?: Record<string, 
 // AivisSpeech, so log it rather than let it fail silently.
 const LONG_QUERY_WARN_BYTES = 6000;
 
-async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = []): Promise<ArrayBuffer | null> {
+// Diagnostics filled in per segment and returned to the browser as response
+// headers, so the conversation window can show what the engine is actually
+// doing. Everything here was already known server-side — it was going to
+// console.warn, where an unstable engine is invisible during a VRChat session.
+export interface SynthMeta {
+  engine: number;
+  engineState: 'running' | 'launched' | 'failed' | 'unknown';
+  engineError?: string;
+  chars: number;
+  skipped: boolean;
+}
+
+async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = [], meta?: SynthMeta): Promise<ArrayBuffer | null> {
     // Per-entity pronunciation dictionary (local_data/tts_dict/<folder>.json):
     // literal CJK-friendly substring replacement, applied FIRST so an entity can
     // override any reading (names, jargon) before the generic passes below.
@@ -84,7 +96,8 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
 
     // Skip unspeakable (phoneme-less) chunks. Returning null tells the caller to
     // drop this segment instead of pushing a buffer — prevents the 500 above.
-    if (!hasSpeakableContent(text)) return null;
+    if (meta) { meta.engine = engine; meta.chars = text.length; }
+    if (!hasSpeakableContent(text)) { if (meta) meta.skipped = true; return null; }
 
     // Start the engine if it isn't running and the user configured its path in
     // Preferences → VRChat & Audio. Deliberately placed AFTER the speakable
@@ -95,6 +108,10 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
     // and let the normal connection error surface exactly as before.
     const ensured = await ensureEngineRunning(engine);
     if (!ensured.ok && ensured.error) console.warn(`[tts] ${ensured.error}`);
+    if (meta) {
+      meta.engineState = ensured.ok ? (ensured.launched ? 'launched' : 'running') : 'failed';
+      if (ensured.error) meta.engineError = ensured.error;
+    }
 
     if (engine === 0) {
       const vvData = JSON.parse(fs.readFileSync(speakersJsonPath(), 'utf8'));
@@ -229,7 +246,14 @@ function concatenateWavs(buffers: ArrayBuffer[]): Buffer {
     return finalBuffer;
 }
 
+// Headers must be latin-1; engine errors carry Japanese and box characters.
+function headerSafe(s: string): string {
+  return encodeURIComponent(String(s || '').slice(0, 500));
+}
+
 export async function POST(req: Request) {
+  const started = Date.now();
+  const meta: SynthMeta = { engine: -1, engineState: 'unknown', chars: 0, skipped: false };
   try {
     const data = await req.json();
     let buffers: ArrayBuffer[] = [];
@@ -240,22 +264,47 @@ export async function POST(req: Request) {
 
     if (data.segments && Array.isArray(data.segments)) {
       for (const seg of data.segments) {
-        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0, dictPairs);
+        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0, dictPairs, meta);
         if (buf) buffers.push(buf);
       }
     } else {
-       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0, dictPairs);
+       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0, dictPairs, meta);
        if (buf) buffers.push(buf);
     }
-    
+
     const finalWav = concatenateWavs(buffers);
-    
+
+    // Diagnostics ride along with the audio. The browser reads them to drive the
+    // live TTS indicator; nothing here changes the audio itself.
     return new NextResponse(finalWav, {
-      headers: { 'Content-Type': 'audio/wav' }
+      headers: {
+        'Content-Type': 'audio/wav',
+        'X-Tts-Engine': String(meta.engine),
+        'X-Tts-Engine-State': meta.engineState,
+        'X-Tts-Chars': String(meta.chars),
+        'X-Tts-Skipped': meta.skipped ? '1' : '0',
+        'X-Tts-Ms': String(Date.now() - started),
+        ...(meta.engineError ? { 'X-Tts-Engine-Error': headerSafe(meta.engineError) } : {}),
+      },
     });
-    
+
   } catch (e: any) {
     console.error('TTS Error:', e);
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    // The failure reason travels in the body AND in a header, because the
+    // streaming client used to discard the body entirely — which is exactly why
+    // an unstable AivisSpeech could not be diagnosed from the UI.
+    return NextResponse.json(
+      { error: e.message, engine: meta.engine, engineState: meta.engineState, chars: meta.chars },
+      {
+        status: 500,
+        headers: {
+          'X-Tts-Engine': String(meta.engine),
+          'X-Tts-Engine-State': meta.engineState,
+          'X-Tts-Chars': String(meta.chars),
+          'X-Tts-Ms': String(Date.now() - started),
+          'X-Tts-Error': headerSafe(e?.message || 'synthesis failed'),
+        },
+      },
+    );
   }
 }
