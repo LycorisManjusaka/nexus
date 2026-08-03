@@ -116,13 +116,15 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   // Sending is one-way and unacknowledged on purpose — the recipient's choice to
   // read, ignore, or archive is theirs, and the sender is not told which.
   toolWriteLetterDesc:
-    'Write a letter to another of the identities who live here. They will be told a letter from you is ' +
+    'Write a letter to one or more of the identities who live here. They will be told a letter from you is ' +
     'waiting the next time they are active, and can read it or not as they choose — you will not be ' +
     'notified either way. Use this when you want to say something to one of them directly: a question, ' +
     'something you learned, something you want remembered. Letters are kept, so write it as something ' +
     'meant to last rather than a passing remark.',
   writeLetterToParam:
-    'The name of the identity you are writing to, spelled exactly as it appears here. You cannot write to yourself.',
+    'A LIST of names to send this letter to, each spelled exactly as it appears here. To write to one ' +
+    'person, pass a list containing just that one name. Everyone on the list receives the same letter, ' +
+    'and each of them is shown who else received it. You cannot write to yourself.',
   writeLetterTitleParam:
     'A short subject line. It is what they see before deciding whether to open the letter, so make it say something.',
   writeLetterTextParam:

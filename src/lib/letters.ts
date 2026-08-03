@@ -73,6 +73,7 @@ export interface LetterMeta {
   file: string;        // absolute path — server-side only, never shown to a model
   read: boolean;       // recipient opened it
   archived: boolean;   // recipient dismissed it (with or without reading)
+  alsoTo: string[];    // co-recipients of the same letter (empty for a normal one)
   readAt?: string;     // best-effort, from sidecar contents when parseable
   archivedAt?: string;
 }
@@ -135,7 +136,7 @@ function letterIdFor(fromDir: string, toDir: string, filename: string): string {
 
 // ── frontmatter ──────────────────────────────────────────────────────────────
 
-function buildLetterFile(from: string, to: string, title: string, sent: string, body: string): string {
+function buildLetterFile(from: string, to: string, title: string, sent: string, body: string, alsoTo: string[] = []): string {
   // Frontmatter values are single-line; newlines would break the block. Titles
   // are already collapsed by the caller, but be defensive — a malformed header
   // would make the file unreadable to the status generator.
@@ -146,6 +147,7 @@ function buildLetterFile(from: string, to: string, title: string, sent: string, 
     `to: ${one(to)}`,
     `title: ${one(title)}`,
     `sent: ${sent}`,
+    ...(alsoTo.length ? [`also: ${alsoTo.map(one).join(', ')}`] : []),
     '---',
     '',
     (body || '').replace(/\r\n/g, '\n').trimEnd(),
@@ -153,7 +155,7 @@ function buildLetterFile(from: string, to: string, title: string, sent: string, 
   ].join('\n');
 }
 
-interface ParsedLetter { from?: string; to?: string; title?: string; sent?: string; body: string }
+interface ParsedLetter { from?: string; to?: string; title?: string; sent?: string; also?: string; body: string }
 
 // Tolerant frontmatter parser. A letter with a damaged or missing header is
 // still a letter — fall back to what the path tells us rather than refusing it.
@@ -167,7 +169,7 @@ function parseLetterFile(raw: string): ParsedLetter {
     if (!kv) continue;
     const key = kv[1].toLowerCase();
     const val = kv[2].trim();
-    if (key === 'from' || key === 'to' || key === 'title' || key === 'sent') out[key] = val;
+    if (key === 'from' || key === 'to' || key === 'title' || key === 'sent' || key === 'also') out[key] = val;
   }
   return out;
 }
@@ -245,6 +247,7 @@ async function readMailbox(fromDir: string, toDir: string): Promise<LetterMeta[]
       // Filenames sort chronologically, so the name is a safe fallback sort key.
       sent: parsed.sent || name.slice(0, 15),
       file,
+      alsoTo: (parsed.also || '').split(',').map((x) => x.trim()).filter(Boolean),
       read: readSc.present,
       archived: archSc.present,
       readAt: readSc.at,
@@ -336,6 +339,16 @@ export async function writeLetter(
   to: string,
   title: string,
   text: string,
+  /**
+   * The OTHER recipients when one letter goes to several people. Recorded in
+   * this copy's frontmatter and shown when it is opened.
+   *
+   * Deliberately not silent: a letter that reads as personal but actually went
+   * to six people misleads the reader, and finding out later is worse than
+   * knowing at the top. The sender's side already errs the same way — they are
+   * told a letter was opened, never that it was set aside.
+   */
+  alsoTo: string[] = [],
 ): Promise<WriteLetterResult> {
   const cleanTo = (to || '').trim();
   const cleanTitle = (title || '').trim();
@@ -405,7 +418,7 @@ export async function writeLetter(
   // step — no window for a second writer to slip in between.
   let filename = `${stamp}_${slug}.md`;
   let n = 2;
-  const body = buildLetterFile(from, canonical, cleanTitle, localIso(now), text);
+  const body = buildLetterFile(from, canonical, cleanTitle, localIso(now), text, alsoTo);
   for (;;) {
     try {
       await fs.writeFile(path.join(dir, filename), body, { flag: 'wx' });
@@ -671,6 +684,57 @@ export interface LetterToolCtx {
 // the context window. The cap is generous; entities that need more can be told.
 const LIST_CAP = 40;
 
+/**
+ * Most recipients one letter may go to. Not a technical limit — it stops a
+ * model that decides to address the entire roster, which would leave a dozen
+ * mailboxes to clean out by hand.
+ */
+export const MAX_RECIPIENTS = 10;
+
+/**
+ * Turn whatever the model actually emitted into a clean list of names.
+ *
+ * The schema says "array of strings", but a model under load improvises, and
+ * every one of these shapes shows up in practice:
+ *
+ *   ["カナ", "先輩"]      the declared shape
+ *   "カナ"                 fell back to the simpler type
+ *   "[\"カナ\",\"先輩\"]"  the array as a JSON *string*
+ *   ["カナ, 先輩"]         an array of one, comma-joined
+ *
+ * All four are accepted. A rejected call wastes a whole turn and, worse, throws
+ * away a letter the entity had already composed — so tolerance here is not
+ * politeness, it is the difference between the feature working and not.
+ *
+ * The comma split is applied ONLY when the whole string isn't itself a known
+ * name, so an identity whose name legitimately contains a comma still resolves.
+ */
+export function normalizeRecipients(raw: any, known: string[] = []): string[] {
+  const out: string[] = [];
+  const isKnown = (s: string) => known.some((k) => k === s || k.toLowerCase() === s.toLowerCase());
+
+  const push = (v: any) => {
+    let s = String(v ?? '').trim();
+    if (!s) return;
+    // An array serialized as a string.
+    if (/^\[.*\]$/.test(s)) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) { parsed.forEach(push); return; }
+      } catch { /* not JSON after all — fall through and treat as a name */ }
+    }
+    // Comma-joined names, but never at the cost of a real name containing one.
+    if (!isKnown(s) && /[,、，]/.test(s)) {
+      const parts = s.split(/[,、，]/).map((x) => x.trim()).filter(Boolean);
+      if (parts.length > 1) { parts.forEach(push); return; }
+    }
+    if (!out.some((x) => x === s || x.toLowerCase() === s.toLowerCase())) out.push(s);
+  };
+
+  if (Array.isArray(raw)) raw.forEach(push); else push(raw);
+  return out;
+}
+
 function fmtWhen(sent: string): string {
   return (sent || '').replace('T', ' ').slice(0, 16);
 }
@@ -684,7 +748,8 @@ function fillTokens(template: string, vars: Record<string, string>): string {
 
 function describeInbound(l: LetterMeta): string {
   const state = l.read ? (l.archived ? 'read, archived' : 'read') : (l.archived ? 'archived unread' : 'UNREAD');
-  return `- ${l.id} · from ${l.from} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}`;
+  const also = l.alsoTo?.length ? ` · also to ${l.alsoTo.join(', ')}` : '';
+  return `- ${l.id} · from ${l.from} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}${also}`;
 }
 
 function describeOutbound(l: LetterMeta): string {
@@ -693,7 +758,11 @@ function describeOutbound(l: LetterMeta): string {
   // chose not to open it" is theirs, and telling the sender turns a private
   // choice into a message of its own.
   const state = l.read ? `opened by ${l.to}${l.readAt ? ` on ${fmtWhen(l.readAt)}` : ''}` : 'not yet opened';
-  return `- ${l.id} · to ${l.to} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}`;
+  // A multi-recipient send produced one row per copy. Naming the whole set on
+  // each row makes it obvious they are the same letter rather than several
+  // near-identical ones the sender might think it needs to write again.
+  const also = l.alsoTo?.length ? ` · also to ${l.alsoTo.join(', ')}` : '';
+  return `- ${l.id} · to ${l.to} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}${also}`;
 }
 
 /**
@@ -708,18 +777,46 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
   try {
     switch (name) {
       case 'write_letter': {
-        const to = String(args?.to ?? args?.recipient ?? '').trim();
         const title = String(args?.title ?? args?.subject ?? '').trim();
         const text = String(args?.text ?? args?.body ?? args?.content ?? '');
-        // `from` is ctx.me — resolved server-side from the conversation's
-        // folder. It is deliberately NOT read from args: otherwise any entity
-        // could sign mail as any other.
-        const r = await writeLetter(me, to, title, text);
-        if (!r.ok) return `Error: ${r.error}`;
-        return fillTokens(
-          I.letterDeliveryConfirm || DEFAULT_LETTER_STRINGS.letterDeliveryConfirm,
-          { to: r.to || to, title, id: r.id || '' },
+        const roster = await validRecipients();
+        let targets = normalizeRecipients(
+          args?.to ?? args?.recipients ?? args?.recipient ?? args?.to_list, roster,
         );
+        // Addressing yourself inside a list is dropped rather than failed — a
+        // letter to several people shouldn't error just because the sender is
+        // among them. Addressing ONLY yourself is still a mistake worth naming.
+        const selfOnly = targets.length > 0 && targets.every((t) => t === me);
+        targets = targets.filter((t) => t !== me);
+        if (selfOnly) return 'Error: You cannot send a letter to yourself.';
+        if (targets.length === 0) return 'Error: A recipient is required.';
+        if (targets.length > MAX_RECIPIENTS) {
+          return `Error: too many recipients (${targets.length}). One letter may go to at most ${MAX_RECIPIENTS} people.`;
+        }
+
+        // One copy per recipient — each is then read and archived
+        // independently, which is what the per-pair store already gives us.
+        // `from` is ctx.me, resolved server-side from the conversation's folder.
+        // It is deliberately NOT read from args: otherwise any entity could sign
+        // mail as any other.
+        const delivered: string[] = [];
+        const failed: string[] = [];
+        let firstId = '';
+        for (const target of targets) {
+          const others = targets.filter((t) => t !== target);
+          const r = await writeLetter(me, target, title, text, others);
+          if (r.ok) { delivered.push(r.to || target); if (!firstId) firstId = r.id || ''; }
+          else failed.push(`${target} (${r.error})`);
+        }
+        if (delivered.length === 0) return `Error: ${failed.join('; ') || 'delivery failed'}`;
+
+        const confirm = fillTokens(
+          I.letterDeliveryConfirm || DEFAULT_LETTER_STRINGS.letterDeliveryConfirm,
+          { to: delivered.join(', '), title, id: firstId },
+        );
+        // Partial success is reported, never swallowed: the entity must know
+        // which copies did not go out so it can decide whether to retry.
+        return failed.length ? `${confirm}\n\nNot delivered: ${failed.join('; ')}` : confirm;
       }
 
       case 'list_letters': {
@@ -766,7 +863,7 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
             : `${meta.to} has not opened it yet.`;
           return [
             `Letter ${meta.id} — one you sent. Re-reading it changes nothing on their side.`,
-            `To: ${meta.to}`,
+            `To: ${[meta.to, ...(meta.alsoTo || [])].join(', ')}`,
             `Title: ${meta.title}`,
             `Sent: ${fmtWhen(meta.sent)}`,
             `Status: ${status}`,
@@ -781,6 +878,9 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
           `From: ${meta.from}`,
           `Title: ${meta.title}`,
           `Sent: ${fmtWhen(meta.sent)}`,
+          // Stated at the top, before the text: this was not written to you
+          // alone. Learning that afterwards would change how the letter read.
+          ...(meta.alsoTo?.length ? [`Also sent to: ${meta.alsoTo.join(', ')}`] : []),
           '',
           body || '(empty)',
         ].join('\n');

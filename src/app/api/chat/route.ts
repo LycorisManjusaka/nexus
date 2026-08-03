@@ -574,11 +574,11 @@ async function streamClaudeViaAgentSDK(args: {
                 'write_letter',
                 I.toolWriteLetterDesc,
                 {
-                  to: z.string().describe(I.writeLetterToParam),
+                  to: z.union([z.string(), z.array(z.string())]).describe(I.writeLetterToParam),
                   title: z.string().describe(I.writeLetterTitleParam),
                   text: z.string().describe(I.writeLetterTextParam),
                 },
-                async (a: { to: string; title: string; text: string }) => ({
+                async (a: { to: string | string[]; title: string; text: string }) => ({
                   content: [{ type: 'text' as const, text: await runLetterTool('write_letter', a, letterCtx) }],
                 }),
               ),
@@ -2588,7 +2588,7 @@ export async function POST(req: Request) {
           input_schema: {
             type: 'object',
             properties: {
-              to: { type: 'string', description: I.writeLetterToParam },
+              to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam },
               title: { type: 'string', description: I.writeLetterTitleParam },
               text: { type: 'string', description: I.writeLetterTextParam },
             },
@@ -3524,7 +3524,7 @@ export async function POST(req: Request) {
               parameters: {
                 type: 'OBJECT',
                 properties: {
-                  to: { type: 'STRING', description: I.writeLetterToParam },
+                  to: { type: 'ARRAY', items: { type: 'STRING' }, description: I.writeLetterToParam },
                   title: { type: 'STRING', description: I.writeLetterTitleParam },
                   text: { type: 'STRING', description: I.writeLetterTextParam },
                 },
@@ -4579,7 +4579,7 @@ export async function POST(req: Request) {
             parameters: {
               type: 'object',
               properties: {
-                to: { type: 'string', description: I.writeLetterToParam },
+                to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam },
                 title: { type: 'string', description: I.writeLetterTitleParam },
                 text: { type: 'string', description: I.writeLetterTextParam },
               },
