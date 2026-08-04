@@ -90,20 +90,23 @@ function sanitizeEntityDir(name: string): string {
   return (name || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/[.\s]+$/, '').trim();
 }
 
-// Windows-safe, reasonably short filename fragment built from the letter title.
-// Keeps CJK. Collapses whitespace to "-" so the filename stays one token, which
-// makes the mailbox readable in Explorer at a glance.
-function slugifyTitle(title: string): string {
-  const s = (title || '')
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f]/g, '')
-    .replace(/[\\/:*?"<>|]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-.]+|[-.\s]+$/g, '')
-    .trim();
-  const cut = s.slice(0, 60).replace(/[-.\s]+$/, '');
-  return cut || 'untitled';
+// Filenames are PURE ASCII: <YYYY-MM-DD_HHmm>_<8 hex>.md
+//
+// They used to embed a slug of the title, which kept CJK characters. That broke
+// Mercurial on the Work PC — the "ダメ文字" problem: certain byte sequences in
+// Shift-JIS-adjacent encodings are mangled or rejected by tools that do not
+// handle the filename encoding consistently, and a repository cannot hold a
+// file it cannot name.
+//
+// The title was never needed in the filename — it lives in the frontmatter,
+// which is where every reader already gets it. The timestamp stays so the
+// mailbox still sorts chronologically in Explorer; the random suffix only has
+// to make the name unique.
+function randomSuffix(): string {
+  return createHash('sha256')
+    .update(`${Date.now()}-${Math.random()}-${process.pid}`)
+    .digest('hex')
+    .slice(0, 8);
 }
 
 // Local-time ISO string WITH offset (e.g. 2026-07-31T14:20:33+09:00). The plain
@@ -118,6 +121,21 @@ function localIso(d: Date): string {
     `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
     `${sign}${pad(Math.floor(Math.abs(off) / 60))}:${pad(Math.abs(off) % 60)}`
   );
+}
+
+/**
+ * Recover a send time from a filename that happens to start with our stamp
+ * (`2026-08-04_1418…`). Returns '' for any other name — including every name a
+ * human might rename a file to. Only used when the frontmatter has no `sent`.
+ */
+function sentFromFilename(name: string): string {
+  const m = (name || '').match(/^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})/);
+  return m ? `${m[1]}T${m[2]}:${m[3]}:00` : '';
+}
+
+/** Last-resort send time: when the file itself was written. */
+async function fileMtimeIso(file: string): Promise<string> {
+  try { return localIso((await fs.stat(file)).mtime); } catch { return ''; }
 }
 
 function filenameStamp(d: Date): string {
@@ -245,7 +263,13 @@ async function readMailbox(fromDir: string, toDir: string): Promise<LetterMeta[]
       to: parsed.to || toDir,
       title: parsed.title || name.replace(/\.md$/, ''),
       // Filenames sort chronologically, so the name is a safe fallback sort key.
-      sent: parsed.sent || name.slice(0, 15),
+      // A letter file may be named ANYTHING. Renaming one by hand — to get a
+      // problematic name out of a Mercurial/Git repository, for instance — must
+      // not change how it behaves, so nothing here parses the filename for
+      // meaning. `sent` comes from the frontmatter; the filename is only
+      // consulted as a last resort when the header is missing, and the file's
+      // own mtime is the final fallback.
+      sent: parsed.sent || sentFromFilename(name) || (await fileMtimeIso(file)) || '',
       file,
       alsoTo: (parsed.also || '').split(',').map((x) => x.trim()).filter(Boolean),
       read: readSc.present,
@@ -411,13 +435,13 @@ export async function writeLetter(
 
   const now = new Date();
   const stamp = filenameStamp(now);
-  const slug = slugifyTitle(cleanTitle);
 
-  // Two letters with the same title in the same minute would collide. Suffix
-  // until free. wx = fail if exists, so the check and the create are one atomic
-  // step — no window for a second writer to slip in between.
-  let filename = `${stamp}_${slug}.md`;
-  let n = 2;
+  // ASCII-only name; the title is carried in the frontmatter, not the filename.
+  // wx = fail if exists, so the existence check and the create are one atomic
+  // step — no window for a second writer to slip in between. A collision just
+  // draws a new suffix.
+  let filename = `${stamp}_${randomSuffix()}.md`;
+  let tries = 0;
   const body = buildLetterFile(from, canonical, cleanTitle, localIso(now), text, alsoTo);
   for (;;) {
     try {
@@ -427,8 +451,8 @@ export async function writeLetter(
       if (e?.code !== 'EEXIST') {
         return { ok: false, error: `Could not deliver the letter: ${e?.message || 'unknown error'}` };
       }
-      if (n > 50) return { ok: false, error: 'Too many letters with this title in the same minute.' };
-      filename = `${stamp}_${slug}-${n++}.md`;
+      if (++tries > 50) return { ok: false, error: 'Could not find a free filename for this letter.' };
+      filename = `${stamp}_${randomSuffix()}.md`;
     }
   }
 
