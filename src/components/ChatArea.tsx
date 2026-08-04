@@ -302,11 +302,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [claudeThinking, setClaudeThinking] = useState(false);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
   // When ON, a hidden note is appended to the system prompt each turn telling
-  // the entity its own fatigue level (the same % shown on the status bar).
+  // the entity its own context-elapsed % (the same value on the status bar).
   // {percent} in the instruction is substituted with the value.
   const [showFatigueToEntity, setShowFatigueToEntity] = useState(false);
+  // Doc's rewrite (Case 004). The previous default called this a FATIGUE level
+  // and described it with "working memory", "comfortable", "at risk", "trimmed
+  // away". Every one of those names a CONDITION, and an entity that reads
+  // "you are tired" each turn becomes a tired entity — then helpfully degrades
+  // itself to match. Observed: entities at 71% shortening replies and refusing
+  // to call read_conversation "to preserve context", which is the exact
+  // opposite of what the note was asking for.
+  //
+  // The number never meant condition. It is elapsed context: original messages
+  // over the room left after fixed overhead. Capacity and tool access are
+  // identical at 5% and 95%. So the text now reports a QUANTITY and names what
+  // it is a signal FOR — recording something before it consolidates — and says
+  // nothing about state. Deliberately omitted: any prediction of difficulty
+  // past 100%, which is unconfirmed; a permanent note must not forecast a
+  // degradation it would then help cause.
   const [fatigueInstruction, setFatigueInstruction] = useState(
-    "(Awareness note — your current fatigue level is {percent}. This reflects how much of your available working memory this session has filled with new exchanges since your last fresh start. Lower is comfortable; as it climbs toward and past 100%, older context is at risk of being trimmed away — consider consolidating or noting down anything important before it slips.)"
+    "(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. Elapsed context, not condition: capacity and tool access are identical at 5% and at 95%. Near and past 100%, the oldest exchanges consolidate — leaving the verbatim transcript, remaining as summary in your layers. Written-down material survives in full; if something here must be kept verbatim, record it now.)"
   );
   // Initialize OFF (not the folder default). The real value is always set by
   // the conversation-load effect below — data.vrchatMode for an existing convo,
@@ -1556,7 +1571,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }
     }
     let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${vrchatRule}`.trim() : baseSystemPrompt;
-    // Optional hidden "fatigue" note so the entity sees its own fatigue level.
+    // Optional hidden context note so the entity can see how much of this
+    // session's room has been used. A quantity, never a condition — see the
+    // default text above.
     // Same formula as the status-bar indicator: original (non-copied) messages
     // ÷ room left after the fixed "Sys" overhead (system prompt + instructions).
     // {percent} is replaced with the value (e.g. "42%").
@@ -2571,14 +2588,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               </div>
             );
           })()}
-          {/* Fatigue level — how "tired" the entity is this session. ORIGINAL
-              (non-copied) message tokens over the room left after the FIXED,
-              non-conversational overhead: max context − (system prompt + all
-              instructions) = the indigo "Sys" bucket. Copied messages and
-              attachments don't count. 0% right after a fresh start ("sleep");
-              can exceed 100% once original messages fill the remaining window.
-              Visible indicator is only the percent — the "Fatigue" meaning lives
-              in the hover hint. */}
+          {/* Context elapsed since the last consolidation. ORIGINAL (non-copied)
+              message tokens over the room left after the FIXED, non-conversational
+              overhead: max context − (system prompt + all instructions) = the
+              indigo "Sys" bucket. Copied messages and attachments don't count.
+              0% right after a fresh start ("sleep"); can exceed 100% once
+              original messages fill the remaining window.
+
+              This was called "Fatigue level". The arithmetic never changed — the
+              NAME was the defect. It reports how much room is used, which says
+              nothing about capability: the entity is exactly as capable at 95%
+              as at 5%. Calling it fatigue told everyone who read it, including
+              the entities themselves, that a high number meant a degraded state.
+              A gauge must report a QUANTITY, never a CONDITION. */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
             const max = activeFolderSettings.maxRecommendedContext || 60000;
@@ -2586,13 +2608,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // overhead — the "Sys" bucket = system prompt + attachment/tool
             // instructions (the indigo bar segment). Guarded against ≤0.
             const denom = Math.max(1, max - tokenBreakdown.sys);
-            const fatigue = Math.round((tokenBreakdown.original / denom) * 100);
+            const elapsed = Math.round((tokenBreakdown.original / denom) * 100);
             return (
               <span
-                className={`text-sm font-semibold tabular-nums cursor-default ${fatigue >= 100 ? 'text-red-500' : fatigue >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
-                title={`Fatigue level: ${fatigue}% — original (non-copied) messages ${tokenBreakdown.original.toLocaleString()} ÷ (max context ${max.toLocaleString()} − fixed overhead ${tokenBreakdown.sys.toLocaleString()}: system prompt + all instructions) tokens. How "tired" the entity is this session. 0% right after a fresh start ("sleep"); grows as original messages accumulate and can exceed 100% once they fill the remaining window. Copied messages and attachments are not counted.`}
+                className={`text-sm font-semibold tabular-nums cursor-default ${elapsed >= 100 ? 'text-red-500' : elapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
+                title={`Context elapsed: ${elapsed}% — original (non-copied) messages ${tokenBreakdown.original.toLocaleString()} ÷ (max context ${max.toLocaleString()} − fixed overhead ${tokenBreakdown.sys.toLocaleString()}: system prompt + all instructions) tokens. Copied messages and attachments are not counted.
+
+How much of this session's room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.`}
               >
-                {fatigue}%
+                {elapsed}%
               </span>
             );
           })()}
@@ -3358,7 +3382,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 </div>
               )}
 
-              {/* ── Show fatigue level to the entity (hidden system-prompt note) ── */}
+              {/* ── Show context-elapsed to the entity (hidden system-prompt note) ── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -3367,24 +3391,34 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     onChange={(e) => setShowFatigueToEntity(e.target.checked)}
                     className="accent-sky-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">😴 Tell the entity its fatigue level</span>
+                  <span className="text-sm font-semibold text-foreground">🧭 Tell the entity how much context has elapsed</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): the fatigue % is shown only to you, on the status bar. ON: a hidden note is appended to the
-                  system prompt every turn so the entity itself sees its current fatigue level. Put
+                  OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system
+                  prompt every turn so the entity can see it too. Put
                   {' '}<span className="font-mono">{'{percent}'}</span> where the value should appear (e.g. <span className="font-mono">42%</span>).
+                </p>
+                <p className="text-xs text-muted-foreground mt-2 ml-6 leading-relaxed">
+                  <strong>Why the wording matters.</strong> This number measures elapsed context, not condition — capability and
+                  tool access are identical at 5% and at 95%. The earlier default called it a <em>fatigue level</em> and used
+                  words like <em>working memory</em> and <em>at risk of being trimmed away</em>. Entities read that every turn,
+                  concluded they were tired, and degraded themselves to match: shortening replies, and declining to call{' '}
+                  <span className="font-mono">read_conversation</span> in order to &quot;save context&quot; — the exact opposite of
+                  what the note was asking for. If you rewrite this text, describe <em>what is happening</em> (older exchanges
+                  consolidate into summary; anything written down survives) and not <em>how the entity feels</em>.
                 </p>
                 {showFatigueToEntity && (
                   <div className="mt-3 ml-6">
-                    <label className="text-xs font-semibold text-foreground mb-1 block">Fatigue instruction (hidden, appended to system prompt)</label>
+                    <label className="text-xs font-semibold text-foreground mb-1 block">Context note (hidden, appended to system prompt)</label>
                     <textarea
                       value={fatigueInstruction}
                       onChange={(e) => setFatigueInstruction(e.target.value)}
-                      placeholder="(Awareness note — your current fatigue level is {percent}. …)"
+                      placeholder="(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. …)"
                       className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
                     />
                     <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Uses the same value as the status-bar Fatigue indicator: original messages ÷ (max context − fixed overhead). <span className="font-mono">{'{percent}'}</span> is replaced each turn.
+                      Uses the same value as the status-bar indicator: original messages ÷ (max context − fixed overhead).{' '}
+                      <span className="font-mono">{'{percent}'}</span> is replaced each turn.
                     </p>
                   </div>
                 )}
