@@ -184,6 +184,42 @@ function truncateToolInput(input: any): any {
   return { _truncated: true, _originalChars: text.length, preview: text.slice(0, TOOL_ARG_CAP) };
 }
 
+// Stops a model that has stopped making progress: the same tool called with the
+// same arguments several times in a row. THAT — not a high call count — is the
+// failure the old fixed cap of 8 iterations was really guarding against, and
+// this catches it on the 3rd repeat instead of the 8th round, while leaving
+// legitimate long work (20+ genuinely different calls) completely alone.
+const TOOL_REPEAT_LIMIT = 3;
+function makeRepeatGuard() {
+  let lastKey = '';
+  let repeats = 0;
+  // Returns the offending tool name once the limit trips, else null.
+  return (name: string, input: any): string | null => {
+    let key: string;
+    try { key = `${name}:${JSON.stringify(input ?? {})}`; } catch { key = name; }
+    if (key === lastKey) {
+      repeats++;
+      if (repeats >= TOOL_REPEAT_LIMIT) return name;
+    } else {
+      lastKey = key;
+      repeats = 1;
+    }
+    return null;
+  };
+}
+
+// Wording shared by every provider path so the same stop reads the same way
+// wherever it happens. Delivered as a `notice`, which the client renders beside
+// the message and never sends back to the model.
+function toolLimitNotice(rounds: number): string {
+  return `Stopped after ${rounds} rounds of tool use — the turn hit the tool-call limit before finishing.`
+    + ` Any work from the last round was discarded. Raise "Tool-call limit per turn" in Preferences → Other if the task genuinely needs more steps.`;
+}
+function toolRepeatNotice(name: string): string {
+  return `Stopped: \`${name}\` was called ${TOOL_REPEAT_LIMIT} times in a row with identical arguments,`
+    + ` which means the turn was no longer making progress. This usually means the tool keeps failing, or the model is asking for something that does not exist.`;
+}
+
 function toolActivityLabel(name: string): string | null {
   switch (name) {
     // BARE INFINITIVE, not the -ing form. These are rendered as
@@ -1939,6 +1975,7 @@ export async function POST(req: Request) {
       // Manual "continue this reply" — the history ends with the assistant
       // message being continued, and NEXUS adds the resume turn server-side.
       continueFromMessage = false,
+      maxToolIterations: maxToolIterationsRaw,
       lettersEnabled = false,
       subagentEnabled = false,
       subagentModel = '',
@@ -1953,6 +1990,14 @@ export async function POST(req: Request) {
       injectTurnId = '',
     } = await req.json();
     const keys = await loadKeys();
+
+    // Rounds of tool use one turn may take, from Preferences → Other.
+    // Was hard-coded to 8, which silently truncated real agentic work: one
+    // ordinary Work-PC task used ~20 sequential tool calls, so it would have
+    // stopped around the second Bash — before any Edit ran — with no message
+    // explaining why. Claude OAuth is unaffected: Claude Code runs its own loop
+    // and NEXUS sets no maxTurns on the main query.
+    const MAX_TOOL_ROUNDS = Math.min(200, Math.max(1, Number(maxToolIterationsRaw) || 40));
 
     // Per-Entity editable footer = Layer 5. When the entity keeps a FOOTER.md in
     // its workspace, its contents are injected as a self-authored "Layer 5"
@@ -3026,7 +3071,12 @@ export async function POST(req: Request) {
           // tool_use blocks, we execute them, append the assistant turn and a
           // user tool_result turn, then go around. Stops when the model
           // produces a turn with no tool_use blocks (or after a safety cap).
-          const MAX_TOOL_ITERATIONS = 8;
+          const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
+          const repeatGuard = makeRepeatGuard();
+          // Set when the loop stops for a reason the user should see, rather
+          // than because the model finished. Emitted after the loop so it
+          // cannot be mistaken for part of the reply.
+          let toolStopNotice = '';
           // Automatic continuation of a reply cut off at the token cap. Counted
           // separately from tool iterations so a long answer can never exhaust
           // the tool budget (and vice versa). Six rounds at a 128k ceiling is
@@ -3296,6 +3346,27 @@ export async function POST(req: Request) {
                 break;
               }
 
+              // Progress check before spending anything: if the model is
+              // repeating an identical call, stop now rather than burning the
+              // remaining rounds on it.
+              {
+                let stuck: string | null = null;
+                for (const tu of toolUses) {
+                  const hit = repeatGuard(tu.name, tu.input);
+                  if (hit) { stuck = hit; break; }
+                }
+                if (stuck) {
+                  toolStopNotice = toolRepeatNotice(stuck);
+                  break;
+                }
+              }
+              // Last round available, and the model still wants tools: whatever
+              // we execute now can never be answered, so stop and say so.
+              if (iter === MAX_TOOL_ITERATIONS - 1) {
+                toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
+                break;
+              }
+
               // Append the assistant turn and execute each tool, building
               // tool_result blocks for the next user turn.
               currentMessages.push({ role: 'assistant', content: assistantBlocks });
@@ -3524,6 +3595,14 @@ export async function POST(req: Request) {
               currentMessages.push({ role: 'user', content: toolResultBlocks });
               // …and around the loop again. Next iteration the model sees the
               // tool_result blocks and continues its reply.
+            }
+
+            // Why the loop stopped, when it wasn't because the model finished.
+            // Sent as a notice so it sits beside the message instead of inside
+            // it — never persisted into the reply, never replayed to the model.
+            if (toolStopNotice) {
+              console.warn(`[claude-api] ${toolStopNotice}`);
+              enqueue({ type: 'notice', content: toolStopNotice });
             }
 
             // Emit normalized cache usage just before [DONE]. The frontend
@@ -4029,7 +4108,9 @@ export async function POST(req: Request) {
           if (layer1C !== null) {
             enqueue({ type: 'creativity_prefix', label: creativityDisplayPattern.replace('{C}', layer1C.toFixed(2)) });
           }
-          const MAX_TOOL_ITERATIONS = 8;
+          const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
+          const repeatGuard = makeRepeatGuard();
+          let toolStopNotice = '';
           try {
             let contents = [...fullContents];
             let continuationAttempts = 0;
@@ -4051,7 +4132,10 @@ export async function POST(req: Request) {
             const cumGeminiSourceMap = new Map<string, { url: string; title?: string }>();
 
             while (true) {
-              if (toolIterations >= MAX_TOOL_ITERATIONS) break;
+              if (toolIterations >= MAX_TOOL_ITERATIONS) {
+                toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
+                break;
+              }
               const { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata, webSources } = await runGeminiOnce(contents, controller);
               for (const s of (webSources || [])) {
                 if (!cumGeminiSourceMap.has(s.url)) cumGeminiSourceMap.set(s.url, s);
@@ -4066,6 +4150,15 @@ export async function POST(req: Request) {
 
               // 1) Function calls → execute, append model+user turns, loop
               if (functionCalls.length > 0) {
+                // Progress check before spending anything (see makeRepeatGuard).
+                {
+                  let stuck: string | null = null;
+                  for (const fc of functionCalls) {
+                    const hit = repeatGuard(fc.name, fc.args);
+                    if (hit) { stuck = hit; break; }
+                  }
+                  if (stuck) { toolStopNotice = toolRepeatNotice(stuck); break; }
+                }
                 toolIterations++;
                 // Echo the assistant turn back VERBATIM (with thoughtSignature
                 // intact on each functionCall part) so thinking models accept it.
@@ -4344,6 +4437,10 @@ export async function POST(req: Request) {
                          `Possible causes: thinking budget consumed all output tokens, safety filter, or the model couldn't decide how to answer the tool result. ` +
                          `Try disabling extended thinking, increasing context limit, or rewording the prompt.]`,
               });
+            }
+            if (toolStopNotice) {
+              console.warn(`[gemini] ${toolStopNotice}`);
+              enqueue({ type: 'notice', content: toolStopNotice });
             }
             const usagePayload = normalizeCacheUsage(cumGeminiUsage, 'gemini');
             if (usagePayload) enqueue(usagePayload);
@@ -5387,7 +5484,9 @@ export async function POST(req: Request) {
           }
 
           const MAX_CONTINUATIONS = 2;
-          const MAX_TOOL_ITERATIONS = 8;
+          const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
+          const repeatGuard = makeRepeatGuard();
+          let toolStopNotice = '';
           const tagState = { inThink: false, textTail: '' };
           let msgs = [...baseOaiMessages];
           let cumulativeAssistantText = '';
@@ -5458,9 +5557,26 @@ export async function POST(req: Request) {
                 );
               }
 
+              // Model wants tools but the budget is gone — say so rather than
+              // ending the turn on whatever text happened to be produced.
+              if (toolCalls.length > 0 && toolIterations >= MAX_TOOL_ITERATIONS) {
+                toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
+              }
+
               // 1) Tool calls present → execute, append assistant turn (with
               // tool_calls field) and one role:'tool' message per call, loop.
               if (toolCalls.length > 0 && toolIterations < MAX_TOOL_ITERATIONS) {
+                // Progress check before spending anything (see makeRepeatGuard).
+                // Arguments arrive as a JSON string here; the guard hashes them
+                // as-is, which is exactly the comparison we want.
+                {
+                  let stuck: string | null = null;
+                  for (const tc of toolCalls) {
+                    const hit = repeatGuard(tc.name, tc.arguments);
+                    if (hit) { stuck = hit; break; }
+                  }
+                  if (stuck) { toolStopNotice = toolRepeatNotice(stuck); break; }
+                }
                 toolIterations++;
                 msgs = [...msgs, {
                   role: 'assistant',
@@ -5847,6 +5963,10 @@ export async function POST(req: Request) {
             // Emit normalized cache usage. `providerHint` was computed above
             // (just outside the ReadableStream) so the per-iteration cache
             // debug log and this final emission read from the same source.
+            if (toolStopNotice) {
+              console.warn(`[${providerHint}] ${toolStopNotice}`);
+              enqueue({ type: 'notice', content: toolStopNotice });
+            }
             const usagePayload = normalizeCacheUsage(cumOaiUsage, providerHint);
             if (usagePayload) enqueue(usagePayload);
             // Surface web-search citations (if any) so the user can click

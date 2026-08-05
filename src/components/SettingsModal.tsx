@@ -568,6 +568,34 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             </div>
 
             <div>
+              <label className="block">
+                <span className="text-sm text-foreground">Tool-call limit per turn</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={globalSettings.maxToolIterations ?? 40}
+                  onChange={e => {
+                    const n = parseInt(e.target.value, 10);
+                    setGlobalSettings({
+                      ...globalSettings,
+                      maxToolIterations: Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : 40,
+                    });
+                  }}
+                  className="mt-1 w-28 px-2 py-1 rounded-md border border-border bg-background text-sm"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                How many rounds of tool use one turn may take before NEXUS stops it. Each round is one
+                model call, so a task that reads a file, edits it, then runs a test uses three. Real work
+                often needs 20 or more; the old fixed limit of 8 cut those off silently. Raise it if long
+                tasks stop early, lower it to cap spending. A separate guard stops a model that repeats the
+                same call over and over, so this number does not have to be tight to be safe. Does not apply
+                to Claude OAuth — Claude Code runs its own loop.
+              </p>
+            </div>
+
+            <div>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
