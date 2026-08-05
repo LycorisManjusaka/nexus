@@ -262,6 +262,30 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [browserAllowedHosts, setBrowserAllowedHosts] = useState('');
   const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(false);
   const [browserCompact, setBrowserCompact] = useState(false);
+  // Result line for the "sign this identity in" button. Not persisted — it
+  // describes one launch, not a setting.
+  const [browserProfileMsg, setBrowserProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [browserProfileBusy, setBrowserProfileBusy] = useState(false);
+  // Opens this identity's browser profile in a PLAIN window so the machine's
+  // owner can sign it in by hand. Not something the entity can trigger — the
+  // whole point is that account access is granted, not taken.
+  const openBrowserProfile = async (useSystem: boolean) => {
+    setBrowserProfileBusy(true);
+    setBrowserProfileMsg(null);
+    try {
+      const res = await fetch('/api/browser', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'open-profile', entity: folderName, useSystem }),
+      });
+      const data = await res.json();
+      setBrowserProfileMsg({ ok: data?.ok === true, text: String(data?.message || 'No response.') });
+    } catch (e: any) {
+      setBrowserProfileMsg({ ok: false, text: e?.message || String(e) });
+    } finally {
+      setBrowserProfileBusy(false);
+    }
+  };
   // Model the child subagent runs on ('' = cheap default, e.g. Haiku).
   const [subagentModel, setSubagentModel] = useState('');
   // Provider family of the subagent model (routes it to the right endpoint).
@@ -3562,11 +3586,10 @@ How much of this session's room has been used since the last consolidation ("sle
               </div>
 
               {/* ── Browser control ───────────────────────────────────────────
-                  ON by default, unlike everything else on this tab. The real
-                  boundary is the host allowlist below, so leaving the tools
-                  present costs a capability nobody has to remember to switch on,
-                  while still reaching nothing but localhost until a host is
-                  added by hand. */}
+                  OFF by default, like everything else on this tab. Two separate
+                  boundaries: this flag decides whether the tools exist, the host
+                  allowlist below decides where they may go. Switching the flag on
+                  still reaches nothing but localhost until a host is added. */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -3578,7 +3601,7 @@ How much of this session's room has been used since the last consolidation ("sle
                   <span className="text-sm font-semibold text-foreground">🌐 Browser (drive a real Chromium window)</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  ON (default): this identity gets <span className="font-mono">browser_navigate</span>,{' '}
+                  OFF by default. When ON, this identity gets <span className="font-mono">browser_navigate</span>,{' '}
                   <span className="font-mono">browser_snapshot</span>, <span className="font-mono">browser_click</span>,{' '}
                   <span className="font-mono">browser_type</span>, <span className="font-mono">browser_read</span> and{' '}
                   <span className="font-mono">browser_screenshot</span>. A visible Chromium window opens the first time one is
@@ -3632,6 +3655,50 @@ How much of this session's room has been used since the last consolidation ("sle
                       <span className="font-mono">keys.json</span> — sign-ins do not travel to your other machines. Delete the
                       folder to sign everything out.
                     </p>
+
+                    {/* Manual sign-in. The allowlist is a route filter on the automation
+                        context, so it blocks the keyboard as well as the tools — you
+                        cannot just type a login page into the window Nexus is driving.
+                        This opens the same profile in a plain window instead. */}
+                    <div className="pt-2 border-t border-border/50 space-y-2">
+                      <label className="block text-xs font-semibold text-foreground">Sign this identity in</label>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Opens the profile above in an <strong>ordinary browser window</strong> — nothing driving it, no allowlist,
+                        no automation. Sign in to exactly the accounts <span className="font-mono">{folderName}</span> should have,
+                        then close the window. This is how an identity gets your Google account without inheriting every login in
+                        your daily browser. If a browser window is already open for this identity it will be closed first —
+                        two browsers cannot share one profile.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={browserProfileBusy}
+                          onClick={() => openBrowserProfile(false)}
+                          className="px-3 py-1.5 text-xs rounded border border-border bg-input hover:bg-muted text-foreground disabled:opacity-40"
+                        >
+                          {browserProfileBusy ? 'Opening…' : `🔑 Open ${folderName}'s profile`}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={browserProfileBusy}
+                          onClick={() => openBrowserProfile(true)}
+                          className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:bg-muted disabled:opacity-40"
+                        >
+                          …with my installed Chrome
+                        </button>
+                      </div>
+                      {browserProfileMsg && (
+                        <p className={`text-xs leading-relaxed ${browserProfileMsg.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {browserProfileMsg.text}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        The first button uses Nexus&apos;s own bundled Chromium — always the right version, no risk. Use the second
+                        only if a site refuses to sign in (Google sometimes rejects &ldquo;Chrome for Testing&rdquo; builds):
+                        an installed browser can <strong>upgrade the profile one-way</strong>, after which the bundled Chromium may
+                        refuse to open it and this identity&apos;s browser stops working until the profile folder is deleted.
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>

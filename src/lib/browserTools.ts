@@ -38,6 +38,8 @@
 
 import path from 'path';
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
+import { spawn } from 'child_process';
 import type { BrowserContext, Page } from 'playwright';
 import { putBytes } from './attachmentStore';
 
@@ -381,6 +383,160 @@ export function browserSessionInfo(): { entity: string; url: string; idleMs: num
     url: (() => { try { return s.page.url(); } catch { return '(unknown)'; } })(),
     idleMs: now - s.last,
   }));
+}
+
+// ── signing an identity in, by hand ──────────────────────────────────────────
+//
+// The allowlist is a route filter on the automation context, which means it
+// blocks the KEYBOARD as well as the tools: a person cannot simply type
+// accounts.google.com into the window Nexus is driving. And even if they could,
+// they would be signing in inside an automation-controlled browser, which a
+// number of sites — Google among them — refuse outright.
+//
+// So this opens the SAME user-data-dir in a plain browser: spawned directly,
+// no Playwright, no CDP, no automation flags, no route filter. The machine's
+// owner drives an ordinary window, signs into exactly the accounts that
+// identity should have, and closes it. The cookies are simply there the next
+// time the entity navigates.
+//
+// This is the deliberate middle ground between "the entity has no logins at
+// all" and "the entity inherits every account in your daily browser". Access is
+// granted one account at a time, by hand, per identity.
+
+export interface OpenProfileResult {
+  ok: boolean;
+  message: string;
+  executable?: string;
+  profileDir?: string;
+  kind?: 'bundled' | 'system';
+  closedAutomation?: boolean;
+}
+
+/**
+ * Where a normally-installed Chromium-family browser lives on Windows, best
+ * first. Only used when the caller explicitly asks for the system browser —
+ * see the version warning in `openProfileBrowser`.
+ */
+function findSystemBrowser(): { name: string; exe: string } | null {
+  const PF = process.env['ProgramFiles'] || 'C:\\Program Files';
+  const PF86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+  const LOCAL = process.env['LOCALAPPDATA'] || '';
+  const candidates: { name: string; exe: string }[] = [
+    { name: 'Google Chrome', exe: path.join(PF, 'Google\\Chrome\\Application\\chrome.exe') },
+    { name: 'Google Chrome', exe: path.join(PF86, 'Google\\Chrome\\Application\\chrome.exe') },
+    { name: 'Google Chrome', exe: LOCAL ? path.join(LOCAL, 'Google\\Chrome\\Application\\chrome.exe') : '' },
+    { name: 'Brave', exe: path.join(PF, 'BraveSoftware\\Brave-Browser\\Application\\brave.exe') },
+    { name: 'Brave', exe: path.join(PF86, 'BraveSoftware\\Brave-Browser\\Application\\brave.exe') },
+    { name: 'Microsoft Edge', exe: path.join(PF86, 'Microsoft\\Edge\\Application\\msedge.exe') },
+    { name: 'Microsoft Edge', exe: path.join(PF, 'Microsoft\\Edge\\Application\\msedge.exe') },
+  ];
+  for (const c of candidates) {
+    if (c.exe && existsSync(c.exe)) return c;
+  }
+  return null;
+}
+
+/**
+ * Open one identity's browser profile in a plain window for manual sign-in.
+ *
+ * `useSystem` picks the machine's installed Chrome/Brave/Edge instead of the
+ * bundled Chromium. That is offered because Google sometimes refuses sign-in in
+ * "Chrome for Testing" builds — but it carries a REAL, ONE-WAY RISK: a newer
+ * browser upgrades the profile format, and the older bundled Chromium will then
+ * refuse to open it at all, breaking that identity's browser until the profile
+ * folder is deleted. Bundled is the default for exactly this reason.
+ */
+export async function openProfileBrowser(
+  entity: string,
+  opts: { useSystem?: boolean; executablePath?: string; url?: string } = {}
+): Promise<OpenProfileResult> {
+  const dir = path.join(PROFILES_DIR, safeName(entity));
+
+  let exe = String(opts.executablePath || '').trim();
+  let kind: 'bundled' | 'system' = opts.useSystem || exe ? 'system' : 'bundled';
+  let label = 'your installed browser';
+
+  if (!exe && opts.useSystem) {
+    const found = findSystemBrowser();
+    if (!found) {
+      return {
+        ok: false,
+        message:
+          'No installed Chrome, Brave or Edge was found in the usual places. ' +
+          'Use the bundled Chromium instead, or give an explicit path to the .exe.',
+      };
+    }
+    exe = found.exe;
+    label = found.name;
+  }
+
+  if (!exe) {
+    // The bundled binary, asked for by name rather than guessed at from a path.
+    try {
+      const { chromium } = await import('playwright');
+      exe = chromium.executablePath();
+    } catch (e: any) {
+      return { ok: false, message: `Playwright is not installed (${e?.message || e}).` };
+    }
+    label = 'the bundled Chromium';
+    kind = 'bundled';
+  }
+
+  if (!existsSync(exe)) {
+    return {
+      ok: false,
+      message:
+        kind === 'bundled'
+          ? `Chromium is not downloaded yet — run "npx playwright install chromium" in web-app. (looked for ${exe})`
+          : `No browser at ${exe}.`,
+    };
+  }
+
+  // MANDATORY, not tidiness. Chromium single-instances per user-data-dir: if
+  // the automation context still holds this directory, the new process would
+  // simply hand its window to the RUNNING one and exit — putting the sign-in
+  // back inside the automation-controlled browser, which is the exact thing
+  // this function exists to avoid. Worse, two processes writing one profile is
+  // how a profile gets corrupted.
+  const closed = (await closeBrowser(entity)) > 0;
+  if (closed) await new Promise((r) => setTimeout(r, 1200)); // let the lock go
+
+  await fs.mkdir(dir, { recursive: true });
+
+  const args = [
+    `--user-data-dir=${dir}`,
+    // Quality-of-life only. None of these are automation flags: the point of
+    // this launch is that the browser has no idea anything is driving it.
+    '--no-first-run',
+    '--no-default-browser-check',
+  ];
+  if (opts.url) args.push(opts.url);
+
+  try {
+    // detached + unref so the window outlives this request and is not killed
+    // when the Next.js dev server reloads — same reasoning as the TTS engines.
+    const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
+    child.unref();
+  } catch (e: any) {
+    return { ok: false, message: `Failed to launch: ${e?.message || e}` };
+  }
+
+  console.log(`[browser] manual profile window for ${entity}: ${exe}`);
+  return {
+    ok: true,
+    kind,
+    executable: exe,
+    profileDir: dir,
+    closedAutomation: closed,
+    message:
+      `Opened ${entity}'s profile in ${label}. Sign in to whatever accounts this identity should have, ` +
+      `then close the window — the logins stay in the profile.` +
+      (closed ? ' The automation window was closed first, because two browsers cannot share one profile.' : '') +
+      (kind === 'system'
+        ? ' Note: an installed browser may upgrade this profile so the bundled Chromium can no longer open it. ' +
+          'If the identity\'s browser stops working after this, delete the profile folder and sign in again with the bundled option.'
+        : ''),
+  };
 }
 
 // ── snapshot ─────────────────────────────────────────────────────────────────
