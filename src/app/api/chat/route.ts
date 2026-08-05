@@ -1367,15 +1367,36 @@ async function streamClaudeViaAgentSDK(args: {
         if (capturedSessionId) {
           enqueue({ type: 'session_id', sessionId: capturedSessionId });
         }
-        // Prefer the summed per-call figures when the SDK reported any: they
-        // are the consolidated counts Anthropic bills on, and now cover EVERY
-        // inner call rather than just the last. Fall back to the raw stream
-        // events only if no assistant message carried usage.
-        const turnUsage = sdkUsageCalls > 0 ? sdkUsage : cumUsage;
+        // Merge the two accumulators FIELD BY FIELD, not whole-object.
+        //
+        // The SDK's `assistant` messages do not reliably carry every usage
+        // field — in practice output_tokens is present while the cache
+        // breakdown often is not. Preferring one object wholesale therefore
+        // loses whatever the winner happened to omit. (The old code hid this
+        // behind `Number(u.x || cumUsage.x)`, which silently kept the
+        // stream-event value for any field the SDK left undefined and
+        // overwrote the rest — producing a turn whose input was a true sum
+        // across every inner call while its output was only the last call's.
+        // A real Work-PC trace showed 4.4M input against 634 output for a turn
+        // containing five Edits and five Bash runs: input summed, output not.)
+        //
+        // Both accumulators count the same calls, so where both have a value
+        // they agree; taking the larger just means "whichever source actually
+        // saw this field". Never added together — that would double-count.
+        const pick = (a: number, b: number) => (a > b ? a : b);
+        const turnUsage = {
+          input: pick(sdkUsage.input, cumUsage.input),
+          output: pick(sdkUsage.output, cumUsage.output),
+          cacheRead: pick(sdkUsage.cacheRead, cumUsage.cacheRead),
+          cacheCreate: pick(sdkUsage.cacheCreate, cumUsage.cacheCreate),
+        };
         console.log(
           `[claude-oauth] turn usage over ${sdkUsageCalls || '?'} model call(s):`
           + ` in=${turnUsage.input} out=${turnUsage.output}`
           + ` cacheRead=${turnUsage.cacheRead} cacheWrite=${turnUsage.cacheCreate}`
+          // Both sources printed so a future mismatch is visible rather than
+          // silently resolved by pick() above.
+          + ` | sdk=${JSON.stringify(sdkUsage)} events=${JSON.stringify(cumUsage)}`
         );
         const usagePayload = normalizeCacheUsage({
           input_tokens: turnUsage.input,
