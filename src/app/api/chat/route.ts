@@ -162,6 +162,28 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
 // input streams silently) isn't mistaken for a frozen "thinking...". Tools with
 // their own dedicated UI (AskQuestion → question card, spawn_subagent → chip)
 // return null so we don't override those richer indicators.
+// Tool-call record for the per-message tool report (the 🔧 button on an
+// assistant bubble). This is EVIDENCE, not context: it records what the model
+// actually dispatched, so a reply claiming "I saved the file" can be checked
+// against whether a Write call was really made. Entities that hallucinate tool
+// use — observed on Opus 5 (API), GLM 5.2 and Kimi K3 — produce a confident
+// message with an empty report.
+//
+// Never sent back to any model: the client's slimHistory is an allowlist, so a
+// field it doesn't name is dropped on the way out. Display-only, zero tokens.
+const TOOL_ARG_CAP = 4000;
+function truncateToolInput(input: any): any {
+  // Arguments can be enormous (a Write carries the whole file body). Store a
+  // readable head, not the payload — this lands in the conversation log.
+  let text: string;
+  try { text = typeof input === 'string' ? input : JSON.stringify(input ?? {}); }
+  catch { return { _unserializable: true }; }
+  if (text.length <= TOOL_ARG_CAP) {
+    try { return typeof input === 'string' ? input : JSON.parse(text); } catch { return text; }
+  }
+  return { _truncated: true, _originalChars: text.length, preview: text.slice(0, TOOL_ARG_CAP) };
+}
+
 function toolActivityLabel(name: string): string | null {
   switch (name) {
     // BARE INFINITIVE, not the -ing form. These are rendered as
@@ -691,10 +713,14 @@ async function streamClaudeViaAgentSDK(args: {
                       pausedForRendezvous--;
                       touchSdkActivity();
                     }
-                    cumUsage.input += sub.usage.input;
-                    cumUsage.output += sub.usage.output;
-                    cumUsage.cacheRead += sub.usage.cacheRead;
-                    cumUsage.cacheCreate += sub.usage.cacheCreate;
+                    // Into BOTH accumulators: only one of them is used at the
+                    // end, and a subagent's bill must survive either choice.
+                    for (const acc of [cumUsage, sdkUsage]) {
+                      acc.input += sub.usage.input;
+                      acc.output += sub.usage.output;
+                      acc.cacheRead += sub.usage.cacheRead;
+                      acc.cacheCreate += sub.usage.cacheCreate;
+                    }
                     enqueue({ type: 'subagent_done', task: a.task, result: sub.text, via: sub.via });
                     return { content: [{ type: 'text' as const, text: sub.text || '(subagent returned nothing)' }] };
                   }
@@ -767,10 +793,13 @@ async function streamClaudeViaAgentSDK(args: {
                   // Fold the child's token bill into the parent's meter so cost
                   // stays honest.
                   if (childUsage) {
-                    cumUsage.input += Number(childUsage.input_tokens || 0);
-                    cumUsage.output += Number(childUsage.output_tokens || 0);
-                    cumUsage.cacheRead += Number(childUsage.cache_read_input_tokens || 0);
-                    cumUsage.cacheCreate += Number(childUsage.cache_creation_input_tokens || 0);
+                    // Into BOTH accumulators — see the sibling comment above.
+                    for (const acc of [cumUsage, sdkUsage]) {
+                      acc.input += Number(childUsage.input_tokens || 0);
+                      acc.output += Number(childUsage.output_tokens || 0);
+                      acc.cacheRead += Number(childUsage.cache_read_input_tokens || 0);
+                      acc.cacheCreate += Number(childUsage.cache_creation_input_tokens || 0);
+                    }
                   }
                   enqueue({ type: 'subagent_done', task: a.task, result: resultText, via: { label: 'Anthropic (OAuth / Claude Code)', endpoint: 'Claude Code subscription session', echoedModel: childModel } });
                   return { content: [{ type: 'text' as const, text: resultText || '(subagent returned nothing)' }] };
@@ -1026,9 +1055,43 @@ async function streamClaudeViaAgentSDK(args: {
 
         let capturedSessionId: string | null = null;
         let cumUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+        // Authoritative per-call usage, SUMMED over every model call the SDK
+        // makes inside one NEXUS turn.
+        //
+        // This used to overwrite rather than accumulate, so a turn that used a
+        // tool recorded only its LAST inner call — the first call's input and
+        // the tool_use tokens it emitted simply vanished. Every OAuth cost
+        // figure in NEXUS (per-message $, conversation $, Statistics) was
+        // therefore under-reported, and under-reported MORE the more tools an
+        // entity used. That is what made OAuth look far cheaper than the API
+        // path whenever the two were compared.
+        const sdkUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+        let sdkUsageCalls = 0;
         // Track which content-block index is currently open and what type
         // it is, so deltas know whether to be emitted as 'text' or 'thought'.
         let curBlockType: string | null = null;
+
+        // Assistant text arrives in separate blocks — one before a tool call,
+        // another once the result comes back — and the SDK puts no separator
+        // between them. Concatenated raw, they ran together mid-sentence:
+        // "…running a short wait now.Done! I waited 10 seconds…". Open a
+        // paragraph break when a NEW text block starts after text has already
+        // been written, unless one side already supplies a newline.
+        // The API-key path needs none of this: there the model produces the
+        // whole reply in one block and writes its own breaks.
+        let lastTextChar = '';
+        let pendingTextBreak = false;
+        const emitText = (s: string) => {
+          if (!s) return;
+          if (pendingTextBreak) {
+            pendingTextBreak = false;
+            if (lastTextChar && lastTextChar !== '\n' && !s.startsWith('\n')) {
+              enqueue({ type: 'text', content: '\n\n' });
+            }
+          }
+          enqueue({ type: 'text', content: s });
+          lastTextChar = s.slice(-1);
+        };
         // Tool name currently shown in the client's loading label (via the
         // 'tool_activity' SSE event). Tool calls are otherwise invisible:
         // their input streams as input_json_delta (a large Write can take
@@ -1126,6 +1189,8 @@ async function streamClaudeViaAgentSDK(args: {
                 cumUsage.output += Number(ev.usage.output_tokens || 0);
               } else if (ev.type === 'content_block_start') {
                 curBlockType = ev.content_block?.type || null;
+                // A second (or later) text block — arm the paragraph break.
+                if (curBlockType === 'text' && lastTextChar) pendingTextBreak = true;
                 if (curBlockType === 'tool_use' || curBlockType === 'server_tool_use' || curBlockType === 'mcp_tool_use') {
                   anyToolUsed = true;
                   // Surface what the model is doing so the loading label reflects
@@ -1151,7 +1216,7 @@ async function streamClaudeViaAgentSDK(args: {
                          || ev.content_block?.text
                          || '';
                 if (init) {
-                  if (curBlockType === 'text') { enqueue({ type: 'text', content: init }); producedContent = true; }
+                  if (curBlockType === 'text') { emitText(init); producedContent = true; }
                   else if (curBlockType === 'thinking' || curBlockType === 'summarized_thinking') {
                     enqueue({ type: 'thought', content: init }); producedContent = true;
                   } else if (curBlockType === 'redacted_thinking') {
@@ -1161,7 +1226,7 @@ async function streamClaudeViaAgentSDK(args: {
               } else if (ev.type === 'content_block_delta') {
                 const d = ev.delta || {};
                 if (d.type === 'text_delta' && d.text) {
-                  enqueue({ type: 'text', content: d.text }); producedContent = true;
+                  emitText(d.text); producedContent = true;
                 } else if (d.type === 'thinking_delta' && d.thinking) {
                   enqueue({ type: 'thought', content: d.thinking }); producedContent = true;
                 } else if (d.type === 'summary_delta') {
@@ -1186,16 +1251,39 @@ async function streamClaudeViaAgentSDK(args: {
             if (msg.type === 'assistant' || msg.type === 'user') {
               harvestOauthBlocks((msg as any).message?.content);
             }
+            // Tool-call evidence for the per-message report. The SDK hands us
+            // complete assistant blocks, so `input` is already parsed here —
+            // unlike the streaming path above, where only the name is known at
+            // content_block_start. MCP tools arrive as `mcp__nexus__<tool>`;
+            // strip the server prefix so the report reads the same on every path.
+            if (msg.type === 'assistant') {
+              for (const b of ((msg as any).message?.content || [])) {
+                if (b?.type === 'tool_use' || b?.type === 'server_tool_use' || b?.type === 'mcp_tool_use') {
+                  enqueue({
+                    type: 'tool_call',
+                    call: {
+                      name: String(b.name || 'unknown').replace(/^mcp__\w+?__/, ''),
+                      input: truncateToolInput(b.input),
+                      at: Date.now(),
+                    },
+                  });
+                }
+              }
+            }
             if (msg.type === 'assistant') {
               const u = (msg as any).message?.usage;
               if (u) {
-                // Use these as the source of truth — they're the consolidated
-                // final counts. Reset rather than add to avoid double-counting
-                // against the per-event accumulation above.
-                cumUsage.input = Number(u.input_tokens || cumUsage.input);
-                cumUsage.output = Number(u.output_tokens || cumUsage.output);
-                cumUsage.cacheRead = Number(u.cache_read_input_tokens || cumUsage.cacheRead);
-                cumUsage.cacheCreate = Number(u.cache_creation_input_tokens || cumUsage.cacheCreate);
+                // One `assistant` message = one completed model call. A turn
+                // that uses tools produces several, so these must be SUMMED.
+                // They go into their own accumulator rather than cumUsage
+                // because the stream events above already counted the same
+                // tokens — adding here too would double-count. Whichever
+                // accumulator actually saw data wins at the end.
+                sdkUsage.input += Number(u.input_tokens || 0);
+                sdkUsage.output += Number(u.output_tokens || 0);
+                sdkUsage.cacheRead += Number(u.cache_read_input_tokens || 0);
+                sdkUsage.cacheCreate += Number(u.cache_creation_input_tokens || 0);
+                sdkUsageCalls++;
               }
               // Capture the model's stop_reason from each assistant turn; the
               // LAST one is why the overall turn ended.
@@ -1279,11 +1367,21 @@ async function streamClaudeViaAgentSDK(args: {
         if (capturedSessionId) {
           enqueue({ type: 'session_id', sessionId: capturedSessionId });
         }
+        // Prefer the summed per-call figures when the SDK reported any: they
+        // are the consolidated counts Anthropic bills on, and now cover EVERY
+        // inner call rather than just the last. Fall back to the raw stream
+        // events only if no assistant message carried usage.
+        const turnUsage = sdkUsageCalls > 0 ? sdkUsage : cumUsage;
+        console.log(
+          `[claude-oauth] turn usage over ${sdkUsageCalls || '?'} model call(s):`
+          + ` in=${turnUsage.input} out=${turnUsage.output}`
+          + ` cacheRead=${turnUsage.cacheRead} cacheWrite=${turnUsage.cacheCreate}`
+        );
         const usagePayload = normalizeCacheUsage({
-          input_tokens: cumUsage.input,
-          output_tokens: cumUsage.output,
-          cache_read_input_tokens: cumUsage.cacheRead,
-          cache_creation_input_tokens: cumUsage.cacheCreate,
+          input_tokens: turnUsage.input,
+          output_tokens: turnUsage.output,
+          cache_read_input_tokens: turnUsage.cacheRead,
+          cache_creation_input_tokens: turnUsage.cacheCreate,
         }, 'claude');
         if (usagePayload) enqueue(usagePayload);
 
@@ -2547,6 +2645,34 @@ export async function POST(req: Request) {
         }
       }
 
+      // ── Task budget (opt-in: NEXUS_TASK_BUDGET=64000) ────────────────────
+      // `max_tokens` is a wall the model cannot see. It generates at full speed
+      // and the turn is simply cut off when it lands — which is how a turn ends
+      // with no answer at all. A task budget is the opposite: the server
+      // injects a countdown the model reads WHILE generating, so it paces
+      // itself and finishes gracefully. It's a suggestion, not a cap —
+      // max_tokens still enforces. The budget counts what the model generates
+      // plus the tool results it reads THIS turn, NOT the history resent on
+      // every request, so a large conversation doesn't consume it.
+      // Opt-in via env var, deliberately: it needs a beta header, and if that
+      // flag isn't enabled for the account the request 400s. Off by default
+      // means an unattended Claude API path can never break because of it.
+      let claudeTaskBudget = 0;
+      const taskBudgetRaw = Number(process.env.NEXUS_TASK_BUDGET || 0);
+      if (isAdaptiveThinking && Number.isFinite(taskBudgetRaw) && taskBudgetRaw >= 20000) {
+        claudeTaskBudget = Math.floor(taskBudgetRaw);
+        claudeParams.output_config = {
+          ...(claudeParams.output_config || {}),
+          task_budget: { type: 'tokens', total: claudeTaskBudget },
+        };
+      } else if (taskBudgetRaw > 0 && taskBudgetRaw < 20000) {
+        console.warn(`[claude-api] NEXUS_TASK_BUDGET=${taskBudgetRaw} ignored — Anthropic's minimum total is 20000.`);
+      }
+      // Per-request beta header, sent only when a budget is actually in play.
+      const claudeRequestOptions: any = claudeTaskBudget
+        ? { headers: { 'anthropic-beta': 'task-budgets-2026-03-13' } }
+        : undefined;
+
       // Optional tools — web search and/or the workspace file tools.
       const claudeTools: any[] = [];
       if (modelParams.enableClaudeWebSearch) {
@@ -2891,6 +3017,18 @@ export async function POST(req: Request) {
           // the cache marker propagates through the tool loop too.
           let currentMessages = [...cachedMessages];
 
+          // Request shape, once per turn. Pairs with the per-iteration lines
+          // below: those show what came back, this shows what was asked for.
+          console.log(
+            `[claude-api] turn start model=${claudeModel}`
+            + ` max_tokens=${claudeParams.max_tokens}`
+            + ` thinking=${JSON.stringify(claudeParams.thinking ?? null)}`
+            + ` output_config=${JSON.stringify(claudeParams.output_config ?? null)}`
+            + ` task_budget=${claudeTaskBudget || 'off'}`
+            + ` tools=${(claudeParams.tools || []).map((t: any) => t.name || t.type).join(',') || '(none)'}`
+            + ` messages=${currentMessages.length}`
+          );
+
           // Cumulative usage across tool-loop iterations. Emitted as a single
           // cache_usage SSE event once the loop ends so the bubble shows the
           // turn's total token bill, not just the last iteration's.
@@ -2903,7 +3041,7 @@ export async function POST(req: Request) {
           try {
             for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
               const iterParams = { ...claudeParams, messages: currentMessages };
-              const stream = await anthropic.messages.stream(iterParams);
+              const stream = await anthropic.messages.stream(iterParams, claudeRequestOptions);
 
               // Per-iteration accumulator that mirrors the assistant's content
               // blocks exactly — needed to echo them back on the next call.
@@ -2929,6 +3067,22 @@ export async function POST(req: Request) {
               // thinking+output hit the hard cap and the turn is truncated.
               let stopReason = '';
 
+              // ── Per-iteration diagnostics ────────────────────────────────
+              // Opus 5 on this path has produced turns that end with
+              // stop_reason 'max_tokens' while the reported output token count
+              // is nowhere near the ceiling, and rounds that emit nothing
+              // visible for minutes. None of that survives in the log — the
+              // saved message keeps only the final text and one cumulative
+              // usage object — so the evidence has to be captured as the
+              // stream goes past. One line per iteration on the server console.
+              const iterStartedAt = Date.now();
+              let messageDeltaCount = 0;
+              let thinkingChars = 0;    // thinking_delta (raw, older models)
+              let summaryChars = 0;     // summary_delta (adaptive + summarized)
+              let textChars = 0;        // text_delta (what the user sees)
+              let toolJsonChars = 0;    // input_json_delta (invisible output)
+              const blockTypes: string[] = [];
+
               for await (const chunk of stream as any) {
                 // Anthropic streaming usage events
                 if (chunk.type === 'message_start' && chunk.message?.usage) {
@@ -2938,6 +3092,7 @@ export async function POST(req: Request) {
                   iterUsageCacheRead += Number(u.cache_read_input_tokens || 0);
                   iterUsageCacheCreate += Number(u.cache_creation_input_tokens || 0);
                 } else if (chunk.type === 'message_delta') {
+                  messageDeltaCount++;
                   if (chunk.usage) iterUsageOutput += Number(chunk.usage.output_tokens || 0);
                   // stop_reason arrives on message_delta (e.g. 'end_turn',
                   // 'tool_use', 'max_tokens'). Capture it to detect truncation.
@@ -2945,6 +3100,7 @@ export async function POST(req: Request) {
                 }
                 if (chunk.type === 'content_block_start') {
                   const blockType = chunk.content_block?.type;
+                  if (blockType) blockTypes.push(blockType);
                   if (blockType === 'text') {
                     assistantBlocks.push({ type: 'text', text: '' });
                     currentTextIdx = assistantBlocks.length - 1;
@@ -2996,19 +3152,24 @@ export async function POST(req: Request) {
                   const d = chunk.delta;
                   if (d?.type === 'summary_delta') {
                     const t = d.summary || d.text || '';
+                    summaryChars += t.length;
                     currentThinkingText += t;
                     enqueue({ type: 'thought', content: t });
                   } else if (d?.type === 'thinking_delta') {
+                    thinkingChars += (d.thinking || '').length;
                     currentThinkingText += d.thinking || '';
                     enqueue({ type: 'thought', content: d.thinking || '' });
                   } else if (d?.type === 'redacted_thinking_delta') {
+                    thinkingChars += (d.data || '').length;
                     currentThinkingText += d.data || '';
                   } else if (d?.type === 'signature_delta') {
                     currentThinkingSignature += d.signature || '';
                   } else if (d?.type === 'text_delta') {
+                    textChars += (d.text || '').length;
                     if (currentTextIdx >= 0) assistantBlocks[currentTextIdx].text += d.text || '';
                     enqueue({ type: 'text', content: d.text || '' });
                   } else if (d?.type === 'input_json_delta') {
+                    toolJsonChars += (d.partial_json || '').length;
                     currentToolJson += d.partial_json || '';
                   }
                 } else if (chunk.type === 'content_block_stop') {
@@ -3030,6 +3191,27 @@ export async function POST(req: Request) {
                   }
                 }
               }
+
+              // ── Diagnostic line ─────────────────────────────────────────
+              // `openThinking`/`openToolUse` mean the stream ended without a
+              // content_block_stop for that block — i.e. the cap was hit
+              // INSIDE it. An open tool_use is the case NEXUS currently
+              // mistakes for "truncated mid-answer": the partial block never
+              // reaches assistantBlocks, so the tool loop sees no tool call
+              // and asks the model to continue prose it had already finished.
+              // Comparing `out` against max_tokens on a 'max_tokens' stop also
+              // answers whether the reported output count includes the raw
+              // thinking Opus 5 never returns.
+              console.log(
+                `[claude-api] iter=${iter} cont=${continuations}/${MAX_CONTINUATIONS}`
+                + ` stop=${stopReason || '(none)'} ms=${Date.now() - iterStartedAt}`
+                + ` | tokens in=${iterUsageInput} out=${iterUsageOutput}`
+                + ` cacheRead=${iterUsageCacheRead} cacheWrite=${iterUsageCacheCreate}`
+                + ` max_tokens=${claudeParams.max_tokens}`
+                + ` | chars text=${textChars} summary=${summaryChars} thinking=${thinkingChars} toolJson=${toolJsonChars}`
+                + ` | blocks=[${blockTypes.join(',')}] msgDeltas=${messageDeltaCount}`
+                + ` openThinking=${inThinkingBlock} openToolUse=${currentToolUse ? currentToolUse.name : 'no'}`
+              );
 
               // Accumulate this iteration's usage into the cumulative total.
               cumUsage.input += iterUsageInput;
@@ -3104,6 +3286,7 @@ export async function POST(req: Request) {
                 // the tool call instead of a silent "thinking...".
                 const actLabel = toolActivityLabel(tu.name);
                 if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
+                enqueue({ type: 'tool_call', call: { name: tu.name, input: truncateToolInput(tu.input), at: Date.now() } });
                 try {
                   if (tu.name === 'Read') {
                     const p = String(tu.input?.path || '');
@@ -3878,6 +4061,7 @@ export async function POST(req: Request) {
                   // Reflect the tool call in the loading label (silent otherwise).
                   const actLabel = toolActivityLabel(fc.name);
                   if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
+                  enqueue({ type: 'tool_call', call: { name: fc.name, input: truncateToolInput(fc.args), at: Date.now() } });
                   try {
                     if (fc.name === 'Read') {
                       const p = String(fc.args?.path || '');
@@ -5289,6 +5473,7 @@ export async function POST(req: Request) {
                   // Reflect the tool call in the loading label (silent otherwise).
                   const actLabel = toolActivityLabel(tc.name);
                   if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
+                  enqueue({ type: 'tool_call', call: { name: tc.name, input: truncateToolInput(parsed), at: Date.now() } });
                   try {
                     if (tc.name === 'Read') {
                       const p = String(parsed.path || '');

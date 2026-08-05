@@ -1712,6 +1712,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // message body so they are never persisted into the reply text, never
       // replayed to the model, and never counted as tokens.
       const notices: string[] = [];
+      // Every tool the model actually dispatched this turn, with its arguments.
+      // This is the evidence behind the 🔧 report button: a reply that claims
+      // "I saved the file" can be checked against whether a Write really ran.
+      // Display-only — slimHistory is an allowlist and never names this field,
+      // so it is never sent to any model and costs no tokens.
+      const toolCalls: any[] = [];
       // Attachments collected from tool calls during this turn, to be
       // attached to the assistant message.
       const toolAttachments: any[] = [];
@@ -1811,6 +1817,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // token count.
                 if (typeof data.content === 'string' && data.content.trim()) {
                   notices.push(data.content.trim());
+                }
+              } else if (data.type === 'tool_call') {
+                // A tool the model really dispatched. Recorded regardless of
+                // whether it succeeded — the report answers "was this called?",
+                // which is the question a hallucinated tool claim fails.
+                if (data.call && typeof data.call.name === 'string') {
+                  toolCalls.push(data.call);
                 }
               } else if (data.type === 'session_id') {
                 // Claude OAuth path emits this so we can resume the
@@ -2003,6 +2016,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               ...(cacheUsage ? { cacheUsage } : {}),
               ...(webSources ? { webSources } : {}),
               ...(notices.length > 0 ? { notices } : {}),
+              ...(toolCalls.length > 0 ? { toolCalls } : {}),
               ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
               ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
             }

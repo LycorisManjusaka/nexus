@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -33,6 +33,8 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     error?: string;
   } | null>(null);
   const [textCopyState, setTextCopyState] = useState<'idle' | 'copied'>('idle');
+  // Tool report popup — the evidence panel for "did it really call the tool?".
+  const [toolReportOpen, setToolReportOpen] = useState(false);
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const currentAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const currentAudioRef2 = React.useRef<HTMLAudioElement | null>(null);
@@ -1110,6 +1112,20 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             {linkCopied ? <Check size={12} /> : <Link2 size={12} />}
           </button>
         )}
+        {/* Tool report. Present only when the model actually dispatched at
+            least one tool this turn — so its ABSENCE on a reply that claims
+            tool use is itself the finding. Shown to the user only; the entity
+            never sees this and it is not part of the context. */}
+        {!isUser && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0 && (
+          <button
+            onClick={() => setToolReportOpen(true)}
+            title={`${msg.toolCalls.length} tool call${msg.toolCalls.length === 1 ? '' : 's'} — click for details`}
+            className="flex items-center gap-1 opacity-70 hover:opacity-100 transition"
+          >
+            <Wrench size={12} />
+            <span className="text-[10px]">{msg.toolCalls.length}</span>
+          </button>
+        )}
       </div>
 
       {/* Turn-stopped diagnostics. Deliberately rendered OUTSIDE the message
@@ -1413,6 +1429,83 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     </div>
 
       {/* Zoom Modal */}
+      {/* Tool report. Lists exactly what the model dispatched this turn, with
+          the arguments it passed. Read it against what the reply CLAIMS: a
+          message saying "I saved the file" with no Write here means the tool
+          call never happened. */}
+      {toolReportOpen && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setToolReportOpen(false)}
+        >
+          <div
+            className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Wrench size={16} className="text-blue-500 shrink-0" />
+                <span className="text-sm font-medium">Tool calls in this message</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {(msg.toolCalls || []).length} call{(msg.toolCalls || []).length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(JSON.stringify(msg.toolCalls || [], null, 2));
+                      setTextCopyState('copied');
+                      setTimeout(() => setTextCopyState('idle'), 1500);
+                    } catch {}
+                  }}
+                  className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  title="Copy the whole report as JSON"
+                >
+                  <Copy size={12} /> {textCopyState === 'copied' ? 'Copied!' : 'Copy'}
+                </button>
+                <button
+                  onClick={() => setToolReportOpen(false)}
+                  className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                  title="Close"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 overflow-y-auto space-y-3">
+              {(msg.toolCalls || []).map((c: any, i: number) => (
+                <div key={i} className="rounded-lg border border-border overflow-hidden">
+                  <div className="px-3 py-1.5 bg-muted/50 flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground w-5 shrink-0">#{i + 1}</span>
+                    <span className="font-mono text-xs font-medium">{c.name}</span>
+                    {c.at && (
+                      <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                        {new Date(c.at).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                  <pre className="px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-all font-mono max-h-64 overflow-y-auto">
+                    {(() => {
+                      try { return JSON.stringify(c.input, null, 2); }
+                      catch { return String(c.input); }
+                    })()}
+                  </pre>
+                  {c.input?._truncated && (
+                    <div className="px-3 pb-2 text-[10px] text-amber-600 dark:text-amber-400">
+                      Arguments truncated for storage — original was {Number(c.input._originalChars).toLocaleString()} characters.
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-2 border-t border-border text-[10px] text-muted-foreground shrink-0">
+              Shown to you only. The entity never sees this, and it is not part of the context sent to any model.
+            </div>
+          </div>
+        </div>
+      )}
+
       {viewTextAttachment && (
         <div
           className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
