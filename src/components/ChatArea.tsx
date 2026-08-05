@@ -249,12 +249,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Optional subagent (context-firewall helper) tool — OAuth path for now.
   const [subagentEnabled, setSubagentEnabled] = useState(false);
   const [lettersEnabled, setLettersEnabled] = useState(false);
-  // Browser control. ON unless deliberately turned off — the opposite of every
-  // other capability here, and deliberately so: letters shipped default-OFF and
-  // the result was that no conversation ever had mail, because nobody thinks to
-  // switch on a feature they have not missed yet. The security boundary is the
-  // host allowlist below, not this flag.
-  const [browserEnabled, setBrowserEnabled] = useState(true);
+  // Browser control. OFF unless deliberately turned on, like every other
+  // capability here. A throwaway test window must start with nothing enabled —
+  // an entity that can browse before anyone asked it to is a surprise, and a
+  // Chromium process is a visible, resource-owning one. Two boundaries, not
+  // one: this flag decides whether the tools exist at all, the host allowlist
+  // decides where they may go.
+  const [browserEnabled, setBrowserEnabled] = useState(false);
   // Stored and edited as text (one host per line or comma-separated); split into
   // an array only on the wire. Keeping one representation in state and on disk
   // means the textarea can never disagree with what was saved.
@@ -729,11 +730,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setSubagentEnabled(data.subagentEnabled === true);
         setLettersEnabled(data.lettersEnabled === true);
-        // `!== false`, not `=== true`: a conversation saved before browser
-        // control existed has no field at all, and those must come back with the
-        // browser ON. `=== true` here is exactly how letters ended up off
-        // everywhere.
-        setBrowserEnabled(data.browserEnabled !== false);
+        // `=== true`: absent field means off. A conversation saved before
+        // browser control existed never asked for it, so it does not get it.
+        setBrowserEnabled(data.browserEnabled === true);
         setBrowserAllowedHosts(typeof data.browserAllowedHosts === 'string' ? data.browserAllowedHosts : '');
         setBrowserAllowAnyHost(data.browserAllowAnyHost === true);
         setBrowserCompact(data.browserCompact === true);
@@ -801,7 +800,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setSubagentEnabled(pick('subagentEnabled', false));
         setLettersEnabled(pick('lettersEnabled', false));
-        setBrowserEnabled(pick('browserEnabled', true));
+        setBrowserEnabled(pick('browserEnabled', false));
         setBrowserAllowedHosts(pick('browserAllowedHosts', ''));
         setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
         setBrowserCompact(pick('browserCompact', false));

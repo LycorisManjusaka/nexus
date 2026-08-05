@@ -2026,15 +2026,14 @@ export async function POST(req: Request) {
       maxToolIterations: maxToolIterationsRaw,
       lettersEnabled = false,
       // ── Browser control ──────────────────────────────────────────────────
-      // Per-Entity, ON unless deliberately turned off. Defaulting to ON is the
-      // lesson from letters: a capability that every conversation starts with
-      // switched off is a capability nobody has. The six schemas cost 1,439
-      // tokens, which sit in the cached prefix (tools precede system in
-      // Anthropic's cache order), so ~$0.0007 on a cached turn.
+      // Per-Entity, OFF unless deliberately turned on. A request that omits the
+      // field gets no browser: a test window, a script, or an older client must
+      // never silently acquire the ability to launch Chromium.
       //
-      // The security boundary is browserAllowedHosts, NOT this flag. Default is
-      // localhost only; anything further has to be added by hand per identity.
-      browserEnabled = true,
+      // Two independent boundaries. This flag decides whether the six tools are
+      // offered at all; browserAllowedHosts decides where they may go (localhost
+      // only by default). Turning the flag on does not widen the allowlist.
+      browserEnabled = false,
       browserAllowedHosts = [],
       browserAllowAnyHost = false,
       browserCompact = false,
