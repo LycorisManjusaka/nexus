@@ -271,7 +271,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at Alibaba Cloud Model Studio. Used for Qwen 3.6 Plus / 3.6 Max / 3.7 Max and DeepSeek V3.2 via the OpenAI-compatible DashScope endpoint.
+                Get one at Alibaba Cloud Model Studio. Used for Qwen 3.6 Plus / 3.6 Max / 3.7 Max / 3.8 Max and DeepSeek V3.2 via the OpenAI-compatible DashScope endpoint.
               </div>
             </div>
             <div>

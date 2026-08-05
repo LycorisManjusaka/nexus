@@ -28,7 +28,21 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'gemini-3.1-pro-preview',
 
   // ── Qwen (DashScope international) ─────────────────────────────────────────
+  // qwen3.8-max: the model card lists "Visual Understanding" as a first-class
+  // capability ("native visual understanding runs through the full cycle of
+  // planning, execution, and verification"). Image input only — there is no
+  // published evidence of audio input, so it stays out of AUDIO_CAPABLE_MODELS,
+  // and video claims are about long-video *analysis* rather than a documented
+  // `video_url` content part, so it stays out of VIDEO_CAPABLE_MODELS too.
+  // Both bridges therefore still fire for it, which is the safe default.
+  'qwen3.8-max',
   'qwen3.7-max',
+  // NOTE: the model table exposes this as `qwen3.6-max-preview`, and this set is
+  // matched EXACTLY — so the bare `qwen3.6-max` below never matches anything
+  // NEXUS can select, and 3.6 Max silently goes through the eyes bridge. Left
+  // as-is rather than "fixed" blind: if the preview id is what DashScope serves,
+  // the right change is to add the `-preview` id, and that needs one live call
+  // to confirm. Flagged, not guessed.
   'qwen3.6-max',
   'qwen3.6-plus',
   'qwen3.5-omni-flash', // also handles audio/video

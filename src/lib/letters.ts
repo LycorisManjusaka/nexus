@@ -944,13 +944,31 @@ export const DEFAULT_LETTER_STRINGS = {
 
 // ── arrival notice ───────────────────────────────────────────────────────────
 
-// Re-announce a still-unread letter only after the conversation has moved on by
-// this many messages, and never more than MAX_ANNOUNCEMENTS times in one
-// conversation. Together these stop the "you have mail" line from becoming
-// wallpaper the entity learns to skip — the alarm-fatigue failure mode, which is
-// worse than saying nothing, because it teaches the model to ignore ALL notices.
-const RE_ANNOUNCE_GAP = 20;
-const MAX_ANNOUNCEMENTS = 3;
+// UNREAD IS A STATE, NOT AN EVENT.
+//
+// The first version of this announced each letter once, then went quiet after a
+// gap and a cap (20 messages, 3 mentions), on the theory that repetition becomes
+// wallpaper. That theory cost a real letter: 謡 wrote to Cairn, the notice fired
+// on exactly one turn, the turn was busy with something else, and the letter was
+// never seen. The human had to relay it by hand — which is the failure the whole
+// system exists to remove.
+//
+// It is worse than it looks on the OAuth path, and that is the deciding fact.
+// Notices are deliberately never persisted, and OAuth rebuilds the entire
+// transcript from the visible log every turn. So on OAuth a missed announcement
+// leaves NO trace anywhere: if the entity does not act on it during that single
+// turn, it never learns the letter exists at all.
+//
+// So: announce every unread letter, every turn, until the entity does something
+// about it. This is an unread badge, not an alert — a mail client does not hide
+// the badge after showing it three times. Silence is now EARNED by an action the
+// entity can take at any moment: read_letter opens it, archive_letter sets it
+// aside unread. Both clear the notice permanently. Dismissal became an action
+// instead of a timeout, which is the shape it should have had from the start.
+//
+// Cost is negligible and — importantly — not a cache cost: the notice appends to
+// the LAST USER MESSAGE, which differs every turn regardless, so repeating it
+// invalidates no prompt-cache prefix. It is ~60 tokens after a cached prefix.
 
 export interface AnnounceOptions {
   me: string;
@@ -961,15 +979,15 @@ export interface AnnounceOptions {
 }
 
 /**
- * Decide whether to tell `me` about waiting mail, and return the notice text
- * (or null). Persists the per-conversation announcement counters as a side
- * effect, so calling this twice for one turn would double-count — call it once,
- * at send time.
+ * Return the notice text for every letter still waiting for `me` (or null when
+ * the mailbox is clear). Announces on EVERY turn while a letter is unread — see
+ * the note above; the read/archive tools are what stop it, not a counter.
  *
- * Announcement state is scoped to the CONVERSATION on purpose. Entities are
- * reconstructed rather than continued: if カナ was told about a letter in
- * conversation A and never opened it, the カナ in conversation B has no memory of
- * being told, so announcing again there is correct rather than repetitive.
+ * Still persists per-conversation mention counters, but they are now diagnostic
+ * only: nothing reads them to make a decision. They answer "was this entity ever
+ * actually told, and how often?" after the fact — which is exactly the question
+ * that diagnosed the missed letter this function was rewritten for. Calling this
+ * twice in one turn therefore inflates a counter but changes no behaviour.
  */
 export async function announceLetters(opts: AnnounceOptions): Promise<string | null> {
   const { me, convoId, historyLength } = opts;
@@ -987,12 +1005,8 @@ export async function announceLetters(opts: AnnounceOptions): Promise<string | n
     if (!live.has(id)) { delete state[id]; changed = true; }
   }
 
-  const due = waiting.filter((l) => {
-    const seen = state[l.id];
-    if (!seen) return true;                              // never mentioned here
-    if (seen.count >= MAX_ANNOUNCEMENTS) return false;   // said enough
-    return historyLength - seen.lastLen >= RE_ANNOUNCE_GAP;
-  });
+  // Everything unread is due, every turn. Unread is a state, not an event.
+  const due = waiting;
 
   if (due.length === 0) {
     if (changed) await saveAnnounceState(convoId, state);

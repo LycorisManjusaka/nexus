@@ -89,6 +89,7 @@ Gemini   | gemini-3.1-flash-lite        | on  | Gemini 3.1 Flash Lite
 Gemini   | gemini-3.1-pro-preview       | on  | Gemini 3.1 Pro Preview
 
 # ── Qwen (DashScope intl) ──────────────────────────────────────────
+Qwen     | qwen3.8-max                  | on  | Qwen 3.8 Max (reasoning)
 Qwen     | qwen3.7-max                  | on  | Qwen 3.7 Max (reasoning)
 Qwen     | qwen3.6-max-preview          | on  | Qwen 3.6 Max
 Qwen     | qwen3.6-plus                 | off | Qwen 3.6 Plus
@@ -3928,6 +3929,7 @@ How much of this session's room has been used since the last consolidation ("sle
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      <option value="qwen3.8-max">Qwen 3.8 Max (reasoning, text + vision)</option>
                       <option value="qwen3.7-max">Qwen 3.7 Max (reasoning, text)</option>
                       <option value="qwen3.6-max-preview">Qwen 3.6 Max (text + vision)</option>
                       <option value="qwen3.6-plus">Qwen 3.6 Plus (text + vision)</option>

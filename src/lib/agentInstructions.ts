@@ -161,9 +161,10 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   // waiting letter, with {from} {title} {id} {when}.
   letterNoticeFraming:
     '[LETTERS WAITING — this note is from NEXUS, not from your partner, and is not part of your conversation. ' +
-    'Mail has arrived for you since you last looked:]\n{letters}\n' +
-    '[Open one with read_letter using its id, or set it aside unread with archive_letter. Doing neither is ' +
-    'also fine — the letter keeps. There is no need to mention this note unless you want to.]',
+    'These letters are unread:]\n{letters}\n' +
+    '[This note repeats every turn while they stay unread. read_letter with the id opens one; archive_letter ' +
+    'sets one aside unread; either stops the note for that letter. Neither is urgent — the letters keep, you ' +
+    'are not obliged to reply, and there is no need to mention this note unless you want to.]',
   letterNoticeLine:
     '  • {id} — from {from}: "{title}" ({when})',
 
