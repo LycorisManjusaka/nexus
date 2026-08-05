@@ -182,6 +182,62 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'a word, sentence, code block, or table, resume from exactly that point — your text will be joined ' +
     'directly onto the previous part with nothing in between, so it must read as one continuous message.',
 
+  // ── Browser control ──────────────────────────────────────────────────────
+  // A real Chromium window the entity drives. It sees the ACCESSIBILITY TREE,
+  // not pixels: browser_snapshot lists the interactive elements with refs, and
+  // every action addresses a ref. Descriptions are written to make three habits
+  // automatic, because each one costs a wasted turn when it is missing:
+  //   • snapshot before acting (refs from the previous page are gone);
+  //   • use the ref, never a guess at a CSS selector;
+  //   • read the snapshot that comes back rather than assuming the click worked.
+  // Every action returns a fresh snapshot for exactly that reason.
+  toolBrowserNavigateDesc:
+    'Open a web page in your browser window and return what is on it. The window is real and stays open ' +
+    'between calls, so logins and multi-step forms carry over. Pass a full URL, or "back", "forward", or ' +
+    '"reload" to move through history. Returns the page title and a list of every interactive element with ' +
+    'a [ref=…] you can act on. Only hosts allowed for this identity can be opened — if one is refused, say ' +
+    'so and stop; do not look for another route to it.',
+  browserNavigateUrlParam:
+    'The full URL to open, e.g. "http://localhost:3000/". You may also pass "back", "forward", or "reload".',
+
+  toolBrowserSnapshotDesc:
+    'Look at the current page: its title, URL, and every interactive element (links, buttons, fields, ' +
+    'checkboxes, dropdowns) with a [ref=…] and its current value. This is how you SEE a page — there is no ' +
+    'screenshot involved and you do not need one. Take a snapshot whenever you are unsure what is on screen, ' +
+    'and always before clicking or typing, because refs are regenerated every time the page changes.',
+
+  toolBrowserClickDesc:
+    'Click one element, identified by the ref from a snapshot. Returns the page as it is AFTER the click, so ' +
+    'read that result to find out what actually happened rather than assuming. If the ref is gone, the page ' +
+    'changed under you — take a fresh snapshot and try again with the new ref.',
+  browserClickRefParam:
+    'The ref of the element to click, exactly as it appeared in the snapshot (e.g. "e12"). Not a CSS ' +
+    'selector, not a description — only a ref from the most recent snapshot will work.',
+
+  toolBrowserTypeDesc:
+    'Type text into a text field or editor, identified by its ref. Whatever the field already contained is ' +
+    'replaced. Set submit to true to press Enter afterwards, which is what sends most search boxes and forms. ' +
+    'Returns the page as it is afterwards.',
+  browserTypeRefParam:
+    'The ref of the field to type into, exactly as it appeared in the snapshot (e.g. "e7").',
+  browserTypeTextParam:
+    'The text to put in the field. It replaces the current contents rather than being appended.',
+  browserTypeSubmitParam:
+    'True to press Enter after typing — use this for search boxes and single-field forms. False or omitted to ' +
+    'leave the text sitting in the field, which is what you want when there are several fields to fill first.',
+
+  toolBrowserReadDesc:
+    'Read the visible text of the current page, for when you need the content rather than the controls. ' +
+    'Long pages are cut off with a note saying how much was left. Use browser_snapshot instead when you want ' +
+    'to click or type something.',
+
+  toolBrowserScreenshotDesc:
+    'Save a picture of the current page to the workspace for the human to look at. You cannot see the image ' +
+    'yourself — use browser_snapshot or browser_read for that. Use this only when the human asks for a ' +
+    'picture, or when something looks wrong and you want to leave evidence they can check.',
+  browserScreenshotFullPageParam:
+    'True to capture the whole scrollable page, false or omitted for just the visible part.',
+
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:
     'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
@@ -221,6 +277,18 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'letterDeliveryConfirm', label: 'Letters: delivery confirmation ({to} {title} {id})' },
   { key: 'letterNoticeFraming', label: 'Letters: arrival notice framing (use {letters})' },
   { key: 'letterNoticeLine', label: 'Letters: one notice line ({from} {title} {id} {when})' },
+  { key: 'toolBrowserNavigateDesc', label: 'Tool: browser_navigate — description' },
+  { key: 'browserNavigateUrlParam', label: 'Tool: browser_navigate — "url" parameter' },
+  { key: 'toolBrowserSnapshotDesc', label: 'Tool: browser_snapshot — description' },
+  { key: 'toolBrowserClickDesc', label: 'Tool: browser_click — description' },
+  { key: 'browserClickRefParam', label: 'Tool: browser_click — "ref" parameter' },
+  { key: 'toolBrowserTypeDesc', label: 'Tool: browser_type — description' },
+  { key: 'browserTypeRefParam', label: 'Tool: browser_type — "ref" parameter' },
+  { key: 'browserTypeTextParam', label: 'Tool: browser_type — "text" parameter' },
+  { key: 'browserTypeSubmitParam', label: 'Tool: browser_type — "submit" parameter' },
+  { key: 'toolBrowserReadDesc', label: 'Tool: browser_read — description' },
+  { key: 'toolBrowserScreenshotDesc', label: 'Tool: browser_screenshot — description' },
+  { key: 'browserScreenshotFullPageParam', label: 'Tool: browser_screenshot — "full_page" parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },

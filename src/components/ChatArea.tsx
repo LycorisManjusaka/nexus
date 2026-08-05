@@ -249,6 +249,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Optional subagent (context-firewall helper) tool — OAuth path for now.
   const [subagentEnabled, setSubagentEnabled] = useState(false);
   const [lettersEnabled, setLettersEnabled] = useState(false);
+  // Browser control. ON unless deliberately turned off — the opposite of every
+  // other capability here, and deliberately so: letters shipped default-OFF and
+  // the result was that no conversation ever had mail, because nobody thinks to
+  // switch on a feature they have not missed yet. The security boundary is the
+  // host allowlist below, not this flag.
+  const [browserEnabled, setBrowserEnabled] = useState(true);
+  // Stored and edited as text (one host per line or comma-separated); split into
+  // an array only on the wire. Keeping one representation in state and on disk
+  // means the textarea can never disagree with what was saved.
+  const [browserAllowedHosts, setBrowserAllowedHosts] = useState('');
+  const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(false);
+  const [browserCompact, setBrowserCompact] = useState(false);
   // Model the child subagent runs on ('' = cheap default, e.g. Haiku).
   const [subagentModel, setSubagentModel] = useState('');
   // Provider family of the subagent model (routes it to the right endpoint).
@@ -717,6 +729,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setSubagentEnabled(data.subagentEnabled === true);
         setLettersEnabled(data.lettersEnabled === true);
+        // `!== false`, not `=== true`: a conversation saved before browser
+        // control existed has no field at all, and those must come back with the
+        // browser ON. `=== true` here is exactly how letters ended up off
+        // everywhere.
+        setBrowserEnabled(data.browserEnabled !== false);
+        setBrowserAllowedHosts(typeof data.browserAllowedHosts === 'string' ? data.browserAllowedHosts : '');
+        setBrowserAllowAnyHost(data.browserAllowAnyHost === true);
+        setBrowserCompact(data.browserCompact === true);
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -781,6 +801,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setSubagentEnabled(pick('subagentEnabled', false));
         setLettersEnabled(pick('lettersEnabled', false));
+        setBrowserEnabled(pick('browserEnabled', true));
+        setBrowserAllowedHosts(pick('browserAllowedHosts', ''));
+        setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
+        setBrowserCompact(pick('browserCompact', false));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -893,7 +917,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -942,7 +966,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           });
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1653,7 +1677,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 40 };
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
+        browserEnabled,
+        // Text in the UI, array on the wire. Split on newlines and commas so the
+        // box accepts whichever way the host list was typed.
+        browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
+        browserAllowAnyHost, browserCompact,
+        instructionOverrides, toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 40 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -2247,6 +2277,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       subagentModel,
       subagentFamily,
       lettersEnabled,
+      browserEnabled,
+      browserAllowedHosts,
+      browserAllowAnyHost,
+      browserCompact,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -3528,6 +3562,81 @@ How much of this session's room has been used since the last consolidation ("sle
                 )}
               </div>
 
+              {/* ── Browser control ───────────────────────────────────────────
+                  ON by default, unlike everything else on this tab. The real
+                  boundary is the host allowlist below, so leaving the tools
+                  present costs a capability nobody has to remember to switch on,
+                  while still reaching nothing but localhost until a host is
+                  added by hand. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={browserEnabled}
+                    onChange={(e) => setBrowserEnabled(e.target.checked)}
+                    className="accent-amber-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">🌐 Browser (drive a real Chromium window)</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  ON (default): this identity gets <span className="font-mono">browser_navigate</span>,{' '}
+                  <span className="font-mono">browser_snapshot</span>, <span className="font-mono">browser_click</span>,{' '}
+                  <span className="font-mono">browser_type</span>, <span className="font-mono">browser_read</span> and{' '}
+                  <span className="font-mono">browser_screenshot</span>. A visible Chromium window opens the first time one is
+                  called — there is nothing else to start. What the identity sees is the page&apos;s <em>accessibility tree</em>
+                  {' '}(a text list of links, buttons and fields), not pixels, so this works on every model whether or not it can
+                  see images, and costs a few hundred tokens per step instead of a screenshot.
+                  {' '}The window stays open between turns, so logins and multi-step forms carry over; it closes after 30 minutes idle.
+                  <em> Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.</em>
+                </p>
+                {browserEnabled && (
+                  <div className="mt-2 ml-6 space-y-2">
+                    <label className="block text-xs font-semibold text-foreground">Hosts this identity may open</label>
+                    <textarea
+                      value={browserAllowedHosts}
+                      onChange={(e) => setBrowserAllowedHosts(e.target.value)}
+                      disabled={browserAllowAnyHost}
+                      rows={3}
+                      spellCheck={false}
+                      placeholder={'example.com\ndocs.python.org'}
+                      className="w-full text-xs font-mono p-2 rounded border border-border bg-input text-foreground disabled:opacity-40"
+                    />
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      One per line (commas work too). <span className="font-mono">localhost</span> and{' '}
+                      <span className="font-mono">127.0.0.1</span> are always allowed and do not need listing. A bare name covers
+                      its subdomains, so <span className="font-mono">example.com</span> also permits{' '}
+                      <span className="font-mono">www.example.com</span>. Anything else is refused — on the address asked for,
+                      on whatever it redirects to, and on any navigation the page starts by itself.
+                    </p>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={browserAllowAnyHost}
+                        onChange={(e) => setBrowserAllowAnyHost(e.target.checked)}
+                        className="accent-red-500"
+                      />
+                      <span className="text-xs font-semibold text-red-400">Allow any host (turns the allowlist off entirely)</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={browserCompact}
+                        onChange={(e) => setBrowserCompact(e.target.checked)}
+                        className="accent-amber-500"
+                      />
+                      <span className="text-xs text-foreground">Compact page listings (for models with a small context window)</span>
+                    </label>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      This identity&apos;s logins live in{' '}
+                      <span className="font-mono">local_data/browser_profiles/{folderName}/</span> and persist between sessions.
+                      That folder holds live session cookies and is <strong>excluded from the Google&nbsp;Drive sync</strong>, like{' '}
+                      <span className="font-mono">keys.json</span> — sign-ins do not travel to your other machines. Delete the
+                      folder to sign everything out.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {/* ── Subagent (context-firewall helper) — OAuth Claude only ───── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -4518,6 +4627,10 @@ How much of this session's room has been used since the last consolidation ("sle
                       subagentModel,
                       subagentFamily,
                       lettersEnabled,
+                      browserEnabled,
+                      browserAllowedHosts,
+                      browserAllowAnyHost,
+                      browserCompact,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

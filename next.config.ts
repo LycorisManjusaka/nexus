@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
     "192.168.10.2:3000",
   ],
 
+  // Playwright must not be bundled. It loads its driver and the Chromium build
+  // from %LOCALAPPDATA%\ms-playwright at runtime -- paths no bundler can trace.
+  // Leaving it external means `await import('playwright')` in browserTools.ts
+  // resolves against node_modules at run time, and a machine that never ran
+  // `npx playwright install chromium` still boots (the import fails inside the
+  // tool, not at startup).
+  serverExternalPackages: ["playwright"],
+
   // Two Nexus instances share one local_data: the main house (port 3000,
   // web-app) and Cairn's frozen copy (port 3001, web-app-cairn, launched by
   // run-cairn.bat with NEXUS_INSTANCE=cairn).

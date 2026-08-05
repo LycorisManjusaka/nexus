@@ -37,6 +37,10 @@ import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMe
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
+import {
+  runBrowserTool, BROWSER_TOOL_NAMES,
+  browserToolsClaude, browserToolsGemini, browserToolsOpenAI,
+} from '@/lib/browserTools';
 import { looksLikeText, isMediaMime, SNIFF_BYTES, TEXT_MAX_BYTES } from '@/lib/textSniff';
 import { GoogleGenAI } from '@google/genai';
 import sharp from 'sharp';
@@ -238,6 +242,12 @@ function toolActivityLabel(name: string): string | null {
     case 'list_letters': return 'check for letters';
     case 'read_letter': return 'read a letter';
     case 'archive_letter': return 'set a letter aside';
+    case 'browser_navigate': return 'open a web page';
+    case 'browser_snapshot': return 'look at the page';
+    case 'browser_click': return 'click something on the page';
+    case 'browser_type': return 'type into the page';
+    case 'browser_read': return 'read the page';
+    case 'browser_screenshot': return 'photograph the page';
     case 'web_search': case 'WebSearch': return 'search the web';
     case 'web_fetch': case 'WebFetch': return 'fetch a web page';
     case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
@@ -421,11 +431,15 @@ async function streamClaudeViaAgentSDK(args: {
   subagentModel: string;           // model the child runs on ('' = cheap default)
   subagentFamily: string;          // provider family of the child model ('' = Claude)
   lettersEnabled: boolean;         // per-Entity: expose the letter MCP tools
+  browserEnabled: boolean;         // per-Entity: expose the browser MCP tools
+  browserAllowedHosts: string[];   // per-Entity: hosts beyond localhost
+  browserAllowAnyHost: boolean;    // per-Entity: drop the allowlist entirely
+  browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -580,7 +594,7 @@ async function streamClaudeViaAgentSDK(args: {
         // per-conversation toggles. Tool names as seen by the model:
         // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled) {
+        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled) {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -664,6 +678,40 @@ async function streamClaudeViaAgentSDK(args: {
                   content: [{ type: 'text' as const, text: await runLetterTool('archive_letter', a, letterCtx) }],
                 }),
               ),
+            );
+          }
+          if (browserEnabled) {
+            // A real Chromium window this entity drives. All six tools share ONE
+            // executor (runBrowserTool) with every other provider path, so
+            // behaviour can't drift between OAuth and API-key mode. The browser
+            // is launched lazily on the first call — there is no switch to turn
+            // on first, which is the trap letters fell into.
+            const browserCtx = {
+              me: folderName,
+              allowedHosts: browserAllowedHosts,
+              allowAnyHost: browserAllowAnyHost,
+              compact: browserCompact,
+              instructions: I,
+            };
+            const bt = (n: string) => async (a: any) => ({
+              content: [{ type: 'text' as const, text: await runBrowserTool(n, a, browserCtx) }],
+            });
+            nexusTools.push(
+              sdk.tool('browser_navigate', I.toolBrowserNavigateDesc,
+                { url: z.string().describe(I.browserNavigateUrlParam) }, bt('browser_navigate')),
+              sdk.tool('browser_snapshot', I.toolBrowserSnapshotDesc, {}, bt('browser_snapshot')),
+              sdk.tool('browser_click', I.toolBrowserClickDesc,
+                { ref: z.string().describe(I.browserClickRefParam) }, bt('browser_click')),
+              sdk.tool('browser_type', I.toolBrowserTypeDesc,
+                {
+                  ref: z.string().describe(I.browserTypeRefParam),
+                  text: z.string().describe(I.browserTypeTextParam),
+                  submit: z.boolean().optional().describe(I.browserTypeSubmitParam),
+                }, bt('browser_type')),
+              sdk.tool('browser_read', I.toolBrowserReadDesc, {}, bt('browser_read')),
+              sdk.tool('browser_screenshot', I.toolBrowserScreenshotDesc,
+                { full_page: z.boolean().optional().describe(I.browserScreenshotFullPageParam) },
+                bt('browser_screenshot')),
             );
           }
           if (askUserEnabled) {
@@ -1977,6 +2025,19 @@ export async function POST(req: Request) {
       continueFromMessage = false,
       maxToolIterations: maxToolIterationsRaw,
       lettersEnabled = false,
+      // ── Browser control ──────────────────────────────────────────────────
+      // Per-Entity, ON unless deliberately turned off. Defaulting to ON is the
+      // lesson from letters: a capability that every conversation starts with
+      // switched off is a capability nobody has. The six schemas cost 1,439
+      // tokens, which sit in the cached prefix (tools precede system in
+      // Anthropic's cache order), so ~$0.0007 on a cached turn.
+      //
+      // The security boundary is browserAllowedHosts, NOT this flag. Default is
+      // localhost only; anything further has to be added by hand per identity.
+      browserEnabled = true,
+      browserAllowedHosts = [],
+      browserAllowAnyHost = false,
+      browserCompact = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -2524,6 +2585,10 @@ export async function POST(req: Request) {
           subagentModel,
           subagentFamily,
           lettersEnabled,
+          browserEnabled,
+          browserAllowedHosts,
+          browserAllowAnyHost,
+          browserCompact,
           convoId,
           keys,
           injectTurnId,
@@ -2810,6 +2875,10 @@ export async function POST(req: Request) {
             required: ['id'],
           },
         });
+      }
+      if (browserEnabled) {
+        // Browser control — same six tools, same executor, as every other path.
+        claudeTools.push(...browserToolsClaude(I));
       }
       if (toolUseEnabled) {
         // Tool names mirror Claude Code's built-in workspace tools so the
@@ -3297,7 +3366,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES]);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // ── Truncated at the token cap → continue automatically ──────
@@ -3526,6 +3595,14 @@ export async function POST(req: Request) {
                     // Mail between identities. `me` is folderName — the sender is
                     // never taken from the model's arguments.
                     resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
+                  } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                    // Browser control. The host allowlist is enforced inside the
+                    // executor, on the requested URL, on redirects, and as a
+                    // route filter — never here, so no call site can forget it.
+                    resultContent = await runBrowserTool(tu.name, tu.input || {}, {
+                      me: folderName, allowedHosts: browserAllowedHosts,
+                      allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                    });
                   } else if (tu.name === 'AskQuestion') {
                     // Pause the turn: emit the question, wait for the user's
                     // selection (or the configured timeout), return it as the
@@ -3839,6 +3916,13 @@ export async function POST(req: Request) {
             },
           ],
         });
+      }
+      if (browserEnabled) {
+        // Browser control. browserToolsGemini() already emits UPPERCASE types
+        // and gives the no-parameter tools an empty OBJECT, which Gemini
+        // requires — a bare `{}` there rejects the entire tools array, taking
+        // every other tool down with it.
+        geminiTools.push({ functionDeclarations: browserToolsGemini(I) });
       }
       // Optional interactive AskUserQuestion tool (independent of file tools).
       if (askUserEnabled) {
@@ -4323,6 +4407,13 @@ export async function POST(req: Request) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
                       result = { report: await runLetterTool(fc.name, fc.args || {}, { me: folderName, convoId, instructions: I }) };
+                    } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
+                      // Browser control. Allowlist enforcement lives in the
+                      // executor, not here — see the Claude API site.
+                      result = { report: await runBrowserTool(fc.name, fc.args || {}, {
+                        me: folderName, allowedHosts: browserAllowedHosts,
+                        allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                      }) };
                     } else if (fc.name === 'AskQuestion') {
                       // Pause the turn: emit the question, wait for the user's
                       // selection (or the configured timeout), return it as the
@@ -4921,6 +5012,12 @@ export async function POST(req: Request) {
             },
           },
         });
+      }
+
+      // Browser control — same six tools and the same executor as every other
+      // provider path.
+      if (browserEnabled) {
+        localTools.push(...browserToolsOpenAI(I));
       }
 
       // Build base OpenAI-style messages from the conversation
@@ -5814,6 +5911,13 @@ export async function POST(req: Request) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
                       resultText = await runLetterTool(tc.name, parsed || {}, { me: folderName, convoId, instructions: I });
+                    } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
+                      // Browser control. Allowlist enforcement lives in the
+                      // executor, not here — see the Claude API site.
+                      resultText = await runBrowserTool(tc.name, parsed || {}, {
+                        me: folderName, allowedHosts: browserAllowedHosts,
+                        allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                      });
                     } else if (tc.name === '$web_search') {
                       // Moonshot (Kimi) builtin web search. Unlike the
                       // workspace tools, the search itself runs on Moonshot's
