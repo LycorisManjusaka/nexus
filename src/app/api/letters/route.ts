@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { spawn } from 'child_process';
+import fs from 'fs/promises';
+import path from 'path';
 import {
   listAllLetters,
   resolveAnyLetter,
@@ -98,6 +101,51 @@ export async function POST(req: Request) {
     if (action === 'delete') {
       const r = await deleteLetter(meta);
       return r.ok ? NextResponse.json({ ok: true }) : NextResponse.json({ error: r.error }, { status: 500 });
+    }
+
+    if (action === 'reveal') {
+      // Open the OS file manager with this letter's .md selected. The point is
+      // the neighbours: the .read / .archived sidecars sit right beside it, and
+      // they are the truth this window is only a convenience over. Sometimes
+      // you want to look at — or fix — them directly.
+      //
+      // The path is resolved server-side from the id and never crosses the
+      // wire, which keeps this route's rule that absolute paths stay here. It
+      // is always inside local_data/letters/, so there is nothing to inject.
+      try {
+        await fs.access(meta.file);
+      } catch {
+        return NextResponse.json(
+          { error: 'That letter is no longer on disk. Refresh the list.' },
+          { status: 404 },
+        );
+      }
+
+      try {
+        if (process.platform === 'win32') {
+          // explorer.exe parses its own command line and wants exactly
+          // /select,"<path>" with no space after the comma. Without
+          // windowsVerbatimArguments, Node re-quotes the whole token into a
+          // form explorer misreads once the path contains a space (entity
+          // names may). Its exit code is deliberately not checked: explorer
+          // returns 1 even when it succeeds.
+          spawn('explorer.exe', [`/select,"${meta.file}"`], {
+            windowsVerbatimArguments: true, detached: true, stdio: 'ignore',
+          }).unref();
+        } else if (process.platform === 'darwin') {
+          spawn('open', ['-R', meta.file], { detached: true, stdio: 'ignore' }).unref();
+        } else {
+          // Linux has no portable "select this file", so the containing folder
+          // is the honest best — the sidecars are still visible next to it.
+          spawn('xdg-open', [path.dirname(meta.file)], { detached: true, stdio: 'ignore' }).unref();
+        }
+      } catch (e: any) {
+        return NextResponse.json(
+          { error: `Could not open the file manager: ${e?.message || e}` },
+          { status: 500 },
+        );
+      }
+      return NextResponse.json({ ok: true });
     }
 
     if (action === 'regenerate') {

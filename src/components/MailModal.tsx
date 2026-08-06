@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Mail, Loader2, Trash2, Save, RefreshCw, PenLine, Send,
-  MailOpen, Archive, AlertTriangle, Check, Reply,
+  MailOpen, Archive, AlertTriangle, Check, Reply, FolderOpen,
 } from 'lucide-react';
 import EditableCombo from './EditableCombo';
 
@@ -180,6 +180,15 @@ export default function MailModal({
       setConfirmDelete(false);
       load();
     }
+  };
+
+  // Show the letter's .md in the OS file manager, selected. Its .read and
+  // .archived sidecars are sitting right next to it — this window creates and
+  // deletes them, but they remain the truth, and sometimes you want the truth
+  // in front of you rather than a rendering of it.
+  const reveal = async () => {
+    if (!detail) return;
+    await act({ action: 'reveal', id: detail.id });
   };
 
   // Reply: swap the two ends, prefix the title, leave the body empty. The
@@ -444,6 +453,14 @@ export default function MailModal({
                     }`}
                   >
                     <Archive className="h-3.5 w-3.5" /> {detail.archived ? 'Archived' : 'Archive'}
+                  </button>
+                  <button
+                    onClick={reveal}
+                    disabled={busy}
+                    title="Open the folder with this letter's file selected — its .read / .archived sidecars are next to it"
+                    className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-40"
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" /> Show file
                   </button>
                   {detail.readAt && <span className="text-[11px] text-muted-foreground">opened {when(detail.readAt)}</span>}
 
