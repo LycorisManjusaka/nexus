@@ -97,6 +97,7 @@ Qwen     | qwen3.5-omni-flash           | off | Qwen 3.5 Omni Flash (multimodal)
 
 # ── DeepSeek (direct API + DashScope intl) ─────────────────────────
 DeepSeek | deepseek-v4-pro              | on  | DeepSeek V4 Pro
+DeepSeek | deepseek-v4-flash-0731         | on  | DeepSeek V4 Flash 0731
 DeepSeek | deepseek-v4-flash            | off | DeepSeek V4 Flash
 DeepSeek | deepseek-reasoner            | on  | DeepSeek Reasoner
 DeepSeek | deepseek-chat                | off | DeepSeek Chat
@@ -113,6 +114,13 @@ GLM      | glm-4.6                      | on  | GLM-4.6 Thinking
 GLM      | glm-4.6v                     | on  | GLM-4.6V Thinking (multimodal)
 GLM      | glm-4.6v-flash               | off | GLM-4.6V Flash (fast multimodal)
 GLM      | glm-4.5-air                  | off | GLM-4.5 Air (cheap)
+
+# ── GLM via DigitalOcean Inference (US-hosted, ~half Z.ai price) ───
+# Same Z.ai open weights, served at inference.do-ai.run. The digitalocean/
+# prefix is NEXUS routing marker; the wire API gets the bare id.
+GLM      | digitalocean/glm-5.2         | on  | GLM-5.2 (DigitalOcean)
+GLM      | digitalocean/glm-5.1         | on  | GLM-5.1 (DigitalOcean)
+GLM      | digitalocean/glm-5           | on  | GLM-5 (DigitalOcean)
 
 # ── Grok (xAI) — reasoning controlled by model name suffix ─────────
 Grok     | grok-4.3                     | on  | Grok 4.3
@@ -4004,7 +4012,7 @@ How much of this session's room has been used since the last consolidation ("sle
                         setSpecificModel('qwen3.6-plus');
                       } else if (newAiName === 'DeepSeek' && !specificModel?.startsWith('deepseek')) {
                         setSpecificModel('deepseek-v4-flash');
-                      } else if (newAiName === 'GLM' && !specificModel?.startsWith('glm')) {
+                      } else if (newAiName === 'GLM' && !specificModel?.startsWith('glm') && !specificModel?.startsWith('digitalocean/glm')) {
                         setSpecificModel('glm-5.2');
                       } else if (newAiName === 'Grok' && !specificModel?.startsWith('grok')) {
                         setSpecificModel('grok-4.5');
@@ -4022,7 +4030,7 @@ How much of this session's room has been used since the last consolidation ("sle
                         setSpecificModel('seed-2-0-pro-260328');
                       } else if (newAiName === 'Local') {
                         // Clear so the user picks from the list LM Studio reports
-                        if (specificModel?.includes('claude') || specificModel?.includes('gemini') || specificModel?.startsWith('qwen') || specificModel?.startsWith('deepseek') || specificModel?.startsWith('glm') || specificModel?.startsWith('grok') || specificModel?.toLowerCase().includes('kimi') || specificModel?.startsWith('command-') || specificModel?.toLowerCase().startsWith('minimax') || specificModel?.toLowerCase().startsWith('gpt') || specificModel?.toLowerCase().startsWith('mimo') || specificModel?.toLowerCase().startsWith('seed')) {
+                        if (specificModel?.includes('claude') || specificModel?.includes('gemini') || specificModel?.startsWith('qwen') || specificModel?.startsWith('deepseek') || specificModel?.startsWith('glm') || specificModel?.startsWith('digitalocean/') || specificModel?.startsWith('grok') || specificModel?.toLowerCase().includes('kimi') || specificModel?.startsWith('command-') || specificModel?.toLowerCase().startsWith('minimax') || specificModel?.toLowerCase().startsWith('gpt') || specificModel?.toLowerCase().startsWith('mimo') || specificModel?.toLowerCase().startsWith('seed')) {
                           setSpecificModel('');
                         }
                       }
@@ -4128,6 +4136,7 @@ How much of this session's room has been used since the last consolidation ("sle
                     >
                       <optgroup label="DeepSeek first-party API (api.deepseek.com)">
                         <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+                        <option value="deepseek-v4-flash-0731">DeepSeek V4 Flash 0731 (official release, 1M context)</option>
                         <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
                         <option value="deepseek-reasoner">DeepSeek Reasoner (legacy alias)</option>
                         <option value="deepseek-chat">DeepSeek Chat (legacy alias)</option>
@@ -4286,25 +4295,65 @@ How much of this session's room has been used since the last consolidation ("sle
 
                 {localAiName === 'GLM' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">GLM Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">GLM Provider</label>
                     <select
-                      value={specificModel}
+                      value={(specificModel || '').startsWith('digitalocean/') ? 'digitalocean' : 'zai'}
+                      onChange={(e) => {
+                        // Provider is derived from the model id prefix — one
+                        // field, no second state to drift out of sync.
+                        setSpecificModel(e.target.value === 'digitalocean' ? 'digitalocean/glm-5.2' : 'glm-5.2');
+                      }}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                    >
+                      <option value="zai">Z.AI (Zhipu) — api.z.ai</option>
+                      <option value="digitalocean">DigitalOcean Inference — inference.do-ai.run (US-hosted, ~half Z.ai price)</option>
+                    </select>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 mt-3">GLM Model</label>
+                    <select
+                      value={(() => {
+                        // Guard: a saved model that doesn't exist on the current
+                        // provider (e.g. glm-4.7 after switching to DigitalOcean)
+                        // renders as a disabled placeholder instead of a blank box.
+                        const isDO = (specificModel || '').startsWith('digitalocean/');
+                        const valid = isDO
+                          ? ['digitalocean/glm-5.2', 'digitalocean/glm-5.1', 'digitalocean/glm-5']
+                          : ['glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'];
+                        return valid.includes(specificModel || '') ? specificModel : '';
+                      })()}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="glm-5.2">GLM-5.2 (latest)</option>
-                      <option value="glm-5.1">GLM-5.1</option>
-                      <option value="glm-5">GLM-5</option>
-                      <option value="glm-5-turbo">GLM-5 Turbo (fast)</option>
-                      <option value="glm-5v-turbo">GLM-5V Turbo (fast multimodal)</option>
-                      <option value="glm-4.7">GLM-4.7</option>
-                      <option value="glm-4.6">GLM-4.6 (200K context)</option>
-                      <option value="glm-4.6v">GLM-4.6V (multimodal)</option>
-                      <option value="glm-4.6v-flash">GLM-4.6V Flash (fast multimodal)</option>
-                      <option value="glm-4.5-air">GLM-4.5 Air (cheap)</option>
+                      {(specificModel || '').startsWith('digitalocean/') ? (
+                        <>
+                          {(!['digitalocean/glm-5.2','digitalocean/glm-5.1','digitalocean/glm-5'].includes(specificModel || '')) && (
+                            <option value="" disabled>{specificModel} (not on DigitalOcean — pick one below)</option>
+                          )}
+                          <option value="digitalocean/glm-5.2">GLM-5.2 (262K context, $0.70/$2.20 per M)</option>
+                          <option value="digitalocean/glm-5.1">GLM-5.1 ($0.975/$4.30 per M)</option>
+                          <option value="digitalocean/glm-5">GLM-5 ($0.75/$2.40 per M)</option>
+                        </>
+                      ) : (
+                        <>
+                          {(specificModel && !['glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'].includes(specificModel)) && (
+                            <option value="" disabled>{specificModel} (not on Z.AI — pick one below)</option>
+                          )}
+                          <option value="glm-5.2">GLM-5.2 (latest)</option>
+                          <option value="glm-5.1">GLM-5.1</option>
+                          <option value="glm-5">GLM-5</option>
+                          <option value="glm-5-turbo">GLM-5 Turbo (fast)</option>
+                          <option value="glm-5v-turbo">GLM-5V Turbo (fast multimodal)</option>
+                          <option value="glm-4.7">GLM-4.7</option>
+                          <option value="glm-4.6">GLM-4.6 (200K context)</option>
+                          <option value="glm-4.6v">GLM-4.6V (multimodal)</option>
+                          <option value="glm-4.6v-flash">GLM-4.6V Flash (fast multimodal)</option>
+                          <option value="glm-4.5-air">GLM-4.5 Air (cheap)</option>
+                        </>
+                      )}
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by Z.AI (Zhipu) at <span className="font-mono">api.z.ai</span>. Set the Z.AI API key in Preferences. The Thinking Mode toggle below maps to GLM's <span className="font-mono">{'thinking: { type: enabled }'}</span> parameter.
+                      {(specificModel || '').startsWith('digitalocean/')
+                        ? <>Served by DigitalOcean Inference at <span className="font-mono">inference.do-ai.run</span> — Z.ai's open weights on US-hosted infrastructure, ~half Z.ai's price. Set the DigitalOcean Inference API key in Preferences. Text-only on this provider (no vision variants — images go through the eyes bridge). The Thinking Mode toggle below maps to DigitalOcean's <span className="font-mono">reasoning_effort</span> parameter.</>
+                        : <>Served by Z.AI (Zhipu) at <span className="font-mono">api.z.ai</span>. Set the Z.AI API key in Preferences. The Thinking Mode toggle below maps to GLM's <span className="font-mono">{'thinking: { type: enabled }'}</span> parameter.</>}
                     </div>
                   </div>
                 )}

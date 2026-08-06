@@ -1550,6 +1550,13 @@ function buildModelLabel(family: string, specificModel: string, thinking: boolea
   // Try to produce a clean "Claude Opus 4.7 Thinking" form. Falls back to
   // raw "<family> <specificModel>" if we don't recognize the pattern.
   let pretty = specificModel || '';
+  // DigitalOcean-served models keep their provider in the label — same bare
+  // model id exists on Z.AI at a different price, so the reader must be able
+  // to see which provider actually served this message.
+  if (pretty.startsWith('digitalocean/')) {
+    const suffixD = thinking ? ' Thinking' : '';
+    return family + ' ' + pretty.slice('digitalocean/'.length) + ' (DigitalOcean)' + suffixD;
+  }
   // Strip common prefixes like "moonshotai/" so labels stay tidy.
   if (pretty.includes('/')) pretty = pretty.split('/').pop()!;
   // OpenAI ids like "gpt-5.4-mini" read best with an uppercase "GPT" and the
@@ -1787,11 +1794,16 @@ async function runModelSelectorPreflight(args: {
   const isDashScope = isQwen || isDeepSeek;
   // DeepSeek direct vs via DashScope (only deepseek-v3.2 lives on DashScope).
   const useDeepSeekDirect = isDeepSeek && !!specificModel && specificModel !== 'deepseek-v3.2';
+  // DigitalOcean Inference serves GLM open weights on US infrastructure;
+  // selected via a `digitalocean/` prefix on the model id (see main branch).
+  const useDigitalOcean = isGLM && (specificModel || '').startsWith('digitalocean/');
 
   const url = useDeepSeekDirect
     ? 'https://api.deepseek.com/v1/chat/completions'
     : isDashScope ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
-    : isGLM       ? 'https://api.z.ai/api/paas/v4/chat/completions'
+    : isGLM       ? (useDigitalOcean
+        ? 'https://inference.do-ai.run/v1/chat/completions'
+        : 'https://api.z.ai/api/paas/v4/chat/completions')
     : isGrok      ? 'https://api.x.ai/v1/chat/completions'
     : isKimi      ? 'https://api.moonshot.ai/v1/chat/completions'
     : isCohere    ? 'https://api.cohere.ai/compatibility/v1/chat/completions'
@@ -1805,7 +1817,7 @@ async function runModelSelectorPreflight(args: {
 
   const apiKey = useDeepSeekDirect ? keys.deepseek
     : isDashScope ? keys.qwen
-    : isGLM       ? keys.glm
+    : isGLM       ? (useDigitalOcean ? keys.digitalocean : keys.glm)
     : isGrok      ? keys.grok
     : isKimi      ? keys.kimi
     : isCohere    ? keys.cohere
@@ -1829,7 +1841,8 @@ async function runModelSelectorPreflight(args: {
   // also fixes temperature/top_p server-side, so those are omitted below.
   const selKimiK3 = isKimi && /k3/i.test(resolveKimiModel(specificModel));
   if ((isQwen || isDeepSeek) && !isOmni) extra.enable_thinking = false;
-  if (isGLM || (isKimi && !selKimiK3)) extra.thinking = { type: 'disabled' };
+  if (useDigitalOcean) extra.reasoning_effort = 'none';
+  else if (isGLM || (isKimi && !selKimiK3)) extra.thinking = { type: 'disabled' };
   if (selKimiK3) extra.reasoning_effort = 'max';
   if (isCohere) extra.reasoning_effort = 'none';
   // OpenAI GPT-5 family: DO NOT set `reasoning_effort` here. This selector always
@@ -1841,7 +1854,10 @@ async function runModelSelectorPreflight(args: {
   // model-suffix; MiniMax always reasons; LM Studio runs the loaded weights.
 
   const body: any = {
-    model: isKimi ? resolveKimiModel(specificModel) : (specificModel || (
+    model: isKimi ? resolveKimiModel(specificModel)
+      // DigitalOcean wants the bare model id; the prefix is NEXUS routing only.
+      : useDigitalOcean ? (specificModel || '').slice('digitalocean/'.length)
+      : (specificModel || (
       isGLM      ? 'glm-4.7' :
       isGrok     ? 'grok-4.5' :
       isCohere   ? 'command-a-plus-05-2026' :
@@ -1862,6 +1878,8 @@ async function runModelSelectorPreflight(args: {
     // OpenAI-compatible provider accepts the classic pair.
     ...(isOpenAI
       ? { max_completion_tokens: 512 }
+      : useDigitalOcean
+        ? { max_completion_tokens: 512, temperature: 0.0 }   // DO: max_tokens deprecated
       : selKimiK3
         ? { max_tokens: 512 }                       // K3 fixes temp/top_p — omit them
         : { temperature: 0.0, max_tokens: 512 }),
@@ -4567,6 +4585,13 @@ export async function POST(req: Request) {
       //     deepseek-chat/deepseek-reasoner) → api.deepseek.com directly.
       //     Requires a separate DeepSeek API key (keys.deepseek).
       const useDeepSeekDirect = isDeepSeek && !!specificModel && specificModel !== 'deepseek-v3.2';
+      // DigitalOcean Inference (inference.do-ai.run) serves open-weight models
+      // — currently the GLM 5.x family — on US-hosted infrastructure. Selected
+      // via a `digitalocean/` prefix on the model id (e.g. `digitalocean/glm-5.2`);
+      // the prefix is stripped before the wire call and used for routing, key
+      // selection, and pricing (same model id can exist on two providers at
+      // different prices, so the price table keys on the prefixed id).
+      const useDigitalOcean = isGLM && (specificModel || '').startsWith('digitalocean/');
 
       if (useDeepSeekDirect && !keys.deepseek) {
         return NextResponse.json({
@@ -4578,9 +4603,14 @@ export async function POST(req: Request) {
           error: `${isDeepSeek ? 'DeepSeek V3.2 (via DashScope)' : 'Qwen'} requires the Alibaba (Qwen / DashScope) API key in Preferences.`,
         }, { status: 400 });
       }
-      if (isGLM && !keys.glm) {
+      if (isGLM && !useDigitalOcean && !keys.glm) {
         return NextResponse.json({
           error: `GLM (Z.AI) requires the Z.AI API key in Preferences.`,
+        }, { status: 400 });
+      }
+      if (useDigitalOcean && !keys.digitalocean) {
+        return NextResponse.json({
+          error: `GLM via DigitalOcean Inference requires the DigitalOcean Inference API key in Preferences (control panel → Inference → Model Access Keys).`,
         }, { status: 400 });
       }
 
@@ -4629,7 +4659,9 @@ export async function POST(req: Request) {
         : isDashScope
           ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
           : isGLM
-            ? 'https://api.z.ai/api/paas/v4/chat/completions'
+            ? (useDigitalOcean
+              ? 'https://inference.do-ai.run/v1/chat/completions'
+              : 'https://api.z.ai/api/paas/v4/chat/completions')
             : isGrok
               ? 'https://api.x.ai/v1/chat/completions'
               : isKimi
@@ -4650,7 +4682,7 @@ export async function POST(req: Request) {
         : isDashScope
           ? { Authorization: `Bearer ${keys.qwen}` }
           : isGLM
-            ? { Authorization: `Bearer ${keys.glm}` }
+            ? { Authorization: `Bearer ${useDigitalOcean ? keys.digitalocean : keys.glm}` }
             : isGrok
               ? { Authorization: `Bearer ${keys.grok}` }
               : isKimi
@@ -4666,7 +4698,7 @@ export async function POST(req: Request) {
                         : isBytedance
                           ? { Authorization: `Bearer ${keys.bytedance}` }
                           : {};
-      const localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
+      let localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
         isGrok     ? 'grok-4.5' :
         isCohere   ? 'command-a-plus-05-2026' :
@@ -4679,6 +4711,18 @@ export async function POST(req: Request) {
         isBytedance ? 'seed-2-0-pro-260328' :
                      'local-model'
       ));
+      // DeepSeek's direct API (api.deepseek.com) only accepts 'deepseek-v4-flash' or 'deepseek-v4-pro'.
+      // Map the UI snapshot alias 'deepseek-v4-flash-0731' to 'deepseek-v4-flash' when calling api.deepseek.com.
+      if (useDeepSeekDirect && localModel === 'deepseek-v4-flash-0731') {
+        localModel = 'deepseek-v4-flash';
+      }
+      // DigitalOcean Inference: the `digitalocean/` prefix is a NEXUS routing
+      // marker (same bare model id exists on Z.AI at a different price, so the
+      // prefix disambiguates for routing + pricing). The wire API wants the
+      // bare id — strip it here.
+      if (useDigitalOcean && localModel.startsWith('digitalocean/')) {
+        localModel = localModel.slice('digitalocean/'.length);
+      }
 
       // ── DashScope/DeepSeek/Z.AI inline-file size preflight ─────────────────
       // DashScope (Qwen/DeepSeek-via-Alibaba), api.deepseek.com, and api.z.ai
@@ -5257,10 +5301,32 @@ export async function POST(req: Request) {
           requestBody.reasoning_effort = 'max';
           delete requestBody.temperature;
           delete requestBody.top_p;
+        } else if (useDigitalOcean) {
+          // DigitalOcean Inference serves GLM through an OpenAI-compatible
+          // surface and exposes reasoning via the standard OpenAI
+          // `reasoning_effort` field (none|low|medium|high|max) — NOT GLM's
+          // native `thinking: { type }` object, which Z.AI's own endpoint uses.
+          // Map the shared Thinking-Mode toggle onto the two ends.
+          requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'none';
         } else if (isGLM || isKimi) {
           requestBody.thinking = {
             type: modelParams.qwenEnableThinking !== false ? 'enabled' : 'disabled',
           };
+        }
+        // DigitalOcean Inference defaults max output to ~2048 tokens when no
+        // cap is sent, and treats `max_tokens` as deprecated in favor of
+        // `max_completion_tokens`. Without an explicit cap, long replies get
+        // silently truncated. Set a generous per-model cap (each model's own
+        // documented max output) so nothing is cut short.
+        if (useDigitalOcean) {
+          // Documented max output per model (DigitalOcean "Supported Models"
+          // page, verified 2026-08-06): glm-5.2 → 52,429; glm-5.1 → 32,768;
+          // glm-5 → 12,800.
+          requestBody.max_completion_tokens =
+            localModel === 'glm-5.2' ? 52429 :
+            localModel === 'glm-5.1' ? 32768 :
+            localModel === 'glm-5'   ? 12800 :
+                                       32768;
         }
         // Kimi (Moonshot) pins temperature to a single fixed value per mode and
         // rejects anything else with a 400 ("invalid temperature: only X is
@@ -5342,7 +5408,7 @@ export async function POST(req: Request) {
           const label = useDeepSeekDirect
             ? 'DeepSeek API'
             : isGLM
-              ? 'Z.AI GLM'
+              ? (useDigitalOcean ? 'DigitalOcean Inference (GLM)' : 'Z.AI GLM')
               : isGrok
                 ? 'xAI Grok'
                 : isKimi

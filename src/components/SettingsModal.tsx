@@ -24,6 +24,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const [keys, setKeys] = useState<any>({
     gemini: '', claude: '', qwen: '', deepseek: '', glm: '', grok: '',
     kimi: '', cohere: '', minimax: '', openai: '', mimo: '', bytedance: '',
+    digitalocean: '',
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
   });
   const [loading, setLoading] = useState(true);
@@ -284,7 +285,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">platform.deepseek.com</span>. Required for DeepSeek V4 Pro / V4 Flash and the legacy <span className="font-mono">deepseek-chat</span> / <span className="font-mono">deepseek-reasoner</span> aliases. Globally accessible — no regional restrictions.
+                Get one at <span className="font-mono">platform.deepseek.com</span>. Required for DeepSeek V4 Flash 0731 / V4 Pro / V4 Flash and the legacy <span className="font-mono">deepseek-chat</span> / <span className="font-mono">deepseek-reasoner</span> aliases. Globally accessible — no regional restrictions.
               </div>
             </div>
             <div>
@@ -298,6 +299,19 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               />
               <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                 Get one at <span className="font-mono">z.ai</span> → API Console. Required for the GLM family (GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air).
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">DigitalOcean Inference API Key</label>
+              <input
+                type="password"
+                placeholder="..."
+                value={keys.digitalocean || ''}
+                onChange={e => setKeys({...keys, digitalocean: e.target.value})}
+                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+              />
+              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                One key for all DigitalOcean Inference models — create a Model Access Key in the DigitalOcean control panel (Inference → Model Access Keys). Serves GLM-5.2 / GLM-5.1 / GLM-5 (Z.ai open weights, US-hosted, ~half Z.ai price), plus DeepSeek V4, Kimi K2.5/K2.6, and more via the provider selector.
               </div>
             </div>
             <div>

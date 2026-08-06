@@ -327,7 +327,14 @@ function resolveOpenAIRoute(family: string, model: string, keys: any): { url: st
     if (model === 'deepseek-v3.2') return { url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', headers: bearer(keys.qwen), model, label: 'DeepSeek (DashScope)' };
     return { url: 'https://api.deepseek.com/v1/chat/completions', headers: bearer(keys.deepseek), model, label: 'DeepSeek' };
   }
-  if (f.includes('glm'))     return { url: 'https://api.z.ai/api/paas/v4/chat/completions', headers: bearer(keys.glm), model, label: 'GLM (Z.AI)' };
+  if (f.includes('glm')) {
+    // `digitalocean/` prefix routes GLM open weights through DigitalOcean
+    // Inference (US-hosted, ~half Z.ai price) instead of api.z.ai.
+    if (model.startsWith('digitalocean/')) {
+      return { url: 'https://inference.do-ai.run/v1/chat/completions', headers: bearer(keys.digitalocean), model: model.slice('digitalocean/'.length), label: 'GLM (DigitalOcean)' };
+    }
+    return { url: 'https://api.z.ai/api/paas/v4/chat/completions', headers: bearer(keys.glm), model, label: 'GLM (Z.AI)' };
+  }
   if (f.includes('grok'))    return { url: 'https://api.x.ai/v1/chat/completions', headers: bearer(keys.grok), model, label: 'Grok (xAI)' };
   if (f.includes('kimi'))    return { url: 'https://api.moonshot.ai/v1/chat/completions', headers: bearer(keys.kimi), model: model.replace(/^moonshotai\//i, '').toLowerCase(), label: 'Kimi (Moonshot)' };
   if (f.includes('cohere'))  return { url: 'https://api.cohere.ai/compatibility/v1/chat/completions', headers: bearer(keys.cohere), model, label: 'Cohere' };
