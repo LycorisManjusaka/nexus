@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import MessageBubble from './MessageBubble';
 import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
@@ -21,7 +21,7 @@ import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
-import { appendLayer4Index } from '@/lib/layer4';
+import { appendLayer4Index, appendLayer5Footer } from '@/lib/layer4';
 import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import LiveSession from './LiveSession';
@@ -539,12 +539,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // token count). Refreshed when the modal opens or convo/folder changes.
   const [summaryIndexBody, setSummaryIndexBody] = useState<string>('');
   const [summaryIndexTokens, setSummaryIndexTokens] = useState<number>(0);
+  // The entity's self-authored FOOTER.md = Layer 5. Appended server-side at
+  // send time, so it is never part of the STORED prompt — which is exactly why
+  // the "Sys" counter used to under-report it. Mirrored here purely so the
+  // indicator can count what is actually sent.
+  const [footerBody, setFooterBody] = useState<string>('');
 
-  // Refresh the live Layer-4 summaries index for the read-only Identity view.
-  // Fetches the assembled body and counts its tokens. Triggered when the modal
-  // opens with the toggle ON (and when the toggle flips on while open).
+  // Refresh the live Layer-4 summaries index. This used to be gated on the
+  // Identity modal being open, because its only consumer was the read-only
+  // preview inside it. The "Sys" counter now needs the same body, and it must
+  // be correct whether or not anyone has opened that window — so the fetch runs
+  // whenever the toggle is ON, and the modal opening is only an extra refresh.
   useEffect(() => {
-    if (!isPromptModalOpen || !useSummariesForLayer4) return;
+    if (!useSummariesForLayer4) {
+      // Toggle OFF → nothing is injected, so nothing may be counted.
+      setSummaryIndexBody('');
+      setSummaryIndexTokens(0);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -563,6 +575,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPromptModalOpen, useSummariesForLayer4, folderName, localAiName, convoId]);
+
+  // Mirror the entity's FOOTER.md (Layer 5) for the same reason. Best-effort:
+  // a failure leaves it empty, which under-counts exactly as before rather
+  // than breaking anything. Re-read when the Identity window opens, since the
+  // System Prompt Updater can edit the footer from there.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/footer?folder=${encodeURIComponent(folderName)}`);
+        if (!res.ok) { if (!cancelled) setFooterBody(''); return; }
+        const { body } = await res.json();
+        if (!cancelled) setFooterBody(typeof body === 'string' ? body : '');
+      } catch {
+        if (!cancelled) setFooterBody('');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [folderName, isPromptModalOpen]);
 
   // Persist the per-folder toggle immediately (merging existing settings).
   const persistUseSummariesToggle = async (checked: boolean) => {
@@ -630,20 +661,46 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     return 0;
   };
 
+  // ── What the "Sys" counter must actually measure ────────────────────────────
+  // The STORED system prompt is not what gets sent. Three blocks are appended at
+  // send time and never written back into the prompt:
+  //
+  //   Layer 4 — the summaries index, appended client-side (see handleSend).
+  //   Layer 5 — the entity's FOOTER.md, appended server-side from the chat route.
+  //   VRChat  — the secret rule block, appended client-side when VRChat mode is on.
+  //
+  // Counting only `systemPrompt` therefore under-reported every entity that uses
+  // summaries or has written a FOOTER.md — for a long-lived identity that is
+  // thousands of tokens missing from both the "Sys" bucket and the Context
+  // Elapsed denominator, which uses the same number as its fixed overhead.
+  //
+  // This rebuilds the prompt through the SAME appendLayer4Index /
+  // appendLayer5Footer helpers the send path uses, so headings, blank lines and
+  // the empty-body short-circuit all behave identically. It is a measurement
+  // only: nothing here is ever stored or sent.
+  const countedSystemPrompt = useMemo(() => {
+    let p = systemPrompt || '';
+    if (useSummariesForLayer4) p = appendLayer4Index(p, summaryIndexBody);
+    p = appendLayer5Footer(p, footerBody);
+    if (vrchatMode) p = `${p}\n\n${vrchatRule}`.trim();
+    return p;
+  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, vrchatRule]);
+
   useEffect(() => {
     // `cancelled` guards against an async race: on load this effect fires once
     // for the initial `defaultSystemPrompt` and again once the log sets the real
     // prompt. Without cleanup, the slower/earlier request can resolve LAST and
     // overwrite the correct count with the default prompt's (the "Sys shows 194
     // on load, fixes on edit" bug). Ignoring a superseded response fixes it.
+    // The same guard now also covers the Layer-4/Layer-5 fetches landing late.
     let cancelled = false;
     const fetchSysTokens = async () => {
-      const tokens = await fetchTokensForText(systemPrompt || '', localAiName);
+      const tokens = await fetchTokensForText(countedSystemPrompt, localAiName);
       if (!cancelled) setSystemTokens(tokens);
     };
     fetchSysTokens();
     return () => { cancelled = true; };
-  }, [systemPrompt, localAiName]);
+  }, [countedSystemPrompt, localAiName]);
 
   useEffect(() => {
     // Same stale-response guard as the system-prompt counter above.
@@ -2502,9 +2559,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setIsRecalculating(true);
     setToolsOpen(false);
     try {
-      // System prompt + attachment instruction
+      // System prompt + attachment instruction. Same rebuilt prompt the live
+      // counter uses — stored Layers 1-3 plus the Layer 4 / Layer 5 / VRChat
+      // blocks that are appended at send time and never stored.
       const [sysT, instrT] = await Promise.all([
-        fetchTokensForText(systemPrompt || '', localAiName),
+        fetchTokensForText(countedSystemPrompt, localAiName),
         fetchTokensForText(toolUseEnabled ? (toolInstruction || '') : '', localAiName),
       ]);
       setSystemTokens(sysT);
@@ -2651,7 +2710,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             const pctAttach = (attach / denom) * 100;
             const overLimit = total > max;
             return (
-              <div className="flex flex-col items-end gap-1 min-w-[260px]" title={`System ${sys.toLocaleString()} · Copied ${copied.toLocaleString()} · Original ${original.toLocaleString()} · Attachments ${attach.toLocaleString()} (not counted toward auto-trim threshold) · Free ${Math.max(0, max - total).toLocaleString()} / limit ${max.toLocaleString()}`}>
+              <div className="flex flex-col items-end gap-1 min-w-[260px]" title={`System ${sys.toLocaleString()} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + VRChat rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied ${copied.toLocaleString()} · Original ${original.toLocaleString()} · Attachments ${attach.toLocaleString()} (not counted toward auto-trim threshold) · Free ${Math.max(0, max - total).toLocaleString()} / limit ${max.toLocaleString()}`}>
                 <div className={`flex h-2 w-full rounded-full overflow-hidden bg-muted/60 border ${overLimit ? 'border-red-500 ring-1 ring-red-500/40' : 'border-border/50'}`}>
                   <div className="bg-indigo-500" style={{ width: `${pctSys}%` }} />
                   <div className="bg-amber-400" style={{ width: `${pctCopied}%` }} />
