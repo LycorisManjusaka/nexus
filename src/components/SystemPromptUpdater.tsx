@@ -280,6 +280,18 @@ interface RedistributeReport {
 // model's token cap → we prefill-continue. Stripped before saving.
 const END_SENTINEL = '<<<NEXUS_END>>>';
 
+// ── Fixed agent filenames ────────────────────────────────────────────────────
+// Each action button used to run whichever .md file the user happened to have
+// picked from a shared ComboBox — a footgun (running "Redistribute" against
+// updater.md silently did the wrong thing, with no error). Every type folder
+// under local_data/system_prompt_agents/<Type>/ now carries exactly these four
+// canonical files, and each button is wired to its own fixed name: there is no
+// file selector left to point at the wrong one.
+const AGENT_FILE_UPDATE = 'updater.md';                       // "Update from Conversation"
+const AGENT_FILE_REORGANIZE = 'defragmenter.md';              // "Reorganize (No Conversation)"
+const AGENT_FILE_REDISTRIBUTE = 'interlayer_redistributor.md'; // "Redistribute Layer 4 → 1-3"
+const AGENT_FILE_GENESIS = 'genesis_extractor.md';            // "Genesis (Build From Scratch)"
+
 // ── Soul-packer model shortlist ──────────────────────────────────────────────
 // Only these four families produce usable system-prompt updates; the others
 // either flatten the Layer structure or paraphrase the identity away. Kept as a
@@ -330,7 +342,7 @@ export default function SystemPromptUpdater({
 }: Props) {
   // ── State ────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'summary' | 'auto'>(null);
+  const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'summary' | 'auto'>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
 
   // The whole identity prompt is now ONE editable block per side (no per-layer
@@ -407,18 +419,26 @@ export default function SystemPromptUpdater({
   const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   // All updater agent .md files in the selected type subfolder + the (separate)
-  // summary writer agent. The user picks which updater file to run via a second
-  // ComboBox (`selectedAgentFile`).
+  // summary writer agent. Each action button below runs a FIXED filename out of
+  // this list (see AGENT_FILE_* above) — there is no per-run file picker.
   const [agents, setAgents] = useState<{
     files: Array<{ name: string; systemPrompt: string }>;
     summary: { raw: string; systemPrompt: string } | null;
   } | null>(null);
-  const [selectedAgentFile, setSelectedAgentFile] = useState<string>('');
-  const userPickedFileRef = useRef(false);
   const [deletionPatterns, setDeletionPatterns] = useState<string[]>([]);
 
-  // The agent the update will actually run with (the selected file).
-  const activeAgent = agents?.files.find((f) => f.name === selectedAgentFile) || null;
+  // Look up one of the four canonical agent files by its fixed name. Returns
+  // null if the selected type folder doesn't have that file (or nothing has
+  // loaded yet) — every button-disabled check and every run function goes
+  // through this instead of a shared "currently selected" agent.
+  const getAgentFile = useCallback(
+    (name: string) => agents?.files.find((f) => f.name === name) || null,
+    [agents]
+  );
+  const updateAgent = useMemo(() => getAgentFile(AGENT_FILE_UPDATE), [getAgentFile]);
+  const reorganizeAgent = useMemo(() => getAgentFile(AGENT_FILE_REORGANIZE), [getAgentFile]);
+  const redistributeAgent = useMemo(() => getAgentFile(AGENT_FILE_REDISTRIBUTE), [getAgentFile]);
+  const genesisAgent = useMemo(() => getAgentFile(AGENT_FILE_GENESIS), [getAgentFile]);
 
   // ── Summary panel (separate call, separate default model) ────────────────
   const [summaryText, setSummaryText] = useState('');
@@ -596,17 +616,6 @@ export default function SystemPromptUpdater({
         setAgents({ files, summary: agentRes?.summary ?? null });
         setDeletionPatterns(delRes?.patterns || []);
 
-        // Choose the active agent file: prefer the folder's remembered choice,
-        // else the canonical Boundary file, else the first file in the folder.
-        const remembered = folder?.settings?.systemPromptAgentFile as string | undefined;
-        const canonical = files.find((f) => f.name === 'Boundary_Enforced_Abstract_Identity_Schema.md');
-        const initialFile =
-          (remembered && files.some((f) => f.name === remembered)) ? remembered
-          : canonical ? canonical.name
-          : (files[0]?.name || '');
-        userPickedFileRef.current = false; // hydration, not a user pick
-        setSelectedAgentFile(initialFile);
-
         if (userPickedTypeRef.current && folder) {
           userPickedTypeRef.current = false;
           try { await saveFolderSettings(folderName, { systemPromptAgentType: selectedAgentType }); } catch {}
@@ -618,15 +627,6 @@ export default function SystemPromptUpdater({
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, selectedAgentType]);
-
-  // ── Persist the selected updater agent file (per-folder) on user change ──
-  useEffect(() => {
-    if (!open || !userPickedFileRef.current || !folder || !selectedAgentFile) return;
-    userPickedFileRef.current = false;
-    (async () => {
-      try { await saveFolderSettings(folderName, { systemPromptAgentFile: selectedAgentFile }); } catch {}
-    })();
-  }, [open, selectedAgentFile, folder, folderName, saveFolderSettings]);
 
   // ── Load the archived changelog for display (read-only; never in context) ──
   useEffect(() => {
@@ -900,10 +900,15 @@ export default function SystemPromptUpdater({
   // if the model hits its output cap (no END sentinel yet), we prefill-continue
   // with what we have so far until the sentinel appears or a safety cap is hit.
   const runUpdate = useCallback(async (withConversation: boolean): Promise<string | null> => {
-    if (!activeAgent) {
+    // "Update from Conversation" always runs updater.md; "Reorganize (No
+    // Conversation)" always runs defragmenter.md. There is no shared file
+    // picker anymore — each mode owns its own fixed filename.
+    const agentFilename = withConversation ? AGENT_FILE_UPDATE : AGENT_FILE_REORGANIZE;
+    const agent = getAgentFile(agentFilename);
+    if (!agent) {
       setStatusMessage(
         selectedAgentType
-          ? `No updater agent selected — add/select a .md file under local_data/system_prompt_agents/${selectedAgentType}/.`
+          ? `No "${agentFilename}" found under local_data/system_prompt_agents/${selectedAgentType}/.`
           : 'No agent type selected — pick one from the dropdown.'
       );
       return null;
@@ -1032,7 +1037,7 @@ export default function SystemPromptUpdater({
           ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
           : [{ role: 'user', content: userMsg, timestamp: Date.now() },
              { role: 'assistant', content: accum, timestamp: Date.now() }];
-        const piece = await streamChat(messages, activeAgent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
+        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;        // finished cleanly
         if (!piece.trim()) break;                       // model produced nothing new
@@ -1110,7 +1115,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
+  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
 
   // ── Run the Layers 1-4 redistribution ────────────────────────────────────
   // A third mode, separate from both update paths above. The agent sees the
@@ -1131,10 +1136,11 @@ export default function SystemPromptUpdater({
   //     whole folder is copied to local_data/backups/<entity>/summaries/<time>/
   //     before a single byte is written, in the same request as the writes.
   const runRedistribute = useCallback(async (): Promise<boolean> => {
-    if (!activeAgent) {
+    const agent = getAgentFile(AGENT_FILE_REDISTRIBUTE);
+    if (!agent) {
       setStatusMessage(
         selectedAgentType
-          ? `No updater agent selected — add/select a .md file under local_data/system_prompt_agents/${selectedAgentType}/.`
+          ? `No "${AGENT_FILE_REDISTRIBUTE}" found under local_data/system_prompt_agents/${selectedAgentType}/.`
           : 'No agent type selected — pick one from the dropdown.'
       );
       return false;
@@ -1233,7 +1239,7 @@ export default function SystemPromptUpdater({
           ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
           : [{ role: 'user', content: userMsg, timestamp: Date.now() },
              { role: 'assistant', content: accum, timestamp: Date.now() }];
-        const piece = await streamChat(messages, activeAgent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
+        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;
         if (!piece.trim()) break;
@@ -1355,7 +1361,166 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [activeAgent, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, selectedAgentType, streamChat, summaryIndexBody, title]);
+  }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, selectedAgentType, streamChat, summaryIndexBody, title]);
+
+  // ── Run the genesis (first-time) construction ────────────────────────────
+  // A fourth mode, distinct from all three above: it assumes NO prior Layers
+  // 1-3 exist at all — this is the bootstrap pass genesis_extractor.md is built
+  // for. It is fed the conversation log (and, if present, the current left-pane
+  // text as extra source material — genesis doesn't require an empty left pane,
+  // it just doesn't treat whatever IS there as authoritative) and is told not
+  // to emit a changelog (there is nothing yet to diff against) or Layer 4/5.
+  // Output lands in the right pane, same as every other mode, for review before
+  // "Go to Next Conversation" promotes it.
+  const runGenesis = useCallback(async (): Promise<string | null> => {
+    const agent = getAgentFile(AGENT_FILE_GENESIS);
+    if (!agent) {
+      setStatusMessage(
+        selectedAgentType
+          ? `No "${AGENT_FILE_GENESIS}" found under local_data/system_prompt_agents/${selectedAgentType}/.`
+          : 'No agent type selected — pick one from the dropdown.'
+      );
+      return null;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUpdateStatus({ state: 'called' });
+    setStreamingUpdate(true);
+    setStatusMessage('Constructing Layers 1-3 from scratch (genesis — no prior document assumed)…');
+
+    const focus = focusPoint.trim();
+    const resumeText = resumeFromRight ? rightText.trim() : '';
+    const userMsg = [
+      `[ユーザーからの指示]`,
+      `対象：${baseName}`,
+      `操作モード：初回構築（Genesis）`,
+      `既存のLayer 1〜3は存在しないものとして扱ってください。以下の素材から、Layer 1〜3を初めて構築してください。`,
+      `変更ログは出力しないこと（比較対象となる既存の文書がありません）。Layer 4・Layer 5も出力しないこと。`,
+      ...(focus ? ['', `重要：${focus}`] : []),
+      ``,
+      ...(header.trim() ? [
+        `=== 参考：ヘッダー（最終プロンプトの先頭に自動付与） ===`,
+        `※参照専用。書き換え・出力への含有は禁止。文脈把握のためだけに使うこと。`,
+        header.trim(),
+        ``,
+      ] : []),
+      `=== 素材：会話ログ ===`,
+      conversationLogText || '(なし)',
+      ``,
+      ...(leftText.trim() ? [
+        `=== 参考：既存のプロンプト本文（あれば、追加の材料として） ===`,
+        leftText.trim(),
+        ``,
+      ] : []),
+      ...(resumeText ? [
+        `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
+        `※以下は前回の実行で既に生成された、完成済みの部分です。`,
+        `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
+        resumeText,
+        ``,
+      ] : []),
+      `=== 出力 ===`,
+      ...(resumeText
+        ? [
+            `上記「すでに生成済みの出力」の**続きのみ**を出力してください。`,
+            `最初から全体を書き直さないこと。途中で切れている箇所に自然に接続する形で書き始めてください。`,
+          ]
+        : [
+            `Layer 1〜3を指定フォーマットで出力してください。変更ログ・Layer 4・Layer 5は出力しないこと。`,
+          ]),
+      `すべての出力が完了したら、最後の行に必ず半角で「${END_SENTINEL}」とだけ記述して終了してください。`,
+    ].join('\n');
+
+    let thinkingChars = 0;
+    let outputChars = 0;
+    let liveAccum = resumeText ? resumeText + '\n' : '';
+    const onProgress = (t: number, o: number, chunk?: string) => {
+      thinkingChars += t;
+      outputChars += o;
+      if (chunk) {
+        liveAccum += chunk;
+        setRightText(liveAccum);
+      }
+      setUpdateStatus(outputChars > 0
+        ? { state: 'outputting', thinkingChars, outputChars }
+        : { state: 'thinking', thinkingChars, outputChars });
+    };
+
+    const MAX_CONTINUATIONS = 6;
+    let accum = resumeText ? resumeText + '\n' : '';
+    try {
+      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+        if (controller.signal.aborted) break;
+        const messages = attempt === 0
+          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
+          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
+             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
+        accum += piece;
+        if (accum.includes(END_SENTINEL)) break;
+        if (!piece.trim()) break;
+        if (attempt < MAX_CONTINUATIONS) {
+          setStatusMessage(`Output continued past the token cap — fetching more (continuation ${attempt + 1})…`);
+        }
+      }
+
+      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+        .split(END_SENTINEL).join('')
+        .trim();
+
+      if (!cleaned) {
+        if (controller.signal.aborted) {
+          setUpdateStatus({ state: 'idle' });
+          setStatusMessage('Genesis stopped — no output was produced yet.');
+          return null;
+        }
+        const msg = 'Empty response (refusal, content filter, or output token cap)';
+        setUpdateStatus({ state: 'error', message: msg });
+        setStatusMessage('Genesis returned no text — model may have refused or hit a filter.');
+        return null;
+      }
+
+      // genesis_extractor.md is told not to emit a changelog, so this is
+      // normally a no-op; splitOffChangelog is still run defensively in case
+      // the model produces preamble anyway — it must never end up saved.
+      const { changelog, core } = splitOffChangelog(cleaned);
+      const { layers: layersOut, logs } = splitOffLogs(core);
+      setChangelogText(changelog);
+      setRightText(layersOut);
+      setUpdateLogs(logs);
+      if (changelog) {
+        fetch('/api/changelogs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: folderName, title, content: changelog }),
+        }).catch(() => {});
+      }
+      if (controller.signal.aborted) {
+        setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+        setStatusMessage(`Genesis stopped — kept the partial result (${layersOut.length} chars). Review or re-run.`);
+        return null;
+      }
+      setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+      setStatusMessage(
+        `Layers 1-3 built from scratch (${layersOut.length} chars)` +
+        (logs ? ` · ${logs.length} chars of logs separated` : '') + '.'
+      );
+      return layersOut;
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || controller.signal.aborted) {
+        setUpdateStatus({ state: 'idle' });
+        setStatusMessage('Genesis stopped.');
+        return null;
+      }
+      const msg = e?.message || 'unknown error';
+      setUpdateStatus({ state: 'error', message: msg });
+      setStatusMessage(`Genesis failed: ${msg}`);
+      return null;
+    } finally {
+      setStreamingUpdate(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, folderName, title, resumeFromRight, rightText]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
@@ -1461,27 +1626,38 @@ export default function SystemPromptUpdater({
     }
   }, []);
 
+  // "Update from Conversation" — runs updater.md WITH the conversation log.
   const handleUpdate = useCallback(async () => {
     if (running !== null) return;
     setRunning('update');
     try { await runUpdate(true); } finally { setRunning(null); }
   }, [running, runUpdate]);
 
-  // "Update without conversation" — refine the system prompt itself, with no
-  // conversation log fed to the agent.
+  // "Reorganize (No Conversation)" — runs defragmenter.md on the system prompt
+  // itself, with no conversation log fed to the agent.
   const handleUpdateNoConvo = useCallback(async () => {
     if (running !== null) return;
     setRunning('update');
     try { await runUpdate(false); } finally { setRunning(null); }
   }, [running, runUpdate]);
 
-  // "Redistribute Layers 1-4" — the agent sees Layers 1-5 and no conversation
-  // log, and rewrites Layers 1-3 AND the summary files behind Layer 4.
+  // "Redistribute Layer 4 → 1-3" — runs interlayer_redistributor.md. The agent
+  // sees Layers 1-5 and no conversation log, and rewrites Layers 1-3 AND the
+  // summary files behind Layer 4.
   const handleRedistribute = useCallback(async () => {
     if (running !== null) return;
     setRunning('redistribute');
     try { await runRedistribute(); } finally { setRunning(null); }
   }, [running, runRedistribute]);
+
+  // "Genesis (Build From Scratch)" — runs genesis_extractor.md. Assumes no
+  // prior Layers 1-3 exist; builds them from the conversation log (and left
+  // pane, if any) with no changelog and no Layer 4/5.
+  const handleGenesis = useCallback(async () => {
+    if (running !== null) return;
+    setRunning('genesis');
+    try { await runGenesis(); } finally { setRunning(null); }
+  }, [running, runGenesis]);
 
   const handleWriteSummary = useCallback(async () => {
     if (running !== null) return;
@@ -1647,9 +1823,9 @@ export default function SystemPromptUpdater({
             )}
             <button
               onClick={handleAuto}
-              disabled={busy || !activeAgent}
+              disabled={busy || !updateAgent}
               className="px-3 py-1.5 bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Update Layers 1-3 (single pass) AND write the summary, then review."
+              title="Update from Conversation (single pass, updater.md) AND write the summary, then review."
             >
               {running === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
               Auto (update + summary)
@@ -1729,27 +1905,20 @@ export default function SystemPromptUpdater({
                 Deletion patterns: <span className="font-mono text-foreground">{deletionPatterns.length}</span>
               </span>
             </div>
-            {/* Agent FILE selector — every .md file in the selected type folder. */}
-            <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium">Agent file:</span>
-              <select
-                value={selectedAgentFile}
-                onChange={(e) => { userPickedFileRef.current = true; setSelectedAgentFile(e.target.value); }}
-                disabled={!agents || agents.files.length === 0 || busy}
-                className="px-2 py-1 bg-background border border-border rounded text-sm font-mono outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 max-w-[420px]"
-              >
-                {(!agents || agents.files.length === 0) && <option value="">(no .md agent files found)</option>}
-                {agents?.files.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
-              </select>
-              <span className="text-[10px] text-muted-foreground">
-                Every <span className="font-mono">.md</span> in this folder. Saved per-folder.
-              </span>
-            </div>
+            {/* Each action button below runs its own FIXED filename from this
+                type folder (see AGENT_FILE_* constants) — no per-run picker.
+                This line is just visibility into which of the four canonical
+                files were actually found, so a missing/misnamed file shows up
+                here instead of as a silently-disabled button. */}
             <div className="text-[10px] font-mono text-muted-foreground leading-snug">
-              <span className="text-indigo-500">Selected agent:</span>{' '}
-              {activeAgent
-                ? <span title={activeAgent.systemPrompt.split('\n')[0]}>{activeAgent.systemPrompt.split('\n')[0] || '(empty first line)'}</span>
-                : <span className="text-red-500">none selected / not loaded</span>}
+              <span className="text-indigo-500">Agent files in this folder:</span>{' '}
+              <span className={updateAgent ? '' : 'text-red-500'}>{AGENT_FILE_UPDATE}{updateAgent ? '' : ' (missing)'}</span>
+              {' · '}
+              <span className={reorganizeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REORGANIZE}{reorganizeAgent ? '' : ' (missing)'}</span>
+              {' · '}
+              <span className={redistributeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REDISTRIBUTE}{redistributeAgent ? '' : ' (missing)'}</span>
+              {' · '}
+              <span className={genesisAgent ? '' : 'text-red-500'}>{AGENT_FILE_GENESIS}{genesisAgent ? '' : ' (missing)'}</span>
             </div>
           </div>
 
@@ -1789,31 +1958,40 @@ export default function SystemPromptUpdater({
               <div className="flex items-center gap-1.5">
                 <StatusBadge status={updateStatus} />
                 <button
+                  onClick={handleGenesis}
+                  disabled={busy || !genesisAgent}
+                  className="px-2.5 py-1 text-xs font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={`Runs ${AGENT_FILE_GENESIS}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new identity.`}
+                >
+                  {running === 'genesis' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                  Genesis (Build From Scratch)
+                </button>
+                <button
                   onClick={handleRedistribute}
-                  disabled={busy || !activeAgent}
+                  disabled={busy || !redistributeAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Show the agent Layers 1-5 with NO conversation log, and let it move material between them. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first."
+                  title={`Runs ${AGENT_FILE_REDISTRIBUTE}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first.`}
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
-                  Redistribute Layers 1-4
+                  Redistribute Layer 4 → 1-3
                 </button>
                 <button
                   onClick={handleUpdateNoConvo}
-                  disabled={busy || !activeAgent}
+                  disabled={busy || !reorganizeAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-slate-500/15 text-slate-600 dark:text-slate-300 hover:bg-slate-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Run the updater agent on the system prompt ITSELF, WITHOUT the conversation log (reorganize/clean up the existing layers)"
+                  title={`Runs ${AGENT_FILE_REORGANIZE}. Cleans up/re-files the EXISTING Layers 1-3, WITHOUT a conversation log — no new facts are added, only boundary enforcement and de-duplication.`}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <FileX size={12} />}
-                  Update (no conversation)
+                  Reorganize (No Conversation)
                 </button>
                 <button
                   onClick={handleUpdate}
-                  disabled={busy || !activeAgent}
+                  disabled={busy || !updateAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Run the single updater agent over Layers 1-3 using the conversation log (with continuation if the output is long)"
+                  title={`Runs ${AGENT_FILE_UPDATE}. Reconciles the new conversation log against Layers 1-3 and updates them in one pass (with continuation if the output is long).`}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
-                  Update Layers 1-3
+                  Update from Conversation
                 </button>
               </div>
             </div>

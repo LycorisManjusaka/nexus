@@ -9,11 +9,15 @@ import {
 // GET /api/system-prompt-agents
 //   (no params)      → { types: string[] }  — list of subfolders under
 //                       local_data/system_prompt_agents/
-//   ?type=<name>     → { standard, compression } — both agents from that
-//                       subfolder. Each is { raw, systemPrompt } or null.
+//   ?type=<name>     → { files, summary } — every .md agent file in that
+//                       subfolder, plus the separate summary-writer agent.
+//                       Each file is { name, systemPrompt }.
 //
 // The client first calls without params to populate the agent-type ComboBox,
-// then re-calls with `?type=` whenever the selection changes.
+// then re-calls with `?type=` whenever the selection changes. Each System
+// Prompt Updater action button looks up its own fixed filename out of `files`
+// (updater.md / defragmenter.md / interlayer_redistributor.md /
+// genesis_extractor.md) — there is no per-run file picker on the client.
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -30,8 +34,8 @@ export async function GET(req: Request) {
     ]);
     return NextResponse.json({
       type,
-      // Every .md updater agent in this type subfolder. The client lists them in
-      // a ComboBox and runs whichever one the user selects.
+      // Every .md updater agent in this type subfolder. The client looks up
+      // each of the four canonical filenames by name (see route header).
       files: allFiles.map((f) => ({
         name: f.name,
         systemPrompt: extractAgentSystemPrompt(f.content),
