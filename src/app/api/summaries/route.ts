@@ -5,6 +5,7 @@ import {
   writeSummary,
   listSummaries,
   assembleSummaryIndex,
+  replaceManySummaries,
   summaryKey,
   type SummaryIndexEntry,
 } from '@/lib/summaryStorage';
@@ -98,10 +99,35 @@ export async function GET(req: Request) {
   }
 }
 
-// POST /api/summaries  body={ folder, title, content }
+// POST /api/summaries
+//   body={ folder, title, content }                     → write one summary
+//   body={ action:'replaceMany', folder, entries:[…] }  → snapshot the whole
+//     folder into local_data/backups/<folder>/summaries/<date_time>/, then
+//     write every entry. Used by the updater's "Redistribute Layers 1-4" mode,
+//     which rewrites many summaries from one agent output. Backup + writes are
+//     one request so they can never be half-applied, and titles that are on
+//     disk but missing from `entries` are left alone (a truncated agent run
+//     must not be able to delete a summary).
 export async function POST(req: Request) {
   try {
-    const { folder, title, content } = await req.json();
+    const body = await req.json();
+
+    if (body?.action === 'replaceMany') {
+      const { folder, entries } = body;
+      if (typeof folder !== 'string' || !folder || !Array.isArray(entries)) {
+        return NextResponse.json(
+          { error: 'folder (string) and entries (array) required' },
+          { status: 400 },
+        );
+      }
+      if (entries.length === 0) {
+        return NextResponse.json({ error: 'entries is empty — nothing to write' }, { status: 400 });
+      }
+      const result = await replaceManySummaries(folder, entries);
+      return NextResponse.json({ ok: true, ...result });
+    }
+
+    const { folder, title, content } = body;
     if (typeof folder !== 'string' || typeof title !== 'string' || typeof content !== 'string') {
       return NextResponse.json(
         { error: 'folder (string), title (string), content (string) required' },

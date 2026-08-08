@@ -325,7 +325,10 @@ function resolveOpenAIRoute(family: string, model: string, keys: any): { url: st
   if (f.includes('deepseek')) {
     // deepseek-v3.2 is only served via DashScope (keys.qwen); others go direct.
     if (model === 'deepseek-v3.2') return { url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', headers: bearer(keys.qwen), model, label: 'DeepSeek (DashScope)' };
-    return { url: 'https://api.deepseek.com/v1/chat/completions', headers: bearer(keys.deepseek), model, label: 'DeepSeek' };
+    // api.deepseek.com only accepts 'deepseek-v4-flash' / 'deepseek-v4-pro' —
+    // not date-versioned snapshot ids like the UI alias 'deepseek-v4-flash-0731'.
+    const wireModel = model === 'deepseek-v4-flash-0731' ? 'deepseek-v4-flash' : model;
+    return { url: 'https://api.deepseek.com/v1/chat/completions', headers: bearer(keys.deepseek), model: wireModel, label: 'DeepSeek' };
   }
   if (f.includes('glm')) {
     // `digitalocean/` prefix routes GLM open weights through DigitalOcean

@@ -1840,9 +1840,17 @@ async function runModelSelectorPreflight(args: {
   // configured via the top-level `reasoning_effort` field (only 'max' today). It
   // also fixes temperature/top_p server-side, so those are omitted below.
   const selKimiK3 = isKimi && /k3/i.test(resolveKimiModel(specificModel));
-  if ((isQwen || isDeepSeek) && !isOmni) extra.enable_thinking = false;
+  // `enable_thinking` is a DashScope extension (Qwen, and DeepSeek V3.2 which
+  // is ALSO served via DashScope). DeepSeek's own direct API (api.deepseek.com)
+  // does not recognize this field at all — it silently ignores it and stays
+  // in its default 'thinking: enabled' state. Sending it here is a no-op that
+  // masked a real 400: this selector always forces tool_choice, and DeepSeek's
+  // direct endpoint rejects a forced tool_choice while thinking is enabled
+  // ("Thinking mode does not support this tool_choice"). Direct DeepSeek must
+  // use the same object shape as GLM/Kimi below instead.
+  if ((isQwen || (isDeepSeek && !useDeepSeekDirect)) && !isOmni) extra.enable_thinking = false;
   if (useDigitalOcean) extra.reasoning_effort = 'none';
-  else if (isGLM || (isKimi && !selKimiK3)) extra.thinking = { type: 'disabled' };
+  else if (isGLM || (isKimi && !selKimiK3) || useDeepSeekDirect) extra.thinking = { type: 'disabled' };
   if (selKimiK3) extra.reasoning_effort = 'max';
   if (isCohere) extra.reasoning_effort = 'none';
   // OpenAI GPT-5 family: DO NOT set `reasoning_effort` here. This selector always
@@ -1853,22 +1861,33 @@ async function runModelSelectorPreflight(args: {
   // Grok / MiniMax / Local: no toggle exists. Grok's reasoning is set by
   // model-suffix; MiniMax always reasons; LM Studio runs the loaded weights.
 
+  let selectorModel = isKimi ? resolveKimiModel(specificModel)
+    // DigitalOcean wants the bare model id; the prefix is NEXUS routing only.
+    : useDigitalOcean ? (specificModel || '').slice('digitalocean/'.length)
+    : (specificModel || (
+    isGLM      ? 'glm-4.7' :
+    isGrok     ? 'grok-4.5' :
+    isCohere   ? 'command-a-plus-05-2026' :
+    isMinimax  ? 'MiniMax-M3' :
+    isDeepSeek ? 'deepseek-v4-flash' :
+    isQwen     ? 'qwen3.6-plus' :
+    isOpenAI   ? 'gpt-5.6-terra' :
+    isMimo     ? 'mimo-v2.5' :
+    isBytedance ? 'seed-2-0-pro-260328' :
+                 'local-model'
+  ));
+  // api.deepseek.com only accepts 'deepseek-v4-flash' / 'deepseek-v4-pro' —
+  // not date-versioned snapshot ids like the UI alias 'deepseek-v4-flash-0731'.
+  // Same mapping as the main request-building path (see useDeepSeekDirect
+  // below, ~line 4716) — without it, THIS preflight call 400s, gets caught,
+  // and silently falls back to the user's un-mapped current model, which is
+  // exactly the "picked model isn't even in the allowed list" bug.
+  if (useDeepSeekDirect && selectorModel === 'deepseek-v4-flash-0731') {
+    selectorModel = 'deepseek-v4-flash';
+  }
+
   const body: any = {
-    model: isKimi ? resolveKimiModel(specificModel)
-      // DigitalOcean wants the bare model id; the prefix is NEXUS routing only.
-      : useDigitalOcean ? (specificModel || '').slice('digitalocean/'.length)
-      : (specificModel || (
-      isGLM      ? 'glm-4.7' :
-      isGrok     ? 'grok-4.5' :
-      isCohere   ? 'command-a-plus-05-2026' :
-      isMinimax  ? 'MiniMax-M3' :
-      isDeepSeek ? 'deepseek-v4-flash' :
-      isQwen     ? 'qwen3.6-plus' :
-      isOpenAI   ? 'gpt-5.6-terra' :
-      isMimo     ? 'mimo-v2.5' :
-      isBytedance ? 'seed-2-0-pro-260328' :
-                   'local-model'
-    )),
+    model: selectorModel,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMsg },
@@ -1953,6 +1972,10 @@ export async function POST(req: Request) {
       instructionOverrides = {},
       toolInstruction = '',
       toolImageInstruction = '',
+      // Set by callers whose systemPrompt is an AGENT's instructions rather than
+      // an entity's identity — the System Prompt Updater and the summary writer.
+      // Suppresses the automatic Layer 5 append below. See the comment there.
+      suppressLayer5 = false,
       modelParams = { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' },
       specificModel = 'gemini-3.5-flash',
       dateTimeVisibility = 'none',
@@ -2084,12 +2107,24 @@ export async function POST(req: Request) {
     // edits only the body (FOOTER.md) with its own file tools; the heading is
     // added here at send time and never stored. No FOOTER.md → prompt unchanged.
     // Every changed version is snapshotted server-side (see backupFooterIfChanged).
-    try {
-      const footer = await readEntityFooter(folderName);
-      if (footer && footer.trim()) {
-        systemPrompt = appendLayer5Footer(systemPrompt, footer);
-      }
-    } catch { /* footer is best-effort; never block a turn on it */ }
+    //
+    // NOT for agent runs. This append is unconditional on folderName, so it was
+    // also landing on the System Prompt Updater's and summary writer's calls —
+    // where `systemPrompt` is the AGENT's instructions, not the entity's
+    // identity. The agent's own prompt therefore ended with the target entity's
+    // first-person signature ("I chose the name Cairn…"), which is a strong pull
+    // toward speaking AS the entity instead of following the agent protocol, and
+    // is the likeliest reason a shikigami's own output format got ignored.
+    // Those callers pass `suppressLayer5` and show the footer explicitly, as
+    // clearly-labelled reference material inside the user message instead.
+    if (!suppressLayer5) {
+      try {
+        const footer = await readEntityFooter(folderName);
+        if (footer && footer.trim()) {
+          systemPrompt = appendLayer5Footer(systemPrompt, footer);
+        }
+      } catch { /* footer is best-effort; never block a turn on it */ }
+    }
 
     // Per-Entity path-scope hints baked into the workspace tool descriptions so
     // the model knows whether absolute paths are allowed. Without this, the
@@ -2115,9 +2150,18 @@ export async function POST(req: Request) {
     // model_selected SSE label is accurate even for families (Local, Grok,
     // MiniMax) where modelParams has no per-provider thinking field to read.
     let autoSelectedThinking: boolean | null = null;
+    // Human-readable trace of what Automatic Model Selection actually did this
+    // turn, surfaced to the user via the `notices` channel (never sent to the
+    // model). Every branch below — success, empty list, and failure/fallback —
+    // sets this, so "the model I got isn't what I configured" is always
+    // explainable from the UI instead of requiring a server-log dig.
+    let autoSelectNotice: string | null = null;
     if (autoModelSelectEnabled) {
+      const preAutoLabel = buildModelLabel(aiName, specificModel, false, modelParams);
       const allowed = parseAllowedModels(autoModelSelectAllowedModels);
-      if (allowed.length > 0) {
+      if (allowed.length === 0) {
+        autoSelectNotice = `Automatic Model Selection is ON but no allowed models are configured — running on ${preAutoLabel} unchanged.`;
+      } else {
         try {
           const chosen = await runModelSelectorPreflight({
             aiName,
@@ -2148,10 +2192,18 @@ export async function POST(req: Request) {
             // Gemini 3.x can't fully disable — map "off" to 'minimal'.
             if (fam.includes('gemini')) patch.thinkingLevel = t ? 'medium' : 'minimal';
             modelParams = { ...modelParams, ...patch };
+            autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} → chose ${chosen.label}.`;
+          } else {
+            autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} but returned no valid pick — falling back to ${preAutoLabel} unchanged.`;
           }
         } catch (e) {
-          // Don't surface preflight errors to the user — fall back silently.
+          // Don't block the turn on a preflight error — fall back silently to
+          // chat, but still tell the user it happened (that's the whole point
+          // of this notice: a swallowed exception used to be indistinguishable
+          // from a real pick).
           console.warn('[auto-model-select] preflight failed:', e);
+          const errMsg = e instanceof Error ? e.message : String(e);
+          autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} but failed (${errMsg.slice(0, 200)}) — falling back to ${preAutoLabel} unchanged.`;
         }
       }
     }
@@ -2226,6 +2278,7 @@ export async function POST(req: Request) {
       specificModel,
       thinking: modelThinkingFlag,
       label: modelLabelForSSE,
+      ...(autoSelectNotice ? { autoSelectNotice } : {}),
     };
 
     const formatDate = (ts: number) => {
@@ -5268,15 +5321,25 @@ export async function POST(req: Request) {
         if (localTools.length) requestBody.tools = [...localTools];
         // DashScope thinking toggle via `enable_thinking` (extra top-level field).
         //   - Qwen 3.x: hybrid, on/off toggle
-        //   - DeepSeek V3.2: also hybrid, same flag, same semantics
+        //   - DeepSeek V3.2: also hybrid, same flag, same semantics (served via
+        //     DashScope, NOT api.deepseek.com — see useDeepSeekDirect below)
         // Local LM Studio models ignore it (no harm).
         //
         // EXCEPTION — Qwen Omni (qwen3.5-omni-flash / -plus): DashScope rejects
         // `enable_thinking` for these with a misleading "thinking_budget must be
         // a positive integer and not greater than 0" 400. Omni models have
         // built-in reasoning that's not user-toggleable, so simply skip the flag.
+        //
+        // DeepSeek's DIRECT API (api.deepseek.com, useDeepSeekDirect) does not
+        // recognize `enable_thinking` at all — it's a DashScope-only field and
+        // is silently dropped there, leaving the model at its default
+        // `thinking: enabled`. That means the Thinking-Mode toggle has had NO
+        // effect on direct DeepSeek turns; every turn ran with thinking on
+        // regardless of the UI setting. Fixed below by giving useDeepSeekDirect
+        // the same object-shaped `thinking` field as GLM/Kimi, which is the
+        // format DeepSeek's own API docs actually document.
         const isOmniModel = (specificModel || '').toLowerCase().includes('omni');
-        if ((isQwen || isDeepSeek) && !isOmniModel) {
+        if ((isQwen || (isDeepSeek && !useDeepSeekDirect)) && !isOmniModel) {
           requestBody.enable_thinking = modelParams.qwenEnableThinking !== false;
         }
         // NOTE: Local LM Studio / llama.cpp models intentionally get NO thinking
@@ -5308,7 +5371,10 @@ export async function POST(req: Request) {
           // native `thinking: { type }` object, which Z.AI's own endpoint uses.
           // Map the shared Thinking-Mode toggle onto the two ends.
           requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'none';
-        } else if (isGLM || isKimi) {
+        } else if (isGLM || isKimi || useDeepSeekDirect) {
+          // DeepSeek's direct API uses this exact same `{ type: 'enabled' |
+          // 'disabled' }` shape (confirmed against api-docs.deepseek.com) —
+          // NOT the DashScope `enable_thinking` boolean handled above.
           requestBody.thinking = {
             type: modelParams.qwenEnableThinking !== false ? 'enabled' : 'disabled',
           };

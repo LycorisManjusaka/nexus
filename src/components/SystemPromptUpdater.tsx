@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX } from 'lucide-react';
+import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle } from 'lucide-react';
 import { diff_match_patch, DIFF_DELETE, DIFF_INSERT } from 'diff-match-patch';
 import { DEFAULT_SUMMARY_INDEX_HINT } from '@/lib/summaryHint';
 
@@ -206,6 +206,75 @@ function splitOffChangelog(text: string): { changelog: string; core: string } {
   return { changelog: text.slice(0, m.index).trim(), core: text.slice(m.index) };
 }
 
+// ── Layer 4 split + entry parsing (redistribute mode only) ──────────────────
+// The normal update forbids Layer 4 in the output entirely. The redistribute
+// mode ASKS for it, because Layer 4 is where the episodic memory lives and
+// moving material between the layers is the whole point of that pass. What
+// comes back has to be routed to a different place than the rest: Layers 1-3
+// go into the prompt file, Layer 4 goes into the individual summary files
+// under local_data/summaries/<entity>/.
+//
+// Split at the Layer 4 heading — everything before it is Layers 1-3, and the
+// body after it holds the per-conversation entries. Tolerant of `##`/`###`, an
+// optional `**`, and whatever the agent writes after "Layer 4" on that line.
+const LAYER4_HEADER_RE = /^#{2,3}\s*\*{0,2}\s*Layer\s*4\b[^\n]*$/im;
+// Any layer heading — used to stop the Layer 4 body at a Layer 5 the agent was
+// told not to write but wrote anyway. Without this, that heading and its body
+// would be appended to the LAST summary and written into that entity's summary
+// file, which is the quietest possible way to corrupt one.
+const ANY_LAYER_HEADER_RE = /^#{2,3}\s*\*{0,2}\s*Layer\s*\d+\b/im;
+function splitOffLayer4(text: string): { before: string; layer4: string; after: string } {
+  const m = text.match(LAYER4_HEADER_RE);
+  if (!m || m.index === undefined) return { before: text, layer4: '', after: '' };
+  const before = text.slice(0, m.index).replace(/\s+$/, '');
+  // Drop the heading line itself — only its body carries entries.
+  const rest = text.slice(m.index + m[0].length).replace(/^\n/, '');
+  const nxt = rest.match(ANY_LAYER_HEADER_RE);
+  if (!nxt || nxt.index === undefined) return { before, layer4: rest, after: '' };
+  return { before, layer4: rest.slice(0, nxt.index).replace(/\s+$/, ''), after: rest.slice(nxt.index).trim() };
+}
+
+// Each conversation inside Layer 4 is "### <title>" followed by its summary —
+// the exact shape assembleSummaryIndex() emits, so the agent is asked to hand
+// back what it was given. The title is matched against the files on disk, so
+// it has to survive verbatim; only surrounding `**`/`` ` `` decoration is
+// stripped. Entries with no body, and the "(no summary yet)" placeholder, are
+// dropped rather than written — an empty file would erase a real summary.
+const SUMMARY_ENTRY_RE = /^###\s+(.+?)\s*$/gm;
+const EMPTY_SUMMARY_RE = /^_?\(?\s*(?:no summary yet|まだ要約なし|要約なし)\s*\)?_?$/i;
+function parseSummaryEntries(layer4Body: string): Array<{ title: string; content: string }> {
+  const heads: Array<{ title: string; start: number; bodyStart: number }> = [];
+  let m: RegExpExecArray | null;
+  SUMMARY_ENTRY_RE.lastIndex = 0;
+  while ((m = SUMMARY_ENTRY_RE.exec(layer4Body)) !== null) {
+    heads.push({
+      title: m[1].replace(/^[*`\s]+|[*`\s]+$/g, ''),
+      start: m.index,
+      bodyStart: m.index + m[0].length,
+    });
+  }
+  const out: Array<{ title: string; content: string }> = [];
+  for (let i = 0; i < heads.length; i++) {
+    const cur = heads[i];
+    const next = heads[i + 1];
+    const body = layer4Body.slice(cur.bodyStart, next ? next.start : layer4Body.length).trim();
+    if (!cur.title || !body) continue;
+    if (EMPTY_SUMMARY_RE.test(body)) continue;
+    out.push({ title: cur.title, content: body });
+  }
+  return out;
+}
+
+// What the server did with the parsed Layer 4 — shown read-only after a
+// redistribute run so the write is auditable without opening a file manager.
+interface RedistributeReport {
+  backupDir: string | null;
+  backedUp: number;
+  replaced: string[];
+  created: string[];
+  skipped: Array<{ title: string; reason: string }>;
+}
+
 // Continuation sentinel the agent is asked to print at the very end of its
 // output. Its absence after a stream means the output was truncated at the
 // model's token cap → we prefill-continue. Stripped before saving.
@@ -261,7 +330,7 @@ export default function SystemPromptUpdater({
 }: Props) {
   // ── State ────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState<null | 'update' | 'summary' | 'auto'>(null);
+  const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'summary' | 'auto'>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
 
   // The whole identity prompt is now ONE editable block per side (no per-layer
@@ -284,6 +353,9 @@ export default function SystemPromptUpdater({
   // changelog. Shown read-only, archived to local_data/changelogs/<folder>/
   // <title>.md, and NEVER fed into any context window.
   const [changelogText, setChangelogText] = useState('');
+  // Result of the last "Redistribute Layers 1-4" write (backup path + which
+  // summary files were replaced/created/skipped). Null until one has run.
+  const [redistributeReport, setRedistributeReport] = useState<RedistributeReport | null>(null);
   // AbortController for the in-flight agent run (update / summary / auto), so a
   // Stop button can cancel it — same mechanism the conversation Stop uses.
   const abortRef = useRef<AbortController | null>(null);
@@ -431,6 +503,7 @@ export default function SystemPromptUpdater({
         setUpdateStatus({ state: 'idle' });
         setUpdateLogs('');
         setChangelogText('');
+        setRedistributeReport(null);
         lastSavedLeftRef.current = leftRaw;
         lastSavedRightRef.current = nextRaw;
 
@@ -773,6 +846,13 @@ export default function SystemPromptUpdater({
         folderName,
         systemPrompt: sys,
         toolUseEnabled: false,
+        // `sys` here is an AGENT's instruction file, not the entity's identity.
+        // Without this the chat route appends the entity's FOOTER.md to it as
+        // "Layer 5: The Signature (Self-Authored)" — the agent would read the
+        // target's first-person signature as part of its OWN instructions. The
+        // footer is still shown to the agent, explicitly labelled as
+        // reference-only, inside the user message.
+        suppressLayer5: true,
         modelParams: { ...modelParams, claudeThinking: false },
         specificModel: runModel,
         ...(runAuthMode ? { claudeAuthMode: runAuthMode } : {}),
@@ -1032,6 +1112,251 @@ export default function SystemPromptUpdater({
     // silently resume from an out-of-date pane (or not resume at all).
   }, [activeAgent, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
 
+  // ── Run the Layers 1-4 redistribution ────────────────────────────────────
+  // A third mode, separate from both update paths above. The agent sees the
+  // whole identity — header, Layers 1-3, the live Layer 4 index, the entity's
+  // own Layer 5 — and NO conversation log, and is asked to move material
+  // BETWEEN the layers: promote what has settled out of the episodic summaries
+  // into the standing identity, and shorten the summaries it drew from.
+  //
+  // Two things make this different from runUpdate():
+  //
+  //  1) The instruction block is deliberately thin. runUpdate() tells the agent
+  //     three separate times to emit Layers 1-3 only, which is why an agent file
+  //     asking for anything else appeared to be ignored — the user message was
+  //     overriding it. Here the agent file governs; NEXUS only states the output
+  //     contract it has to parse, and what happens to each part afterwards.
+  //
+  //  2) Layer 4 is written back to the summary FILES, not into the prompt. The
+  //     whole folder is copied to local_data/backups/<entity>/summaries/<time>/
+  //     before a single byte is written, in the same request as the writes.
+  const runRedistribute = useCallback(async (): Promise<boolean> => {
+    if (!activeAgent) {
+      setStatusMessage(
+        selectedAgentType
+          ? `No updater agent selected — add/select a .md file under local_data/system_prompt_agents/${selectedAgentType}/.`
+          : 'No agent type selected — pick one from the dropdown.'
+      );
+      return false;
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUpdateStatus({ state: 'called' });
+    setStreamingUpdate(true);
+    setRedistributeReport(null);
+    setStatusMessage('Redistributing Layers 1-4 (no conversation log)…');
+
+    // Fetch the FULL index, without the `current` exclusion the reference copy
+    // uses: this pass rewrites the summary files themselves, so leaving the open
+    // conversation out would make its summary the one file that can never be
+    // touched here.
+    let fullIndex = summaryIndexBody;
+    try {
+      const r = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index`);
+      if (r.ok) fullIndex = (await r.json())?.body || fullIndex;
+    } catch { /* fall back to the reference index */ }
+
+    const focus = focusPoint.trim();
+    const resumeText = resumeFromRight ? rightText.trim() : '';
+    const userMsg = [
+      `[ユーザーからの指示]`,
+      `対象：${baseName}`,
+      `操作モード：階層間情報再配分（会話ログなし）`,
+      ``,
+      `作業内容はあなた自身のプロトコルに従ってください。以下は材料と、NEXUS側の出力仕様です。`,
+      ...(focus ? [``, `重要：${focus}`] : []),
+      ``,
+      ...(header.trim() ? [
+        `=== 参考：ヘッダー（最終プロンプトの先頭に自動付与） ===`,
+        `※参照専用。書き換え・出力への含有は禁止。`,
+        header.trim(),
+        ``,
+      ] : []),
+      `=== 第1〜3層（現行・更新対象） ===`,
+      leftText || '(なし)',
+      ``,
+      `=== 第4層：会話要約インデックス（更新対象） ===`,
+      `※この層は local_data/summaries/${folderName}/ 内の要約ファイル群から自動的に組み立てられています。`,
+      `※あなたが出力した第4層は、会話タイトルごとに元のファイルへ書き戻されます。`,
+      fullIndex || '(まだ要約なし)',
+      ``,
+      ...(entityFooter.trim() ? [
+        `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
+        `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
+        `第1〜4層がここに書かれた自己認識と矛盾しないようにするためだけに読むこと。`,
+        entityFooter.trim(),
+        ``,
+      ] : []),
+      ...(resumeText ? [
+        `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
+        `※以下は前回の実行で既に生成された、完成済みの部分です。`,
+        `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
+        resumeText,
+        ``,
+      ] : []),
+      `=== 出力仕様（NEXUSが機械的に解析します） ===`,
+      ...(resumeText
+        ? [`上記「すでに生成済みの出力」の**続きのみ**を出力してください。最初から書き直さないこと。`, ``]
+        : []),
+      `1. 変更ログ — 最初の「Layer 1」見出しより前に書くこと。プロンプトには保存されず、別途アーカイブされます。`,
+      `2. 第1〜3層 — 「## **Layer 1: …**」形式の見出しから開始すること。`,
+      `3. 第4層 — 見出しは「## **Layer 4: Conversation Summaries**」とすること。`,
+      `   各会話は「### <会話タイトル>」の見出し＋その本文、という形式で出力すること。`,
+      `   会話タイトルは上記「第4層」に現れたものと一字一句同一にすること（ファイル照合に使用します）。`,
+      `   残す会話はすべて出力してください。出力に含まれなかった会話の要約ファイルは変更されません（削除もされません）。`,
+      `   本文が空の見出しは無視されます。要約を空にすることで削除はできません。`,
+      `第5層は出力しないこと。`,
+      `すべての出力が完了したら、最後の行に必ず半角で「${END_SENTINEL}」とだけ記述して終了してください。`,
+    ].join('\n');
+
+    let thinkingChars = 0;
+    let outputChars = 0;
+    let liveAccum = resumeText ? resumeText + '\n' : '';
+    const onProgress = (t: number, o: number, chunk?: string) => {
+      thinkingChars += t;
+      outputChars += o;
+      if (chunk) {
+        liveAccum += chunk;
+        setRightText(liveAccum);
+      }
+      setUpdateStatus(outputChars > 0
+        ? { state: 'outputting', thinkingChars, outputChars }
+        : { state: 'thinking', thinkingChars, outputChars });
+    };
+
+    const MAX_CONTINUATIONS = 6;
+    let accum = resumeText ? resumeText + '\n' : '';
+    try {
+      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+        if (controller.signal.aborted) break;
+        const messages = attempt === 0
+          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
+          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
+             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const piece = await streamChat(messages, activeAgent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
+        accum += piece;
+        if (accum.includes(END_SENTINEL)) break;
+        if (!piece.trim()) break;
+        if (attempt < MAX_CONTINUATIONS) {
+          setStatusMessage(`Output continued past the token cap — fetching more (continuation ${attempt + 1})…`);
+        }
+      }
+
+      const sawSentinel = accum.includes(END_SENTINEL);
+      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+        .split(END_SENTINEL).join('')
+        .trim();
+
+      if (!cleaned) {
+        if (controller.signal.aborted) {
+          setUpdateStatus({ state: 'idle' });
+          setStatusMessage('Redistribute stopped — no output was produced yet.');
+          return false;
+        }
+        const msg = 'Empty response (refusal, content filter, or output token cap)';
+        setUpdateStatus({ state: 'error', message: msg });
+        setStatusMessage('Redistribute returned no text — model may have refused or hit a filter.');
+        return false;
+      }
+
+      // A run that was stopped, or that never printed the completion marker, is
+      // by definition incomplete — writing its Layer 4 back would replace real
+      // summaries with half-written ones. Keep the RAW output in the right pane
+      // (not the split-out Layers 1-3), because that is what "Continue from the
+      // right-side text" hands back to the agent to resume from: splitting here
+      // would silently throw away the partial Layer 4 it needs to continue.
+      if (controller.signal.aborted || !sawSentinel) {
+        setRightText(cleaned);
+        setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+        setStatusMessage(controller.signal.aborted
+          ? `Redistribute stopped — kept the raw partial output (${cleaned.length} chars) in the right pane. NO summary file was written. Tick "Continue from the right-side text" to resume.`
+          : `Output ended without the completion marker — treating it as truncated. Kept the raw output (${cleaned.length} chars); NO summary file was written. Tick "Continue from the right-side text" and re-run.`);
+        return false;
+      }
+
+      // changelog | Layers 1-3 | Layer 4 | trailing logs
+      const { changelog, core } = splitOffChangelog(cleaned);
+      const { before: layers123Raw, layer4, after: pastLayer4 } = splitOffLayer4(core);
+      const { layers: layers123 } = splitOffLogs(layers123Raw);
+      const { layers: layer4Body, logs: layer4Logs } = splitOffLogs(layer4);
+      // Anything past Layer 4 is a layer the agent was told not to write (Layer
+      // 5 is the entity's own). It is kept only in the read-only logs pane so
+      // the user can see it happened — never saved anywhere.
+      const logs = [
+        layer4Logs,
+        pastLayer4 ? `## [Discarded — output past Layer 4 (not saved anywhere)]\n${pastLayer4}` : '',
+      ].filter(Boolean).join('\n\n');
+      const entries = parseSummaryEntries(layer4Body);
+
+      setChangelogText(changelog);
+      setRightText(layers123);
+      setUpdateLogs(logs);
+      if (changelog) {
+        fetch('/api/changelogs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: folderName, title, content: changelog }),
+        }).catch(() => {});
+      }
+
+      if (!layer4) {
+        setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+        setStatusMessage(`Redistribute finished but the output contained no Layer 4 heading — Layers 1-3 are in the right pane, no summary file was written.`);
+        return false;
+      }
+      if (entries.length === 0) {
+        setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+        setStatusMessage('Redistribute finished but no "### <title>" entries were found inside Layer 4 — no summary file was written.');
+        return false;
+      }
+
+      setStatusMessage(`Backing up ${folderName} summaries and writing ${entries.length} entries…`);
+      const res = await fetch('/api/summaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'replaceMany', folder: folderName, entries }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+      const report: RedistributeReport = {
+        backupDir: data.backupDir ?? null,
+        backedUp: data.backedUp ?? 0,
+        replaced: data.replaced ?? [],
+        created: data.created ?? [],
+        skipped: data.skipped ?? [],
+      };
+      setRedistributeReport(report);
+      setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+      setStatusMessage(
+        `Layers 1-3 updated (${layers123.length} chars) · Layer 4: ${report.replaced.length} replaced` +
+        (report.created.length ? `, ${report.created.length} created` : '') +
+        (report.skipped.length ? `, ${report.skipped.length} skipped` : '') +
+        (report.backedUp ? ` · ${report.backedUp} files backed up` : ' · nothing to back up') +
+        (changelog ? ` · changelog saved` : '') + '.'
+      );
+      // The reference index is now stale — refresh it from disk.
+      try {
+        const r = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}`);
+        if (r.ok) setSummaryIndexBody((await r.json())?.body || '');
+      } catch { /* keep previous value */ }
+      return true;
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || controller.signal.aborted) {
+        setUpdateStatus({ state: 'idle' });
+        setStatusMessage('Redistribute stopped.');
+        return false;
+      }
+      const msg = e?.message || 'unknown error';
+      setUpdateStatus({ state: 'error', message: msg });
+      setStatusMessage(`Redistribute failed: ${msg}`);
+      return false;
+    } finally {
+      setStreamingUpdate(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }, [activeAgent, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, selectedAgentType, streamChat, summaryIndexBody, title]);
+
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
     const summaryAgentPrompt =
@@ -1057,6 +1382,21 @@ export default function SystemPromptUpdater({
       `=== アイデンティティ参考（Layer 1-3） ===`,
       identityText || '(なし)',
       ``,
+      // Same reference-only Layer 4/5 blocks runUpdate() shows the identity
+      // agent — so the summary writer knows what the entity already has on
+      // record (past summaries, self-authored footer) and doesn't restate or
+      // contradict it. Never rewritten, never asked for in the output.
+      `=== 参考：自動生成された第4層（会話要約インデックス） ===`,
+      `※これは参照専用です。書き換えたり出力に含めたりしないでください。既存の要約と重複しない、独立した要約を書くための文脈としてのみ利用してください。`,
+      summaryIndexBody || '(まだ要約なし)',
+      ``,
+      ...(entityFooter.trim() ? [
+        `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
+        `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
+        `要約が本人の自己認識と矛盾しないようにするためだけに読むこと。`,
+        entityFooter.trim(),
+        ``,
+      ] : []),
       `=== 会話ログ ===`,
       conversationLogText,
       ``,
@@ -1110,7 +1450,7 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode]);
+  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the
@@ -1134,6 +1474,14 @@ export default function SystemPromptUpdater({
     setRunning('update');
     try { await runUpdate(false); } finally { setRunning(null); }
   }, [running, runUpdate]);
+
+  // "Redistribute Layers 1-4" — the agent sees Layers 1-5 and no conversation
+  // log, and rewrites Layers 1-3 AND the summary files behind Layer 4.
+  const handleRedistribute = useCallback(async () => {
+    if (running !== null) return;
+    setRunning('redistribute');
+    try { await runRedistribute(); } finally { setRunning(null); }
+  }, [running, runRedistribute]);
 
   const handleWriteSummary = useCallback(async () => {
     if (running !== null) return;
@@ -1436,10 +1784,19 @@ export default function SystemPromptUpdater({
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider font-semibold text-indigo-500">Identity</span>
-                <span className="text-sm font-medium">Layers 1-3 (updated together in one pass — Layer 4 is ignored)</span>
+                <span className="text-sm font-medium">Layers 1-3 (one pass — Layer 4 is rewritten only by Redistribute)</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <StatusBadge status={updateStatus} />
+                <button
+                  onClick={handleRedistribute}
+                  disabled={busy || !activeAgent}
+                  className="px-2.5 py-1 text-xs font-medium bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Show the agent Layers 1-5 with NO conversation log, and let it move material between them. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first."
+                >
+                  {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
+                  Redistribute Layers 1-4
+                </button>
                 <button
                   onClick={handleUpdateNoConvo}
                   disabled={busy || !activeAgent}
@@ -1558,6 +1915,37 @@ export default function SystemPromptUpdater({
                   rows={8}
                   className="w-full px-2 py-1.5 bg-blue-500/[0.04] border border-blue-500/30 rounded text-[12px] font-mono outline-none resize-y text-muted-foreground"
                 />
+              </div>
+            )}
+
+            {/* Redistribute result — what was actually written to
+                local_data/summaries/<entity>/, and where the snapshot went.
+                Read-only; shown so a bulk write is auditable without opening a
+                file manager. */}
+            {redistributeReport && (
+              <div className="mt-3 border border-purple-500/30 bg-purple-500/[0.04] rounded p-2">
+                <div className="text-[10px] uppercase tracking-wider text-purple-600 dark:text-purple-300 font-semibold mb-1">
+                  Layer 4 write · summaries/{folderName}/
+                </div>
+                <div className="text-[11px] font-mono leading-relaxed space-y-1">
+                  <div className="text-muted-foreground">
+                    {redistributeReport.backupDir
+                      ? <>Backup: {redistributeReport.backedUp} file(s) → <span className="text-foreground break-all">{redistributeReport.backupDir}</span></>
+                      : <>Backup: nothing to copy (folder was empty).</>}
+                  </div>
+                  {redistributeReport.replaced.length > 0 && (
+                    <div><span className="text-emerald-600 dark:text-emerald-400">Replaced ({redistributeReport.replaced.length}):</span> {redistributeReport.replaced.join(' · ')}</div>
+                  )}
+                  {redistributeReport.created.length > 0 && (
+                    <div><span className="text-amber-600 dark:text-amber-400">Created ({redistributeReport.created.length}) — title had no file, check for a typo:</span> {redistributeReport.created.join(' · ')}</div>
+                  )}
+                  {redistributeReport.skipped.length > 0 && (
+                    <div><span className="text-red-600 dark:text-red-400">Skipped ({redistributeReport.skipped.length}):</span> {redistributeReport.skipped.map((s) => `${s.title || '(untitled)'} — ${s.reason}`).join(' · ')}</div>
+                  )}
+                  {redistributeReport.replaced.length === 0 && redistributeReport.created.length === 0 && (
+                    <div className="text-muted-foreground">No summary file was written.</div>
+                  )}
+                </div>
               </div>
             )}
 

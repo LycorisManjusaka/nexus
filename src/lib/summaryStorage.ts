@@ -20,6 +20,7 @@ import { resolveSummaryHint } from './summaryHint';
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const SUMMARIES_DIR = path.join(DATA_DIR, 'summaries');
+const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 
 // Mirror the folder-name sanitization used elsewhere so the same entity maps
 // to the same directory across features.
@@ -100,6 +101,98 @@ export async function listSummaries(folderName: string): Promise<Record<string, 
       }),
   );
   return out;
+}
+
+// ── Bulk replace, with a snapshot taken first ───────────────────────────────
+// The "Redistribute Layers 1-4" mode rewrites MANY summaries in one go from a
+// single agent output. That is the one operation here that can destroy real
+// work, so it is never done without a full copy of the folder taken first:
+//
+//   local_data/summaries/<entity>/  →  local_data/backups/<entity>/summaries/<YYYY-MM-DD_HH-MM-SS>/
+//
+// Backup and writes happen inside ONE request so they cannot be half-applied,
+// and the backup is a hard precondition — if the copy fails, nothing is
+// written. Files present on disk but absent from the agent output are left
+// untouched: a truncated run must never delete a summary.
+
+function timeStamp(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+}
+
+/**
+ * Copy every file in an entity's summaries folder into a timestamped backup
+ * directory. Returns the absolute backup path and how many files were copied.
+ * An entity with no summaries yet yields `{ dir: null, files: 0 }` — nothing to
+ * protect, so no empty directory is created.
+ */
+export async function backupSummaries(folderName: string): Promise<{ dir: string | null; files: number }> {
+  const src = summaryDir(folderName);
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(src);
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return { dir: null, files: 0 };
+    throw e;
+  }
+  // Skip dotfiles (including our own .tmp-* write scratch files).
+  const files: string[] = [];
+  for (const n of names) {
+    if (n.startsWith('.')) continue;
+    const st = await fs.stat(path.join(src, n)).catch(() => null);
+    if (st?.isFile()) files.push(n);
+  }
+  if (files.length === 0) return { dir: null, files: 0 };
+
+  const dest = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), 'summaries', timeStamp());
+  await fs.mkdir(dest, { recursive: true });
+  for (const n of files) {
+    await fs.copyFile(path.join(src, n), path.join(dest, n));
+  }
+  return { dir: dest, files: files.length };
+}
+
+export interface SummaryReplacement { title: string; content: string; }
+export interface ReplaceManyResult {
+  backupDir: string | null;
+  backedUp: number;
+  replaced: string[];
+  created: string[];
+  skipped: Array<{ title: string; reason: string }>;
+}
+
+/**
+ * Back up the folder, then write every supplied entry. Entries whose file
+ * already exists are reported as `replaced`; the rest as `created` (a title the
+ * agent invented, or a conversation renamed since — surfaced so the user can
+ * see it rather than silently accumulating).
+ */
+export async function replaceManySummaries(
+  folderName: string,
+  entries: SummaryReplacement[],
+): Promise<ReplaceManyResult> {
+  const backup = await backupSummaries(folderName);
+  const existing = await listSummaries(folderName);
+
+  const replaced: string[] = [];
+  const created: string[] = [];
+  const skipped: Array<{ title: string; reason: string }> = [];
+  const seen = new Set<string>();
+
+  for (const e of entries) {
+    const title = String(e?.title || '').trim();
+    const content = String(e?.content ?? '').trim();
+    const key = summaryKey(title);
+    if (!key) { skipped.push({ title, reason: 'empty title' }); continue; }
+    if (!content) { skipped.push({ title, reason: 'empty body' }); continue; }
+    if (seen.has(key)) { skipped.push({ title, reason: 'duplicate title in output' }); continue; }
+    seen.add(key);
+    await writeSummary(folderName, title, content + '\n');
+    if (Object.prototype.hasOwnProperty.call(existing, key)) replaced.push(title);
+    else created.push(title);
+  }
+
+  return { backupDir: backup.dir, backedUp: backup.files, replaced, created, skipped };
 }
 
 // ── Layer-4 index assembly ──────────────────────────────────────────────────

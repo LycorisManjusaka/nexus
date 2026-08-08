@@ -1914,6 +1914,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 setLiveModel(chosenModelSpecific);
                 chosenModelThinking = !!data.thinking;
                 chosenModelLabel = data.label || '';
+                // Automatic Model Selection trace ("selector ran on X, chose
+                // Y" / fell back / no allowed models configured). Piggybacks
+                // on this same event so it's visible before any tool activity.
+                if (typeof data.autoSelectNotice === 'string' && data.autoSelectNotice.trim()) {
+                  notices.push(data.autoSelectNotice.trim());
+                }
               } else if (data.type === 'cache_usage') {
                 cacheUsage = {
                   cachedInputTokens: Number(data.cachedInputTokens || 0),
