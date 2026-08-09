@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import pathModule from 'path';
 import { promises as fsp } from 'fs';
-import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter } from '@/lib/fsStorage';
+import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable } from '@/lib/modelVision';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
@@ -1016,6 +1016,15 @@ async function streamClaudeViaAgentSDK(args: {
         let sandboxRoot: string;
         try { sandboxRoot = await fsp.realpath(workspaceDir); }
         catch { sandboxRoot = pathModule.resolve(workspaceDir); }
+        // A workspace can contain a second, nested junction (e.g.
+        // common_workspace → C:\dev\common\common_workspace) whose real
+        // target is a SIBLING of local_data's real target, not a descendant
+        // of sandboxRoot. getTrustedJunctionRoot() (shared with the
+        // API-key path in fsStorage.ts) resolves to local_data's real
+        // parent directory, which both junctions live under — accepted as
+        // an additional valid prefix below so deployment-configured
+        // junctions aren't mistaken for an escape.
+        const trustedJunctionRoot = await getTrustedJunctionRoot();
         // Realpath-aware containment test. For a path that doesn't exist yet
         // (a Write to a new file), walk up to the deepest existing ancestor,
         // realpath THAT, then re-attach the missing tail — identical strategy
@@ -1042,7 +1051,9 @@ async function streamClaudeViaAgentSDK(args: {
             }
           }
           if (!real) real = abs;
-          return real === sandboxRoot || real.startsWith(sandboxRoot + pathModule.sep);
+          if (real === sandboxRoot || real.startsWith(sandboxRoot + pathModule.sep)) return true;
+          if (trustedJunctionRoot && (real === trustedJunctionRoot || real.startsWith(trustedJunctionRoot + pathModule.sep))) return true;
+          return false;
         };
         const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
           // Mid-turn partner interjection (OAuth path). canUseTool fires before

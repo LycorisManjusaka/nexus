@@ -163,6 +163,44 @@ function resolveWorkspacePath(folderName: string, relPath: string): string | nul
   return target;
 }
 
+// local_data itself is commonly a junction/symlink (deployment sync setups
+// point it at a shared folder, e.g. C:\dev\common\local_data). A workspace
+// can also contain a SECOND junction nested inside it (e.g.
+// agent_workspaces/<Entity>/common_workspace → C:\dev\common\common_workspace)
+// so multiple entities/machines can share one folder. That second junction's
+// real target is a SIBLING of local_data's real target, not a descendant of
+// it — so a plain realpath-prefix check against the workspace root rejects it
+// as an "escape" even though it's deployment infrastructure the user set up,
+// not something an entity created (workspace tools never call fs.symlink;
+// only Bash, gated behind the separate per-entity dangerous-tools toggle,
+// could plant a junction). getTrustedJunctionRoot() computes the shared
+// parent directory that local_data's own real target lives under
+// (C:\dev\common in the example above) and both containment checks below
+// accept it as an additional valid prefix, alongside the workspace's own
+// root. This does not widen trust to the whole filesystem the way
+// fullAccess does — only to the specific sync-parent folder the deployment
+// already implicitly trusts via the local_data junction itself.
+let trustedJunctionRootPromise: Promise<string | null> | null = null;
+export async function getTrustedJunctionRoot(): Promise<string | null> {
+  if (!trustedJunctionRootPromise) {
+    trustedJunctionRootPromise = (async () => {
+      try {
+        const realDataDir = await fs.realpath(DATA_DIR);
+        return path.dirname(realDataDir);
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return trustedJunctionRootPromise;
+}
+
+function isWithinTrustedRoots(real: string, realRoot: string, trustedRoot: string | null): boolean {
+  if (real === realRoot || real.startsWith(realRoot + path.sep)) return true;
+  if (trustedRoot && (real === trustedRoot || real.startsWith(trustedRoot + path.sep))) return true;
+  return false;
+}
+
 // Symlink-safe variant. Resolves both the target and the sandbox root via
 // fs.realpath so a symlink planted inside the sandbox that points outside
 // (e.g. <workspace>/escape → C:\Windows) is caught: realpath surfaces the
@@ -174,6 +212,7 @@ async function resolveWorkspacePathSafe(folderName: string, relPath: string): Pr
   const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
   try {
     const realRoot = await fs.realpath(root);
+    const trustedRoot = await getTrustedJunctionRoot();
     let realTarget: string;
     try {
       // Target exists — realpath the file/dir itself.
@@ -190,7 +229,7 @@ async function resolveWorkspacePathSafe(folderName: string, relPath: string): Pr
         try {
           const realDir = await fs.realpath(dir);
           realTarget = path.join(realDir, tail);
-          if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) return null;
+          if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) return null;
           return realTarget;
         } catch {
           // dir doesn't exist either — go one level up.
@@ -202,7 +241,7 @@ async function resolveWorkspacePathSafe(folderName: string, relPath: string): Pr
       }
       return null;
     }
-    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) return null;
+    if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) return null;
     return realTarget;
   } catch {
     return null;
