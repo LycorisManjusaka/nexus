@@ -4196,11 +4196,17 @@ export async function POST(req: Request) {
         // candidatesTokenCount, cachedContentTokenCount); we keep the latest
         // for the final cache_usage emission.
         let lastUsageMetadata: any = null;
+        // Input-side block report. Gemini puts refusals that happen BEFORE
+        // generation here (`blockReason`), where no candidate is produced at
+        // all — so `finishReason` stays null and the turn looks like a plain
+        // silent stop. Nothing read this until now.
+        let promptFeedback: any = null;
         // Grounding citations from Google Search. Each grounding chunk carries
         // a `web: { uri, title }` for a page the model actually consulted.
         const geminiSourceMap = new Map<string, { url: string; title?: string }>();
         for await (const chunk of stream) {
           if ((chunk as any).usageMetadata) lastUsageMetadata = (chunk as any).usageMetadata;
+          if ((chunk as any).promptFeedback?.blockReason) promptFeedback = (chunk as any).promptFeedback;
           const gm = (chunk as any).candidates?.[0]?.groundingMetadata;
           if (gm?.groundingChunks && Array.isArray(gm.groundingChunks)) {
             for (const gc of gm.groundingChunks) {
@@ -4252,7 +4258,7 @@ export async function POST(req: Request) {
           }
           if (cand?.finishReason) finishReason = cand.finishReason;
         }
-        console.log(`[gemini] ${geminiModelId} chunks=${chunkCount} visible=${visibleText.length}c thought=${thoughtText.length}c finish=${finishReason} fnCalls=${functionCalls.length} parts=${rawModelParts.length}`);
+        console.log(`[gemini] ${geminiModelId} chunks=${chunkCount} visible=${visibleText.length}c thought=${thoughtText.length}c finish=${finishReason} fnCalls=${functionCalls.length} parts=${rawModelParts.length}${promptFeedback?.blockReason ? ` blockReason=${promptFeedback.blockReason}` : ''}`);
         if (visibleText.length > 0) {
           console.log(`[gemini]   visible[0..120]: ${JSON.stringify(visibleText.slice(0, 120))}`);
         }
@@ -4261,7 +4267,7 @@ export async function POST(req: Request) {
           console.log('[gemini]   EMPTY TURN — raw part shapes:', rawModelParts.map((p: any) => Object.keys(p)).slice(0, 10));
           console.log('[gemini]   first part sample:', JSON.stringify(rawModelParts[0]).slice(0, 400));
         }
-        return { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata: lastUsageMetadata, webSources: [...geminiSourceMap.values()] };
+        return { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata: lastUsageMetadata, webSources: [...geminiSourceMap.values()], promptFeedback };
       };
 
       const readableStream = new ReadableStream({
@@ -4282,6 +4288,15 @@ export async function POST(req: Request) {
             let toolIterations = 0;
             let totalVisibleEmitted = 0;
             let lastFinishReason: string | null = null;
+            // Per-iteration state for the end-of-turn diagnostic. `totalVisible`
+            // alone is not enough: a turn that says something, calls a tool, and
+            // then dies silently has totalVisible > 0 and used to end with no
+            // explanation at all. What matters is whether the LAST iteration
+            // produced anything.
+            let lastVisibleLen = 0;
+            let lastThoughtOnly = false;
+            let lastBlockReason: string | null = null;
+            let lastPartCount = 0;
             // Accumulated raw model parts from prior continuations. When we
             // continue, we replace the trailing prefill model turn with one
             // containing every part the model has emitted so far (text,
@@ -4301,7 +4316,7 @@ export async function POST(req: Request) {
                 toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
                 break;
               }
-              const { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata, webSources } = await runGeminiOnce(contents, controller);
+              const { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata, webSources, promptFeedback } = await runGeminiOnce(contents, controller);
               for (const s of (webSources || [])) {
                 if (!cumGeminiSourceMap.has(s.url)) cumGeminiSourceMap.set(s.url, s);
               }
@@ -4312,6 +4327,11 @@ export async function POST(req: Request) {
               }
               totalVisibleEmitted += visibleText.length;
               lastFinishReason = finishReason;
+              lastVisibleLen = visibleText.length;
+              lastPartCount = rawModelParts.length;
+              lastBlockReason = promptFeedback?.blockReason ? String(promptFeedback.blockReason) : null;
+              // Thought parts arrived but nothing addressed to the user.
+              lastThoughtOnly = visibleText.length === 0 && functionCalls.length === 0 && rawModelParts.length > 0;
 
               // 1) Function calls → execute, append model+user turns, loop
               if (functionCalls.length > 0) {
@@ -4601,14 +4621,45 @@ export async function POST(req: Request) {
             // when the thinking budget consumed all output tokens) or was
             // refused/blocked. Surface it instead of leaving the user with
             // a silent empty bubble.
-            if (totalVisibleEmitted === 0) {
-              console.warn(`[gemini] empty visible response — finishReason=${lastFinishReason}, toolIterations=${toolIterations}`);
-              enqueue({
-                type: 'text',
-                content: `[empty response — finishReason=${lastFinishReason || 'unknown'}. The model produced no visible text. ` +
-                         `Possible causes: thinking budget consumed all output tokens, safety filter, or the model couldn't decide how to answer the tool result. ` +
-                         `Try disabling extended thinking, increasing context limit, or rewording the prompt.]`,
-              });
+            if (totalVisibleEmitted === 0 || lastVisibleLen === 0) {
+              const fin = String(lastFinishReason || '').toUpperCase();
+              // Name the reason Gemini gave. These are the documented
+              // finishReason values; anything unrecognised falls through with
+              // the raw string so we never hide it behind a guess.
+              const REASONS: Record<string, string> = {
+                STOP: 'the model ended its turn normally — it simply had nothing more to say after the tool result',
+                MAX_TOKENS: 'output token limit reached (with thinking on, the thinking budget can consume the whole allowance before any answer is written)',
+                SAFETY: 'blocked by a safety filter on the generated output',
+                RECITATION: 'blocked as recitation — the answer reproduced too much source text verbatim. Large verbatim tool results (search snippets, file contents) are the usual trigger',
+                LANGUAGE: 'blocked: unsupported language',
+                BLOCKLIST: 'blocked by a term blocklist',
+                PROHIBITED_CONTENT: 'blocked as prohibited content',
+                SPII: 'blocked as sensitive personal information',
+                MALFORMED_FUNCTION_CALL: 'the model tried to emit a tool call that did not parse — the call is discarded and the turn ends with nothing',
+                UNEXPECTED_TOOL_CALL: 'the model called a tool that was not offered',
+                IMAGE_SAFETY: 'blocked by an image safety filter',
+                OTHER: 'unspecified — Gemini gives no reason under this code',
+              };
+              const named = REASONS[fin];
+              const parts: string[] = [];
+              parts.push(`finishReason=${lastFinishReason || 'null (no candidate returned)'}`);
+              if (lastBlockReason) parts.push(`blockReason=${lastBlockReason} (the INPUT was blocked, not the output)`);
+              parts.push(`toolIterations=${toolIterations}`, `parts=${lastPartCount}`);
+              if (lastThoughtOnly) parts.push('the model emitted thinking parts only, no answer');
+              const diag = `${named ? named + '. ' : ''}[${parts.join(', ')}]`;
+
+              if (totalVisibleEmitted === 0) {
+                console.warn(`[gemini] empty visible response — ${diag}`);
+                enqueue({ type: 'text', content: `[empty response — ${diag}]` });
+              } else {
+                // There IS real text to keep; the turn just died after the last
+                // tool call. Use a notice so the saved message is not polluted.
+                console.warn(`[gemini] stopped after tool call with no closing answer — ${diag}`);
+                enqueue({
+                  type: 'notice',
+                  content: `Stopped after the last tool call without writing an answer — ${diag}`,
+                });
+              }
             }
             if (toolStopNotice) {
               console.warn(`[gemini] ${toolStopNotice}`);
