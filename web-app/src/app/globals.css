@@ -1,6 +1,13 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Tailwind v4 scans the whole project for class names by default.  That follows
+   POSIX symlinks and Turbopack panics when one points outside the project root
+   (nexus-cairn's local_data -> /c/dev/common/local_data).  Explicit @source
+   keeps the scanner inside src/ and the public/ directory. */
+@source "../**/*.{ts,tsx,js,jsx,mdx}";
+@source "../../public/**/*.{html,svg}";
+
 @theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
