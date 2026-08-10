@@ -100,7 +100,7 @@ export async function readConversationByName(
   // Skip pure-system bookkeeping; strip base64; guard against inline thoughts.
   const lines: string[] = [];
   for (const m of full.messages) {
-    const speaker = m.role === 'user' ? (m.name || 'User') : (m.name || folderName || 'Assistant');
+    const speaker = m.role === 'user' ? (m.name || 'Anonymous') : (m.name || folderName || 'Assistant');
     const text = cleanContent(m.content || '').trim();
     const atts = Array.isArray(m.attachments) && m.attachments.length > 0
       ? ` [${m.attachments.length} attachment(s)]`

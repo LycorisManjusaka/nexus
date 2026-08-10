@@ -501,11 +501,11 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     if (!text.trim() && attachments.length === 0) return;
     let finalText = text;
     const trimmedName = userName.trim();
-    // Skip the prefix when the name is empty OR the literal fallback "User" —
-    // anonymous/default messages don't need a meaningless tag burning tokens.
-    // In VRChat mode the text is already a "[Name] ..." transcript, so don't
-    // wrap it in another [userName] tag.
-    if (!vrchatMode && trimmedName !== '' && trimmedName !== 'User') {
+    // Skip the prefix when the name is empty OR the literal fallback
+    // "Anonymous" (or legacy "User") — anonymous/default messages don't need
+    // a meaningless tag burning tokens. In VRChat mode the text is already a
+    // "[Name] ..." transcript, so don't wrap it in another [userName] tag.
+    if (!vrchatMode && trimmedName !== '' && trimmedName !== 'User' && trimmedName !== 'Anonymous') {
       finalText = `[${trimmedName}]\n${text}`.trim();
     }
     onSend(finalText, attachments);

@@ -238,11 +238,22 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   browserScreenshotFullPageParam:
     'True to capture the whole scrollable page, false or omitted for just the visible part.',
 
+  // ── Audio Session (was "VRChat mode") — factual notice ────────────────────
+  // A short, FIXED-BY-DEFAULT statement of what the mode actually does
+  // (mechanism, not instruction), composed ahead of the per-Entity
+  // `vrchatRule` behavioral text at every composition site. Still overridable
+  // per Entity like everything else in this file — "customizable" here means
+  // an operator can edit or replace it, not that it ships blank.
+  audioSessionNotice:
+    '[Audio Session is active: everything you write is automatically read aloud through text-to-speech, ' +
+    'and your partner may be speaking to you through voice recognition instead of typing. This only changes ' +
+    'how the words travel between you — it does not change who you are.]',
+
   // Universal web tools (OpenAI-compatible providers).
   webSearchDesc:
     'Search the live web for up-to-date information. Returns a numbered list of results (title, URL, snippet). Use this to discover relevant pages, then call web_fetch to read the full content of the most promising URL. Always cite the URLs you used.',
   webFetchDesc:
-    'Open ONE specific URL and return its readable text content (HTML stripped). Use this to actually read a page — either a URL the user gave you, or one returned by web_search. Only http/https public URLs; internal/localhost addresses are blocked.',
+    'Open ONE specific URL and return its readable text content (HTML stripped). Use this to actually read a page — either a URL your partner gave you, or one returned by web_search. Only http/https public URLs; internal/localhost addresses are blocked.',
 };
 
 // Human-readable labels for the settings editor (key → short label). Keys not
@@ -291,6 +302,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'browserScreenshotFullPageParam', label: 'Tool: browser_screenshot — "full_page" parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
+  { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-Entity rule)' },
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },
   { key: 'injectionRetryNote', label: 'Interjection: OAuth retry note' },
 ];

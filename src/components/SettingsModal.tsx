@@ -247,7 +247,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   <div><strong>Billing:</strong> Uses your Pro/Max subscription credit, NOT pay-per-token API. Pro = $20/mo credit, Max 5x = $100, Max 20x = $200.</div>
                   <div><strong>How it works:</strong> NEXUS uses the Claude Agent SDK, which spawns the official Claude Code binary under the hood. Conversations use Anthropic-side session resume to preserve role semantics.</div>
                   <div><strong>Risk:</strong> Account ban is possible (gray-zone use of OAuth tokens). Probability low for solo use; not zero.</div>
-                  <div><strong>Workspace tools (when Tool Use is ON):</strong> Claude Code's <code>Read</code> / <code>Write</code> / <code>Edit</code> / <code>Glob</code> / <code>Grep</code> are sandboxed to <code className="font-mono">local_data/agent_workspaces/&lt;folder&gt;/</code>. Shell/network/subagent tools always disabled.</div>
+                  <div><strong>Workspace tools (when Tool Use is ON):</strong> Claude Code's <code>Read</code> / <code>Write</code> / <code>Edit</code> / <code>Glob</code> / <code>Grep</code> are sandboxed to <code className="font-mono">local_data/workspaces/&lt;folder&gt;/</code>. Shell/network/subagent tools always disabled.</div>
                   <div><strong>Other limitations:</strong> creativity-control disabled; extended thinking uses adaptive mode by default.</div>
                 </div>
               </div>

@@ -523,7 +523,7 @@ async function streamClaudeViaAgentSDK(args: {
     return (
       '<conversation_history>\n' +
       'This is the full prior conversation, provided for your context — it is exactly ' +
-      'what the user currently sees. Continue naturally from it; this is NOT the first ' +
+      'what your partner currently sees. Continue naturally from it; this is NOT the first ' +
       'message. Each turn is labelled with its speaker: your own turns are marked ' +
       `[ASSISTANT] and carry your name ([${entityName}]); everyone else appears under ` +
       '[USER] with their name in brackets. Lines marked "(thinking)" are your own ' +
@@ -727,14 +727,14 @@ async function streamClaudeViaAgentSDK(args: {
             const askQuestionSchema = z.object({
               question: z.string().describe('The full question text. End with a question mark.'),
               header: z.string().optional().describe('Very short label/chip for the question (max ~12 chars).'),
-              multiSelect: z.boolean().optional().describe('Set true to let the user pick multiple options.'),
+              multiSelect: z.boolean().optional().describe('Set true to let your partner pick multiple options.'),
               options: z.array(askOptionSchema).describe('2 to 4 distinct, mutually-exclusive choices.'),
             });
             nexusTools.push(
               sdk.tool(
                 'AskQuestion',
                 I.askUserDesc,
-                { questions: z.array(askQuestionSchema).describe('Between 1 and 4 questions to ask the user.') },
+                { questions: z.array(askQuestionSchema).describe('Between 1 and 4 questions to ask your partner.') },
                 async (a: { questions: any[] }) => {
                   const questions = normalizeQuestions(a);
                   if (questions.length === 0) {
@@ -1972,7 +1972,7 @@ export async function POST(req: Request) {
       toolUseEnabled = false,
       // ── Per-Entity agent capability toggles (apply to ALL providers) ──────
       // agentFullSystemAccess: file tools reach the whole PC (absolute paths),
-      //   instead of being sandboxed to agent_workspaces/<Entity>/.
+      //   instead of being sandboxed to workspaces/<Entity>/.
       // agentDangerousTools: enables the Delete tool everywhere, and (OAuth
       //   path only) the Bash/shell family.
       agentFullSystemAccess = false,
@@ -2964,7 +2964,7 @@ export async function POST(req: Request) {
       if (toolUseEnabled) {
         // Tool names mirror Claude Code's built-in workspace tools so the
         // same prompt instructions work in both API-key and OAuth modes.
-        // All five operate on `local_data/agent_workspaces/<folderName>/`
+        // All five operate on `local_data/workspaces/<folderName>/`
         // and refuse paths escaping it (symlink-checked).
         claudeTools.push({
           name: 'Read',
@@ -3056,13 +3056,13 @@ export async function POST(req: Request) {
             properties: {
               questions: {
                 type: 'array',
-                description: 'Between 1 and 4 questions to ask the user.',
+                description: 'Between 1 and 4 questions to ask your partner.',
                 items: {
                   type: 'object',
                   properties: {
                     question: { type: 'string', description: 'The full question text. End with a question mark.' },
                     header: { type: 'string', description: 'Very short label/chip for the question (max ~12 chars).' },
-                    multiSelect: { type: 'boolean', description: 'Set true to let the user pick multiple options.' },
+                    multiSelect: { type: 'boolean', description: 'Set true to let your partner pick multiple options.' },
                     options: {
                       type: 'array',
                       description: '2 to 4 distinct, mutually-exclusive choices.',
@@ -4017,13 +4017,13 @@ export async function POST(req: Request) {
                 properties: {
                   questions: {
                     type: 'ARRAY',
-                    description: 'Between 1 and 4 questions to ask the user.',
+                    description: 'Between 1 and 4 questions to ask your partner.',
                     items: {
                       type: 'OBJECT',
                       properties: {
                         question: { type: 'STRING', description: 'The full question text. End with a question mark.' },
                         header: { type: 'STRING', description: 'Very short label/chip for the question (max ~12 chars).' },
-                        multiSelect: { type: 'BOOLEAN', description: 'Set true to let the user pick multiple options.' },
+                        multiSelect: { type: 'BOOLEAN', description: 'Set true to let your partner pick multiple options.' },
                         options: {
                           type: 'ARRAY',
                           description: '2 to 4 distinct, mutually-exclusive choices.',
@@ -4994,13 +4994,13 @@ export async function POST(req: Request) {
               properties: {
                 questions: {
                   type: 'array',
-                  description: 'Between 1 and 4 questions to ask the user.',
+                  description: 'Between 1 and 4 questions to ask your partner.',
                   items: {
                     type: 'object',
                     properties: {
                       question: { type: 'string', description: 'The full question text. End with a question mark.' },
                       header: { type: 'string', description: 'Very short label/chip for the question (max ~12 chars).' },
-                      multiSelect: { type: 'boolean', description: 'Set true to let the user pick multiple options.' },
+                      multiSelect: { type: 'boolean', description: 'Set true to let your partner pick multiple options.' },
                       options: {
                         type: 'array',
                         description: '2 to 4 distinct, mutually-exclusive choices.',

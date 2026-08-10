@@ -295,7 +295,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
   // Tool-use (per-conversation): when enabled, the model can call
   // Read / Write / Edit / Glob / Grep inside its sandboxed workspace at
-  // local_data/agent_workspaces/<folderName>/. Default off.
+  // local_data/workspaces/<folderName>/. Default off.
   // Tool names are unified across both API-key and OAuth modes — same five
   // verbs in both, so the same prompt instruction works either way.
   const [toolUseEnabled, setToolUseEnabled] = useState(false);
@@ -400,7 +400,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // produce an empty answer. {filename} is substituted server-side.
   // Leave blank to disable the hint entirely.
   const [toolImageInstruction, setToolImageInstruction] = useState(
-    "(The image above is the content of Read(\"{filename}\"). Please answer the user's question about it conversationally — do not return coordinates or JSON.)"
+    "(The image above is the content of Read(\"{filename}\"). Please answer your partner's question about it conversationally — do not return coordinates or JSON.)"
   );
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
   const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
@@ -438,6 +438,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // input box even though the conversation actually has VRChat OFF.
   const [vrchatMode, setVrchatMode] = useState(false);
   const [vrchatRule, setVrchatRule] = useState(defaultVrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]");
+  // Fixed factual notice ("what this mode actually does") composed AHEAD of the
+  // per-Entity `vrchatRule` behavioral text everywhere vrchatRule is used below.
+  // Still per-Entity overridable via instructionOverrides.audioSessionNotice —
+  // "customizable" per the design, just correct-by-default rather than blank.
+  const audioSessionRuleText = useMemo(() => {
+    const notice = (instructionOverrides['audioSessionNotice'] || DEFAULT_AGENT_INSTRUCTIONS.audioSessionNotice || '').trim();
+    return notice ? `${notice}\n\n${vrchatRule}`.trim() : vrchatRule;
+  }, [instructionOverrides, vrchatRule]);
   const [localAiName, setLocalAiName] = useState(aiName);
   const [firstOriginalMessageId, setFirstOriginalMessageId] = useState<string | null>(null);
   // When true, the NEXT message added to the conversation (regardless of role)
@@ -742,9 +750,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let p = systemPrompt || '';
     if (useSummariesForLayer4) p = appendLayer4Index(p, summaryIndexBody);
     p = appendLayer5Footer(p, footerBody);
-    if (vrchatMode) p = `${p}\n\n${vrchatRule}`.trim();
+    if (vrchatMode) p = `${p}\n\n${audioSessionRuleText}`.trim();
     return p;
-  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, vrchatRule]);
+  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText]);
 
   useEffect(() => {
     // `cancelled` guards against an async race: on load this effect fires once
@@ -1746,7 +1754,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         console.warn('[summaries] failed to assemble Layer-4 index, sending prompt as-is', e);
       }
     }
-    let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${vrchatRule}`.trim() : baseSystemPrompt;
+    let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${audioSessionRuleText}`.trim() : baseSystemPrompt;
     // Optional hidden context note so the entity can see how much of this
     // session's room has been used. A quantity, never a condition — see the
     // default text above.
@@ -2907,7 +2915,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
               }
             }}
             className="p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
-            title={`Open this entity's workspace folder in file explorer (local_data/agent_workspaces/${folderName}/)`}
+            title={`Open this entity's workspace folder in file explorer (local_data/workspaces/${folderName}/)`}
           >
             <FolderOpen size={16} />
           </button>
@@ -3484,7 +3492,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                   <span className="text-sm font-semibold text-foreground">Enable file workspace tools (Claude, Gemini &amp; Local)</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  Gives the assistant a private file sandbox at <span className="font-mono">local_data/agent_workspaces/{folderName}/</span>
+                  Gives the assistant a private file sandbox at <span className="font-mono">local_data/workspaces/{folderName}/</span>
                   with <span className="font-mono">Read</span> / <span className="font-mono">Write</span> / <span className="font-mono">Edit</span> / <span className="font-mono">Glob</span> / <span className="font-mono">Grep</span> tools (same names as Claude Code's tools — works identically across API-key and OAuth modes).
                   The current file list is auto-injected into the system prompt — no list_files tool needed.
                   Files the assistant reads/writes appear as attachments on its messages with
@@ -3522,7 +3530,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         <span className="text-sm font-semibold text-foreground">⚠ Full PC access (leave the workspace sandbox)</span>
                       </label>
                       <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
-                        OFF (default): file tools are confined to this entity's <span className="font-mono">agent_workspaces/{folderName}/</span> folder.
+                        OFF (default): file tools are confined to this entity's <span className="font-mono">workspaces/{folderName}/</span> folder.
                         ON: the entity can read/write/delete <strong>anywhere on this PC</strong> using absolute paths
                         (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.
                       </p>
@@ -4930,7 +4938,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
       <LiveSession
         open={liveOpen}
         onClose={() => setLiveOpen(false)}
-        systemPrompt={vrchatMode ? `${systemPrompt}\n\n${vrchatRule}`.trim() : (systemPrompt || '')}
+        systemPrompt={vrchatMode ? `${systemPrompt}\n\n${audioSessionRuleText}`.trim() : (systemPrompt || '')}
         voiceName={defaultLiveSessionVoice || 'Aoede'}
         aiVoice={folders?.find((f: any) => f.name === folderName)?.settings?.aiVoice}
         audioOutDevice1={globalSettings?.device1Id}

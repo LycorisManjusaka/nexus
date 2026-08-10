@@ -357,10 +357,11 @@ export default function Sidebar({
       const newIds: string[] = [];
       const importErrors: string[] = [];
       // Fetch the registered speaker names from character_map.json once. Only
-      // these names (plus the entity/assistant name and the built-in "User")
+      // these names (plus the entity/assistant name and the built-in
+      // "Anonymous" — "User" from pre-rename exports is still recognized too)
       // are allowed to start a new message when parsing "## X" headers — any
       // other "## ..." line is kept as body text. If the fetch fails we pass an
-      // empty list, so only the entity + "User" headers are recognized.
+      // empty list, so only the entity + "Anonymous"/"User" headers are recognized.
       let validUserNames: string[] = [];
       try {
         const cr = await fetch('/api/chara/list');
@@ -379,7 +380,7 @@ export default function Sidebar({
           if (parsed.length === 0) {
             // Explain the refusal instead of silently skipping. The usual cause:
             // the file's speaker headers don't match a recognized name (the
-            // target folder's entity name, "User", or a character_map speaker).
+            // target folder's entity name, "Anonymous"/"User", or a character_map speaker).
             const diag = diagnoseMarkdown(text, activeFolder.name, validUserNames);
             const unrecognized = diag.headersFound.filter(h => !h.recognized).map(h => h.text);
             let reason: string;
@@ -393,8 +394,8 @@ export default function Sidebar({
             console.warn(
               `[md-import] "${file.name}" → 0 messages, SKIPPED. Reason: ${reason}.\n` +
               `  Headers in file: ${diag.headersFound.length ? diag.headersFound.map(h => `${h.recognized ? '✓' : '✗'} "${h.text}"`).join(', ') : '(none)'}\n` +
-              `  Recognized names (folder entity + "User" + character_map): ${diag.recognizedNames.map(n => `"${n}"`).join(', ')}\n` +
-              `  Fix: rename the header to "${activeFolder.name}", add the speaker to character_map.json, or use "User".`
+              `  Recognized names (folder entity + "Anonymous"/"User" + character_map): ${diag.recognizedNames.map(n => `"${n}"`).join(', ')}\n` +
+              `  Fix: rename the header to "${activeFolder.name}", add the speaker to character_map.json, or use "Anonymous".`
             );
             importErrors.push(`${file.name}: ${reason}`);
             continue;

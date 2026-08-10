@@ -13,7 +13,7 @@ const KEYS_FILE = path.join(DATA_DIR, 'keys.json');
 const USER_SETTINGS_FILE = path.join(DATA_DIR, 'user_settings.json');
 
 const FOLDERS_DIR = path.join(DATA_DIR, 'folders');
-const WORKSPACES_DIR = path.join(DATA_DIR, 'agent_workspaces');
+const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
 
 // Per-entity CSS themes live as plain, hand-editable `.css` files here:
 //   local_data/themes/<EntityName>.css
@@ -51,7 +51,7 @@ async function writeThemeCss(folderName: string, css: string | undefined | null)
 
 // -------- Agent workspace helpers ---------------------------------------
 // Each AI entity (Nexus folder) gets its own sandboxed directory under
-// agent_workspaces/. Paths inside are relative and bounded — any attempt
+// workspaces/. Paths inside are relative and bounded — any attempt
 // to escape via "../" returns null and the operation refuses.
 
 function sanitizeFolderName(name: string): string {
@@ -166,7 +166,7 @@ function resolveWorkspacePath(folderName: string, relPath: string): string | nul
 // local_data itself is commonly a junction/symlink (deployment sync setups
 // point it at a shared folder, e.g. C:\dev\common\local_data). A workspace
 // can also contain a SECOND junction nested inside it (e.g.
-// agent_workspaces/<Entity>/common_workspace → C:\dev\common\common_workspace)
+// workspaces/<Entity>/common_workspace → C:\dev\common\common_workspace)
 // so multiple entities/machines can share one folder. That second junction's
 // real target is a SIBLING of local_data's real target, not a descendant of
 // it — so a plain realpath-prefix check against the workspace root rejects it
@@ -253,7 +253,7 @@ async function resolveWorkspacePathSafe(folderName: string, relPath: string): Pr
 //   - fullAccess: when true, the entity's file tools are NOT sandboxed to its
 //     workspace. Absolute paths are used verbatim (anywhere on the PC) and
 //     relative paths are anchored to the workspace for convenience. When false
-//     (default) every path is contained to agent_workspaces/<Entity>/ exactly
+//     (default) every path is contained to workspaces/<Entity>/ exactly
 //     as before.
 // This is the mechanism behind "full PC access is optional per Entity".
 export interface WsOpts { fullAccess?: boolean }

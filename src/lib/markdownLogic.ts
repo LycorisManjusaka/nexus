@@ -43,7 +43,7 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
       const uniqueTags = [...new Set(tags)];
 
       if (uniqueTags.length === 0) {
-        header = m.name || 'User';
+        header = m.name || 'Anonymous';
         md += `[${header}]:\n\n${tsLine}${content}\n\n`;
       } else if (uniqueTags.length === 1) {
         header = uniqueTags[0];
@@ -78,16 +78,18 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       .toLowerCase();
 
   // The ONLY headers that legitimately start a new message: the entity /
-  // assistant (customAiName), the built-in "User" fallback header, and every
-  // speaker registered in character_map.json (passed in as validUserNames). A
-  // "[X]:" line (current format) — or a legacy "## X" line (older exports) — is
-  // a message boundary only when X, or for a multi-speaker header EVERY comma/、
-  // -separated part of X, is one of those known names. Any other such line is
-  // treated as ordinary body text of the current message and kept verbatim.
-  // This stops markdown sub-headings (e.g. "## Summary") and bracketed body
-  // lines (e.g. "[Note]:") inside a message from being misread as new turns.
+  // assistant (customAiName), the built-in "Anonymous" fallback header
+  // ("User" also still recognized, for .md files exported before the rename),
+  // and every speaker registered in character_map.json (passed in as
+  // validUserNames). A "[X]:" line (current format) — or a legacy "## X" line
+  // (older exports) — is a message boundary only when X, or for a
+  // multi-speaker header EVERY comma/、-separated part of X, is one of those
+  // known names. Any other such line is treated as ordinary body text of the
+  // current message and kept verbatim. This stops markdown sub-headings (e.g.
+  // "## Summary") and bracketed body lines (e.g. "[Note]:") inside a message
+  // from being misread as new turns.
   const validSet = new Set(
-    [customAiName || '', 'User', ...validUserNames].filter(Boolean).map(norm)
+    [customAiName || '', 'User', 'Anonymous', ...validUserNames].filter(Boolean).map(norm)
   );
   const isRecognizedHeader = (h: string): boolean => {
     const parts = h.split(/[,、]/).map((p) => norm(p)).filter(Boolean);
@@ -152,10 +154,12 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
 
     if (role === 'user') {
       const isMultiple = currentHeader.includes(',') || currentHeader.includes('、');
-      // Mirror the app's specific behavior: the plain "User" username is never
-      // injected as a "[User]" tag (identity flows through [username] tags only
-      // for named users). A "## User:" header therefore stays untagged.
-      const isPlainUser = currentHeader.trim() === 'User';
+      // Mirror the app's specific behavior: the plain "Anonymous" username
+      // (or legacy "User", from .md files exported before the rename) is
+      // never injected as a "[Anonymous]"/"[User]" tag — identity flows
+      // through [username] tags only for named users. A "[Anonymous]:" or
+      // "[User]:" header therefore stays untagged.
+      const isPlainUser = currentHeader.trim() === 'User' || currentHeader.trim() === 'Anonymous';
       if (!isMultiple && !isPlainUser) {
         const hasTags = /\[.*?\]/.test(finalContent);
         if (!hasTags) {
@@ -179,11 +183,11 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
   };
 
   // Flush content that appeared BEFORE the first recognized speaker header (or an
-  // entire header-less file) as an initial "User" message, so imported content is
-  // never silently dropped. No-op when there's nothing but whitespace.
+  // entire header-less file) as an initial "Anonymous" message, so imported
+  // content is never silently dropped. No-op when there's nothing but whitespace.
   const flushOrphan = () => {
     if (!currentHeader && currentContent.join('\n').trim()) {
-      currentHeader = 'User';
+      currentHeader = 'Anonymous';
       addMessage();
       currentContent = [];
     }
@@ -217,7 +221,7 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
     addMessage();
   } else {
     // No recognized "[Name]:" header anywhere — import the whole file as one
-    // "User" message rather than producing nothing.
+    // "Anonymous" message rather than producing nothing.
     flushOrphan();
   }
 
@@ -241,7 +245,7 @@ export function diagnoseMarkdown(
 } {
   const norm = (s: string) =>
     s.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).trim().toLowerCase();
-  const recognizedNames = [customAiName || '', 'User', ...validUserNames].filter(Boolean);
+  const recognizedNames = [customAiName || '', 'User', 'Anonymous', ...validUserNames].filter(Boolean);
   const validSet = new Set(recognizedNames.map(norm));
   const isRecognized = (h: string): boolean => {
     const parts = h.split(/[,、]/).map(norm).filter(Boolean);

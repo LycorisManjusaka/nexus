@@ -401,7 +401,7 @@ export default function SystemPromptUpdater({
   }, [rightLooksTruncated, streamingUpdate]);
 
   const [header, setHeader] = useState('');
-  // ── The entity's self-authored Layer 5 (agent_workspaces/<Entity>/FOOTER.md).
+  // ── The entity's self-authored Layer 5 (workspaces/<Entity>/FOOTER.md).
   // Lives in a FILE and is injected at send time, which is exactly why the
   // updater agent used to be blind to it: the agent reads the STORED prompt, so
   // a footer baked into that prompt was visible and a FOOTER.md was not.
@@ -2270,7 +2270,7 @@ export default function SystemPromptUpdater({
               className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-amber-500 resize-y"
             />
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-              <span className="font-mono">agent_workspaces/{folderName}/FOOTER.md</span> — injected as Layer 5 at send time,
+              <span className="font-mono">workspaces/{folderName}/FOOTER.md</span> — injected as Layer 5 at send time,
               never stored in the conversation, which is why the updater agent could not see it before. It can now, as
               <strong> reference only</strong>: it is the one layer the entity writes about itself, so the agent is told
               to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the entity&apos;s own

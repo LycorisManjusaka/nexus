@@ -22,9 +22,9 @@ export async function POST(req: Request) {
   }
 
   const { name: userLabel } = resolveCurrentChara();
-  // Suppress the prefix when the resolved name is the literal fallback "User"
-  // (or empty) — same convention as InputArea.
-  const labeled = (userLabel && userLabel !== 'User') ? `[${userLabel}] ${text}` : text;
+  // Suppress the prefix when the resolved name is the literal fallback
+  // "Anonymous" (or legacy "User", or empty) — same convention as InputArea.
+  const labeled = (userLabel && userLabel !== 'User' && userLabel !== 'Anonymous') ? `[${userLabel}] ${text}` : text;
   s.transcripts.push({ ts: Date.now(), role: 'user', text: labeled });
   emit({ type: 'transcript_delta', role: 'user', text: labeled });
 

@@ -45,7 +45,7 @@ import { putBytes } from './attachmentStore';
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const PROFILES_DIR = path.join(DATA_DIR, 'browser_profiles');
-const WORKSPACES_DIR = path.join(DATA_DIR, 'agent_workspaces');
+const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
 
 export const BROWSER_TOOL_NAMES = [
   'browser_navigate',

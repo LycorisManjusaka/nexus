@@ -93,8 +93,8 @@ export function formatAnswerForModel(answers: AskAnswer[], timedOut: boolean): s
     return `- ${label}: ${a.answers.join(', ') || '(no selection)'}`;
   });
   const head = timedOut
-    ? 'The user did not respond in time; proceeding with the recommended option(s):'
-    : 'The user answered:';
+    ? 'Your partner did not respond in time; proceeding with the recommended option(s):'
+    : 'Your partner answered:';
   return `${head}\n${lines.join('\n')}`;
 }
 

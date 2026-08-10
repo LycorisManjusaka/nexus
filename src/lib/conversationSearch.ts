@@ -109,7 +109,8 @@ function nameKey(s: string): string {
 async function loadValidNameKeys(): Promise<Set<string>> {
   const keys = new Set<string>();
   const add = (v?: string | null) => { const k = nameKey(String(v || '')); if (k) keys.add(k); };
-  add('User');
+  add('Anonymous');
+  add('User'); // legacy sentinel — still present in logs/exports predating the rename
   try {
     const files = await fs.readdir(FOLDERS_DIR);
     await Promise.all(files.filter((f) => f.endsWith('.json')).map(async (f) => {
@@ -300,11 +301,11 @@ export async function searchConversations(
       const isUser = m.role === 'user';
       const tags = isUser ? speakerTags(content) : [];
       const storedName: string | null =
-        typeof m.name === 'string' && nameKey(m.name) && nameKey(m.name) !== 'user' ? m.name : null;
+        typeof m.name === 'string' && nameKey(m.name) && nameKey(m.name) !== 'user' && nameKey(m.name) !== 'anonymous' ? m.name : null;
 
       for (const s of snippetsForMessage(content, lower, needle)) {
         let author: string;
-        if (isUser) author = governingSpeaker(tags, s.matchIdx, validNameKeys) || storedName || 'User';
+        if (isUser) author = governingSpeaker(tags, s.matchIdx, validNameKeys) || storedName || 'Anonymous';
         else author = m.name || m.role || 'assistant';
         snippets.push({
           messageIndex: idx,

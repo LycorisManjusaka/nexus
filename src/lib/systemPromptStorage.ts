@@ -4,10 +4,13 @@ import path from 'path';
 // Resolves to <repo-root>/local_data/...
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const SP_ROOT = path.join(DATA_DIR, 'system_prompts');           // per-entity layer files
-const AGENTS_DIR = path.join(DATA_DIR, 'system_prompt_agents');  // updater agent definitions
+const AGENTS_DIR = path.join(DATA_DIR, 'system_prompt_agents');  // operator-owned overrides (preferred)
+// Repo-bundled defaults, shipped so a fresh checkout works with zero setup.
+// `process.cwd()` is the web-app repo root (same base `DATA_DIR` resolves against).
+const BUNDLED_AGENTS_DIR = path.resolve(process.cwd(), 'defaults', 'system_prompt_agents');
 
-// Agent type = subdirectory under AGENTS_DIR. Each type folder contains its
-// own copy of `identity_abstract_schema_standard.md`,
+// Agent type = subdirectory under the resolved agents root. Each type folder
+// contains its own copy of `identity_abstract_schema_standard.md`,
 // `identity_abstract_schema_dynamic_compression.md`, and `_deletion_patterns.txt`.
 // The user selects the type via the System Prompt Updater UI (ComboBox).
 const STANDARD_AGENT_NAME = 'identity_abstract_schema_standard.md';
@@ -20,8 +23,26 @@ function sanitizeAgentType(t: string): string {
   return t.replace(/[\\/:*?"<>|]+/g, '_').replace(/\.\.+/g, '_');
 }
 
-function agentTypeDir(type: string): string {
-  return path.join(AGENTS_DIR, sanitizeAgentType(type));
+// AGENTS_DIR (local_data/system_prompt_agents) wins whenever the operator has
+// populated it with at least one type folder — that is the "custom agents"
+// path from the user's own instruction. An empty or missing AGENTS_DIR falls
+// back to the repo-bundled defaults, so a fresh checkout needs no setup and
+// `local_data` can stay entirely out of git. Re-checked on every call (cheap:
+// one readdir) rather than cached, so adding/removing the override folder
+// takes effect without a server restart.
+async function resolveAgentsRoot(): Promise<string> {
+  try {
+    const entries = await fs.readdir(AGENTS_DIR, { withFileTypes: true });
+    if (entries.some((e) => e.isDirectory())) return AGENTS_DIR;
+  } catch (e: any) {
+    if (e?.code !== 'ENOENT') throw e;
+  }
+  return BUNDLED_AGENTS_DIR;
+}
+
+async function agentTypeDir(type: string): Promise<string> {
+  const root = await resolveAgentsRoot();
+  return path.join(root, sanitizeAgentType(type));
 }
 
 // ── Filesystem-safe folder names ────────────────────────────────────────────
@@ -190,8 +211,9 @@ export function assembleLayers(layers: Layer[]): string {
 // in the System Prompt Updater (e.g. "Entities", "Technical"). Loose files
 // at the AGENTS_DIR root are ignored; only directories count.
 export async function listAgentTypes(): Promise<string[]> {
+  const root = await resolveAgentsRoot();
   try {
-    const entries = await fs.readdir(AGENTS_DIR, { withFileTypes: true });
+    const entries = await fs.readdir(root, { withFileTypes: true });
     return entries
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
@@ -210,7 +232,7 @@ export async function listAgentTypes(): Promise<string[]> {
 const MAIN_AGENT_NAME = 'Boundary_Enforced_Abstract_Identity_Schema.md';
 export async function readMainAgent(type: string): Promise<string | null> {
   if (!type) return null;
-  const dir = agentTypeDir(type);
+  const dir = await agentTypeDir(type);
   try {
     // Canonical name first.
     return await fs.readFile(path.join(dir, MAIN_AGENT_NAME), 'utf-8');
@@ -243,7 +265,7 @@ export async function readMainAgent(type: string): Promise<string | null> {
 // `.md` so it's naturally excluded; dotfiles are skipped.)
 export async function readAllAgentFiles(type: string): Promise<Array<{ name: string; content: string }>> {
   if (!type) return [];
-  const dir = agentTypeDir(type);
+  const dir = await agentTypeDir(type);
   let entries: string[] = [];
   try {
     entries = await fs.readdir(dir);
@@ -266,7 +288,7 @@ export async function readAllAgentFiles(type: string): Promise<Array<{ name: str
 export async function readStandardAgent(type: string): Promise<string | null> {
   if (!type) return null;
   try {
-    return await fs.readFile(path.join(agentTypeDir(type), STANDARD_AGENT_NAME), 'utf-8');
+    return await fs.readFile(path.join(await agentTypeDir(type), STANDARD_AGENT_NAME), 'utf-8');
   } catch (e: any) {
     if (e?.code === 'ENOENT') return null;
     throw e;
@@ -276,7 +298,7 @@ export async function readStandardAgent(type: string): Promise<string | null> {
 export async function readCompressionAgent(type: string): Promise<string | null> {
   if (!type) return null;
   try {
-    return await fs.readFile(path.join(agentTypeDir(type), COMPRESSION_AGENT_NAME), 'utf-8');
+    return await fs.readFile(path.join(await agentTypeDir(type), COMPRESSION_AGENT_NAME), 'utf-8');
   } catch (e: any) {
     if (e?.code === 'ENOENT') return null;
     throw e;
@@ -291,7 +313,7 @@ export async function readCompressionAgent(type: string): Promise<string | null>
 export async function readSummaryAgent(type: string): Promise<string | null> {
   if (!type) return null;
   try {
-    return await fs.readFile(path.join(agentTypeDir(type), SUMMARY_AGENT_NAME), 'utf-8');
+    return await fs.readFile(path.join(await agentTypeDir(type), SUMMARY_AGENT_NAME), 'utf-8');
   } catch (e: any) {
     if (e?.code === 'ENOENT') return null;
     throw e;
@@ -319,7 +341,7 @@ export function extractAgentSystemPrompt(agentFile: string): string {
 export async function readDeletionPatterns(type: string): Promise<string[]> {
   if (!type) return [];
   try {
-    const raw = await fs.readFile(path.join(agentTypeDir(type), DELETIONS_NAME), 'utf-8');
+    const raw = await fs.readFile(path.join(await agentTypeDir(type), DELETIONS_NAME), 'utf-8');
     return raw
       .split(/\r?\n/)
       .map((s) => s.replace(/\s+$/, ''))

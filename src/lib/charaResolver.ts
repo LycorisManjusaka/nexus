@@ -14,7 +14,7 @@ interface CharMap {
 const DEFAULT_MAP: CharMap = {
   engines: { voicevox: '0', coeiroink: '1' },
   rules: [],
-  fallback: 'User',
+  fallback: 'Anonymous',
   humanLabel: '人',
 };
 
@@ -40,7 +40,7 @@ export function resolveCurrentChara(): { name: string; humanLabel: string } {
   const settings = readJson<any>(charaSettingsPath(), null);
 
   const humanLabel = charMap.humanLabel || '人';
-  const fallback = charMap.fallback || 'User';
+  const fallback = charMap.fallback || 'Anonymous';
 
   if (!settings || !settings.current_engine) {
     return { name: fallback, humanLabel };
@@ -71,11 +71,11 @@ export function resolveCharaByIds(engineNum: string, charId: string): string {
   const rule = charMap.rules.find(
     (r) => r.engine === String(engineNum) && r.charId === String(charId)
   );
-  return rule?.name || charMap.fallback || 'User';
+  return rule?.name || charMap.fallback || 'Anonymous';
 }
 
 /** The configured fallback speaker name from character_map.json. */
 export function getCharaFallback(): string {
   const charMap = readJson<CharMap>(CHAR_MAP_PATH, DEFAULT_MAP);
-  return charMap.fallback || 'User';
+  return charMap.fallback || 'Anonymous';
 }

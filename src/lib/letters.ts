@@ -13,7 +13,7 @@
 //   local_data/letters/_status.md                      ← generated overview
 //   local_data/letters/_state/<convoId>.json           ← announcement counters
 //
-// The store lives OUTSIDE agent_workspaces on purpose. Entities reach letters
+// The store lives OUTSIDE workspaces on purpose. Entities reach letters
 // only through tools, never through their file tools, so an entity with "Full
 // PC access" gains no leverage over one without it. For the same reason the
 // tools speak in opaque IDs, never paths — the layout stays ours to change.
@@ -304,8 +304,9 @@ function byNewest(a: LetterMeta, b: LetterMeta): number {
  * identities that exist here but may never have run a conversation, so they
  * have no folder yet.
  *
- * Only `rules[].name` is taken. `fallback` ("User") and `humanLabel` ("人") are
- * placeholder labels for unmatched speakers, not people you could write to.
+ * Only `rules[].name` is taken. `fallback` ("Anonymous" by default) and
+ * `humanLabel` ("人") are placeholder labels for unmatched speakers, not
+ * people you could write to.
  */
 async function characterMapNames(): Promise<string[]> {
   try {

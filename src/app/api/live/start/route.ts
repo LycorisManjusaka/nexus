@@ -44,7 +44,7 @@ export async function POST(req: Request) {
 
   // Build seed system text
   const historyTranscript = seedMessages.map((m: any) => {
-    const who = m.role === 'assistant' ? '[assistant]' : `[${m.name || 'User'}]`;
+    const who = m.role === 'assistant' ? '[assistant]' : `[${m.name || 'Anonymous'}]`;
     return `${who} ${m.content || ''}`;
   }).join('\n');
   const fullSystem = [
@@ -235,9 +235,9 @@ export async function POST(req: Request) {
           // Resolve character name fresh on each line — user may switch voices mid-session
           const { name: userLabel, humanLabel } = resolveCurrentChara();
           const tag = role === 'user' ? userLabel : humanLabel;
-          // Skip the prefix for the literal fallback "User" (or empty) — same
-          // convention as the regular chat input.
-          const labeled = (tag && tag !== 'User') ? `[${tag}] ${cleanText}` : cleanText;
+          // Skip the prefix for the literal fallback "Anonymous" (or legacy
+          // "User", or empty) — same convention as the regular chat input.
+          const labeled = (tag && tag !== 'User' && tag !== 'Anonymous') ? `[${tag}] ${cleanText}` : cleanText;
           // Store the labeled text in transcripts so the merged log preserves the prefix
           s.transcripts.push({ ts: Date.now(), role, text: labeled });
           console.log(`[live] pushed ${role} transcript from ${posKey}: "${labeled.slice(0, 80)}" (now ${s.transcripts.length})`);

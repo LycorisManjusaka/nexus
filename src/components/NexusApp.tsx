@@ -53,7 +53,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   // files that still have those keys are loaded harmlessly — nothing reads
   // them from here anymore.
   const [globalSettings, setGlobalSettings] = useState<any>({
-    userName: 'User',
+    userName: 'Anonymous',
     theme: 'dark',
   });
 
@@ -571,7 +571,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             aiName={activeFolder.settings?.aiName || 'Claude'}
             userName={globalSettings.userName}
             defaultSystemPrompt={activeFolder.settings?.systemPrompt !== undefined ? activeFolder.settings.systemPrompt : 'You are a helpful AI assistant.'}
-            defaultAttachmentInstruction={activeFolder.settings?.attachmentInstruction !== undefined ? activeFolder.settings.attachmentInstruction : "Note: The user's chat client automatically injects the contents of attached text files into their messages using <attached_file name=\"filename\">...</attached_file> XML tags. When you see these tags, treat the contents as the actual attached file."}
+            defaultAttachmentInstruction={activeFolder.settings?.attachmentInstruction !== undefined ? activeFolder.settings.attachmentInstruction : "Note: your partner's chat client automatically injects the contents of attached text files into their messages using <attached_file name=\"filename\">...</attached_file> XML tags. When you see these tags, treat the contents as the actual attached file."}
             defaultModelParams={activeFolder.settings?.modelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' }}
             defaultSpecificModel={activeFolder.settings?.specificModel}
             defaultCustomAiName={activeFolder.settings?.customAiName || ''}

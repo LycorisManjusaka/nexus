@@ -978,10 +978,11 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       
       {/* Meta Bar */}
       <div className={`flex items-center gap-3 text-[11px] text-muted-foreground mb-1.5 px-1 ${isUser ? 'flex-row-reverse' : ''}`}>
-        {/* User-role messages intentionally have no name label — the user's
+        {/* User-role messages intentionally have no name label — the partner's
             identity lives in `[username]` tags inside the message content
             (parsed by TTS / MD export / agent log). Old logs that still
-            carry `msg.name = "User"` simply don't render it here. */}
+            carry `msg.name = "User"` (or the current sentinel `"Anonymous"`)
+            simply don't render it here. */}
         {!isUser && msg.name && (
           <span className="font-semibold text-foreground/80">{msg.name}</span>
         )}
