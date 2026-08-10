@@ -73,8 +73,20 @@ if (-not (Test-Path $dataDir)) {
   New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
 }
 if (Test-Path $defaultsDataDir) {
-  Copy-Item -Path (Join-Path $defaultsDataDir "*") -Destination $dataDir -Recurse -Force
-  Write-Host "  Copied starter character_map.json / user_settings.json."
+  # Seed only files that don't already exist -- never overwrite a real local_data.
+  $copied = 0
+  Get-ChildItem $defaultsDataDir | ForEach-Object {
+    $target = Join-Path $dataDir $_.Name
+    if (-not (Test-Path $target)) {
+      Copy-Item -Path $_.FullName -Destination $dataDir -Recurse
+      $copied++
+    }
+  }
+  if ($copied -gt 0) {
+    Write-Host "  Seeded $copied file(s) from defaults (existing local_data files were left untouched)."
+  } else {
+    Write-Host "  local_data already present -- nothing seeded (existing files untouched)."
+  }
 } else {
   Write-Host "  No defaults/local_data found in the repo -- local_data left empty. Nexus creates" -ForegroundColor Yellow
   Write-Host "  what it needs on first run, but you'll want to set up character_map.json by hand." -ForegroundColor Yellow
