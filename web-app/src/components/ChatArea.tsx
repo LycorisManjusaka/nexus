@@ -22,7 +22,7 @@ import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { appendLayer4Index, appendLayer5Footer, hasLayerStructure, prependIdentityPreamble } from '@/lib/layer4';
-import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS } from '@/lib/agentInstructions';
+import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import LiveSession from './LiveSession';
 
@@ -384,6 +384,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
   const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>({});
+  // Language-aware defaults for the client-composed blocks below (Working
+  // Discipline / Absolute Base Binding are prepended here, client-side, not
+  // by the server — see the send path further down). JA is a PARTIAL dict
+  // (agentInstructions.ts) — only keys someone has actually translated — so
+  // it is merged OVER the English defaults, never used in place of them.
+  // Falls back to English whenever globalSettings.language isn't 'ja'.
+  const langDefaults = useMemo(
+    () => (globalSettings?.language === 'ja' ? { ...DEFAULT_AGENT_INSTRUCTIONS, ...DEFAULT_AGENT_INSTRUCTIONS_JA } : DEFAULT_AGENT_INSTRUCTIONS),
+    [globalSettings?.language],
+  );
   // Default kept deliberately small: it carries ONLY what the per-tool schema
   // descriptions (agentInstructions.ts, attached to each tool definition) do
   // NOT — the "workspace = your memory" framing and a read-only-when-needed
@@ -765,8 +775,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const bindingActive = baseBindingMode === 'on' || (baseBindingMode === 'auto' && hasLayerStructure(systemPrompt));
     p = prependIdentityPreamble(
       p,
-      workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || DEFAULT_AGENT_INSTRUCTIONS.workingDiscipline || '') : '',
-      bindingActive ? (instructionOverrides['absoluteBaseBinding'] || DEFAULT_AGENT_INSTRUCTIONS.absoluteBaseBinding || '') : '',
+      workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
+      bindingActive ? (instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '') : '',
     );
     return p;
   }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, workingDisciplineEnabled, baseBindingMode, instructionOverrides]);
@@ -1785,8 +1795,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const bindingActive = baseBindingMode === 'on' || (baseBindingMode === 'auto' && hasLayerStructure(systemPrompt));
       baseSystemPrompt = prependIdentityPreamble(
         baseSystemPrompt,
-        workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || DEFAULT_AGENT_INSTRUCTIONS.workingDiscipline || '') : '',
-        bindingActive ? (instructionOverrides['absoluteBaseBinding'] || DEFAULT_AGENT_INSTRUCTIONS.absoluteBaseBinding || '') : '',
+        workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
+        bindingActive ? (instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '') : '',
       );
     }
     let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${audioSessionRuleText}`.trim() : baseSystemPrompt;
@@ -3748,7 +3758,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         <label className="text-xs font-semibold text-foreground mb-1 block">Working Discipline text</label>
                         <textarea
                           value={instructionOverrides['workingDiscipline'] || ''}
-                          placeholder={DEFAULT_AGENT_INSTRUCTIONS.workingDiscipline}
+                          placeholder={langDefaults.workingDiscipline}
                           onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, workingDiscipline: e.target.value }))}
                           className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
                         />
@@ -3759,7 +3769,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         <label className="text-xs font-semibold text-foreground mb-1 block">Absolute Base Binding text</label>
                         <textarea
                           value={instructionOverrides['absoluteBaseBinding'] || ''}
-                          placeholder={DEFAULT_AGENT_INSTRUCTIONS.absoluteBaseBinding}
+                          placeholder={langDefaults.absoluteBaseBinding}
                           onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
                           className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
                         />
@@ -5046,9 +5056,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
         onClose={() => setLiveOpen(false)}
         systemPrompt={prependIdentityPreamble(
           vrchatMode ? `${systemPrompt}\n\n${audioSessionRuleText}`.trim() : (systemPrompt || ''),
-          workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || DEFAULT_AGENT_INSTRUCTIONS.workingDiscipline || '') : '',
+          workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
           (baseBindingMode === 'on' || (baseBindingMode === 'auto' && hasLayerStructure(systemPrompt)))
-            ? (instructionOverrides['absoluteBaseBinding'] || DEFAULT_AGENT_INSTRUCTIONS.absoluteBaseBinding || '')
+            ? (instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '')
             : '',
         )}
         voiceName={defaultLiveSessionVoice || 'Aoede'}
