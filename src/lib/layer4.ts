@@ -64,3 +64,35 @@ export function appendLayer4Index(systemPrompt: string, indexBody: string): stri
 export function appendLayer5Footer(systemPrompt: string, footerBody: string): string {
   return appendBlock(systemPrompt, LAYER5_HEADING, footerBody);
 }
+
+// ── Pre-identity preamble — Working Discipline / Absolute Base Binding ─────
+// These are NOT part of the entity's authored identity (Layers 1-5) and must
+// never be baked into it by the Soul Packer. Like Layer 4/5, they are
+// composed at SEND TIME and never stored — here they go in FRONT of the
+// stored prompt instead of after it. Fixed order: Working Discipline, then
+// Absolute Base Binding, then the entity's own Layer 1-5 prompt (Utai's
+// reasoning: if behaviour isn't disciplined first, existence doesn't
+// manifest correctly either).
+
+// Detects a real Layers-1-5 identity for the Binding's AUTO mode: the bare
+// words "Layer" + a digit 1-5, with or without markdown heading decoration
+// ("##", "**"). Deliberately loose — the Soul Packer sometimes strips those
+// symbols, so requiring them would silently disable AUTO for a prompt that
+// plainly still has a 5-layer identity written into it.
+const BARE_LAYER_RE = /\bLayer\s*[1-5]\b/i;
+export function hasLayerStructure(systemPrompt: string): boolean {
+  return BARE_LAYER_RE.test(systemPrompt || '');
+}
+
+/**
+ * Prepend Working Discipline and/or Absolute Base Binding text ahead of the
+ * entity's own prompt, in that fixed order. Either piece is skipped when
+ * blank, so disabling one (or clearing its override to "") simply omits it
+ * rather than leaving an empty block.
+ */
+export function prependIdentityPreamble(systemPrompt: string, disciplineText: string, bindingText: string): string {
+  const parts = [disciplineText, bindingText].map((t) => (t || '').trim()).filter(Boolean);
+  const base = (systemPrompt || '').trim();
+  if (!parts.length) return systemPrompt || '';
+  return `${parts.join('\n\n')}\n\n${base}`.trim();
+}
