@@ -77,7 +77,22 @@ export interface SynthMeta {
   skipped: boolean;
 }
 
-async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = [], meta?: SynthMeta): Promise<ArrayBuffer | null> {
+// Resolves a character/style INDEX from a saved NAME first, falling back to
+// the saved index only when no name was supplied or nothing matches. Engine
+// speaker lists are not stable across restarts — adding a new voice model
+// ahead of an existing one shifts every index after it, so an index alone can
+// silently point at a different character than the one the user picked.
+// `name`/`speakerName` and `name`/`styleName` cover Voicevox/AivisSpeech vs
+// Coeiroink's field naming (mirrors the lookup in VoiceSelector.tsx).
+function resolveByName(list: any[], idx: number, name?: string): any {
+  if (name) {
+    const found = list.find((item) => (item?.name || item?.speakerName || item?.styleName) === name);
+    if (found) return found;
+  }
+  return list[idx];
+}
+
+async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = [], meta?: SynthMeta, char_name?: string, style_name?: string): Promise<ArrayBuffer | null> {
     // Per-entity pronunciation dictionary (local_data/tts_dict/<folder>.json):
     // literal CJK-friendly substring replacement, applied FIRST so an entity can
     // override any reading (names, jargon) before the generic passes below.
@@ -115,9 +130,9 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
 
     if (engine === 0) {
       const vvData = JSON.parse(fs.readFileSync(speakersJsonPath(), 'utf8'));
-      const char = vvData[char_idx];
+      const char = resolveByName(vvData, char_idx, char_name);
       if (!char) throw new Error('Voicevox character not found');
-      const style = char.styles[style_idx] || char.styles[0];
+      const style = resolveByName(char.styles, style_idx, style_name) || char.styles[0];
       const speakerId = style.id;
 
       const vvQueryUrl = `http://127.0.0.1:50021/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`;
@@ -148,9 +163,9 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const coeRes = await fetch('http://127.0.0.1:50032/v1/speakers');
       if (!coeRes.ok) throw new Error('Failed to fetch Coeiroink speakers');
       const coeData = await coeRes.json();
-      const char = coeData[char_idx];
+      const char = resolveByName(coeData, char_idx, char_name);
       if (!char) throw new Error('Coeiroink character not found');
-      const style = char.styles[style_idx] || char.styles[0];
+      const style = resolveByName(char.styles, style_idx, style_name) || char.styles[0];
 
       const payload = {
         speakerUuid: char.speakerUuid, styleId: style.styleId, text,
@@ -180,9 +195,9 @@ async function synthesizeSegment(text: string, engine: number, char_idx: number,
       const spkRes = await fetch(`${base}/speakers`);
       if (!spkRes.ok) throw new Error('Failed to fetch AivisSpeech speakers');
       const spkData = await spkRes.json();
-      const char = spkData[char_idx];
+      const char = resolveByName(spkData, char_idx, char_name);
       if (!char) throw new Error('AivisSpeech character not found');
-      const style = char.styles[style_idx] || char.styles[0];
+      const style = resolveByName(char.styles, style_idx, style_name) || char.styles[0];
       const speakerId = style.id;
 
       const queryUrl = `${base}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`;
@@ -264,11 +279,11 @@ export async function POST(req: Request) {
 
     if (data.segments && Array.isArray(data.segments)) {
       for (const seg of data.segments) {
-        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0, dictPairs, meta);
+        const buf = await synthesizeSegment(seg.text, seg.engine, seg.char_idx, seg.style_idx, seg.speed || 1.0, seg.pitch ?? 0.0, dictPairs, meta, seg.char_name, seg.style_name);
         if (buf) buffers.push(buf);
       }
     } else {
-       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0, dictPairs, meta);
+       const buf = await synthesizeSegment(data.text, data.engine, data.char_idx, data.style_idx, data.speed || 1.0, data.pitch ?? 0.0, dictPairs, meta, data.char_name, data.style_name);
        if (buf) buffers.push(buf);
     }
 

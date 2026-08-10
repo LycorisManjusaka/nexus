@@ -36,6 +36,16 @@ export async function GET() {
     }
 
     const characters = (map.rules || []).map((r: any) => {
+      // `engine`/`charId` are optional on a rule (a name-only entry is valid —
+      // e.g. registered purely as a letters recipient or display name). Without
+      // both, there is no TTS voice to resolve: previously this fell through to
+      // parseInt(undefined) === NaN, and `NaN || 0` downstream silently picked
+      // engine 0 / character 0 — the wrong voice, not "no voice". Return
+      // voice: null instead so callers (MessageBubble's tag lookup) correctly
+      // fall back to the default voice rather than speaking as someone else.
+      if (r.engine === undefined || r.engine === null || r.charId === undefined || r.charId === null) {
+        return { name: r.name, voice: null };
+      }
       const engineKey = engineByNum[r.engine];
       let style_idx = 0;
       if (engineKey && settings?.[engineKey]?.character_styles) {

@@ -38,6 +38,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Character "${name}" not found in character_map.json` }, { status: 404 });
     }
 
+    // `engine`/`charId` are optional on a rule — a name-only entry is valid for
+    // display/letters purposes, but there is no TTS voice to switch to. Refuse
+    // this specific action (voice-changer character switch), not the rule
+    // itself: the name still resolves everywhere that doesn't need a voice.
+    if (rule.engine === undefined || rule.engine === null || rule.charId === undefined || rule.charId === null) {
+      return NextResponse.json({
+        error: `"${name}" has no engine/charId set in character_map.json — it has a display name but no TTS voice to switch to.`,
+      }, { status: 400 });
+    }
+
     // Reverse-lookup engine number → engine key (e.g., "0" → "voicevox")
     const engines: Record<string, string> = map.engines || {};
     let engineName: string | null = null;

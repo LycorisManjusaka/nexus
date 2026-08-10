@@ -20,7 +20,7 @@ interface LiveSessionProps {
   systemPrompt: string;
   seedMessages: any[];
   voiceName: string;             // comes from folder settings
-  aiVoice?: { engine?: number; char_idx?: number; style_idx?: number; speed?: number };
+  aiVoice?: { engine?: number; char_idx?: number; style_idx?: number; char_name?: string; style_name?: string; speed?: number };
   audioOutDevice1?: string;
   audioOutDevice2?: string;
 }
@@ -70,6 +70,8 @@ export default function LiveSession({
       engine: aiVoice?.engine ?? 0,
       char_idx: aiVoice?.char_idx ?? 0,
       style_idx: aiVoice?.style_idx ?? 0,
+      char_name: aiVoice?.char_name,
+      style_name: aiVoice?.style_name,
       speed: aiVoice?.speed ?? 1.0,
     };
 

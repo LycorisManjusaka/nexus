@@ -4,6 +4,12 @@ interface VoiceSettings {
   engine: number;
   char_idx: number;
   style_idx: number;
+  // Persisted alongside the indices so a character list that gets reordered
+  // (a new voice added ahead of this one) doesn't silently switch who speaks.
+  // The synthesize route resolves these against the LIVE speaker list first;
+  // the indices are only a fallback for data saved before this field existed.
+  char_name?: string;
+  style_name?: string;
   speed?: number;
   // When true, the streaming-TTS pipeline synthesizes larger blocks (whole
   // message / paragraph) instead of sentence-by-sentence, so context-aware
@@ -82,7 +88,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   }, [loadSpeakers]);
 
   const handleEngineChange = (eng: number) => {
-    onChange({ ...value, engine: eng, char_idx: 0, style_idx: 0, speed: value.speed || 1.0 });
+    onChange({ ...value, engine: eng, char_idx: 0, style_idx: 0, char_name: undefined, style_name: undefined, speed: value.speed || 1.0 });
     setStartMsg(null);
     if (eng === 0) return;                       // reads from disk, no engine needed
     const list = eng === 2 ? speakers.aivisspeech : speakers.coeiroink;
@@ -92,8 +98,20 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   if (loading) return <div className="text-xs text-muted-foreground">Loading voices...</div>;
 
   const currentEngineData = value.engine === 0 ? speakers.voicevox : value.engine === 2 ? speakers.aivisspeech : speakers.coeiroink;
-  const currentChar = currentEngineData?.[value.char_idx];
+  // Resolve by NAME first, so a saved selection keeps pointing at the same
+  // character/style even if the engine's list order changed since last save
+  // (e.g. a new voice model added ahead of this one). Falls back to the saved
+  // index for older data that predates char_name/style_name.
+  const nameCharIdx = value.char_name
+    ? (currentEngineData || []).findIndex((c: any) => (c.name || c.speakerName) === value.char_name)
+    : -1;
+  const resolvedCharIdx = nameCharIdx >= 0 ? nameCharIdx : value.char_idx;
+  const currentChar = currentEngineData?.[resolvedCharIdx];
   const styles = currentChar?.styles || [];
+  const nameStyleIdx = value.style_name
+    ? styles.findIndex((s: any) => (s.name || s.styleName) === value.style_name)
+    : -1;
+  const resolvedStyleIdx = nameStyleIdx >= 0 ? nameStyleIdx : value.style_idx;
 
   return (
     <div className="space-y-3 bg-secondary/20 p-3 rounded-lg border border-border">
@@ -166,9 +184,13 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
         <>
           <div>
             <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">Character</label>
-            <select 
-              value={value.char_idx}
-              onChange={e => onChange({ ...value, char_idx: parseInt(e.target.value), style_idx: 0, speed: value.speed || 1.0 })}
+            <select
+              value={resolvedCharIdx}
+              onChange={e => {
+                const i = parseInt(e.target.value);
+                const c = currentEngineData[i];
+                onChange({ ...value, char_idx: i, char_name: c?.name || c?.speakerName, style_idx: 0, style_name: (c?.styles?.[0]?.name || c?.styles?.[0]?.styleName), speed: value.speed || 1.0 });
+              }}
               className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none"
             >
               {currentEngineData.map((char: any, i: number) => (
@@ -179,9 +201,13 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
 
           <div>
             <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">Style</label>
-            <select 
-              value={value.style_idx}
-              onChange={e => onChange({ ...value, style_idx: parseInt(e.target.value), speed: value.speed || 1.0 })}
+            <select
+              value={resolvedStyleIdx}
+              onChange={e => {
+                const i = parseInt(e.target.value);
+                const s = styles[i];
+                onChange({ ...value, style_idx: i, style_name: s?.name || s?.styleName, speed: value.speed || 1.0 });
+              }}
               className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none"
             >
               {styles.map((style: any, i: number) => (

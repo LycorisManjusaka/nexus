@@ -6,7 +6,11 @@ const CHAR_MAP_PATH = path.resolve(process.cwd(), '..', 'local_data', 'character
 
 interface CharMap {
   engines: Record<string, string>;
-  rules: { engine: string; charId: string; name: string }[];
+  // `engine`/`charId` are optional: a name-only rule is valid (e.g. registered
+  // purely as a letters recipient or display name with no TTS voice behind
+  // it). Only `name` is required. Anything that needs an actual voice must
+  // check for both being present rather than assuming they always are.
+  rules: { engine?: string; charId?: string; name: string }[];
   fallback: string;
   humanLabel: string;
 }

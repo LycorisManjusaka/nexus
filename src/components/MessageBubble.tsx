@@ -492,6 +492,8 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       engine: voice.engine || 0,
       char_idx: voice.char_idx || 0,
       style_idx: voice.style_idx || 0,
+      char_name: voice.char_name,
+      style_name: voice.style_name,
       speed: voice.speed || 1.0,
       pitch,
     };
@@ -721,7 +723,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       const cleaned = stripAllTimestamps(ttsSource);
       // If the whole message was nothing but timestamps, there's nothing to say.
       if (!isOnlyTimestamps(ttsSource) && cleaned.trim()) {
-        segments.push({ text: cleaned, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch });
+        segments.push({ text: cleaned, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, char_name: voice.char_name, style_name: voice.style_name, speed: voice.speed || 1.0, pitch });
       }
     } else {
       const regex = /\[(.*?)\]/g;
@@ -738,7 +740,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             if (v) voice = v;
           }
           const tagPitch = currentTag ? (folders?.find((f: any) => f.name === currentTag)?.settings?.voicePitch ?? voice.pitch ?? 0.0) : (voice.pitch ?? 0.0);
-          segments.push({ text: textBefore, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch: tagPitch });
+          segments.push({ text: textBefore, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, char_name: voice.char_name, style_name: voice.style_name, speed: voice.speed || 1.0, pitch: tagPitch });
         }
         currentTag = match[1];
         lastIndex = regex.lastIndex;
@@ -752,7 +754,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           if (v) voice = v;
         }
         const tagPitch = currentTag ? (folders?.find((f: any) => f.name === currentTag)?.settings?.voicePitch ?? voice.pitch ?? 0.0) : (voice.pitch ?? 0.0);
-        segments.push({ text: textAfter, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch: tagPitch });
+        segments.push({ text: textAfter, engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, char_name: voice.char_name, style_name: voice.style_name, speed: voice.speed || 1.0, pitch: tagPitch });
       }
 
       if (segments.length === 0 && ttsSource.trim()) {
@@ -763,7 +765,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           if (v) voice = v;
         }
         const fbPitch = seedTag ? (folders?.find((f: any) => f.name === seedTag)?.settings?.voicePitch ?? voice.pitch ?? 0.0) : (voice.pitch ?? 0.0);
-        segments.push({ text: ttsSource.trim(), engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, speed: voice.speed || 1.0, pitch: fbPitch });
+        segments.push({ text: ttsSource.trim(), engine: voice.engine || 0, char_idx: voice.char_idx || 0, style_idx: voice.style_idx || 0, char_name: voice.char_name, style_name: voice.style_name, speed: voice.speed || 1.0, pitch: fbPitch });
       }
     }
     
