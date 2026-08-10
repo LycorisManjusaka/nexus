@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, KeyRound, Volume2, SlidersHorizontal } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
+import { t as translate } from '@/lib/i18n';
 
 // Preferences is split into tabs because the three groups have nothing to do
 // with each other and the API-key list alone is twelve providers long. Add a
@@ -17,6 +18,9 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id'];
 
 export default function SettingsModal({ onClose, globalSettings, setGlobalSettings }: any) {
+  // Drives the small GUI-chrome translation slice below (see src/lib/i18n.ts
+  // for what is and isn't covered yet).
+  const uiLang = globalSettings?.language;
   // claudeAuthMode + claudeOAuthToken are OPT-IN additions for using your
   // Claude Pro/Max subscription billing instead of pay-per-token API billing.
   // Default is 'api-key' so existing setups keep working exactly as before.
@@ -165,7 +169,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
-          <h2 className="text-lg font-bold">Preferences</h2>
+          <h2 className="text-lg font-bold">{translate('settings.title', uiLang)}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
             <X size={20} />
           </button>
@@ -186,7 +190,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                     : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
                 }`}
               >
-                <Icon size={14} /> {t.label}
+                <Icon size={14} /> {translate(`settings.tab.${t.id}`, uiLang)}
               </button>
             );
           })}
@@ -691,10 +695,10 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
         <div className="px-6 py-4 border-t border-border bg-secondary/30 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium rounded-lg hover:bg-muted transition-colors">
-            Cancel
+            {translate('settings.cancel', uiLang)}
           </button>
           <button onClick={saveKeys} className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity flex items-center gap-2">
-            <Save size={16} /> Save Changes
+            <Save size={16} /> {translate('settings.saveChanges', uiLang)}
           </button>
         </div>
       </div>
