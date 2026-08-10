@@ -9,7 +9,11 @@ from pathlib import Path
 # ==========================================
 class Config:
     PORT = 13001
-    LOG_FILE = Path("ear_log.txt") # 実行した階層（ルート）に保存されます
+    # See voice_changer.py's Config for the program/data split rationale.
+    PROGRAM_DIR = Path(__file__).resolve().parent
+    DATA_DIR = PROGRAM_DIR.parent / "local_data" / "voicechanger"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_FILE = DATA_DIR / "ear_log.txt"
 
 class EarService:
     def __init__(self):

@@ -19,21 +19,31 @@ class Config:
     COEIROINK_URL = "http://127.0.0.1:50032"
     ENGINES = ["voicevox", "coeiroink"]
 
-    DEVICE_SETTINGS_FILE = 'device_settings.json'
-    VOICEVOX_SPEAKERS_FILE = 'speakers.json'
-    CHARA_SETTINGS_FILE = 'chara_settings.json'
-    QUIRKS_FILE = Path('quirks.json')
-    AUDIO_FOLDER = Path('audio')
-    
-    KOHAI_TXT_PATH = Path("kohai.txt")
-    GAIRAIGO_FILE = "gairaigo.txt"
+    # PROGRAM_DIR = this file's own location (git-tracked, unchanging code +
+    # notification .wav assets). DATA_DIR = local_data/voicechanger (gitignored
+    # per-machine state: character selection, device settings, quirks, cached
+    # speaker catalog, live transcripts). Anchored off __file__ rather than a
+    # bare relative path so these resolve correctly no matter what cwd the
+    # process was launched with.
+    PROGRAM_DIR = Path(__file__).resolve().parent
+    DATA_DIR = PROGRAM_DIR.parent / "local_data" / "voicechanger"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    DEVICE_SETTINGS_FILE = DATA_DIR / 'device_settings.json'
+    VOICEVOX_SPEAKERS_FILE = DATA_DIR / 'speakers.json'
+    CHARA_SETTINGS_FILE = DATA_DIR / 'chara_settings.json'
+    QUIRKS_FILE = DATA_DIR / 'quirks.json'
+    AUDIO_FOLDER = DATA_DIR / 'audio'
+
+    KOHAI_TXT_PATH = DATA_DIR / "kohai.txt"
+    GAIRAIGO_FILE = DATA_DIR / "gairaigo.txt"
 
     NOTIFICATIONS = {
-        "processing": Path("notifications/processing.wav"),
-        "synthesizing": Path("notifications/synthesizing.wav"),
-        "could_not_understand": Path("notifications/could_not_understand.wav"),
-        "error": Path("notifications/error.wav"),
-        "copy": Path("notifications/copy.wav"),
+        "processing": PROGRAM_DIR / "notifications/processing.wav",
+        "synthesizing": PROGRAM_DIR / "notifications/synthesizing.wav",
+        "could_not_understand": PROGRAM_DIR / "notifications/could_not_understand.wav",
+        "error": PROGRAM_DIR / "notifications/error.wav",
+        "copy": PROGRAM_DIR / "notifications/copy.wav",
     }
 
 # ==========================================

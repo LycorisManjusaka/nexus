@@ -2,8 +2,13 @@ import json
 import pyaudio
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pathlib import Path
 
-SETTINGS_FILE = 'device_settings.json'
+# See voice_changer.py's Config for the program/data split rationale.
+_PROGRAM_DIR = Path(__file__).resolve().parent
+_DATA_DIR = _PROGRAM_DIR.parent / "local_data" / "voicechanger"
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+SETTINGS_FILE = _DATA_DIR / 'device_settings.json'
 
 # Load the available devices
 def list_devices():

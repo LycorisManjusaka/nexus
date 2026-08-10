@@ -3,12 +3,17 @@ import time
 import wave
 import pyaudio
 import os
+from pathlib import Path
 
-SETTINGS_FILE = "device_settings.json"
+# See voice_changer.py's Config for the program/data split rationale.
+_PROGRAM_DIR = Path(__file__).resolve().parent
+_DATA_DIR = _PROGRAM_DIR.parent / "local_data" / "voicechanger"
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+SETTINGS_FILE = _DATA_DIR / "device_settings.json"
 
 NOTIFICATIONS = {
-    "test1": os.path.join("notifications", "test1.wav"),
-    "test2": os.path.join("notifications", "test2.wav")
+    "test1": str(_PROGRAM_DIR / "notifications" / "test1.wav"),
+    "test2": str(_PROGRAM_DIR / "notifications" / "test2.wav")
 }
 
 def load_settings():

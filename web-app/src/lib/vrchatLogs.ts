@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { kohaiPath, earLogPath, speakersJsonPath, VOICECHANGER_DIR } from './voicechangerPaths';
+import { kohaiPath, earLogPath, speakersJsonPath, VOICECHANGER_DATA_DIR } from './voicechangerPaths';
 import { resolveCharaByIds, getCharaFallback } from './charaResolver';
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -142,10 +142,10 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
   }
 
   // Optionally empty both files (clear-on-send). BEFORE truncating, snapshot
-  // each file's raw content to voicechanger/<name>_backup/<date_time>.txt so a
-  // cleared transcript is never truly lost — even if a downstream bug clears the
-  // files without actually sending the message. Best-effort; a backup failure
-  // must not stop the clear.
+  // each file's raw content to local_data/voicechanger/<name>_backup/<date_time>.txt
+  // so a cleared transcript is never truly lost — even if a downstream bug clears
+  // the files without actually sending the message. Best-effort; a backup
+  // failure must not stop the clear.
   if (consume) {
     const stamp = footerLikeStamp();
     ([{ file: kohaiFile, name: 'kohai' }, { file: earFile, name: 'ear' }]).forEach(({ file, name }) => {
@@ -153,7 +153,7 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
       try {
         const raw = fs.readFileSync(file, 'utf-8');
         if (raw.trim()) {
-          const backupDir = path.join(VOICECHANGER_DIR, `${name}_backup`);
+          const backupDir = path.join(VOICECHANGER_DATA_DIR, `${name}_backup`);
           try {
             fs.mkdirSync(backupDir, { recursive: true });
             fs.writeFileSync(path.join(backupDir, `${stamp}.txt`), raw);

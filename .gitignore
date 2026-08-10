@@ -5,12 +5,11 @@
 # Created by install.ps1, seeded from web-app/defaults/local_data.
 /local_data/
 
-# voicechanger runtime state -- both files are opened in append mode by the
-# Python scripts that write them, so they're created automatically on first
-# run if missing. See voicechanger/README.md and web-app/scripts/README.md.
-/voicechanger/kohai.txt
-/voicechanger/ear_log.txt
-/voicechanger/*_backup/
+# voicechanger runtime state (chara_settings.json, device_settings.json,
+# quirks.json, speakers.json, gairaigo.txt, kohai.txt, ear_log.txt, and their
+# *_backup/ snapshot folders) now lives under local_data/voicechanger/ --
+# already covered by the /local_data/ rule above. voicechanger/ itself holds
+# only git-tracked program code + notification .wav assets.
 
 # Python artifacts (voicechanger/)
 __pycache__/

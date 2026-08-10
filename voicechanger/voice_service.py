@@ -28,8 +28,12 @@ from pathlib import Path
 
 class Config:
     PORT = 13000
-    KOHAI_TXT_PATH = Path("kohai.txt")
-    CHARA_SETTINGS_FILE = Path("chara_settings.json")
+    # See voice_changer.py's Config for the program/data split rationale.
+    PROGRAM_DIR = Path(__file__).resolve().parent
+    DATA_DIR = PROGRAM_DIR.parent / "local_data" / "voicechanger"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    KOHAI_TXT_PATH = DATA_DIR / "kohai.txt"
+    CHARA_SETTINGS_FILE = DATA_DIR / "chara_settings.json"
     ENGINES = ["voicevox", "coeiroink"]
 
 

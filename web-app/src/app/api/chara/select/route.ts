@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { charaSettingsPath, VOICECHANGER_DIR } from '@/lib/voicechangerPaths';
+import { charaSettingsPath, VOICECHANGER_DATA_DIR, ensureVoicechangerDataDir } from '@/lib/voicechangerPaths';
 
 const CHAR_MAP_PATH = path.resolve(process.cwd(), '..', 'local_data', 'character_map.json');
 
@@ -12,19 +12,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
     }
 
-    // Voice switching writes into the external voicechanger project. The folder
-    // may not exist on machines that sync only the repo + local_data (e.g. a
-    // work laptop without the Python voicechanger). Previously we no-op'd there,
-    // which made "Active Character" silently unchangeable — it always reverted
-    // to the fallback. Instead, CREATE the voicechanger directory so the
-    // chara_settings.json written below persists. That single file is all the
-    // web-app needs to read the selection back; the full Python service isn't
-    // required just to choose a character.
+    // Voice switching writes into local_data/voicechanger (the data half of the
+    // voicechanger integration). It may not exist yet on a fresh machine.
+    // Previously we no-op'd there, which made "Active Character" silently
+    // unchangeable — it always reverted to the fallback. Instead, CREATE the
+    // directory so the chara_settings.json written below persists. That single
+    // file is all the web-app needs to read the selection back; the full
+    // Python service isn't required just to choose a character.
     try {
-      fs.mkdirSync(VOICECHANGER_DIR, { recursive: true });
+      ensureVoicechangerDataDir();
     } catch (e: any) {
       return NextResponse.json(
-        { error: `Could not create voicechanger directory at "${VOICECHANGER_DIR}": ${e.message}` },
+        { error: `Could not create voicechanger data directory at "${VOICECHANGER_DATA_DIR}": ${e.message}` },
         { status: 500 },
       );
     }

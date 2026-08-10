@@ -4,6 +4,7 @@ import path from 'path';
 import { mergeVrchatLogs } from '@/lib/vrchatLogs';
 import {
   VOICECHANGER_DIR,
+  VOICECHANGER_DATA_DIR,
   kohaiPath,
   earLogPath,
   voicechangerAvailable,
@@ -50,7 +51,9 @@ export async function GET(req: Request) {
       return NextResponse.json({
         cwd: process.cwd(),
         voicechangerDir: VOICECHANGER_DIR,
+        voicechangerDataDir: VOICECHANGER_DATA_DIR,
         envOverride: process.env.NEXUS_VOICECHANGER_DIR || null,
+        dataEnvOverride: process.env.NEXUS_VOICECHANGER_DATA_DIR || null,
         voicechangerAvailable: voicechangerAvailable(),
         kohai: inspectFile(kohaiPath()),
         earLog: inspectFile(earLogPath()),
@@ -101,7 +104,7 @@ export async function POST(req: Request) {
       // an accidental click should never be unrecoverable.
       if (had > 0) {
         try {
-          const dir = path.join(VOICECHANGER_DIR, body.clearKohai ? 'kohai_backup' : 'ear_backup');
+          const dir = path.join(VOICECHANGER_DATA_DIR, body.clearKohai ? 'kohai_backup' : 'ear_backup');
           fs.mkdirSync(dir, { recursive: true });
           const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
           fs.copyFileSync(target, path.join(dir, `${stamp}_manual.txt`));
