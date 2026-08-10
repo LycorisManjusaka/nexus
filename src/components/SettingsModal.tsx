@@ -610,6 +610,28 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             </div>
 
             <div>
+              <label className="block">
+                <span className="text-sm text-foreground">Language</span>
+                <select
+                  value={globalSettings.language ?? 'en'}
+                  onChange={e => setGlobalSettings({ ...globalSettings, language: e.target.value })}
+                  className="mt-1 w-40 px-2 py-1 rounded-md border border-border bg-background text-sm block"
+                >
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                </select>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Two variants: English or Japanese. Covers this Preferences window now; the rest of the
+                interface is not translated yet. Also picks which built-in language an ENTITY&apos;s hidden
+                instructions (tool descriptions, letter notices, etc.) default to when a folder has not
+                overridden them — still editable per-Entity exactly as before either way. The Japanese
+                defaults start as a verbatim copy of the English text and only change where someone hand-writes
+                a real Japanese version — nothing here is machine-translated.
+              </p>
+            </div>
+
+            <div>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
