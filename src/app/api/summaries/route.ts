@@ -45,6 +45,13 @@ async function orderedConvos(folderName: string): Promise<Array<{ convoId: strin
 // GET /api/summaries?folder=X&mode=index          → { body: string }
 //   The assembled Layer-4 index body (titles + summaries in sidebar order;
 //   inactive conversations listed by title only, their summaries never shown).
+// GET /api/summaries?folder=X&mode=all            → { summaries: Record<key, string> }
+//   Every summary in the folder, keyed by summaryKey(title). One request per
+//   folder instead of one per conversation — this feeds the sidebar's hover
+//   preview. Unlike mode=index this is a USER-facing view, so inactive
+//   conversations are NOT filtered out: the filtering in mode=index exists to
+//   keep them out of what gets injected into an AI's context, not to hide them
+//   from the person reading their own sidebar.
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -54,6 +61,10 @@ export async function GET(req: Request) {
 
     if (!folder) {
       return NextResponse.json({ error: 'folder is required' }, { status: 400 });
+    }
+
+    if (mode === 'all') {
+      return NextResponse.json({ summaries: await listSummaries(folder) });
     }
 
     if (mode === 'index') {

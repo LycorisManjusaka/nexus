@@ -215,6 +215,66 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
   return out;
 }
 
+// ── Base Model Family → default model ────────────────────────────────────────
+// One table, four call sites. Before this existed, each site carried its own
+// fallback and they disagreed: initial state said claude-sonnet-4-5, the
+// conversation loader said claude-opus-4-8, the family dropdown said something
+// else again, and the sidebar-sync effect had no fallback at all — so a folder
+// with a family but no saved model landed on an EMPTY model and the chat was
+// unusable until the model was picked by hand. That last one was the bug.
+//
+// `Local` is deliberately empty: the list comes from whatever LM Studio has
+// loaded, so there is no sane default to guess.
+const FAMILY_DEFAULT_MODEL: Record<string, string> = {
+  Claude: 'claude-opus-4-8',
+  Gemini: 'gemini-3.5-flash',
+  Qwen: 'qwen3.6-plus',
+  DeepSeek: 'deepseek-v4-flash',
+  GLM: 'glm-5.2',
+  Grok: 'grok-4.5',
+  Kimi: 'moonshotai/Kimi-K3',
+  Cohere: 'command-a-plus-05-2026',
+  Minimax: 'MiniMax-M3',
+  ChatGPT: 'gpt-5.6-terra',
+  MiMo: 'mimo-v2.5',
+  ByteDance: 'seed-2-0-pro-260328',
+  Local: '',
+};
+
+/** Default model id for a Base Model Family. Unknown family → Claude's default. */
+function defaultModelForFamily(aiName: string): string {
+  if (aiName === 'Local') return '';
+  return FAMILY_DEFAULT_MODEL[aiName] ?? FAMILY_DEFAULT_MODEL.Claude;
+}
+
+/** Does an already-selected model id belong to this family? Used so switching
+ *  family only overwrites the model when the current one doesn't fit. */
+function modelBelongsToFamily(model: string | undefined | null, aiName: string): boolean {
+  const m = (model || '').toLowerCase();
+  if (!m) return false;
+  switch (aiName) {
+    case 'Claude':     return m.includes('claude');
+    case 'Gemini':     return m.includes('gemini');
+    case 'Qwen':       return m.startsWith('qwen');
+    case 'DeepSeek':   return m.startsWith('deepseek');
+    case 'GLM':        return m.startsWith('glm') || m.startsWith('digitalocean/glm');
+    case 'Grok':       return m.startsWith('grok');
+    case 'Kimi':       return m.includes('kimi');
+    case 'Cohere':     return m.startsWith('command-');
+    case 'Minimax':    return m.startsWith('minimax');
+    case 'ChatGPT':    return m.startsWith('gpt');
+    case 'MiMo':       return m.startsWith('mimo');
+    case 'ByteDance':  return m.startsWith('seed');
+    // A local model id is anything that isn't one of the cloud families above.
+    // `digitalocean/` is called out separately because it hosts several
+    // families, not just GLM.
+    case 'Local':      return !m.startsWith('digitalocean/')
+      && !['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Grok', 'Kimi', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance']
+        .some((f) => modelBelongsToFamily(model, f));
+    default:           return false;
+  }
+}
+
 export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -343,7 +403,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "(The image above is the content of Read(\"{filename}\"). Please answer the user's question about it conversationally — do not return coordinates or JSON.)"
   );
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
-  const [specificModel, setSpecificModel] = useState(defaultSpecificModel || (aiName === 'Gemini' ? 'gemini-3.5-flash' : 'claude-sonnet-4-5'));
+  const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
   const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'none');
   const [claudeThinking, setClaudeThinking] = useState(false);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
@@ -721,7 +781,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       initialMount.current = false;
       return;
     }
-    setSpecificModel(defaultSpecificModel);
+    // Fall back to the family default when the folder has a family but no saved
+    // model — otherwise this sets the model to undefined and the chat can't run
+    // until one is picked by hand.
+    setSpecificModel(defaultSpecificModel || defaultModelForFamily(localAiName || aiName));
   }, [defaultSpecificModel]);
 
   // Load chat
@@ -933,7 +996,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof folderSettings.watcherPrompt === 'string') setWatcherPrompt(folderSettings.watcherPrompt);
         setWatcherModel(pick('watcherModel', 'gemini-3.5-flash'));
         setModelParams(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
-        setSpecificModel(defaultSpecificModel || (aiName === 'Gemini' ? 'gemini-3.5-flash' : 'claude-opus-4-8'));
+        setSpecificModel(defaultSpecificModel || defaultModelForFamily(aiName));
       }
       setConvoIsLoading(false);
     })();
@@ -2765,6 +2828,31 @@ How much of this session's room has been used since the last consolidation ("sle
               </span>
             );
           })()}
+          {/* Sleep cue. Appears only once elapsed passes 100%, i.e. once the
+              oldest exchanges have started leaving the verbatim transcript.
+              Deliberately a HINT and nothing more — no auto-consolidation, no
+              blocking. The decision of when to sleep stays with the user.
+              Worded as an available action, not as a diagnosis of the entity
+              (Case 004: a gauge reports a quantity, never a condition). */}
+          {(() => {
+            const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
+            const max = activeFolderSettings.maxRecommendedContext || 60000;
+            const denom = Math.max(1, max - tokenBreakdown.sys);
+            const elapsed = Math.round((tokenBreakdown.original / denom) * 100);
+            if (elapsed < 100) return null;
+            return (
+              <span
+                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 border border-red-500/40 cursor-default whitespace-nowrap"
+                title={`Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.
+
+Starting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.
+
+This is a cue only — nothing happens automatically, and the entity is exactly as capable and has exactly the same tool access as at 5%.`}
+              >
+                💤 sleep
+              </span>
+            );
+          })()}
           {/* Conversation cost — sum of the estimated USD cost of every NEW
               (original, non-copied) assistant message, priced from each one's
               own token usage × modelPricing.json. Shows only "$"; the total is
@@ -4025,15 +4113,15 @@ How much of this session's room has been used since the last consolidation ("sle
                     className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                   />
                   <label htmlFor="vrchatMode" className="text-sm font-semibold text-foreground cursor-pointer">
-                    Enable VRChat Mode
+                    Enable Audio Session
                   </label>
                 </div>
 
                 {vrchatMode && (
                   <div className="mb-6">
-                    <label className="text-sm font-semibold text-foreground mb-1 block">VRChat Hidden Rule</label>
+                    <label className="text-sm font-semibold text-foreground mb-1 block">Audio Session Hidden Rule</label>
                     <p className="text-xs text-muted-foreground mb-2">
-                      Secretly appends these rules to the system prompt when VRChat mode is active.
+                      Secretly appends these rules to the system prompt when Audio Session is active.
                     </p>
                     <textarea
                       value={vrchatRule}
@@ -4069,35 +4157,11 @@ How much of this session's room has been used since the last consolidation ("sle
                     onChange={(e) => {
                       const newAiName = e.target.value;
                       setLocalAiName(newAiName);
-                      if (newAiName === 'Gemini' && !specificModel?.includes('gemini')) {
-                        setSpecificModel('gemini-3.5-flash');
-                      } else if (newAiName === 'Claude' && !specificModel?.includes('claude')) {
-                        setSpecificModel('claude-opus-4-8');
-                      } else if (newAiName === 'Qwen' && !specificModel?.startsWith('qwen')) {
-                        setSpecificModel('qwen3.6-plus');
-                      } else if (newAiName === 'DeepSeek' && !specificModel?.startsWith('deepseek')) {
-                        setSpecificModel('deepseek-v4-flash');
-                      } else if (newAiName === 'GLM' && !specificModel?.startsWith('glm') && !specificModel?.startsWith('digitalocean/glm')) {
-                        setSpecificModel('glm-5.2');
-                      } else if (newAiName === 'Grok' && !specificModel?.startsWith('grok')) {
-                        setSpecificModel('grok-4.5');
-                      } else if (newAiName === 'Kimi' && !specificModel?.toLowerCase().includes('kimi')) {
-                        setSpecificModel('moonshotai/Kimi-K3');
-                      } else if (newAiName === 'Cohere' && !specificModel?.startsWith('command-')) {
-                        setSpecificModel('command-a-plus-05-2026');
-                      } else if (newAiName === 'Minimax' && !specificModel?.toLowerCase().startsWith('minimax')) {
-                        setSpecificModel('MiniMax-M3');
-                      } else if (newAiName === 'ChatGPT' && !specificModel?.toLowerCase().startsWith('gpt')) {
-                        setSpecificModel('gpt-5.6-terra');
-                      } else if (newAiName === 'MiMo' && !specificModel?.toLowerCase().startsWith('mimo')) {
-                        setSpecificModel('mimo-v2.5');
-                      } else if (newAiName === 'ByteDance' && !specificModel?.toLowerCase().startsWith('seed')) {
-                        setSpecificModel('seed-2-0-pro-260328');
-                      } else if (newAiName === 'Local') {
-                        // Clear so the user picks from the list LM Studio reports
-                        if (specificModel?.includes('claude') || specificModel?.includes('gemini') || specificModel?.startsWith('qwen') || specificModel?.startsWith('deepseek') || specificModel?.startsWith('glm') || specificModel?.startsWith('digitalocean/') || specificModel?.startsWith('grok') || specificModel?.toLowerCase().includes('kimi') || specificModel?.startsWith('command-') || specificModel?.toLowerCase().startsWith('minimax') || specificModel?.toLowerCase().startsWith('gpt') || specificModel?.toLowerCase().startsWith('mimo') || specificModel?.toLowerCase().startsWith('seed')) {
-                          setSpecificModel('');
-                        }
+                      // Keep the current model if it already belongs to the new
+                      // family; otherwise take that family's default. For Local
+                      // the default is '' — the list comes from LM Studio.
+                      if (!modelBelongsToFamily(specificModel, newAiName)) {
+                        setSpecificModel(defaultModelForFamily(newAiName));
                       }
                     }}
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"

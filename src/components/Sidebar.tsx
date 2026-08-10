@@ -68,6 +68,52 @@ export default function Sidebar({
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
+  // ── Conversation summary hover preview ─────────────────────────────────────
+  // Every summary in the active folder, fetched ONCE per folder and keyed by
+  // summaryKey(title) — the same filename stem the server files them under.
+  // One request per folder, not one per row; the map is small (plain markdown)
+  // and is dropped as soon as the folder changes.
+  const [folderSummaries, setFolderSummaries] = useState<Record<string, string>>({});
+  // The popup is position:FIXED, not absolute. The conversation list is an
+  // overflow-y-auto scroll container, and per spec `overflow-y:auto` with
+  // `overflow-x:visible` computes x to auto as well — an absolutely-positioned
+  // popup sticking out to the right of a row would simply be clipped off. So
+  // the row's viewport rect is captured on hover and the popup is placed
+  // against the viewport instead.
+  const [hoveredConvo, setHoveredConvo] = useState<{ id: string; top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    const name = activeFolder?.name;
+    if (!name) { setFolderSummaries({}); return; }
+    let cancelled = false;
+    // Clear first so a slow fetch can never show the PREVIOUS folder's
+    // summaries against this folder's titles.
+    setFolderSummaries({});
+    (async () => {
+      try {
+        const res = await fetch(`/api/summaries?folder=${encodeURIComponent(name)}&mode=all`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data?.summaries) setFolderSummaries(data.summaries);
+      } catch { /* preview is optional — a failed fetch just means no tooltip */ }
+    })();
+    return () => { cancelled = true; };
+  }, [activeFolder?.name]);
+
+  // Must stay identical to summaryKey() in lib/summaryStorage.ts. That module
+  // can't be imported here (it pulls in fs/path) so the rule is duplicated;
+  // if it changes there, change it here or every preview silently misses.
+  const summaryKeyForTitle = (title: string) =>
+    String(title || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.\.+/g, '_').trim();
+
+  const previewForConvo = (title: string): string | null => {
+    const raw = folderSummaries[summaryKeyForTitle(title)];
+    if (!raw) return null;
+    const text = raw.trim();
+    if (!text) return null;
+    return text.length > 600 ? `${text.slice(0, 600)}…` : text;
+  };
+
   const handleDragStart = (id: string) => {
     setDraggedId(id);
   };
@@ -651,12 +697,20 @@ export default function Sidebar({
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-all ${
-                currentConvoId === convo.id 
-                  ? 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 font-medium' 
+              className={`group relative flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-all ${
+                currentConvoId === convo.id
+                  ? 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 font-medium'
                   : 'hover:bg-muted/60 text-muted-foreground hover:text-foreground'
               } ${draggedId === convo.id ? 'opacity-50' : ''} ${dragOverId === convo.id ? 'border-t-2 border-indigo-500' : ''}`}
               onClick={() => onSelectConvo(convo.id)}
+              onMouseEnter={(e) => {
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                // Clamp so a row near the bottom of a tall window doesn't push
+                // the popup off-screen.
+                const top = Math.min(r.top, Math.max(8, window.innerHeight - 280));
+                setHoveredConvo({ id: convo.id, top, left: r.right + 8 });
+              }}
+              onMouseLeave={() => setHoveredConvo((cur) => (cur?.id === convo.id ? null : cur))}
               // Drag is disabled while this row is in rename mode — otherwise
               // selecting text inside the input would start a drag-and-drop
               // operation and make it impossible to highlight characters.
@@ -696,7 +750,7 @@ export default function Sidebar({
                   </span>
                 )}
               </div>
-              
+
               {!renamingId && (
                 <div className="relative shrink-0">
                   <button 
@@ -786,6 +840,36 @@ export default function Sidebar({
           </div>
         )}
       </div>
+
+      {/* Conversation summary preview, hover-only.
+          Rendered here — OUTSIDE the animated rows and outside the scroll
+          container — for two reasons. The list is overflow-y-auto, which
+          computes overflow-x to auto as well, so anything sticking out to the
+          right of a row would be clipped. And each row is a framer-motion
+          div: a transformed ancestor becomes the containing block for
+          position:fixed, so a popup nested inside one would be anchored to
+          the row instead of the viewport the moment an animation ran.
+          pointer-events-none keeps it from stealing hover from the row. */}
+      {(() => {
+        if (!hoveredConvo || renamingId || draggedId) return null;
+        const convo = filteredConvos.find((c: any) => c.id === hoveredConvo.id);
+        if (!convo) return null;
+        const preview = previewForConvo(convo.title);
+        if (!preview) return null;
+        return (
+          <div
+            style={{ position: 'fixed', top: hoveredConvo.top, left: hoveredConvo.left }}
+            className="z-[90] w-80 max-h-64 overflow-hidden pointer-events-none rounded-lg border border-border bg-card shadow-2xl p-3"
+          >
+            <div className="text-[10px] uppercase tracking-wider text-indigo-500 font-semibold mb-1 truncate">
+              {convo.title}
+            </div>
+            <div className="text-xs leading-relaxed text-foreground whitespace-pre-wrap break-words">
+              {preview}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Delete Modal */}
       {deleteModalId && (
@@ -931,17 +1015,30 @@ export default function Sidebar({
                 </h4>
                 <div className="space-y-4">
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                      Maximal recommended context window size (tokens)
-                    </label>
+                    <div className="flex items-baseline justify-between mb-1">
+                      <label className="text-xs font-medium text-muted-foreground">
+                        Maximal recommended context window size
+                      </label>
+                      <span className="text-xs font-mono text-indigo-500">
+                        {(folderMaxRecommendedContext || 0).toLocaleString()} tokens
+                      </span>
+                    </div>
+                    {/* Slider moves in 10k steps from 10k to 200k. The bounds widen to
+                        cover any value already saved off that range, so an existing
+                        75,000 shows where it really is instead of being clamped. */}
                     <input
-                      type="number"
-                      min={1000}
-                      step={1000}
+                      type="range"
+                      min={Math.min(10000, folderMaxRecommendedContext || 10000)}
+                      max={Math.max(200000, folderMaxRecommendedContext || 200000)}
+                      step={10000}
                       value={folderMaxRecommendedContext}
                       onChange={(e) => setFolderMaxRecommendedContext(parseInt(e.target.value) || 60000)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                      className="w-full accent-indigo-500 cursor-pointer"
                     />
+                    <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+                      <span>{(Math.min(10000, folderMaxRecommendedContext || 10000) / 1000).toLocaleString()}k</span>
+                      <span>{(Math.max(200000, folderMaxRecommendedContext || 200000) / 1000).toLocaleString()}k</span>
+                    </div>
                     <div className="text-[10px] text-muted-foreground mt-1">
                       Drives the progress bar in the chat header and (if enabled below) auto-trimming of copied messages.
                     </div>
