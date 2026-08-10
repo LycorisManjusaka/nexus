@@ -425,6 +425,7 @@ async function streamClaudeViaAgentSDK(args: {
   agentFullSystemAccess: boolean;  // per-Entity: file tools reach the whole PC
   agentDangerousTools: boolean;    // per-Entity: enable shell (Bash → delete/exec)
   instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
+  language?: string;               // 'en' | 'ja' — base dict for the instructions above
   askUserEnabled: boolean;         // per-Entity: expose the AskQuestion MCP tool
   askUserTimeoutMs: number;        // wait time for an answer (0 = indefinite)
   subagentEnabled: boolean;        // per-Entity: expose the spawn_subagent MCP tool
@@ -439,8 +440,8 @@ async function streamClaudeViaAgentSDK(args: {
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, convoId, keys, injectTurnId } = args;
-  const I = resolveAgentInstructions(instructionOverrides);
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, convoId, keys, injectTurnId } = args;
+  const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
   // attachments). The full prior conversation is replayed separately as a text
@@ -1981,6 +1982,10 @@ export async function POST(req: Request) {
       // (tool descriptions, path rules, read_conversation + web tool text).
       // Empty/missing keys fall back to the English defaults.
       instructionOverrides = {},
+      // Which built-in language DEFAULT_AGENT_INSTRUCTIONS come from before
+      // per-Entity overrides are layered on ('en' | 'ja'). Set in Preferences
+      // -> Other. Unrecognized/missing values fall back to English.
+      language = 'en',
       toolInstruction = '',
       toolImageInstruction = '',
       // Set by callers whose systemPrompt is an AGENT's instructions rather than
@@ -2144,7 +2149,7 @@ export async function POST(req: Request) {
     // workspace (the fs layer would have allowed it).
     // Resolve all hidden instruction strings (defaults overlaid with this
     // Entity's per-folder overrides). Used to build every tool description below.
-    const I = resolveAgentInstructions(instructionOverrides);
+    const I = resolveAgentInstructions(instructionOverrides, language);
     const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
     const pathRule = agentFullSystemAccess ? I.pathRuleFull : I.pathRuleSandbox;
 
@@ -2660,6 +2665,7 @@ export async function POST(req: Request) {
           agentFullSystemAccess,
           agentDangerousTools,
           instructionOverrides,
+          language,
           askUserEnabled,
           askUserTimeoutMs,
           subagentEnabled,

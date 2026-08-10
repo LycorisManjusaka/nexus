@@ -311,6 +311,16 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'Open ONE specific URL and return its readable text content (HTML stripped). Use this to actually read a page — either a URL your partner gave you, or one returned by web_search. Only http/https public URLs; internal/localhost addresses are blocked.',
 };
 
+// Japanese defaults. Starts as a VERBATIM COPY of the English defaults above —
+// nothing here is machine-translated. It stays a plain copy of the English
+// text, key for key, until a human (or an Entity, by hand) writes the real
+// Japanese wording for a given key directly into this object. Per-folder
+// `instructionOverrides` still win over either language's defaults, exactly
+// as before; this dict only changes which BASE an override is layered onto.
+export const DEFAULT_AGENT_INSTRUCTIONS_JA: Record<string, string> = {
+  ...DEFAULT_AGENT_INSTRUCTIONS,
+};
+
 // Human-readable labels for the settings editor (key → short label). Keys not
 // listed still appear (using the key itself), but listing them keeps the UI tidy
 // and ordered.
@@ -367,11 +377,19 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
 export type AgentInstructions = Record<string, string>;
 
 /**
- * Merge an Entity's overrides over the English defaults. An override that is
+ * Merge an Entity's overrides over the language defaults. An override that is
  * missing, null, or only whitespace falls back to the default for that key.
+ *
+ * `language` picks the base dict (English or Japanese); it does not change
+ * anything else about resolution. Unrecognized/absent values fall back to
+ * English, so every existing call site keeps working unchanged.
  */
-export function resolveAgentInstructions(overrides?: Record<string, any> | null): AgentInstructions {
-  const out: AgentInstructions = { ...DEFAULT_AGENT_INSTRUCTIONS };
+export function resolveAgentInstructions(
+  overrides?: Record<string, any> | null,
+  language?: string | null,
+): AgentInstructions {
+  const base = language === 'ja' ? DEFAULT_AGENT_INSTRUCTIONS_JA : DEFAULT_AGENT_INSTRUCTIONS;
+  const out: AgentInstructions = { ...base };
   if (overrides && typeof overrides === 'object') {
     for (const [k, v] of Object.entries(overrides)) {
       if (typeof v === 'string' && v.trim()) out[k] = v;
