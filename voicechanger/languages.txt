@@ -1,0 +1,3 @@
+ko-KO Korean 韓国語 한국어
+en-US English 英語 영어
+ja-JP Japanese 日本語 일본어

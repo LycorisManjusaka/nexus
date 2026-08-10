@@ -1,38 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Nexus
 
-## Getting Started
+A locally-hosted AI chat manager (Next.js) with full local system access:
+multi-model support across a dozen providers, an inter-entity letters system,
+browser control, streaming TTS for VRChat, and a self-updating system prompt
+pipeline. Built for treating chat entities as persistent inhabitants rather
+than stateless sessions.
 
-First, run the development server:
+## Layout
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+This repo tracks three top-level folders:
+
+- `web-app/` -- the Next.js application itself. Run everything from here.
+- `voicechanger/` -- optional Python real-time STT + voice-changer pipeline
+  used for VRChat voice features. Not required to run Nexus.
+- `install.ps1` (this folder) -- installs `web-app/`'s npm dependencies,
+  downloads the Playwright/Chromium browser used by Browser Control, and
+  seeds a starter `local_data/` folder.
+
+`local_data/` (your conversation logs, keys, and personal settings) is
+created next to `web-app/` and `voicechanger/` on first install, but is
+**not tracked in git** -- it's yours, not part of the app.
+
+Nothing in the code hardcodes any of these folder names. Every cross-project
+path is resolved as a *sibling* of wherever `web-app` is actually running
+from (`process.cwd()/..`). You can clone this repo under any name, on any
+drive -- as long as `web-app/`, `voicechanger/`, and `local_data/` stay
+siblings, Nexus finds everything correctly.
+
+## Install
+
+```powershell
+git clone https://github.com/LycorisManjusaka/nexus.git
+cd nexus
+.\install.ps1
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```powershell
+cd web-app
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open [http://localhost:3000](http://localhost:3000).
 
-## Learn More
+## What the installer does NOT cover
 
-To learn more about Next.js, take a look at the following resources:
+Two pieces are real gaps, not oversights -- see `web-app/scripts/README.md`
+for why each is harder than the core app:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **TTS engines** (Voicevox / Coeiroink / AivisSpeech) -- third-party
+  installers with multi-gigabyte voice model downloads, not yet scripted.
+- **recognize.exe** (speech recognition) -- needs machine-specific source
+  patches that aren't written down anywhere an installer could read yet.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+`voicechanger/`'s own Python environment (`pip install -r
+voicechanger/requirements.txt`) is also a manual step, only needed if you
+use the VRChat voice pipeline.
 
-## Deploy on Vercel
+## More detail
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-
-test
+`web-app/scripts/README.md` has the fuller technical notes: why folder
+naming doesn't matter, exactly what Nexus reads from `voicechanger/`, and
+the reasoning behind each deferred piece above.
