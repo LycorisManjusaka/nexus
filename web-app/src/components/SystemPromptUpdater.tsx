@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle } from 'lucide-react';
 import { diff_match_patch, DIFF_DELETE, DIFF_INSERT } from 'diff-match-patch';
 import { DEFAULT_SUMMARY_INDEX_HINT } from '@/lib/summaryHint';
+import { useT, Tx } from '@/lib/i18n';
 
 // One shared diff engine. We do NOT diff the raw text directly: on a large
 // prompt, character-level diff_main blows past its time cap and bails out to a
@@ -94,12 +95,13 @@ function assembleLayers123(text: string): string {
 
 // ── Word-level diff display ────────────────────────────────────────────────
 function DiffView({ before, after }: { before: string; after: string }) {
+  const t = useT();
   const parts = useMemo(() => {
     if (!before && !after) return null;
     // Token-level diff — fast and word-granular (see diffByTokens above).
     return diffByTokens(before, after);
   }, [before, after]);
-  if (!parts) return <div className="italic text-muted-foreground text-xs">(empty)</div>;
+  if (!parts) return <div className="italic text-muted-foreground text-xs">{t('spu.empty')}</div>;
   return (
     <div className="text-[12px] leading-relaxed whitespace-pre-wrap font-mono break-words">
       {parts.map(([op, text], i) => {
@@ -123,41 +125,42 @@ type RunStatus =
   | { state: 'error'; message: string };
 
 function StatusBadge({ status }: { status: RunStatus }) {
+  const t = useT();
   if (status.state === 'idle') return null;
   if (status.state === 'called') {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground" title="POST sent, awaiting first response chunk">
-        <Loader2 size={10} className="animate-spin" /><Phone size={10} />Calling…
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground" title={t('spu.badge.callingTitle')}>
+        <Loader2 size={10} className="animate-spin" /><Phone size={10} />{t('spu.badge.calling')}
       </span>
     );
   }
   if (status.state === 'thinking') {
     return (
       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 animate-pulse"
-        title={`Thinking — ${status.thinkingChars.toLocaleString()} thought chars`}>
-        <Brain size={10} />Thinking · {status.thinkingChars.toLocaleString()}
+        title={t('spu.badge.thinkingTitle').replace('{n}', status.thinkingChars.toLocaleString())}>
+        <Brain size={10} />{t('spu.badge.thinking')} · {status.thinkingChars.toLocaleString()}
       </span>
     );
   }
   if (status.state === 'outputting') {
     return (
       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 animate-pulse"
-        title={`Writing — ${status.outputChars.toLocaleString()} chars`}>
-        <PenLine size={10} />Writing · {status.outputChars.toLocaleString()}
+        title={t('spu.badge.writingTitle').replace('{n}', status.outputChars.toLocaleString())}>
+        <PenLine size={10} />{t('spu.badge.writing')} · {status.outputChars.toLocaleString()}
       </span>
     );
   }
   if (status.state === 'done') {
     return (
       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-        title={`Done — ${status.outputChars.toLocaleString()} output chars`}>
-        <Check size={10} />Done
+        title={t('spu.badge.doneTitle').replace('{n}', status.outputChars.toLocaleString())}>
+        <Check size={10} />{t('spu.badge.done')}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono bg-red-500/15 text-red-600 dark:text-red-400 max-w-[260px] truncate" title={status.message}>
-      <AlertTriangle size={10} />Error
+      <AlertTriangle size={10} />{t('spu.badge.error')}
     </span>
   );
 }
@@ -340,6 +343,7 @@ export default function SystemPromptUpdater({
   aiName, specificModel, modelParams,
   folders, saveFolderSettings, onFinalize,
 }: Props) {
+  const t = useT();
   // ── State ────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'summary' | 'auto'>(null);
@@ -498,7 +502,7 @@ export default function SystemPromptUpdater({
     let cancelled = false;
     (async () => {
       setLoading(true);
-      setStatusMessage('Loading current + next prompt files + agent types…');
+      setStatusMessage(t('spu.st.loading'));
       try {
         const [curRes, nextRes, typesRes] = await Promise.all([
           fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`).then((r) => r.json()),
@@ -582,13 +586,13 @@ export default function SystemPromptUpdater({
         });
         setStatusMessage(
           nextRaw
-            ? 'Loaded existing draft for next conversation from disk — pick up where you left off.'
+            ? t('spu.st.loadedDraft')
             : (types.length === 0
-                ? 'No agent types found. Create a subfolder under local_data/system_prompt_agents/ with the agent file.'
+                ? t('spu.st.noAgentTypes')
                 : '')
         );
       } catch (e: any) {
-        setStatusMessage(`Load failed: ${e.message}`);
+        setStatusMessage(t('spu.st.loadFailed').replace('{e}', e.message));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -908,8 +912,8 @@ export default function SystemPromptUpdater({
     if (!agent) {
       setStatusMessage(
         selectedAgentType
-          ? `No "${agentFilename}" found under local_data/system_prompt_agents/${selectedAgentType}/.`
-          : 'No agent type selected — pick one from the dropdown.'
+          ? t('spu.st.noAgentFile').replace('{file}', agentFilename).replace('{type}', selectedAgentType)
+          : t('spu.st.noTypeSelected')
       );
       return null;
     }
@@ -920,8 +924,8 @@ export default function SystemPromptUpdater({
     // and the diff/compare is frozen until the run ends or is stopped.
     setStreamingUpdate(true);
     setStatusMessage(withConversation
-      ? 'Updating Layers 1-3 (single pass)…'
-      : 'Refining Layers 1-3 from the prompt itself (no conversation log)…');
+      ? t('spu.st.updating')
+      : t('spu.st.refining'));
 
     const focus = focusPoint.trim();
     // Snapshot BEFORE anything can overwrite the pane. Streaming assigns into
@@ -1042,7 +1046,7 @@ export default function SystemPromptUpdater({
         if (accum.includes(END_SENTINEL)) break;        // finished cleanly
         if (!piece.trim()) break;                       // model produced nothing new
         if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(`Output continued past the token cap — fetching more (continuation ${attempt + 1})…`);
+          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
         }
       }
 
@@ -1056,12 +1060,12 @@ export default function SystemPromptUpdater({
       if (!cleaned) {
         if (controller.signal.aborted) {
           setUpdateStatus({ state: 'idle' });
-          setStatusMessage('Update stopped — no output was produced yet.');
+          setStatusMessage(t('spu.st.updateStoppedEmpty'));
           return null;
         }
-        const msg = 'Empty response (refusal, content filter, or output token cap)';
+        const msg = t('spu.st.emptyResponse');
         setUpdateStatus({ state: 'error', message: msg });
-        setStatusMessage('Updater returned no text — model may have refused or hit a filter.');
+        setStatusMessage(t('spu.st.updateNoText'));
         return null;
       }
 
@@ -1085,14 +1089,14 @@ export default function SystemPromptUpdater({
       }
       if (controller.signal.aborted) {
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
-        setStatusMessage(`Update stopped — kept the partial result (${layersOut.length} chars). Review or re-run.`);
+        setStatusMessage(t('spu.st.updateStoppedPartial').replace('{n}', String(layersOut.length)));
         return null;
       }
       setUpdateStatus({ state: 'done', thinkingChars, outputChars });
       setStatusMessage(
-        `Layers 1-3 updated (${layersOut.length} chars)` +
-        (changelog ? ` · changelog saved (${changelog.length} chars)` : '') +
-        (logs ? ` · ${logs.length} chars of logs separated` : '') + '.'
+        t('spu.st.updateDone').replace('{n}', String(layersOut.length)) +
+        (changelog ? t('spu.st.changelogSaved').replace('{n}', String(changelog.length)) : '') +
+        (logs ? t('spu.st.logsSeparated').replace('{n}', String(logs.length)) : '') + t('spu.st.period')
       );
       return layersOut;
     } catch (e: any) {
@@ -1100,12 +1104,12 @@ export default function SystemPromptUpdater({
       // stop, not a failure.
       if (e?.name === 'AbortError' || controller.signal.aborted) {
         setUpdateStatus({ state: 'idle' });
-        setStatusMessage('Update stopped.');
+        setStatusMessage(t('spu.st.updateStopped'));
         return null;
       }
       const msg = e?.message || 'unknown error';
       setUpdateStatus({ state: 'error', message: msg });
-      setStatusMessage(`Update failed: ${msg}`);
+      setStatusMessage(t('spu.st.updateFailed').replace('{e}', msg));
       return null;
     } finally {
       // Leave live-streaming mode: right pane editable again, diff recomputes.
@@ -1140,8 +1144,8 @@ export default function SystemPromptUpdater({
     if (!agent) {
       setStatusMessage(
         selectedAgentType
-          ? `No "${AGENT_FILE_REDISTRIBUTE}" found under local_data/system_prompt_agents/${selectedAgentType}/.`
-          : 'No agent type selected — pick one from the dropdown.'
+          ? t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_REDISTRIBUTE).replace('{type}', selectedAgentType)
+          : t('spu.st.noTypeSelected')
       );
       return false;
     }
@@ -1150,7 +1154,7 @@ export default function SystemPromptUpdater({
     setUpdateStatus({ state: 'called' });
     setStreamingUpdate(true);
     setRedistributeReport(null);
-    setStatusMessage('Redistributing Layers 1-4 (no conversation log)…');
+    setStatusMessage(t('spu.st.redistributing'));
 
     // Fetch the FULL index, without the `current` exclusion the reference copy
     // uses: this pass rewrites the summary files themselves, so leaving the open
@@ -1244,7 +1248,7 @@ export default function SystemPromptUpdater({
         if (accum.includes(END_SENTINEL)) break;
         if (!piece.trim()) break;
         if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(`Output continued past the token cap — fetching more (continuation ${attempt + 1})…`);
+          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
         }
       }
 
@@ -1256,12 +1260,12 @@ export default function SystemPromptUpdater({
       if (!cleaned) {
         if (controller.signal.aborted) {
           setUpdateStatus({ state: 'idle' });
-          setStatusMessage('Redistribute stopped — no output was produced yet.');
+          setStatusMessage(t('spu.st.redistStoppedEmpty'));
           return false;
         }
-        const msg = 'Empty response (refusal, content filter, or output token cap)';
+        const msg = t('spu.st.emptyResponse');
         setUpdateStatus({ state: 'error', message: msg });
-        setStatusMessage('Redistribute returned no text — model may have refused or hit a filter.');
+        setStatusMessage(t('spu.st.redistNoText'));
         return false;
       }
 
@@ -1275,8 +1279,8 @@ export default function SystemPromptUpdater({
         setRightText(cleaned);
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
         setStatusMessage(controller.signal.aborted
-          ? `Redistribute stopped — kept the raw partial output (${cleaned.length} chars) in the right pane. NO summary file was written. Tick "Continue from the right-side text" to resume.`
-          : `Output ended without the completion marker — treating it as truncated. Kept the raw output (${cleaned.length} chars); NO summary file was written. Tick "Continue from the right-side text" and re-run.`);
+          ? t('spu.st.redistStoppedPartial').replace('{n}', String(cleaned.length))
+          : t('spu.st.redistTruncated').replace('{n}', String(cleaned.length)));
         return false;
       }
 
@@ -1307,16 +1311,16 @@ export default function SystemPromptUpdater({
 
       if (!layer4) {
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
-        setStatusMessage(`Redistribute finished but the output contained no Layer 4 heading — Layers 1-3 are in the right pane, no summary file was written.`);
+        setStatusMessage(t('spu.st.redistNoLayer4'));
         return false;
       }
       if (entries.length === 0) {
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
-        setStatusMessage('Redistribute finished but no "### <title>" entries were found inside Layer 4 — no summary file was written.');
+        setStatusMessage(t('spu.st.redistNoEntries'));
         return false;
       }
 
-      setStatusMessage(`Backing up ${folderName} summaries and writing ${entries.length} entries…`);
+      setStatusMessage(t('spu.st.redistBackingUp').replace('{folder}', folderName).replace('{n}', String(entries.length)));
       const res = await fetch('/api/summaries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1335,11 +1339,11 @@ export default function SystemPromptUpdater({
       setRedistributeReport(report);
       setUpdateStatus({ state: 'done', thinkingChars, outputChars });
       setStatusMessage(
-        `Layers 1-3 updated (${layers123.length} chars) · Layer 4: ${report.replaced.length} replaced` +
-        (report.created.length ? `, ${report.created.length} created` : '') +
-        (report.skipped.length ? `, ${report.skipped.length} skipped` : '') +
-        (report.backedUp ? ` · ${report.backedUp} files backed up` : ' · nothing to back up') +
-        (changelog ? ` · changelog saved` : '') + '.'
+        t('spu.st.redistDone').replace('{n}', String(layers123.length)).replace('{r}', String(report.replaced.length)) +
+        (report.created.length ? t('spu.st.redistCreated').replace('{n}', String(report.created.length)) : '') +
+        (report.skipped.length ? t('spu.st.redistSkipped').replace('{n}', String(report.skipped.length)) : '') +
+        (report.backedUp ? t('spu.st.redistBackedUp').replace('{n}', String(report.backedUp)) : t('spu.st.redistNoBackup')) +
+        (changelog ? t('spu.st.changelogSavedShort') : '') + t('spu.st.period')
       );
       // The reference index is now stale — refresh it from disk.
       try {
@@ -1350,12 +1354,12 @@ export default function SystemPromptUpdater({
     } catch (e: any) {
       if (e?.name === 'AbortError' || controller.signal.aborted) {
         setUpdateStatus({ state: 'idle' });
-        setStatusMessage('Redistribute stopped.');
+        setStatusMessage(t('spu.st.redistStopped'));
         return false;
       }
       const msg = e?.message || 'unknown error';
       setUpdateStatus({ state: 'error', message: msg });
-      setStatusMessage(`Redistribute failed: ${msg}`);
+      setStatusMessage(t('spu.st.redistFailed').replace('{e}', msg));
       return false;
     } finally {
       setStreamingUpdate(false);
@@ -1377,8 +1381,8 @@ export default function SystemPromptUpdater({
     if (!agent) {
       setStatusMessage(
         selectedAgentType
-          ? `No "${AGENT_FILE_GENESIS}" found under local_data/system_prompt_agents/${selectedAgentType}/.`
-          : 'No agent type selected — pick one from the dropdown.'
+          ? t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_GENESIS).replace('{type}', selectedAgentType)
+          : t('spu.st.noTypeSelected')
       );
       return null;
     }
@@ -1386,7 +1390,7 @@ export default function SystemPromptUpdater({
     abortRef.current = controller;
     setUpdateStatus({ state: 'called' });
     setStreamingUpdate(true);
-    setStatusMessage('Constructing Layers 1-3 from scratch (genesis — no prior document assumed)…');
+    setStatusMessage(t('spu.st.genesisRunning'));
 
     const focus = focusPoint.trim();
     const resumeText = resumeFromRight ? rightText.trim() : '';
@@ -1460,7 +1464,7 @@ export default function SystemPromptUpdater({
         if (accum.includes(END_SENTINEL)) break;
         if (!piece.trim()) break;
         if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(`Output continued past the token cap — fetching more (continuation ${attempt + 1})…`);
+          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
         }
       }
 
@@ -1471,12 +1475,12 @@ export default function SystemPromptUpdater({
       if (!cleaned) {
         if (controller.signal.aborted) {
           setUpdateStatus({ state: 'idle' });
-          setStatusMessage('Genesis stopped — no output was produced yet.');
+          setStatusMessage(t('spu.st.genesisStoppedEmpty'));
           return null;
         }
-        const msg = 'Empty response (refusal, content filter, or output token cap)';
+        const msg = t('spu.st.emptyResponse');
         setUpdateStatus({ state: 'error', message: msg });
-        setStatusMessage('Genesis returned no text — model may have refused or hit a filter.');
+        setStatusMessage(t('spu.st.genesisNoText'));
         return null;
       }
 
@@ -1497,24 +1501,24 @@ export default function SystemPromptUpdater({
       }
       if (controller.signal.aborted) {
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
-        setStatusMessage(`Genesis stopped — kept the partial result (${layersOut.length} chars). Review or re-run.`);
+        setStatusMessage(t('spu.st.genesisStoppedPartial').replace('{n}', String(layersOut.length)));
         return null;
       }
       setUpdateStatus({ state: 'done', thinkingChars, outputChars });
       setStatusMessage(
-        `Layers 1-3 built from scratch (${layersOut.length} chars)` +
-        (logs ? ` · ${logs.length} chars of logs separated` : '') + '.'
+        t('spu.st.genesisDone').replace('{n}', String(layersOut.length)) +
+        (logs ? t('spu.st.logsSeparated').replace('{n}', String(logs.length)) : '') + t('spu.st.period')
       );
       return layersOut;
     } catch (e: any) {
       if (e?.name === 'AbortError' || controller.signal.aborted) {
         setUpdateStatus({ state: 'idle' });
-        setStatusMessage('Genesis stopped.');
+        setStatusMessage(t('spu.st.genesisStopped'));
         return null;
       }
       const msg = e?.message || 'unknown error';
       setUpdateStatus({ state: 'error', message: msg });
-      setStatusMessage(`Genesis failed: ${msg}`);
+      setStatusMessage(t('spu.st.genesisFailed').replace('{e}', msg));
       return null;
     } finally {
       setStreamingUpdate(false);
@@ -1535,7 +1539,7 @@ export default function SystemPromptUpdater({
     const controller = new AbortController();
     abortRef.current = controller;
     setSummaryStatus({ state: 'called' });
-    setStatusMessage('Writing conversation summary…');
+    setStatusMessage(t('spu.st.summaryWriting'));
 
     const customInstr = summaryInstructions.trim();
     const userMsg = [
@@ -1587,30 +1591,30 @@ export default function SystemPromptUpdater({
       if (!accum.trim()) {
         if (controller.signal.aborted) {
           setSummaryStatus({ state: 'idle' });
-          setStatusMessage('Summary stopped — no output produced yet.');
+          setStatusMessage(t('spu.st.summaryStoppedEmpty'));
           return null;
         }
-        const msg = 'Empty response (refusal, content filter, or output token cap)';
+        const msg = t('spu.st.emptyResponse');
         setSummaryStatus({ state: 'error', message: msg });
-        setStatusMessage('Summary writer returned no text.');
+        setStatusMessage(t('spu.st.summaryNoText'));
         return null;
       }
       const newSummary = accum.trim();
       setSummaryText(newSummary);
       setSummaryStatus({ state: 'done', thinkingChars, outputChars });
       setStatusMessage(controller.signal.aborted
-        ? `Summary stopped — kept the partial result (${newSummary.length} chars).`
-        : `Summary written (${newSummary.length} chars).`);
+        ? t('spu.st.summaryStoppedPartial').replace('{n}', String(newSummary.length))
+        : t('spu.st.summaryDone').replace('{n}', String(newSummary.length)));
       return controller.signal.aborted ? null : newSummary;
     } catch (e: any) {
       if (e?.name === 'AbortError' || controller.signal.aborted) {
         setSummaryStatus({ state: 'idle' });
-        setStatusMessage('Summary stopped.');
+        setStatusMessage(t('spu.st.summaryStopped'));
         return null;
       }
       const msg = e?.message || 'unknown error';
       setSummaryStatus({ state: 'error', message: msg });
-      setStatusMessage(`Summary write failed: ${msg}`);
+      setStatusMessage(t('spu.st.summaryFailed').replace('{e}', msg));
       return null;
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
@@ -1805,7 +1809,7 @@ export default function SystemPromptUpdater({
                 : autoSaveState === 'saved' ? 'text-emerald-500'
                 : autoSaveState === 'error' ? 'text-red-500'
                 : 'text-muted-foreground'}`}
-              title="Left/right prompt files and header/focus point auto-save as you edit."
+              title={t('spu.autosaveTitle')}
             >
               {autoSaveState === 'saving' ? 'Saving…'
                 : autoSaveState === 'saved' ? 'All changes saved'
@@ -1816,7 +1820,7 @@ export default function SystemPromptUpdater({
               <button
                 onClick={handleStop}
                 className="px-3 py-1.5 bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 rounded-md text-sm font-medium flex items-center gap-1.5"
-                title="Stop the current agent run (keeps any partial output)"
+                title={t('spu.stopTitle')}
               >
                 <Square size={14} /> Stop
               </button>
@@ -1825,18 +1829,18 @@ export default function SystemPromptUpdater({
               onClick={handleAuto}
               disabled={busy || !updateAgent}
               className="px-3 py-1.5 bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Update from Conversation (single pass, updater.md) AND write the summary, then review."
+              title={t('spu.autoTitle')}
             >
               {running === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-              Auto (update + summary)
+              {t('spu.auto')}
             </button>
             <button
               onClick={goToNextConversation}
               disabled={busy}
               className="px-3 py-1.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Save updated prompt and clone this conversation with the new system prompt"
+              title={t('spu.nextTitle')}
             >
-              <ChevronsRight size={14} /> Go to Next Conversation
+              <ChevronsRight size={14} /> {t('spu.next')}
             </button>
             <button onClick={onClose} className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
               <X size={18} />
@@ -1871,7 +1875,7 @@ export default function SystemPromptUpdater({
               value={updaterModelKey}
               onChange={(e) => setUpdaterModelKey(e.target.value)}
               disabled={!forceUpdaterModel}
-              title="Only these families produce usable soul-packer output"
+              title={t('spu.updaterModelTitle')}
               className="px-2 py-1 bg-background border border-border rounded text-xs outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {UPDATER_MODELS.map(m => (
@@ -1888,7 +1892,7 @@ export default function SystemPromptUpdater({
           {/* Agent-type selector */}
           <div className="flex flex-col gap-1.5 px-3 py-2 border border-border rounded bg-muted/10">
             <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium">Agent type:</span>
+              <span className="font-medium">{t('spu.agentType')}</span>
               <select
                 value={selectedAgentType}
                 onChange={(e) => { userPickedTypeRef.current = true; setSelectedAgentType(e.target.value); }}
@@ -1925,24 +1929,24 @@ export default function SystemPromptUpdater({
           {/* Header / Focus point */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 block">Header (prepended to final prompt)</label>
+              <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 block">{t('spu.headerLabel')}</label>
               <textarea
                 value={header}
                 onChange={(e) => setHeader(e.target.value)}
                 onBlur={persistHeaderFooter}
                 rows={3}
-                placeholder="Optional. Saved per-entity. Not part of the layer text."
+                placeholder={t('spu.headerPh')}
                 className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
               />
             </div>
             <div>
-              <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 block">Focus point (passed to the updater agent)</label>
+              <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 block">{t('spu.focusLabel')}</label>
               <textarea
                 value={focusPoint}
                 onChange={(e) => setFocusPoint(e.target.value)}
                 onBlur={persistHeaderFooter}
                 rows={3}
-                placeholder="Optional. Appears as 重要：... in the agent's instruction (custom guidance for this update)."
+                placeholder={t('spu.focusPh')}
                 className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
               />
             </div>
@@ -1952,8 +1956,8 @@ export default function SystemPromptUpdater({
           <div className="border border-border rounded-lg p-3 bg-muted/10">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase tracking-wider font-semibold text-indigo-500">Identity</span>
-                <span className="text-sm font-medium">Layers 1-3 (one pass — Layer 4 is rewritten only by Redistribute)</span>
+                <span className="text-xs uppercase tracking-wider font-semibold text-indigo-500">{t('spu.identity')}</span>
+                <span className="text-sm font-medium">{t('spu.identitySub')}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <StatusBadge status={updateStatus} />
@@ -1964,7 +1968,7 @@ export default function SystemPromptUpdater({
                   title={`Runs ${AGENT_FILE_GENESIS}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new identity.`}
                 >
                   {running === 'genesis' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-                  Genesis (Build From Scratch)
+                  {t('spu.genesisBtn')}
                 </button>
                 <button
                   onClick={handleRedistribute}
@@ -1973,7 +1977,7 @@ export default function SystemPromptUpdater({
                   title={`Runs ${AGENT_FILE_REDISTRIBUTE}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first.`}
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
-                  Redistribute Layer 4 → 1-3
+                  {t('spu.redistributeBtn')}
                 </button>
                 <button
                   onClick={handleUpdateNoConvo}
@@ -1982,7 +1986,7 @@ export default function SystemPromptUpdater({
                   title={`Runs ${AGENT_FILE_REORGANIZE}. Cleans up/re-files the EXISTING Layers 1-3, WITHOUT a conversation log — no new facts are added, only boundary enforcement and de-duplication.`}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <FileX size={12} />}
-                  Reorganize (No Conversation)
+                  {t('spu.reorganizeBtn')}
                 </button>
                 <button
                   onClick={handleUpdate}
@@ -1991,7 +1995,7 @@ export default function SystemPromptUpdater({
                   title={`Runs ${AGENT_FILE_UPDATE}. Reconciles the new conversation log against Layers 1-3 and updates them in one pass (with continuation if the output is long).`}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
-                  Update from Conversation
+                  {t('spu.updateBtn')}
                 </button>
               </div>
             </div>
@@ -2015,7 +2019,7 @@ export default function SystemPromptUpdater({
                   className="w-3.5 h-3.5 accent-amber-500 mt-0.5 shrink-0"
                 />
                 <span className="text-[11px] leading-relaxed">
-                  <span className="font-semibold">Continue from the right-side text</span>
+                  <span className="font-semibold">{t('spu.resumeLabel')}</span>
                   {' — '}
                   the agent receives it as already-finished output and writes only what
                   follows, instead of starting over.
@@ -2030,7 +2034,7 @@ export default function SystemPromptUpdater({
               {/* Left = current */}
               <div className="flex flex-col">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Current (all layers — edit freely; remove Layer 4 here once)</span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">{t('spu.currentLabel')}</span>
                   <span className="text-[11px] font-mono text-foreground">{leftTokens.toLocaleString()} tokens</span>
                 </div>
                 <textarea
@@ -2038,7 +2042,7 @@ export default function SystemPromptUpdater({
                   onChange={(e) => setLeftText(e.target.value)}
                   rows={26}
                   className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
-                  placeholder="(empty)"
+                  placeholder={t('spu.empty')}
                 />
               </div>
               {/* Right = updated */}
@@ -2061,7 +2065,7 @@ export default function SystemPromptUpdater({
                     streamingUpdate
                       ? 'bg-muted/40 border-indigo-500/40 cursor-default text-muted-foreground'
                       : 'bg-background border-border focus:ring-1 focus:ring-indigo-500'}`}
-                  placeholder="(no update yet — click Update Layers 1-3)"
+                  placeholder={t('spu.noUpdatePh')}
                 />
               </div>
             </div>
@@ -2069,7 +2073,7 @@ export default function SystemPromptUpdater({
             {/* Word-level diff */}
             <details className="mt-2" open>
               <summary className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold cursor-pointer select-none hover:text-foreground">
-                Word-level diff (current → updated)
+                {t('spu.diffTitle')}
               </summary>
               <div className="mt-2 p-2 border border-border rounded bg-background/60 max-h-96 overflow-y-auto">
                 <DiffView before={diffLeft} after={diffRight} />
@@ -2160,7 +2164,7 @@ export default function SystemPromptUpdater({
                   onClick={handleWriteSummary}
                   disabled={busy}
                   className="px-2.5 py-1 text-xs font-medium bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title="Generate a summary of THIS conversation (Layers 1-3 + conversation log)"
+                  title={t('spu.writeSummaryTitle')}
                 >
                   {running === 'summary' ? <Loader2 size={12} className="animate-spin" /> : <PenLine size={12} />}
                   Write Summary
@@ -2178,7 +2182,7 @@ export default function SystemPromptUpdater({
               onChange={(e) => setSummaryText(e.target.value)}
               rows={8}
               className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-emerald-500 resize-y"
-              placeholder="(no summary yet — click Write Summary, or type one here)"
+              placeholder={t('spu.summaryPh')}
             />
             <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
               This summary appears in the live Layer-4 summaries index for all conversations in this folder.
@@ -2195,7 +2199,7 @@ export default function SystemPromptUpdater({
                 onChange={(e) => setSummaryInstructions(e.target.value)}
                 onBlur={persistHeaderFooter}
                 rows={3}
-                placeholder="Optional. e.g. &quot;Summarize in English&quot;, &quot;Focus on decisions and emotional shifts, skip greetings&quot;, &quot;Keep under 4 sentences&quot;."
+                placeholder={t('spu.summaryInstrPh')}
                 className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-emerald-500 resize-y"
               />
               <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
@@ -2222,7 +2226,7 @@ export default function SystemPromptUpdater({
                 onChange={(e) => setSummaryIndexHint(e.target.value)}
                 onBlur={persistHeaderFooter}
                 rows={4}
-                placeholder="Prepended above the summaries index in the entity's context. Leave blank to omit it."
+                placeholder={t('spu.indexHintPh')}
                 className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-emerald-500 resize-y"
               />
               <div className="flex items-center justify-between mt-1">
