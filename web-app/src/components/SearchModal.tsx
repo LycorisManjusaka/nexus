@@ -5,6 +5,7 @@ import { X, Search, Loader2, Calendar, Copy, Check } from 'lucide-react';
 import { format } from 'date-fns';
 import { compareConvoTitles } from '@/lib/convoSort';
 import { buildDeepLink, absoluteDeepLink } from '@/lib/deepLink';
+import { useT } from '@/lib/i18n';
 
 // Full-text search across all conversations of the current entity. Opens from
 // the 🔍 header button, matches message bodies via /api/search, groups hits by
@@ -51,6 +52,7 @@ function highlight(text: string, query: string): React.ReactNode[] {
 }
 
 export default function SearchModal({ open, onClose, folderName }: { open: boolean; onClose: () => void; folderName: string }) {
+  const t = useT();
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,36 +111,40 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
    */
   function buildMarkdown(): string {
     if (!data) return '';
-    // Explicit plural, because "match" pluralises to "matches" — a bare +'s'
-    // produced "293 matchs" in the first version.
-    const n = (count: number, singular: string, plural = `${singular}s`) =>
-      `${count} ${count === 1 ? singular : plural}`;
+    // No English plural machinery here: Japanese has none, and a ternary
+    // baked into the sentence could not be translated. The keys carry "(s)".
     const out: string[] = [];
 
-    out.push(`# Search: "${data.query}"`);
+    out.push(t('search.md.title').replace('{q}', data.query));
     out.push('');
     out.push(
-      `${n(data.totalMatches, 'match', 'matches')} in ${n(data.conversationsMatched, 'conversation')} ` +
-      `(of ${data.conversationsSearched} searched) — ` +
-      (data.folder === '*' ? `all entities (${data.folders.length})` : data.folder)
+      t('search.md.summary')
+        .replace('{matches}', data.totalMatches.toLocaleString())
+        .replace('{convos}', String(data.conversationsMatched))
+        .replace('{searched}', String(data.conversationsSearched))
+        .replace('{scope}', data.folder === '*'
+          ? t('search.md.allEntities').replace('{n}', String(data.folders.length))
+          : data.folder)
     );
     if (dateFilter && (fromDate || toDate)) {
-      out.push(`Date range: ${fromDate || '(any)'} → ${toDate || '(any)'}`);
+      out.push(t('search.md.dateRange')
+        .replace('{from}', fromDate || t('search.md.any'))
+        .replace('{to}', toDate || t('search.md.any')));
     }
     // The same caveats the panel shows. A pasted report that quietly omitted
     // them would look more complete than the search actually was.
     if (data.conversationsSkippedByDate > 0) {
-      out.push(`${n(data.conversationsSkippedByDate, 'conversation')} skipped — no activity after the FROM date.`);
+      out.push(t('search.md.skipped').replace('{n}', String(data.conversationsSkippedByDate)));
     }
     if (data.messagesSkippedNoTimestamp > 0) {
-      out.push(`${n(data.messagesSkippedNoTimestamp, 'matching message')} hidden — no timestamp to compare.`);
+      out.push(t('search.md.hidden').replace('{n}', String(data.messagesSkippedNoTimestamp)));
     }
     out.push('');
 
     for (const g of sortedResults) {
       const tags: string[] = [];
       if (data.folder === '*') tags.push(g.folder);
-      if (!g.active) tags.push('inactive');
+      if (!g.active) tags.push(t('search.inactive'));
       out.push(`## [${g.convoTitle}](${absoluteDeepLink(g.folder, g.convoId)})${tags.length ? ` — ${tags.join(', ')}` : ''}`);
       out.push('');
       for (const m of g.matches) {
@@ -182,7 +188,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
     const from = advanced && dateFilter ? dayStart(fromDate) : null;
     const to = advanced && dateFilter ? dayEnd(toDate) : null;
     if (from != null && to != null && from > to) {
-      setDateError('FROM is after TO.');
+      setDateError(t('search.fromAfterTo'));
       return;
     }
     setDateError(null);
@@ -203,7 +209,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setData(j);
     } catch (e: any) {
-      setError(e?.message || 'Search failed');
+      setError(e?.message || t('search.failed'));
       setData(null);
     } finally {
       setLoading(false);
@@ -228,7 +234,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border, #3f3f46)' }}>
           <div className="flex items-center gap-2 font-semibold">
-            <Search size={18} /> Search · <span className="opacity-80">{advanced && scope === 'all' ? 'all entities' : folderName}</span>
+            <Search size={18} /> {t('search.title')} · <span className="opacity-80">{advanced && scope === 'all' ? t('search.scopeAll') : folderName}</span>
           </div>
           <div className="flex items-center gap-1">
             {/* Whole result set as Markdown, with absolute links. Disabled until
@@ -236,11 +242,11 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
             <button
               onClick={copyResults}
               disabled={!data || data.totalMatches === 0 || loading}
-              title="Copy all results as Markdown"
+              title={t('search.copyAll')}
               className="flex items-center gap-1 rounded px-2 py-1 text-xs opacity-70 hover:opacity-100 hover:bg-white/5 disabled:opacity-25 disabled:cursor-not-allowed"
             >
               {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? 'Copied' : 'Copy'}
+              {copied ? t('common.copied') : t('common.copy')}
             </button>
             <button onClick={onClose} className="p-1 opacity-70 hover:opacity-100"><X size={18} /></button>
           </div>
@@ -254,7 +260,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') runSearch(); }}
-              placeholder={`Search all conversations with ${folderName}…`}
+              placeholder={t('search.placeholder').replace('{name}', folderName)}
               className="flex-1 rounded border px-3 py-2 text-sm"
               style={inputStyle}
             />
@@ -263,7 +269,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
               disabled={loading || !query.trim()}
               className="flex items-center gap-1.5 rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
             >
-              {loading ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />} Search
+              {loading ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />} {t('search.button')}
             </button>
           </div>
           {/* Advanced toggle + panel */}
@@ -274,21 +280,21 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
               onChange={(e) => setAdvanced(e.target.checked)}
               className="accent-emerald-600"
             />
-            Advanced search
+            {t('search.advanced')}
           </label>
 
           {advanced && (
             <div className="mt-2 flex flex-col gap-2 rounded border px-3 py-2" style={{ borderColor: 'var(--border, #27272a)' }}>
               {/* Scope */}
               <div className="flex flex-wrap items-center gap-4 text-xs">
-                <span className="opacity-60">Search in:</span>
+                <span className="opacity-60">{t('search.searchIn')}</span>
                 <label className="flex cursor-pointer items-center gap-1.5">
                   <input type="radio" name="scope" checked={scope === 'current'} onChange={() => setScope('current')} className="accent-emerald-600" />
-                  Current entity (<span className="opacity-70">{folderName}</span>)
+                  {t('search.currentEntity')} (<span className="opacity-70">{folderName}</span>)
                 </label>
                 <label className="flex cursor-pointer items-center gap-1.5">
                   <input type="radio" name="scope" checked={scope === 'all'} onChange={() => setScope('all')} className="accent-emerald-600" />
-                  All entities
+                  {t('search.allEntities')}
                 </label>
               </div>
 
@@ -296,7 +302,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <label className="flex cursor-pointer items-center gap-1.5">
                   <input type="checkbox" checked={dateFilter} onChange={(e) => setDateFilter(e.target.checked)} className="accent-emerald-600" />
-                  Date range
+                  {t('search.dateRange')}
                 </label>
                 {/* `max`/`min` cross-bound the two fields, so the calendar
                     itself greys out impossible days and an invalid range can't
@@ -307,12 +313,12 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
                     type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)}
                     max={toDate || undefined}
                     onClick={() => openPicker(fromRef)}
-                    disabled={!dateFilter} aria-label="From date"
+                    disabled={!dateFilter} aria-label={t('search.fromDate')}
                     className="rounded border px-2 py-1 text-xs disabled:opacity-40" style={inputStyle}
                   />
                   <button
                     type="button" onClick={() => openPicker(fromRef)} disabled={!dateFilter}
-                    title="Pick the FROM date from a calendar" aria-label="Open FROM calendar"
+                    title={t('search.pickFrom')} aria-label={t('search.openFrom')}
                     className="rounded p-1 opacity-60 hover:opacity-100 disabled:opacity-25"
                   ><Calendar size={13} /></button>
                 </div>
@@ -323,12 +329,12 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
                     type="date" value={toDate} onChange={(e) => setToDate(e.target.value)}
                     min={fromDate || undefined}
                     onClick={() => openPicker(toRef)}
-                    disabled={!dateFilter} aria-label="To date"
+                    disabled={!dateFilter} aria-label={t('search.toDate')}
                     className="rounded border px-2 py-1 text-xs disabled:opacity-40" style={inputStyle}
                   />
                   <button
                     type="button" onClick={() => openPicker(toRef)} disabled={!dateFilter}
-                    title="Pick the TO date from a calendar" aria-label="Open TO calendar"
+                    title={t('search.pickTo')} aria-label={t('search.openTo')}
                     className="rounded p-1 opacity-60 hover:opacity-100 disabled:opacity-25"
                   ><Calendar size={13} /></button>
                 </div>
@@ -337,15 +343,15 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
                     type="button"
                     onClick={() => { setFromDate(''); setToDate(''); setDateError(null); }}
                     className="rounded px-1.5 py-0.5 text-[11px] opacity-55 hover:opacity-100"
-                    title="Clear both dates"
-                  >clear</button>
+                    title={t('search.clearDates')}
+                  >{t('search.clear')}</button>
                 )}
-                <span className="opacity-45">both ends optional · inclusive</span>
+                <span className="opacity-45">{t('search.bothOptional')}</span>
               </div>
               {dateError && <div className="text-xs text-red-400">{dateError}</div>}
               {scope === 'all' && (
                 <p className="text-[11px] opacity-50">
-                  All entities scans every log folder — slower on a large corpus.
+                  {t('search.allScopeWarn')}
                 </p>
               )}
             </div>
@@ -353,16 +359,20 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
 
           {data && !loading && (
             <p className="mt-2 text-xs opacity-60">
-              {data.totalMatches.toLocaleString()} match{data.totalMatches === 1 ? '' : 'es'} in {data.conversationsMatched} conversation
-              {data.conversationsMatched === 1 ? '' : 's'} (of {data.conversationsSearched} searched
-              {data.folder === '*' ? ` across ${data.folders.length} entities` : ''}).
+              {t('search.resultLine')
+                .replace('{matches}', data.totalMatches.toLocaleString())
+                .replace('{convos}', String(data.conversationsMatched))
+                .replace('{searched}', String(data.conversationsSearched))
+                .replace('{across}', data.folder === '*'
+                  ? t('search.across').replace('{n}', String(data.folders.length))
+                  : '')}
               {data.conversationsSkippedByDate > 0 &&
-                ` ${data.conversationsSkippedByDate} conversation${data.conversationsSkippedByDate === 1 ? '' : 's'} skipped — no activity after the FROM date.`}
+                t('search.skippedLine').replace('{n}', String(data.conversationsSkippedByDate))}
               {/* Never hide undated matches silently: a date-filtered search
                   would otherwise look complete when it isn't. */}
               {data.messagesSkippedNoTimestamp > 0 && (
                 <span className="text-amber-500">
-                  {' '}{data.messagesSkippedNoTimestamp} matching message{data.messagesSkippedNoTimestamp === 1 ? '' : 's'} hidden — no timestamp to compare (imported or older logs).
+                  {t('search.hiddenLine').replace('{n}', String(data.messagesSkippedNoTimestamp))}
                 </span>
               )}
             </p>
@@ -372,10 +382,10 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
         {/* Results */}
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
           {error && <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>}
-          {loading && <div className="flex items-center gap-2 text-sm opacity-70"><Loader2 size={16} className="animate-spin" /> Searching…</div>}
+          {loading && <div className="flex items-center gap-2 text-sm opacity-70"><Loader2 size={16} className="animate-spin" /> {t('search.searching')}</div>}
 
           {data && !loading && data.totalMatches === 0 && (
-            <div className="text-sm opacity-60">No matches for “{data.query}”.</div>
+            <div className="text-sm opacity-60">{t('search.noMatches').replace('{q}', data.query)}</div>
           )}
 
           {!loading && sortedResults.map((g) => (
@@ -385,7 +395,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
                 <a
                   href={buildDeepLink(g.folder, g.convoId)}
                   className="hover:underline"
-                  title="Open this conversation"
+                  title={t('search.openConvo')}
                 >
                   {g.convoTitle}
                 </a>
@@ -393,8 +403,8 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
                 {data?.folder === '*' && (
                   <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-normal text-indigo-500">{g.folder}</span>
                 )}
-                {!g.active && <span className="rounded bg-zinc-500/20 px-1.5 py-0.5 text-[10px] font-normal opacity-70">inactive</span>}
-                <span className="ml-auto text-xs font-normal opacity-50">{g.matches.length} match{g.matches.length === 1 ? '' : 'es'}</span>
+                {!g.active && <span className="rounded bg-zinc-500/20 px-1.5 py-0.5 text-[10px] font-normal opacity-70">{t('search.inactive')}</span>}
+                <span className="ml-auto text-xs font-normal opacity-50">{t('search.matchCount').replace('{n}', String(g.matches.length))}</span>
               </div>
               <div className="flex flex-col gap-2">
                 {g.matches.map((m, i) => {
@@ -405,7 +415,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
                     <a
                       key={i}
                       href={href}
-                      title={m.messageId ? 'Open and jump to this message' : 'Open this conversation (this message has no id to jump to)'}
+                      title={m.messageId ? t('search.jumpTo') : t('search.openNoJump')}
                       className="block rounded border px-3 py-1.5 transition hover:border-emerald-500/60 hover:bg-emerald-500/5"
                       style={{ borderColor: 'var(--border, #27272a)' }}
                     >

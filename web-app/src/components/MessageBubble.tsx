@@ -10,8 +10,10 @@ import { stripLeadingTimestamps, stripAllTimestamps, isOnlyTimestamps } from '@/
 import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
+import { useT } from '@/lib/i18n';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
+  const t = useT();
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(msg.content);
@@ -955,9 +957,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             <button
               onClick={() => setViewTextAttachment({ name: att.name, textData: att.textData })}
               className="w-full text-center text-[10px] py-1 bg-background/50 hover:bg-background text-muted-foreground hover:text-indigo-500 border-t border-border transition-colors"
-              title="Open full file in a modal"
+              title={t('bubble.att.openModal')}
             >
-              {att.textData.length.toLocaleString()} chars · click to view full file
+              {t('bubble.att.charsClick').replace('{n}', att.textData.length.toLocaleString())}
             </button>
           )}
         </div>
@@ -999,7 +1001,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-[10px] font-mono"
             title={
               msg.modelFamily
-                ? `${msg.modelFamily} / ${msg.modelSpecific || ''}${msg.modelThinking ? ' · thinking on' : ' · thinking off'}`
+                ? `${msg.modelFamily} / ${msg.modelSpecific || ''}${msg.modelThinking ? t('bubble.thinkingOn') : t('bubble.thinkingOff')}`
                 : (msg.modelSpecific || '')
             }
           >
@@ -1008,7 +1010,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         )}
         <span>{new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short', hour12: false }).format(new Date(msg.timestamp))}</span>
         {displayTokens > 0 && (
-          <span className="bg-muted px-2 py-0.5 rounded-full">{displayTokens} tokens</span>
+          <span className="bg-muted px-2 py-0.5 rounded-full">{t('bubble.tokens').replace('{n}', String(displayTokens))}</span>
         )}
         {/* Generation time — how long this turn took (thinking + tool loops +
             streaming). Display-only, persisted to the log, never sent to the
@@ -1022,7 +1024,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           return (
             <span
               className="bg-sky-500/15 text-sky-700 dark:text-sky-400 px-2 py-0.5 rounded-full font-mono"
-              title={`This turn took ${(ms / 1000).toFixed(1)}s to generate (thinking + tool use + streaming)`}
+              title={t('bubble.genTime').replace('{s}', (ms / 1000).toFixed(1))}
             >
               ⏱ {label}
             </span>
@@ -1039,15 +1041,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             ? Math.round((cu.cachedInputTokens / cu.totalInputTokens) * 100)
             : 0;
           const hit = cu.cachedInputTokens > 0;
-          const tooltip =
-            `Input: ${cu.totalInputTokens.toLocaleString()} tokens\n` +
-            `  cached (cheap):   ${cu.cachedInputTokens.toLocaleString()} (${pct}%)\n` +
-            `  uncached (full):  ${cu.uncachedInputTokens.toLocaleString()}` +
-            (cu.cacheCreationTokens > 0 ? `\n  cache write:      ${cu.cacheCreationTokens.toLocaleString()} (1.25× one-shot)` : '') +
-            `\nOutput: ${cu.outputTokens.toLocaleString()} tokens` +
-            `\n  (includes thinking + files written / tool calls —\n   the plain token count on the left is visible text only)` +
-            `\nProvider: ${cu.providerHint || 'unknown'}` +
-            `\nTotals cover every API call in this turn (tool loops + subagents).`;
+          const tooltip = t('bubble.cache.tooltip')
+            .replace('{total}', cu.totalInputTokens.toLocaleString())
+            .replace('{cached}', cu.cachedInputTokens.toLocaleString())
+            .replace('{pct}', String(pct))
+            .replace('{uncached}', cu.uncachedInputTokens.toLocaleString())
+            .replace('{write}', cu.cacheCreationTokens > 0
+              ? t('bubble.cache.writeLine').replace('{n}', cu.cacheCreationTokens.toLocaleString())
+              : '')
+            .replace('{out}', cu.outputTokens.toLocaleString())
+            .replace('{provider}', cu.providerHint || 'unknown');
           return (
             <span
               className={`px-2 py-0.5 rounded-full font-mono ${
@@ -1057,9 +1060,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               }`}
               title={tooltip}
             >
-              {cu.totalInputTokens.toLocaleString()} in
+              {cu.totalInputTokens.toLocaleString()} {t('bubble.cache.in')}
               {hit && (
-                <span className="ml-1 opacity-80">· {cu.cachedInputTokens.toLocaleString()} cached ({pct}%)</span>
+                <span className="ml-1 opacity-80">{t('bubble.cache.cached').replace('{n}', cu.cachedInputTokens.toLocaleString()).replace('{pct}', String(pct))}</span>
               )}
               {/* Real billed output from the provider — includes thinking tokens
                   and tool_use payloads (file contents the entity wrote). This is
@@ -1067,14 +1070,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   hover-only, while the prominent count next to it is textTokens
                   (visible text only, for context-window accounting). */}
               {cu.outputTokens > 0 && (
-                <span className="ml-1 opacity-80">· {cu.outputTokens.toLocaleString()} out</span>
+                <span className="ml-1 opacity-80">{t('bubble.cache.out').replace('{n}', cu.outputTokens.toLocaleString())}</span>
               )}
             </span>
           );
         })()}
         {msg.continuationCount > 0 && (
-          <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full" title={`Auto-continued ${msg.continuationCount} time${msg.continuationCount === 1 ? '' : 's'} after hitting the model's output token cap`}>
-            ↵ continued ×{msg.continuationCount}
+          <span className="bg-amber-500/15 text-amber-600 dark:text-amber-400 px-2 py-0.5 rounded-full" title={t('bubble.continued.title').replace('{n}', String(msg.continuationCount))}>
+            {t('bubble.continued.badge').replace('{n}', String(msg.continuationCount))}
           </span>
         )}
         {/* Estimated cost of this turn — shows only a "$" glyph; the actual USD
@@ -1088,7 +1091,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             return (
               <span
                 className="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground/50 font-mono cursor-default"
-                title={`No price configured for "${modelId || 'this model'}".\nAdd it in src/lib/modelPricing.json`}
+                title={t('bubble.price.none').replace('{model}', modelId || '—')}
               >$</span>
             );
           }
@@ -1109,7 +1112,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         {onCopyLink && (
           <button
             onClick={onCopyLink}
-            title="Copy a link to this message"
+            title={t('bubble.copyLink')}
             className="opacity-70 hover:opacity-100 transition"
           >
             {linkCopied ? <Check size={12} /> : <Link2 size={12} />}
@@ -1122,7 +1125,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         {!isUser && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0 && (
           <button
             onClick={() => setToolReportOpen(true)}
-            title={`${msg.toolCalls.length} tool call${msg.toolCalls.length === 1 ? '' : 's'} — click for details`}
+            title={t('bubble.toolCallsTitle').replace('{n}', String(msg.toolCalls.length))}
             className="flex items-center gap-1 opacity-70 hover:opacity-100 transition"
           >
             <Wrench size={12} />
@@ -1144,7 +1147,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             </div>
           ))}
           <div className="mt-1 text-[10px] text-amber-700/60 dark:text-amber-300/50">
-            Shown to you only — not part of the conversation or the context sent to the model.
+            {t('bubble.noticeFooter')}
           </div>
         </div>
       )}
@@ -1157,7 +1160,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         <div className="mb-2 flex flex-col gap-1">
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
             <Globe size={12} />
-            <span>Web sources ({msg.webSources.length}) — verified, clickable</span>
+            <span>{t('bubble.webSources').replace('{n}', String(msg.webSources.length))}</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {msg.webSources.map((s: any, i: number) => {
@@ -1195,7 +1198,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                     att.toolAction === 'created' ? 'bg-indigo-500/20 text-indigo-700 dark:text-indigo-300' :
                     att.toolAction === 'modified' ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300' :
                     'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
-                  }`} title="Action the AI performed on this file via tool use">
+                  }`} title={t('bubble.att.toolAction')}>
                     {att.toolAction}
                   </span>
                 )}
@@ -1204,7 +1207,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   <button
                     onClick={() => setViewTextAttachment({ name: att.name, textData: att.textData })}
                     className="ml-auto p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-indigo-500"
-                    title="View full file content"
+                    title={t('bubble.att.viewFull')}
                   >
                     <FileText size={14} />
                   </button>
@@ -1212,7 +1215,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 <button
                   onClick={() => onToggleAttachment(att.id)}
                   className={`${att.isText && att.textData ? '' : 'ml-auto'} p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground`}
-                  title={att.excluded ? "Include in context" : "Exclude from context"}
+                  title={att.excluded ? t('bubble.att.include') : t('bubble.att.exclude')}
                 >
                   {att.excluded ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -1220,7 +1223,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   <button
                     onClick={() => onDeleteAttachment(att.id)}
                     className="p-1 rounded-md hover:bg-red-500/10 text-muted-foreground hover:text-red-500"
-                    title="Permanently remove attachment from this log"
+                    title={t('bubble.att.delete')}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -1251,21 +1254,21 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                       ? 'border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/15'
                       : 'border-indigo-500/30 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-500/15'
                   }`}
-                  title="Click to view full description"
+                  title={t('bubble.att.viewDesc')}
                 >
                   {att.descriptionKind === 'eyes'    ? <Eye size={11} /> :
                    att.descriptionKind === 'ears'    ? <Volume2 size={11} /> :
                    att.descriptionKind === 'watcher' ? <Video size={11} /> :
                                                        <FileText size={11} />}
                   <span className="uppercase tracking-wide">
-                    {att.descriptionKind === 'eyes'    ? 'Eyes' :
-                     att.descriptionKind === 'ears'    ? 'Ears' :
-                     att.descriptionKind === 'watcher' ? 'Watcher' :
-                                                        'Sense'}
+                    {att.descriptionKind === 'eyes'    ? t('bubble.sense.eyes') :
+                     att.descriptionKind === 'ears'    ? t('bubble.sense.ears') :
+                     att.descriptionKind === 'watcher' ? t('bubble.sense.watcher') :
+                                                        t('bubble.sense.other')}
                   </span>
                   <span className="font-mono opacity-80 truncate max-w-[120px]">{att.descriptionModel || ''}</span>
                   {att.descriptionFromCache && !att.descriptionError && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="Description loaded from disk cache" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title={t('bubble.desc.cachedDot')} />
                   )}
                   {att.descriptionError && (
                     <span
@@ -1278,7 +1281,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   )}
                 </button>
               )}
-              {att.excluded && <div className="text-[10px] text-red-500 font-bold mt-1 text-center bg-red-500/10 rounded py-0.5">EXCLUDED FROM CONTEXT</div>}
+              {att.excluded && <div className="text-[10px] text-red-500 font-bold mt-1 text-center bg-red-500/10 rounded py-0.5">{t('bubble.att.excluded')}</div>}
             </div>
           ))}
         </div>
@@ -1314,7 +1317,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               <details className={`border rounded-xl px-4 py-3 text-sm group/details max-w-full shadow-sm text-muted-foreground transition-colors ${msg.thinkingExcluded ? 'bg-muted/10 border-dashed border-border/60 opacity-60' : 'bg-muted/30 border-border open:bg-muted/50'}`}>
                 <summary className="font-semibold cursor-pointer flex items-center gap-2 select-none hover:text-foreground transition-colors outline-none">
                   <Brain size={16} className="text-indigo-400 shrink-0" />
-                  <span>Thought Process</span>
+                  <span>{t('bubble.thoughtProcess')}</span>
                   {/* Reusable-thinking visibility toggle — mirrors attachment
                       exclusion. Shown whenever the entity's "Save & reuse
                       thinking process" toggle is on (we're already inside a
@@ -1326,12 +1329,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                       <button
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleThinking?.(); }}
                         className="ml-auto p-1 rounded hover:bg-muted transition-colors shrink-0"
-                        title={msg.thinkingExcluded ? "Include this thinking in context" : "Exclude this thinking from context"}
+                        title={msg.thinkingExcluded ? t('bubble.thinking.include') : t('bubble.thinking.exclude')}
                       >
                         {msg.thinkingExcluded ? <EyeOff size={14} /> : <Eye size={14} />}
                       </button>
                       {msg.thinkingExcluded && (
-                        <span className="text-[10px] text-red-500 font-bold bg-red-500/10 rounded px-1.5 py-0.5 shrink-0">EXCLUDED</span>
+                        <span className="text-[10px] text-red-500 font-bold bg-red-500/10 rounded px-1.5 py-0.5 shrink-0">{t('bubble.thinking.excludedBadge')}</span>
                       )}
                     </>
                   )}
@@ -1368,7 +1371,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 )
               ) : (
                 msg.attachments?.length > 0
-                  ? <span className="italic opacity-50">(Attachment only)</span>
+                  ? <span className="italic opacity-50">{t('bubble.attachmentOnly')}</span>
                   : null
               )}
             </div>
@@ -1381,27 +1384,27 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             isUser ? 'right-full mr-2' : 'left-full ml-2'
           }`}>
             {ttsState === 'idle' ? (
-              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-muted-foreground hover:text-green-500`} title="Read Aloud (select text to read only the selection)">
+              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-muted-foreground hover:text-green-500`} title={t('bubble.tts.read')}>
                 <Volume2 size={14} />
               </button>
             ) : (
               <>
-                <button onClick={handlePauseResume} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-blue-500 hover:text-blue-600`} title={ttsState === 'playing' ? "Pause" : "Resume"}>
+                <button onClick={handlePauseResume} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-blue-500 hover:text-blue-600`} title={ttsState === 'playing' ? t('bubble.tts.pause') : t('bubble.tts.resume')}>
                   {ttsState === 'playing' ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
                 </button>
-                <button onClick={stopTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-red-500 hover:text-red-600`} title="Stop TTS">
+                <button onClick={stopTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-red-500 hover:text-red-600`} title={t('bubble.tts.stop')}>
                   <Square size={14} fill="currentColor" />
                 </button>
               </>
             )}
-            <button onClick={handleCopyMarkdown} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-foreground shadow-sm" title="Copy as Markdown">
+            <button onClick={handleCopyMarkdown} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-foreground shadow-sm" title={t('bubble.copyMd')}>
               <Copy size={14} />
             </button>
-            <button onClick={() => setIsEditing(true)} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-foreground shadow-sm">
+            <button onClick={() => setIsEditing(true)} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-foreground shadow-sm" title={t('bubble.edit')}>
               <Pencil size={14} />
             </button>
             {!isUser && onRerun && (
-              <button onClick={onRerun} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-indigo-500 shadow-sm" title="Rerun from here">
+              <button onClick={onRerun} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-indigo-500 shadow-sm" title={t('bubble.rerun')}>
                 <RefreshCw size={14} />
               </button>
             )}
@@ -1409,7 +1412,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               <button
                 onClick={onContinue}
                 className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-amber-500 shadow-sm"
-                title="Continue this reply — the model carries on from where it stopped and the new text is appended to this same message"
+                title={t('bubble.continue')}
               >
                 <CornerDownRight size={14} />
               </button>
@@ -1418,12 +1421,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               <button
                 onClick={onSetFirstOriginal}
                 className={`p-1.5 bg-background border border-border rounded-lg shadow-sm ${isFirstOriginal ? 'text-indigo-500 hover:text-muted-foreground' : 'text-muted-foreground hover:text-indigo-500'}`}
-                title={isFirstOriginal ? "Clear first-original marker" : "Set as first original message"}
+                title={isFirstOriginal ? t('bubble.firstOriginal.clear') : t('bubble.firstOriginal.set')}
               >
                 <Bookmark size={14} fill={isFirstOriginal ? "currentColor" : "none"} />
               </button>
             )}
-            <button onClick={onDelete} className="p-1.5 bg-background border border-border rounded-lg text-red-400 hover:text-red-500 shadow-sm" title={isOriginal ? "Delete (original — confirm)" : "Delete (cloned)"}>
+            <button onClick={onDelete} className="p-1.5 bg-background border border-border rounded-lg text-red-400 hover:text-red-500 shadow-sm" title={isOriginal ? t('bubble.delete.original') : t('bubble.delete.cloned')}>
               <Trash2 size={14} />
             </button>
           </div>
@@ -1448,9 +1451,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <Wrench size={16} className="text-blue-500 shrink-0" />
-                <span className="text-sm font-medium">Tool calls in this message</span>
+                <span className="text-sm font-medium">{t('bubble.tool.title')}</span>
                 <span className="text-[10px] text-muted-foreground shrink-0">
-                  {(msg.toolCalls || []).length} call{(msg.toolCalls || []).length === 1 ? '' : 's'}
+                  {t('bubble.tool.count').replace('{n}', String((msg.toolCalls || []).length))}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -1463,14 +1466,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                     } catch {}
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  title="Copy the whole report as JSON"
+                  title={t('bubble.tool.copyJson')}
                 >
-                  <Copy size={12} /> {textCopyState === 'copied' ? 'Copied!' : 'Copy'}
+                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied') : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setToolReportOpen(false)}
                   className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                  title="Close"
+                  title={t('common.close')}
                 >
                   <X size={16} />
                 </button>
@@ -1496,14 +1499,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   </pre>
                   {c.input?._truncated && (
                     <div className="px-3 pb-2 text-[10px] text-amber-600 dark:text-amber-400">
-                      Arguments truncated for storage — original was {Number(c.input._originalChars).toLocaleString()} characters.
+                      {t('bubble.tool.truncated').replace('{n}', Number(c.input._originalChars).toLocaleString())}
                     </div>
                   )}
                 </div>
               ))}
             </div>
             <div className="px-5 py-2 border-t border-border text-[10px] text-muted-foreground shrink-0">
-              Shown to you only. The entity never sees this, and it is not part of the context sent to any model.
+              {t('bubble.tool.footer')}
             </div>
           </div>
         </div>
@@ -1523,7 +1526,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 <FileText size={16} className="text-blue-500 shrink-0" />
                 <span className="font-mono text-sm truncate" title={viewTextAttachment.name}>{viewTextAttachment.name}</span>
                 <span className="text-[10px] text-muted-foreground shrink-0">
-                  {viewTextAttachment.textData.length.toLocaleString()} chars
+                  {t('bubble.att.chars').replace('{n}', viewTextAttachment.textData.length.toLocaleString())}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -1536,14 +1539,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                     } catch {}
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  title="Copy file contents to clipboard"
+                  title={t('bubble.copyFile')}
                 >
-                  <Copy size={12} /> {textCopyState === 'copied' ? 'Copied!' : 'Copy'}
+                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied') : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setViewTextAttachment(null)}
                   className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                  title="Close"
+                  title={t('common.close')}
                 >
                   <X size={16} />
                 </button>
@@ -1577,13 +1580,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 <div className="flex flex-col min-w-0">
                   <span className="font-mono text-sm truncate" title={viewDescription.name}>{viewDescription.name}</span>
                   <span className="text-[10px] text-muted-foreground">
-                    {viewDescription.kind === 'eyes'    ? 'Eyes' :
-                     viewDescription.kind === 'ears'    ? 'Ears' :
-                     viewDescription.kind === 'watcher' ? 'Video Watcher' :
-                                                          'Sense bridge'}
+                    {viewDescription.kind === 'eyes'    ? t('bubble.sense.eyes') :
+                     viewDescription.kind === 'ears'    ? t('bubble.sense.ears') :
+                     viewDescription.kind === 'watcher' ? t('bubble.sense.watcherLong') :
+                                                          t('bubble.sense.bridge')}
                     {' · '}
                     <span className="font-mono">{viewDescription.model}</span>
-                    {viewDescription.fromCache && <span className="ml-2 text-emerald-600">cached</span>}
+                    {viewDescription.fromCache && <span className="ml-2 text-emerald-600">{t('bubble.desc.cached')}</span>}
                     {viewDescription.generatedAt && (
                       <span className="ml-2">{format(new Date(viewDescription.generatedAt), 'yyyy-MM-dd HH:mm')}</span>
                     )}
@@ -1600,14 +1603,14 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                     } catch {}
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  title="Copy description to clipboard"
+                  title={t('bubble.copyDesc')}
                 >
-                  <Copy size={12} /> {textCopyState === 'copied' ? 'Copied!' : 'Copy'}
+                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied') : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setViewDescription(null)}
                   className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
-                  title="Close"
+                  title={t('common.close')}
                 >
                   <X size={16} />
                 </button>
@@ -1616,12 +1619,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             <div className="flex-1 overflow-auto p-4">
               {viewDescription.error && (
                 <div className="mb-3 p-3 rounded-md border border-red-500/40 bg-red-500/10 text-sm text-red-700 dark:text-red-300">
-                  <div className="text-[10px] uppercase tracking-wider font-semibold opacity-70 mb-1">Bridge model reported an error</div>
+                  <div className="text-[10px] uppercase tracking-wider font-semibold opacity-70 mb-1">{t('bubble.desc.errorHeading')}</div>
                   <div className="leading-relaxed whitespace-pre-wrap break-words">{viewDescription.error}</div>
                 </div>
               )}
               <p className="text-sm whitespace-pre-wrap leading-relaxed">
-                {viewDescription.description || '(no description text)'}
+                {viewDescription.description || t('bubble.desc.noText')}
               </p>
             </div>
           </div>
@@ -1656,7 +1659,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               const y = ((e.clientY - top) / height) * 100;
               setZoomPos({ x, y });
             }}
-            alt="Zoomed attachment"
+            alt={t('bubble.zoomAlt')}
           />
         </div>
       )}

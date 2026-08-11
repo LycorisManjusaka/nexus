@@ -377,6 +377,64 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'injectionRetryNote', label: 'Interjection: OAuth retry note' },
 ];
 
+/**
+ * Japanese LABELS for the override editors above.
+ *
+ * This translates the GUI captions only. The instruction BODIES stay in
+ * DEFAULT_AGENT_INSTRUCTIONS / DEFAULT_AGENT_INSTRUCTIONS_JA and are never
+ * machine-translated — an entity-facing string is only ever changed by hand.
+ * Any key missing here falls back to the English label.
+ */
+export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
+  toolReadDesc: 'ツール Read — 説明',
+  toolWriteDesc: 'ツール Write — 説明',
+  toolEditDesc: 'ツール Edit — 説明',
+  toolGlobDesc: 'ツール Glob — 説明',
+  toolGrepDesc: 'ツール Grep — 説明',
+  toolDeleteDesc: 'ツール Delete — 説明',
+  toolBashDesc: 'ツール Bash／シェル — 説明（危険）',
+  pathParamSandbox: 'パスの補足（ワークスペース内のみ）',
+  pathParamFull: 'パスの補足（PC 全体アクセス）',
+  pathRuleSandbox: 'パスの規則（ワークスペース内のみ）',
+  pathRuleFull: 'パスの規則（PC 全体アクセス）',
+  readConversationDesc: 'ツール read_conversation — 説明',
+  readConversationNameParam: 'ツール read_conversation — name 引数',
+  searchConversationsDesc: 'ツール search_conversations — 説明',
+  searchConversationsQueryParam: 'ツール search_conversations — query 引数',
+  continuationInstruction: '自動継続：途中で切れた応答の再開',
+  toolWriteLetterDesc: 'ツール write_letter — 説明',
+  writeLetterToParam: 'ツール write_letter —「to」引数',
+  writeLetterTitleParam: 'ツール write_letter —「title」引数',
+  writeLetterTextParam: 'ツール write_letter —「text」引数',
+  toolListLettersDesc: 'ツール list_letters — 説明',
+  toolReadLetterDesc: 'ツール read_letter — 説明',
+  readLetterIdParam: 'ツール read_letter —「id」引数',
+  toolArchiveLetterDesc: 'ツール archive_letter — 説明',
+  archiveLetterIdParam: 'ツール archive_letter —「id」引数',
+  letterDeliveryConfirm: '手紙：送達の確認（{to} {title} {id}）',
+  letterNoticeFraming: '手紙：到着通知の枠組み（{letters} を使用）',
+  letterNoticeLine: '手紙：通知の1行（{from} {title} {id} {when}）',
+  toolBrowserNavigateDesc: 'ツール browser_navigate — 説明',
+  browserNavigateUrlParam: 'ツール browser_navigate —「url」引数',
+  toolBrowserSnapshotDesc: 'ツール browser_snapshot — 説明',
+  toolBrowserClickDesc: 'ツール browser_click — 説明',
+  browserClickRefParam: 'ツール browser_click —「ref」引数',
+  toolBrowserTypeDesc: 'ツール browser_type — 説明',
+  browserTypeRefParam: 'ツール browser_type —「ref」引数',
+  browserTypeTextParam: 'ツール browser_type —「text」引数',
+  browserTypeSubmitParam: 'ツール browser_type —「submit」引数',
+  toolBrowserReadDesc: 'ツール browser_read — 説明',
+  toolBrowserScreenshotDesc: 'ツール browser_screenshot — 説明',
+  browserScreenshotFullPageParam: 'ツール browser_screenshot —「full_page」引数',
+  webSearchDesc: 'ツール web_search — 説明',
+  webFetchDesc: 'ツール web_fetch — 説明',
+  audioSessionNotice: '音声セッション：機能の説明（固定。存在ごとの規則より前）',
+  workingDiscipline: '作業規律（第1〜5層の前に挿入）',
+  absoluteBaseBinding: '絶対基底呪縛（第1〜5層の前、作業規律の後に挿入）',
+  injectionFraming: '割り込み：枠組み（{messages} を使用）',
+  injectionRetryNote: '割り込み：OAuth の再試行に関する注記',
+};
+
 export type AgentInstructions = Record<string, string>;
 
 /**

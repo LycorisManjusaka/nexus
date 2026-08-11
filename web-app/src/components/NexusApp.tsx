@@ -6,6 +6,9 @@ import ChatArea from '@/components/ChatArea';
 import SettingsModal from '@/components/SettingsModal';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
+// NexusApp itself renders the provider, so it sits ABOVE the context and must
+// use the plain t(key, language) form. Every component below it uses useT().
+import { LanguageProvider, t as translate } from '@/lib/i18n';
 
 // ── Per-tab navigation state ────────────────────────────────────────────────
 // Which folder/conversation a tab is viewing must be PER-TAB, not shared. Using
@@ -521,6 +524,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   }, [activeFolder]);
 
   return (
+    <LanguageProvider language={globalSettings.language}>
     <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans">
       {/* A link that couldn't be followed says so instead of silently landing
           on some other conversation. Dismissible; never auto-clears. */}
@@ -588,10 +592,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
-            <h2 className="text-2xl font-semibold mb-2">Welcome to AI Manager</h2>
-            <p className="mb-4 text-sm">Select or create a conversation to start</p>
+            <h2 className="text-2xl font-semibold mb-2">{translate('app.welcome.title', globalSettings.language)}</h2>
+            <p className="mb-4 text-sm">{translate('app.welcome.subtitle', globalSettings.language)}</p>
             <button onClick={createNewChat} className="px-6 py-2 bg-primary text-primary-foreground rounded-full font-medium hover:opacity-90 transition-opacity">
-              New Chat
+              {translate('app.welcome.newChat', globalSettings.language)}
             </button>
           </div>
         )}
@@ -605,5 +609,6 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         />
       )}
     </div>
+    </LanguageProvider>
   );
 }

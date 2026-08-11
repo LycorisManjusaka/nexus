@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useT } from '@/lib/i18n';
 
 // Renders the interactive "AskUserQuestion" card. Two modes:
 //   • Live (onSubmit provided): the user picks options and submits; the answer
@@ -52,6 +53,7 @@ export default function AskUserQuestionCard({
   answered?: AskCardAnswer[] | null;
   onSubmit?: (answers: AskCardAnswer[]) => void;
 }) {
+  const t = useT();
   const readOnly = !onSubmit;
   const total = questions.length;
   // selections[qIndex] = array of chosen labels (1 entry for single-select).
@@ -104,12 +106,12 @@ export default function AskUserQuestionCard({
       <div className="flex items-center justify-between gap-2">
         {!readOnly ? (
           <div className="flex items-center gap-2 text-sky-500 text-sm font-semibold">
-            <span>💬</span><span>The assistant is asking{submitted ? ' — answer sent…' : '…'}</span>
+            <span>💬</span><span>{t('ask.asking')}{submitted ? t('ask.answerSent') : '…'}</span>
           </div>
         ) : <span />}
         {total > 1 ? (
           <span className="text-[11px] text-muted-foreground font-medium shrink-0">
-            Question {page + 1} of {total}
+            {t('ask.page').replace('{n}', String(page + 1)).replace('{total}', String(total))}
             <span className="ml-1 text-sky-500">{answeredFor(page) ? '●' : '○'}</span>
           </span>
         ) : null}
@@ -122,7 +124,7 @@ export default function AskUserQuestionCard({
             <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-600 font-semibold">{q.header}</span>
           ) : null}
           <span className="text-sm font-medium text-foreground">{q.question}</span>
-          {q.multiSelect ? <span className="text-[10px] text-muted-foreground">(choose any)</span> : null}
+          {q.multiSelect ? <span className="text-[10px] text-muted-foreground">{t('ask.chooseAny')}</span> : null}
         </div>
         <div className="space-y-1.5">
           {q.options.map((o, oi) => (
@@ -143,7 +145,7 @@ export default function AskUserQuestionCard({
             return customs.map((c, ci) => (
               <div key={`custom-${ci}`} className="w-full text-left px-3 py-2 rounded-lg border border-sky-500 bg-sky-500/15">
                 <div className="text-sm font-medium text-foreground">{c}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">Custom answer</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{t('ask.customAnswer')}</div>
               </div>
             ));
           })()}
@@ -152,8 +154,8 @@ export default function AskUserQuestionCard({
               type="text"
               value={otherText[page]}
               disabled={submitted}
-              onChange={(e) => setOtherText((prev) => prev.map((t, i) => (i === page ? e.target.value : t)))}
-              placeholder="Other (type a custom answer)…"
+              onChange={(e) => setOtherText((prev) => prev.map((v, i) => (i === page ? e.target.value : v)))}
+              placeholder={t('ask.otherPlaceholder')}
               className="w-full px-3 py-2 rounded-lg border border-border bg-secondary/40 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-sky-500"
             />
           )}
@@ -168,23 +170,23 @@ export default function AskUserQuestionCard({
             onClick={() => setPage((p) => Math.max(0, p - 1))}
             disabled={isFirst}
             className="px-3 py-1.5 rounded-lg border border-border text-sm text-foreground disabled:opacity-30 disabled:cursor-not-allowed hover:bg-secondary/70 transition-colors"
-          >‹ Prev</button>
+          >{t('ask.prev')}</button>
           <button
             type="button"
             onClick={() => setPage((p) => Math.min(total - 1, p + 1))}
             disabled={isLast}
             className="px-3 py-1.5 rounded-lg border border-border text-sm text-foreground disabled:opacity-30 disabled:cursor-not-allowed hover:bg-secondary/70 transition-colors"
-          >Next ›</button>
+          >{t('ask.next')}</button>
         </div>
         {!readOnly && (
           <button
             type="button"
             onClick={submit}
             disabled={!canSubmit || submitted}
-            title={canSubmit ? '' : 'Answer every question first'}
+            title={canSubmit ? '' : t('ask.answerFirst')}
             className="px-4 py-1.5 rounded-lg bg-sky-500 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-sky-600 transition-colors"
           >
-            {submitted ? 'Sent' : (canSubmit ? 'Send answer' : `Answer all (${questions.filter((_, i) => answeredFor(i)).length}/${total})`)}
+            {submitted ? t('ask.sent') : (canSubmit ? t('ask.send') : t('ask.answerAll').replace('{n}', String(questions.filter((_, i) => answeredFor(i)).length)).replace('{total}', String(total)))}
           </button>
         )}
       </div>

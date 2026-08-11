@@ -1297,7 +1297,7 @@ async function streamClaudeViaAgentSDK(args: {
                   const cleanName = String(ev.content_block?.name || 'a tool').replace(/^mcp__\w+?__/, '');
                   if (cleanName !== 'AskQuestion' && cleanName !== 'spawn_subagent') {
                     shownToolActivity = toolActivityLabel(cleanName) || `run ${cleanName}`;
-                    enqueue({ type: 'tool_activity', tool: shownToolActivity });
+                    enqueue({ type: 'tool_activity', tool: shownToolActivity, name: cleanName });
                   }
                 } else if (shownToolActivity && (curBlockType === 'text' || curBlockType === 'thinking' || curBlockType === 'summarized_thinking')) {
                   // Visible content resumed — fall back to "thinking...".
@@ -3533,7 +3533,7 @@ export async function POST(req: Request) {
                 // Surface what the model is doing so the loading label reflects
                 // the tool call instead of a silent "thinking...".
                 const actLabel = toolActivityLabel(tu.name);
-                if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
+                if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel, name: tu.name });
                 enqueue({ type: 'tool_call', call: { name: tu.name, input: truncateToolInput(tu.input), at: Date.now() } });
                 try {
                   if (tu.name === 'Read') {
@@ -4365,7 +4365,7 @@ export async function POST(req: Request) {
                   let attachmentEvent: any = null;
                   // Reflect the tool call in the loading label (silent otherwise).
                   const actLabel = toolActivityLabel(fc.name);
-                  if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
+                  if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel, name: fc.name });
                   enqueue({ type: 'tool_call', call: { name: fc.name, input: truncateToolInput(fc.args), at: Date.now() } });
                   try {
                     if (fc.name === 'Read') {
@@ -5905,7 +5905,7 @@ export async function POST(req: Request) {
                   let attachmentEvent: any = null;
                   // Reflect the tool call in the loading label (silent otherwise).
                   const actLabel = toolActivityLabel(tc.name);
-                  if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel });
+                  if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel, name: tc.name });
                   enqueue({ type: 'tool_call', call: { name: tc.name, input: truncateToolInput(parsed), at: Date.now() } });
                   try {
                     if (tc.name === 'Read') {

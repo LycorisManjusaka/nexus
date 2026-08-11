@@ -3,24 +3,40 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, KeyRound, Volume2, SlidersHorizontal } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
-import { t as translate } from '@/lib/i18n';
+import { useT, Tx } from '@/lib/i18n';
 
 // Preferences is split into tabs because the three groups have nothing to do
 // with each other and the API-key list alone is twelve providers long. Add a
 // new tab by extending this list and adding a matching `{tab === '...' && (…)}`
-// block in the body.
+// block in the body. Labels come from i18n under `settings.tab.<id>`.
 const TABS = [
-  { id: 'keys',   label: 'API Keys',       icon: KeyRound },
-  { id: 'vrchat', label: 'VRChat & Audio', icon: Volume2 },
-  { id: 'other',  label: 'Other',          icon: SlidersHorizontal },
+  { id: 'keys',   icon: KeyRound },
+  { id: 'vrchat', icon: Volume2 },
+  { id: 'other',  icon: SlidersHorizontal },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
 
+// The single-field providers all render identically, so they're a list rather
+// than twelve copies of the same block. Anthropic stays hand-written below —
+// it has two fields and a long warning panel.
+const SIMPLE_PROVIDERS: { id: string; ph: string; help?: boolean }[] = [
+  { id: 'gemini',       ph: 'AIzaSy...' },
+  { id: 'qwen',         ph: 'sk-...',   help: true },
+  { id: 'deepseek',     ph: 'sk-...',   help: true },
+  { id: 'glm',          ph: '...',      help: true },
+  { id: 'digitalocean', ph: '...',      help: true },
+  { id: 'grok',         ph: 'xai-...',  help: true },
+  { id: 'kimi',         ph: '...',      help: true },
+  { id: 'cohere',       ph: '...',      help: true },
+  { id: 'minimax',      ph: '...',      help: true },
+  { id: 'openai',       ph: 'sk-...',   help: true },
+  { id: 'mimo',         ph: '...',      help: true },
+  { id: 'bytedance',    ph: '...',      help: true },
+];
+
 export default function SettingsModal({ onClose, globalSettings, setGlobalSettings }: any) {
-  // Drives the small GUI-chrome translation slice below (see src/lib/i18n.ts
-  // for what is and isn't covered yet).
-  const uiLang = globalSettings?.language;
+  const t = useT();
   // claudeAuthMode + claudeOAuthToken are OPT-IN additions for using your
   // Claude Pro/Max subscription billing instead of pay-per-token API billing.
   // Default is 'api-key' so existing setups keep working exactly as before.
@@ -81,18 +97,24 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
   const engineAction = async (engine: number, key: string, action: 'start' | 'stop' | 'restart') => {
     setEngineBusy(key);
-    setEngineMsg(prev => ({ ...prev, [key]: action === 'stop' ? 'stopping…' : 'starting…' }));
+    setEngineMsg(prev => ({
+      ...prev,
+      [key]: action === 'stop' ? t('settings.engines.msg.stopping') : t('settings.engines.msg.starting'),
+    }));
     try {
       const d = await fetch('/api/tts/engines', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, engine }),
       }).then(r => r.json());
-      setEngineMsg(prev => ({ ...prev, [key]: d?.message || (d?.ok ? 'done' : 'failed') }));
+      setEngineMsg(prev => ({
+        ...prev,
+        [key]: d?.message || (d?.ok ? t('settings.engines.msg.done') : t('settings.engines.msg.failed')),
+      }));
       // Only a launch needs the boot poll; a stop has already been confirmed.
       if (d?.ok && action !== 'stop') pollEngines();
     } catch (e: any) {
-      setEngineMsg(prev => ({ ...prev, [key]: e?.message || 'request failed' }));
+      setEngineMsg(prev => ({ ...prev, [key]: e?.message || t('settings.engines.msg.requestFailed') }));
     } finally {
       setEngineBusy(null);
       refreshEngines();
@@ -110,7 +132,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
         let devs = await navigator.mediaDevices.enumerateDevices();
         devs = devs.filter(d => d.kind === 'audiooutput');
         setDevices(devs);
-        
+
         // Auto-request for chromium (works without user gesture sometimes, but not in Firefox)
         if (devs.length > 0 && !devs[0].label) {
           try {
@@ -138,11 +160,11 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const requestAudioPermission = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(t => t.stop());
+      stream.getTracks().forEach(tr => tr.stop());
       let devs = await navigator.mediaDevices.enumerateDevices();
       setDevices(devs.filter(d => d.kind === 'audiooutput'));
     } catch(e) {
-      alert("Permission denied or error: " + e);
+      alert(t('settings.audio.permissionDenied') + e);
     }
   };
 
@@ -165,11 +187,13 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
   if (loading) return null;
 
+  const inputCls = "w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none";
+
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
-          <h2 className="text-lg font-bold">{translate('settings.title', uiLang)}</h2>
+          <h2 className="text-lg font-bold">{t('settings.title')}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
             <X size={20} />
           </button>
@@ -177,20 +201,20 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
         {/* Tab bar */}
         <div className="px-6 pt-3 border-b border-border bg-secondary/10 shrink-0 flex gap-1">
-          {TABS.map(t => {
-            const Icon = t.icon;
-            const active = tab === t.id;
+          {TABS.map(tb => {
+            const Icon = tb.icon;
+            const active = tab === tb.id;
             return (
               <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
+                key={tb.id}
+                onClick={() => setTab(tb.id)}
                 className={`px-3 py-2 text-xs font-semibold rounded-t-md flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
                   active
                     ? 'border-indigo-500 text-indigo-500 bg-background'
                     : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
                 }`}
               >
-                <Icon size={14} /> {translate(`settings.tab.${t.id}`, uiLang)}
+                <Icon size={14} /> {t(`settings.tab.${tb.id}`)}
               </button>
             );
           })}
@@ -212,203 +236,70 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
           {tab === 'keys' && (
           <div className="space-y-4">
             <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
-              <KeyRound size={16} /> API Keys
+              <KeyRound size={16} /> {t('settings.keys.heading')}
             </h3>
             <div className="text-xs text-muted-foreground mb-2 leading-relaxed">
-              Keys are saved locally in the <code className="bg-muted px-1 rounded">local_data</code> folder and never sent anywhere except the official APIs.
+              <Tx k="settings.keys.intro" />
             </div>
             <div className="border border-border rounded-lg p-3 space-y-3 bg-muted/10">
-              <label className="text-xs font-semibold text-foreground">Anthropic (Claude)</label>
+              <label className="text-xs font-semibold text-foreground">{t('settings.keys.anthropic')}</label>
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  Token-paid API Key <span className="font-normal">(pay per token)</span>
+                  {t('settings.keys.claudeApi.label')}
                 </label>
                 <input
                   type="password"
                   placeholder="sk-ant-..."
                   value={keys.claude || ''}
                   onChange={e => setKeys({...keys, claude: e.target.value})}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className={inputCls}
                 />
                 <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                  From <span className="font-mono">console.anthropic.com</span> → API Keys. Charged per token sent/received. Billing mode per conversation is chosen in System Instructions → Model tab.
+                  <Tx k="settings.keys.claudeApi.help" />
                 </div>
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  Monthly-paid OAuth Token <span className="font-normal">(Pro / Max subscription)</span>
+                  {t('settings.keys.claudeOauth.label')}
                 </label>
                 <input
                   type="password"
                   placeholder="sk-ant-oat01-..."
                   value={keys.claudeOAuthToken || ''}
                   onChange={e => setKeys({...keys, claudeOAuthToken: e.target.value})}
-                  className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                  className={inputCls}
                 />
                 <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed space-y-1 bg-amber-500/5 border border-amber-500/30 rounded p-2">
-                  <div className="font-semibold text-amber-600 dark:text-amber-400">⚠️ Experimental — read carefully</div>
-                  <div><strong>Setup:</strong> Run <code className="font-mono bg-muted px-1 rounded">npm install -g @anthropic-ai/claude-code</code> then <code className="font-mono bg-muted px-1 rounded">claude setup-token</code>. Paste the resulting <code>sk-ant-oat01-…</code> token here. Token is valid 1 year.</div>
-                  <div><strong>Billing:</strong> Uses your Pro/Max subscription credit, NOT pay-per-token API. Pro = $20/mo credit, Max 5x = $100, Max 20x = $200.</div>
-                  <div><strong>How it works:</strong> NEXUS uses the Claude Agent SDK, which spawns the official Claude Code binary under the hood. Conversations use Anthropic-side session resume to preserve role semantics.</div>
-                  <div><strong>Risk:</strong> Account ban is possible (gray-zone use of OAuth tokens). Probability low for solo use; not zero.</div>
-                  <div><strong>Workspace tools (when Tool Use is ON):</strong> Claude Code's <code>Read</code> / <code>Write</code> / <code>Edit</code> / <code>Glob</code> / <code>Grep</code> are sandboxed to <code className="font-mono">local_data/workspaces/&lt;folder&gt;/</code>. Shell/network/subagent tools always disabled.</div>
-                  <div><strong>Other limitations:</strong> creativity-control disabled; extended thinking uses adaptive mode by default.</div>
+                  <div className="font-semibold text-amber-600 dark:text-amber-400">{t('settings.keys.oauth.warn')}</div>
+                  <div><Tx k="settings.keys.oauth.setup" /></div>
+                  <div><Tx k="settings.keys.oauth.billing" /></div>
+                  <div><Tx k="settings.keys.oauth.how" /></div>
+                  <div><Tx k="settings.keys.oauth.risk" /></div>
+                  <div><Tx k="settings.keys.oauth.tools" /></div>
+                  <div><Tx k="settings.keys.oauth.other" /></div>
                 </div>
               </div>
             </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Google (Gemini) API Key</label>
-              <input
-                type="password"
-                placeholder="AIzaSy..."
-                value={keys.gemini || ''}
-                onChange={e => setKeys({...keys, gemini: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Alibaba (Qwen / DashScope) API Key</label>
-              <input
-                type="password"
-                placeholder="sk-..."
-                value={keys.qwen || ''}
-                onChange={e => setKeys({...keys, qwen: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at Alibaba Cloud Model Studio. Used for Qwen 3.6 Plus / 3.6 Max / 3.7 Max / 3.8 Max and DeepSeek V3.2 via the OpenAI-compatible DashScope endpoint.
+
+            {SIMPLE_PROVIDERS.map(p => (
+              <div key={p.id}>
+                <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                  {t(`settings.keys.${p.id}.label`)}
+                </label>
+                <input
+                  type="password"
+                  placeholder={p.ph}
+                  value={keys[p.id] || ''}
+                  onChange={e => setKeys({ ...keys, [p.id]: e.target.value })}
+                  className={inputCls}
+                />
+                {p.help && (
+                  <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                    <Tx k={`settings.keys.${p.id}.help`} />
+                  </div>
+                )}
               </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">DeepSeek API Key</label>
-              <input
-                type="password"
-                placeholder="sk-..."
-                value={keys.deepseek || ''}
-                onChange={e => setKeys({...keys, deepseek: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">platform.deepseek.com</span>. Required for DeepSeek V4 Flash 0731 / V4 Pro / V4 Flash and the legacy <span className="font-mono">deepseek-chat</span> / <span className="font-mono">deepseek-reasoner</span> aliases. Globally accessible — no regional restrictions.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Z.AI (GLM) API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.glm || ''}
-                onChange={e => setKeys({...keys, glm: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">z.ai</span> → API Console. Required for the GLM family (GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air).
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">DigitalOcean Inference API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.digitalocean || ''}
-                onChange={e => setKeys({...keys, digitalocean: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                One key for all DigitalOcean Inference models — create a Model Access Key in the DigitalOcean control panel (Inference → Model Access Keys). Serves GLM-5.2 / GLM-5.1 / GLM-5 (Z.ai open weights, US-hosted, ~half Z.ai price), plus DeepSeek V4, Kimi K2.5/K2.6, and more via the provider selector.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">xAI (Grok) API Key</label>
-              <input
-                type="password"
-                placeholder="xai-..."
-                value={keys.grok || ''}
-                onChange={e => setKeys({...keys, grok: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">console.x.ai</span>. Required for the Grok family (Grok 4.3, Grok 4.20 reasoning / non-reasoning, Grok Code Fast 1, etc.).
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Kimi (Moonshot) API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.kimi || ''}
-                onChange={e => setKeys({...keys, kimi: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Moonshot's first-party Kimi API (<span className="font-mono">platform.kimi.ai</span> → Console → API Keys; endpoint <span className="font-mono">api.moonshot.ai/v1</span>). Use the international platform, not the <span className="font-mono">.cn</span> one.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Cohere API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.cohere || ''}
-                onChange={e => setKeys({...keys, cohere: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">dashboard.cohere.com</span>. Required for the Command A family (Command A Plus, Command A Reasoning, Command A Vision).
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">MiniMax API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.minimax || ''}
-                onChange={e => setKeys({...keys, minimax: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">platform.minimax.io</span>. Required for the MiniMax M2.7 model.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">OpenAI API Key</label>
-              <input
-                type="password"
-                placeholder="sk-..."
-                value={keys.openai || ''}
-                onChange={e => setKeys({...keys, openai: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">platform.openai.com</span>. Required for the ChatGPT (GPT-5) family — GPT-5.6 Sol / Terra / Luna, GPT-5.5, GPT-5.4, GPT-5.4 Mini.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">MiMo (Xiaomi) API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.mimo || ''}
-                onChange={e => setKeys({...keys, mimo: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">api.xiaomimimo.com</span>. Required for the Xiaomi MiMo family — MiMo V2.5 Pro, MiMo V2.5.
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">ByteDance / BytePlus API Key</label>
-              <input
-                type="password"
-                placeholder="..."
-                value={keys.bytedance || ''}
-                onChange={e => setKeys({...keys, bytedance: e.target.value})}
-                className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
-              />
-              <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                Get one at <span className="font-mono">console.byteplus.com</span> (BytePlus ModelArk). Required for the ByteDance Seed family — Seed 2.0 Pro / Lite / Mini / Code.
-              </div>
-            </div>
+            ))}
           </div>
           )}
 
@@ -416,18 +307,18 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
-                <Volume2 size={16} /> VRChat & Audio Routing
+                <Volume2 size={16} /> {t('settings.audio.heading')}
               </h3>
               {devices.length > 0 && !devices[0].label && (
                 <button onClick={requestAudioPermission} className="text-[10px] bg-primary/20 text-primary px-2 py-1 rounded hover:bg-primary/30 transition">
-                  Unlock Devices (Firefox)
+                  {t('settings.audio.unlock')}
                 </button>
               )}
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">VRChat Pictures Folder Path</label>
-              <input 
-                type="text" 
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.vrchatPath')}</label>
+              <input
+                type="text"
                 placeholder="C:\Users\user\Pictures\VRChat"
                 value={globalSettings.vrchatPath ?? 'C:\\Users\\user\\Pictures\\VRChat'}
                 onChange={e => setGlobalSettings({...globalSettings, vrchatPath: e.target.value})}
@@ -435,26 +326,26 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Primary Audio Output Device</label>
-              <select 
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.device1')}</label>
+              <select
                 value={globalSettings.device1Id || ''}
                 onChange={e => setGlobalSettings({...globalSettings, device1Id: e.target.value})}
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               >
-                <option value="">Default System Device</option>
+                <option value="">{t('settings.audio.device.system')}</option>
                 {devices.map(d => (
                   <option key={d.deviceId} value={d.deviceId}>{d.label || `Device ${d.deviceId.substring(0, 8)}`}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1 block">Secondary Audio Output Device</label>
-              <select 
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.device2')}</label>
+              <select
                 value={globalSettings.device2Id || ''}
                 onChange={e => setGlobalSettings({...globalSettings, device2Id: e.target.value})}
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               >
-                <option value="">None</option>
+                <option value="">{t('settings.audio.device.none')}</option>
                 {devices.map(d => (
                   <option key={d.deviceId} value={d.deviceId}>{d.label || `Device ${d.deviceId.substring(0, 8)}`}</option>
                 ))}
@@ -463,19 +354,17 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
             <div className="pt-2 border-t border-border space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="text-xs font-semibold text-foreground">TTS Engine Executables</h4>
+                <h4 className="text-xs font-semibold text-foreground">{t('settings.engines.heading')}</h4>
                 <button
                   onClick={() => refreshEngines()}
                   className="text-[10px] bg-muted px-2 py-1 rounded hover:bg-muted/70 transition text-muted-foreground"
-                  title="Re-check which engines are currently running"
+                  title={t('settings.engines.refresh.title')}
                 >
-                  Refresh status
+                  {t('settings.engines.refresh')}
                 </button>
               </div>
               <p className="text-[10px] text-muted-foreground leading-relaxed">
-                Full path to each engine&apos;s <code>.exe</code>. When TTS needs an engine that isn&apos;t
-                running, Nexus starts it automatically and waits for it to finish loading.
-                Leave a field empty to disable auto-start for that engine.
+                <Tx k="settings.engines.help" />
               </p>
 
               {[
@@ -501,7 +390,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                               : 'bg-muted text-muted-foreground'
                           }`}
                         >
-                          {running ? 'running' : 'stopped'}
+                          {running ? t('settings.engines.running') : t('settings.engines.stopped')}
                         </span>
                       )}
                       <span className="flex-1" />
@@ -512,30 +401,34 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                       <button
                         onClick={() => engineAction(st?.engine ?? 0, eng.key, 'start')}
                         disabled={busy || running || !configured}
-                        title={!configured ? 'Set the executable path first' : running ? 'Already running' : 'Launch this engine'}
+                        title={!configured
+                          ? t('settings.engines.start.needPath')
+                          : running
+                            ? t('settings.engines.start.already')
+                            : t('settings.engines.start.title')}
                         className={`${btn} bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25`}
-                      >Start</button>
+                      >{t('settings.engines.start')}</button>
                       <button
                         onClick={() => engineAction(st?.engine ?? 0, eng.key, 'stop')}
                         disabled={busy || !running || (st && st.local === false)}
                         title={st && st.local === false
-                          ? `Configured at ${st.base} — Nexus only stops engines on this machine`
-                          : 'Kill whatever is listening on this port'}
+                          ? `${t('settings.engines.stop.remote')}${st.base}`
+                          : t('settings.engines.stop.title')}
                         className={`${btn} bg-rose-500/15 text-rose-600 dark:text-rose-400 hover:bg-rose-500/25`}
-                      >Stop</button>
+                      >{t('settings.engines.stop')}</button>
                       <button
                         onClick={() => engineAction(st?.engine ?? 0, eng.key, 'restart')}
                         disabled={busy || !configured}
-                        title="Stop, wait for the port to be released, then start again — use this after installing new voices"
+                        title={t('settings.engines.restart.title')}
                         className={`${btn} bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25`}
-                      >Restart</button>
+                      >{t('settings.engines.restart')}</button>
                     </label>
                     <input
                       type="text"
                       value={enginePaths[eng.key] ?? ''}
                       onChange={e => setEnginePaths({ ...enginePaths, [eng.key]: e.target.value })}
                       placeholder={eng.ph}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                      className={inputCls}
                     />
                     {engineMsg[eng.key] && (
                       <p className="text-[10px] text-muted-foreground mt-1 font-mono">{engineMsg[eng.key]}</p>
@@ -553,7 +446,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
           {tab === 'other' && (
           <div className="space-y-4">
             <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
-              <SlidersHorizontal size={16} /> Other
+              <SlidersHorizontal size={16} /> {t('settings.other.heading')}
             </h3>
             <div>
               <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -563,10 +456,10 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   onChange={e => setGlobalSettings({...globalSettings, removeTimestamps: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"
                 />
-                <span className="text-sm text-foreground">Remove timestamps from new AI messages</span>
+                <span className="text-sm text-foreground">{t('settings.removeTimestamps.label')}</span>
               </label>
               <p className="text-xs text-muted-foreground mt-1 ml-6">
-                Automatically strips leading <code>[YYYY-MM-DD HH:MM:SS]</code> stacks that models echo at the start of a reply.
+                <Tx k="settings.removeTimestamps.help" />
               </p>
             </div>
 
@@ -578,16 +471,16 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   onChange={e => setGlobalSettings({...globalSettings, autoSplitVideos: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"
                 />
-                <span className="text-sm text-foreground">Auto-split large videos</span>
+                <span className="text-sm text-foreground">{t('settings.autoSplitVideos.label')}</span>
               </label>
               <p className="text-xs text-muted-foreground mt-1 ml-6">
-                Videos whose base64 size exceeds 20&nbsp;MiB are re-encoded server-side at <code>-crf 28</code>; if still oversize they&apos;re split into <code>&lt;name&gt;_part1.mp4</code>, <code>_part2.mp4</code>, … each under the provider cap. Requires <code>ffmpeg</code> on the machine.
+                <Tx k="settings.autoSplitVideos.help" />
               </p>
             </div>
 
             <div>
               <label className="block">
-                <span className="text-sm text-foreground">Tool-call limit per turn</span>
+                <span className="text-sm text-foreground">{t('settings.toolLimit.label')}</span>
                 <input
                   type="number"
                   min={1}
@@ -604,18 +497,13 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 />
               </label>
               <p className="text-xs text-muted-foreground mt-1">
-                How many rounds of tool use one turn may take before NEXUS stops it. Each round is one
-                model call, so a task that reads a file, edits it, then runs a test uses three. Real work
-                often needs 20 or more; the old fixed limit of 8 cut those off silently. Raise it if long
-                tasks stop early, lower it to cap spending. A separate guard stops a model that repeats the
-                same call over and over, so this number does not have to be tight to be safe. Does not apply
-                to Claude OAuth — Claude Code runs its own loop.
+                <Tx k="settings.toolLimit.help" />
               </p>
             </div>
 
             <div>
               <label className="block">
-                <span className="text-sm text-foreground">Language</span>
+                <span className="text-sm text-foreground">{t('settings.language.label')}</span>
                 <select
                   value={globalSettings.language ?? 'en'}
                   onChange={e => setGlobalSettings({ ...globalSettings, language: e.target.value })}
@@ -626,12 +514,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 </select>
               </label>
               <p className="text-xs text-muted-foreground mt-1">
-                Two variants: English or Japanese. Covers this Preferences window now; the rest of the
-                interface is not translated yet. Also picks which built-in language an ENTITY&apos;s hidden
-                instructions (tool descriptions, letter notices, etc.) default to when a folder has not
-                overridden them — still editable per-Entity exactly as before either way. The Japanese
-                defaults start as a verbatim copy of the English text and only change where someone hand-writes
-                a real Japanese version — nothing here is machine-translated.
+                <Tx k="settings.language.help" />
               </p>
             </div>
 
@@ -643,10 +526,10 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   onChange={e => setGlobalSettings({...globalSettings, saveTimestampsToMd: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"
                 />
-                <span className="text-sm text-foreground">Save timestamps to .md</span>
+                <span className="text-sm text-foreground">{t('settings.saveTimestampsToMd.label')}</span>
               </label>
               <p className="text-xs text-muted-foreground mt-1 ml-6">
-                When exporting a conversation to Markdown, writes each message&apos;s <code>[YYYY-MM-DD HH:MM:SS]</code> time under its <code>## Name</code> header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.
+                <Tx k="settings.saveTimestampsToMd.help" />
               </p>
             </div>
 
@@ -658,31 +541,31 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   onChange={e => setGlobalSettings({...globalSettings, customFilterEnabled: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"
                 />
-                <span className="text-sm text-foreground">Custom regex filter on new AI messages</span>
+                <span className="text-sm text-foreground">{t('settings.customFilter.label')}</span>
               </label>
               <p className="text-xs text-muted-foreground mt-1 ml-6">
-                When enabled, every match of the pattern below is replaced (deleted if the replacement is empty) in AI output as it streams — same mechanism as timestamp removal, so it also never reaches TTS.
+                <Tx k="settings.customFilter.help" />
               </p>
               <div className="ml-6 mt-2 space-y-2">
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Pattern (regex — what to replace)</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.customFilter.pattern')}</label>
                   <input
                     type="text"
                     value={globalSettings.customFilterPattern ?? ''}
                     onChange={e => setGlobalSettings({...globalSettings, customFilterPattern: e.target.value})}
                     placeholder={"e.g. \\[🔥[^\\]]*\\]"}
-                    className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50"
+                    className={`${inputCls} disabled:opacity-50`}
                     disabled={!globalSettings.customFilterEnabled}
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Replacement (target — leave empty to delete)</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.customFilter.replacement')}</label>
                   <input
                     type="text"
                     value={globalSettings.customFilterReplacement ?? ''}
                     onChange={e => setGlobalSettings({...globalSettings, customFilterReplacement: e.target.value})}
-                    placeholder="(empty)"
-                    className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none disabled:opacity-50"
+                    placeholder={t('settings.customFilter.replacement.ph')}
+                    className={`${inputCls} disabled:opacity-50`}
                     disabled={!globalSettings.customFilterEnabled}
                   />
                 </div>
@@ -695,10 +578,10 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
         <div className="px-6 py-4 border-t border-border bg-secondary/30 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium rounded-lg hover:bg-muted transition-colors">
-            {translate('settings.cancel', uiLang)}
+            {t('settings.cancel')}
           </button>
           <button onClick={saveKeys} className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity flex items-center gap-2">
-            <Save size={16} /> {translate('settings.saveChanges', uiLang)}
+            <Save size={16} /> {t('settings.saveChanges')}
           </button>
         </div>
       </div>

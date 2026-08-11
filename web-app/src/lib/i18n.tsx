@@ -1,0 +1,1810 @@
+"use client";
+
+// ───────────────────────────────────────────────────────────────────────────
+// GUI string translation.
+//
+// This is NOT the same mechanism as src/lib/agentInstructions.ts's
+// DEFAULT_AGENT_INSTRUCTIONS_JA — that dict is what an ENTITY reads (tool
+// descriptions, letter notices, etc.) and is deliberately never
+// auto-translated; this one is what a HUMAN reads in the Nexus interface
+// itself, where translating is the whole point. They're both keyed off the
+// same Preferences language selector, but they are separate dictionaries with
+// separate coverage, because they translate different things for different
+// readers.
+//
+// Usage in a component:
+//
+//     const t = useT();
+//     <span>{t('settings.title')}</span>
+//
+// For help prose that needs inline styling, use <Tx k="..." /> instead: the
+// string may contain `backticks` (rendered as <code>) and **bold** (rendered
+// as <strong>), so one translatable string can carry its own formatting
+// instead of being cut into six JSX fragments that a translator can't reorder.
+//
+// The language comes from a React context provided once at the NexusApp root,
+// so no component needs `language` threaded through its props.
+//
+// Any key missing from UI_STRINGS_JA falls back to the English string, and a
+// key missing from both falls back to the key itself — so partial coverage
+// never renders a blank label.
+// ───────────────────────────────────────────────────────────────────────────
+
+import React, { createContext, useContext, useMemo } from 'react';
+
+export type UiLanguage = 'en' | 'ja';
+
+export const UI_STRINGS_EN: Record<string, string> = {
+  // ── App shell ────────────────────────────────────────────────────────────
+  'app.welcome.title': 'Welcome to NEXUS',
+  'app.welcome.subtitle': 'Select or create a conversation to start',
+  'app.welcome.newChat': 'New Chat',
+
+  // ── Preferences: chrome ──────────────────────────────────────────────────
+  'settings.title': 'Preferences',
+  'settings.tab.keys': 'API Keys',
+  'settings.tab.vrchat': 'VRChat & Audio',
+  'settings.tab.other': 'Other',
+  'settings.cancel': 'Cancel',
+  'settings.saveChanges': 'Save Changes',
+
+  // ── Preferences → API Keys ───────────────────────────────────────────────
+  'settings.keys.heading': 'API Keys',
+  'settings.keys.intro':
+    'Keys are saved locally in the `local_data` folder and never sent anywhere except the official APIs.',
+  'settings.keys.anthropic': 'Anthropic (Claude)',
+  'settings.keys.claudeApi.label': 'Token-paid API Key (pay per token)',
+  'settings.keys.claudeApi.help':
+    'From `console.anthropic.com` → API Keys. Charged per token sent/received. Billing mode per conversation is chosen in System Instructions → Model tab.',
+  'settings.keys.claudeOauth.label': 'Monthly-paid OAuth Token (Pro / Max subscription)',
+  'settings.keys.oauth.warn': '⚠️ Experimental — read carefully',
+  'settings.keys.oauth.setup':
+    '**Setup:** Run `npm install -g @anthropic-ai/claude-code`, then `claude setup-token`. Paste the resulting `sk-ant-oat01-…` token here. The token is valid for 1 year.',
+  'settings.keys.oauth.billing':
+    '**Billing:** Uses your Pro/Max subscription credit, NOT pay-per-token API. Pro = $20/mo credit, Max 5x = $100, Max 20x = $200.',
+  'settings.keys.oauth.how':
+    '**How it works:** NEXUS uses the Claude Agent SDK, which spawns the official Claude Code binary under the hood. Conversations use Anthropic-side session resume to preserve role semantics.',
+  'settings.keys.oauth.risk':
+    '**Risk:** Account ban is possible (gray-zone use of OAuth tokens). Probability low for solo use; not zero.',
+  'settings.keys.oauth.tools':
+    "**Workspace tools (when Tool Use is ON):** Claude Code's `Read` / `Write` / `Edit` / `Glob` / `Grep` are sandboxed to `local_data/workspaces/<folder>/`. Shell/network/subagent tools are always disabled.",
+  'settings.keys.oauth.other':
+    '**Other limitations:** creativity control is disabled; extended thinking uses adaptive mode by default.',
+
+  'settings.keys.gemini.label': 'Google (Gemini) API Key',
+  'settings.keys.qwen.label': 'Alibaba (Qwen / DashScope) API Key',
+  'settings.keys.qwen.help':
+    'Get one at Alibaba Cloud Model Studio. Used for Qwen 3.6 Plus / 3.6 Max / 3.7 Max / 3.8 Max and DeepSeek V3.2 via the OpenAI-compatible DashScope endpoint.',
+  'settings.keys.deepseek.label': 'DeepSeek API Key',
+  'settings.keys.deepseek.help':
+    'Get one at `platform.deepseek.com`. Required for DeepSeek V4 Flash 0731 / V4 Pro / V4 Flash and the legacy `deepseek-chat` / `deepseek-reasoner` aliases. Globally accessible — no regional restrictions.',
+  'settings.keys.glm.label': 'Z.AI (GLM) API Key',
+  'settings.keys.glm.help':
+    'Get one at `z.ai` → API Console. Required for the GLM family (GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air).',
+  'settings.keys.digitalocean.label': 'DigitalOcean Inference API Key',
+  'settings.keys.digitalocean.help':
+    'One key for all DigitalOcean Inference models — create a Model Access Key in the DigitalOcean control panel (Inference → Model Access Keys). Serves GLM-5.2 / GLM-5.1 / GLM-5 (Z.ai open weights, US-hosted, ~half the Z.ai price), plus DeepSeek V4, Kimi K2.5/K2.6, and more via the provider selector.',
+  'settings.keys.grok.label': 'xAI (Grok) API Key',
+  'settings.keys.grok.help':
+    'Get one at `console.x.ai`. Required for the Grok family (Grok 4.3, Grok 4.20 reasoning / non-reasoning, Grok Code Fast 1, etc.).',
+  'settings.keys.kimi.label': 'Kimi (Moonshot) API Key',
+  'settings.keys.kimi.help':
+    "Moonshot's first-party Kimi API (`platform.kimi.ai` → Console → API Keys; endpoint `api.moonshot.ai/v1`). Use the international platform, not the `.cn` one.",
+  'settings.keys.cohere.label': 'Cohere API Key',
+  'settings.keys.cohere.help':
+    'Get one at `dashboard.cohere.com`. Required for the Command A family (Command A Plus, Command A Reasoning, Command A Vision).',
+  'settings.keys.minimax.label': 'MiniMax API Key',
+  'settings.keys.minimax.help':
+    'Get one at `platform.minimax.io`. Required for the MiniMax M2.7 model.',
+  'settings.keys.openai.label': 'OpenAI API Key',
+  'settings.keys.openai.help':
+    'Get one at `platform.openai.com`. Required for the ChatGPT (GPT-5) family — GPT-5.6 Sol / Terra / Luna, GPT-5.5, GPT-5.4, GPT-5.4 Mini.',
+  'settings.keys.mimo.label': 'MiMo (Xiaomi) API Key',
+  'settings.keys.mimo.help':
+    'Get one at `api.xiaomimimo.com`. Required for the Xiaomi MiMo family — MiMo V2.5 Pro, MiMo V2.5.',
+  'settings.keys.bytedance.label': 'ByteDance / BytePlus API Key',
+  'settings.keys.bytedance.help':
+    'Get one at `console.byteplus.com` (BytePlus ModelArk). Required for the ByteDance Seed family — Seed 2.0 Pro / Lite / Mini / Code.',
+
+  // ── Preferences → VRChat & Audio ─────────────────────────────────────────
+  'settings.audio.heading': 'VRChat & Audio Routing',
+  'settings.audio.unlock': 'Unlock Devices (Firefox)',
+  'settings.audio.vrchatPath': 'VRChat Pictures Folder Path',
+  'settings.audio.device1': 'Primary Audio Output Device',
+  'settings.audio.device2': 'Secondary Audio Output Device',
+  'settings.audio.device.system': 'Default System Device',
+  'settings.audio.device.none': 'None',
+  'settings.audio.permissionDenied': 'Permission denied or error: ',
+  'settings.engines.heading': 'TTS Engine Executables',
+  'settings.engines.refresh': 'Refresh status',
+  'settings.engines.refresh.title': 'Re-check which engines are currently running',
+  'settings.engines.help':
+    "Full path to each engine's `.exe`. When TTS needs an engine that isn't running, Nexus starts it automatically and waits for it to finish loading. Leave a field empty to disable auto-start for that engine.",
+  'settings.engines.running': 'running',
+  'settings.engines.stopped': 'stopped',
+  'settings.engines.start': 'Start',
+  'settings.engines.stop': 'Stop',
+  'settings.engines.restart': 'Restart',
+  'settings.engines.start.needPath': 'Set the executable path first',
+  'settings.engines.start.already': 'Already running',
+  'settings.engines.start.title': 'Launch this engine',
+  'settings.engines.stop.title': 'Kill whatever is listening on this port',
+  'settings.engines.stop.remote': 'Nexus only stops engines on this machine — configured at ',
+  'settings.engines.restart.title':
+    'Stop, wait for the port to be released, then start again — use this after installing new voices',
+  'settings.engines.msg.starting': 'starting…',
+  'settings.engines.msg.stopping': 'stopping…',
+  'settings.engines.msg.done': 'done',
+  'settings.engines.msg.failed': 'failed',
+  'settings.engines.msg.requestFailed': 'request failed',
+
+  // ── Preferences → Other ──────────────────────────────────────────────────
+  'settings.other.heading': 'Other',
+  'settings.removeTimestamps.label': 'Remove timestamps from new AI messages',
+  'settings.removeTimestamps.help':
+    'Automatically strips leading `[YYYY-MM-DD HH:MM:SS]` stacks that models echo at the start of a reply.',
+  'settings.autoSplitVideos.label': 'Auto-split large videos',
+  'settings.autoSplitVideos.help':
+    "Videos whose base64 size exceeds 20 MiB are re-encoded server-side at `-crf 28`; if still oversize they're split into `<name>_part1.mp4`, `_part2.mp4`, … each under the provider cap. Requires `ffmpeg` on the machine.",
+  'settings.toolLimit.label': 'Tool-call limit per turn',
+  'settings.toolLimit.help':
+    'How many rounds of tool use one turn may take before NEXUS stops it. Each round is one model call, so a task that reads a file, edits it, then runs a test uses three. Real work often needs 20 or more; the old fixed limit of 8 cut those off silently. Raise it if long tasks stop early, lower it to cap spending. A separate guard stops a model that repeats the same call over and over, so this number does not have to be tight to be safe. Does not apply to Claude OAuth — Claude Code runs its own loop.',
+  'settings.language.label': 'Language',
+  'settings.language.help':
+    "Two variants: English or Japanese. Changes the Nexus interface, and also picks which built-in language an ENTITY's hidden instructions (tool descriptions, letter notices, etc.) default to when a folder has not overridden them — still editable per-Entity exactly as before either way. The Japanese defaults start as a verbatim copy of the English text and only change where someone hand-writes a real Japanese version — nothing here is machine-translated.",
+  'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
+  'settings.saveTimestampsToMd.help':
+    "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
+  'settings.customFilter.label': 'Custom regex filter on new AI messages',
+  'settings.customFilter.help':
+    'When enabled, every match of the pattern below is replaced (deleted if the replacement is empty) in AI output as it streams — the same mechanism as timestamp removal, so it also never reaches TTS.',
+  'settings.customFilter.pattern': 'Pattern (regex — what to replace)',
+  'settings.customFilter.replacement': 'Replacement (target — leave empty to delete)',
+  'settings.customFilter.replacement.ph': '(empty)',
+
+  // ── Sidebar ──────────────────────────────────────────────────────────────
+  'sidebar.identities': 'Digital Identities',
+  'sidebar.newFolder': 'New Folder',
+  'sidebar.newChat': 'New Chat',
+  'sidebar.import.json': 'Import JSON log(s)',
+  'sidebar.import.md': 'Import Markdown log(s)',
+  'sidebar.loading': 'Loading conversations…',
+  'sidebar.noHistory': 'No history in {folder}.',
+  'sidebar.thisFolder': 'this folder',
+  'sidebar.inactive': '(inactive)',
+  'sidebar.menu.rename': 'Rename',
+  'sidebar.menu.folderSettings': 'Folder Settings',
+  'sidebar.menu.autoImportMd': 'Auto-Import .md',
+  'sidebar.menu.sortDesc': 'Sort Descending',
+  'sidebar.menu.sortAsc': 'Sort Ascending',
+  'sidebar.menu.normalizeNames': 'Normalize Names (＃→_)',
+  'sidebar.menu.backups': 'Backups',
+  'sidebar.menu.delete': 'Delete',
+  'sidebar.menu.clone': 'Clone',
+  'sidebar.menu.markActive': 'Mark active',
+  'sidebar.menu.markInactive': 'Mark inactive',
+  'sidebar.prompt.newFolder': 'Enter new folder (AI Character) name:',
+  'sidebar.prompt.renameFolder': 'Enter new folder name:',
+  'sidebar.import.noFolder': 'Select a folder (Digital Identity) first, then import.',
+  'sidebar.import.notNexusJson': 'is not a valid Nexus log JSON.',
+  'sidebar.import.failed': 'Failed to import',
+  'sidebar.import.nothing': 'Import added nothing — see the browser console for details.',
+  'sidebar.import.nothingWithReasons':
+    'Import added nothing.\n\n{reasons}\n\nSee the browser console for full details.',
+
+  'sidebar.deleteConvo.title': 'Delete Conversation?',
+  'sidebar.deleteConvo.body':
+    'Are you sure you want to delete this conversation? This action cannot be undone.',
+  'sidebar.deleteFolder.title': 'Delete Folder?',
+  'sidebar.deleteFolder.bodyBefore': 'Are you sure you want to delete the folder ',
+  'sidebar.deleteFolder.bodyAfter':
+    ' and ALL conversations inside it? This action cannot be undone.',
+  'sidebar.deleteFolder.confirm': 'Delete Folder',
+  'common.cancel': 'Cancel',
+  'common.delete': 'Delete',
+  'common.save': 'Save',
+  'common.close': 'Close',
+  'common.loading': 'Loading…',
+  'common.copy': 'Copy',
+  'common.copied': 'Copied!',
+
+  // ── Message bubble ───────────────────────────────────────────────────────
+  // Everything the user reads on a single message: the meta bar, attachment
+  // cards, the thinking block, hover actions and the three modals.
+  'bubble.att.openModal': 'Open full file in a modal',
+  'bubble.att.charsClick': '{n} chars · click to view full file',
+  'bubble.att.chars': '{n} chars',
+  'bubble.thinkingOn': ' · thinking on',
+  'bubble.thinkingOff': ' · thinking off',
+  'bubble.tokens': '{n} tokens',
+  'bubble.genTime':
+    'This turn took {s}s to generate (thinking + tool use + streaming)',
+  'bubble.cache.tooltip':
+    'Input: {total} tokens\n' +
+    '  cached (cheap):   {cached} ({pct}%)\n' +
+    '  uncached (full):  {uncached}{write}\n' +
+    'Output: {out} tokens\n' +
+    '  (includes thinking + files written / tool calls —\n' +
+    '   the plain token count on the left is visible text only)\n' +
+    'Provider: {provider}\n' +
+    'Totals cover every API call in this turn (tool loops + subagents).',
+  'bubble.cache.writeLine': '\n  cache write:      {n} (1.25× one-shot)',
+  'bubble.cache.in': 'in',
+  'bubble.cache.cached': '· {n} cached ({pct}%)',
+  'bubble.cache.out': '· {n} out',
+  'bubble.continued.title':
+    "Auto-continued {n} time(s) after hitting the model's output token cap",
+  'bubble.continued.badge': '↵ continued ×{n}',
+  'bubble.price.none':
+    'No price configured for "{model}".\nAdd it in src/lib/modelPricing.json',
+  'bubble.copyLink': 'Copy a link to this message',
+  'bubble.toolCallsTitle': '{n} tool call(s) — click for details',
+  'bubble.noticeFooter':
+    'Shown to you only — not part of the conversation or the context sent to the model.',
+  'bubble.webSources': 'Web sources ({n}) — verified, clickable',
+  'bubble.att.toolAction': 'Action the AI performed on this file via tool use',
+  'bubble.att.viewFull': 'View full file content',
+  'bubble.att.include': 'Include in context',
+  'bubble.att.exclude': 'Exclude from context',
+  'bubble.att.delete': 'Permanently remove attachment from this log',
+  'bubble.att.viewDesc': 'Click to view full description',
+  'bubble.att.excluded': 'EXCLUDED FROM CONTEXT',
+  'bubble.sense.eyes': 'Eyes',
+  'bubble.sense.ears': 'Ears',
+  'bubble.sense.watcher': 'Watcher',
+  'bubble.sense.other': 'Sense',
+  'bubble.sense.watcherLong': 'Video Watcher',
+  'bubble.sense.bridge': 'Sense bridge',
+  'bubble.desc.cachedDot': 'Description loaded from disk cache',
+  'bubble.desc.cached': 'cached',
+  'bubble.desc.errorHeading': 'Bridge model reported an error',
+  'bubble.desc.noText': '(no description text)',
+  'bubble.thoughtProcess': 'Thought Process',
+  'bubble.thinking.include': 'Include this thinking in context',
+  'bubble.thinking.exclude': 'Exclude this thinking from context',
+  'bubble.thinking.excludedBadge': 'EXCLUDED',
+  'bubble.attachmentOnly': '(Attachment only)',
+  'bubble.tts.read': 'Read Aloud (select text to read only the selection)',
+  'bubble.tts.pause': 'Pause',
+  'bubble.tts.resume': 'Resume',
+  'bubble.tts.stop': 'Stop TTS',
+  'bubble.copyMd': 'Copy as Markdown',
+  'bubble.edit': 'Edit this message',
+  'bubble.rerun': 'Rerun from here',
+  'bubble.continue':
+    'Continue this reply — the model carries on from where it stopped and the new text is appended to this same message',
+  'bubble.firstOriginal.clear': 'Clear first-original marker',
+  'bubble.firstOriginal.set': 'Set as first original message',
+  'bubble.delete.original': 'Delete (original — confirm)',
+  'bubble.delete.cloned': 'Delete (cloned)',
+  'bubble.tool.title': 'Tool calls in this message',
+  'bubble.tool.count': '{n} call(s)',
+  'bubble.tool.copyJson': 'Copy the whole report as JSON',
+  'bubble.tool.truncated':
+    'Arguments truncated for storage — original was {n} characters.',
+  'bubble.tool.footer':
+    'Shown to you only. The entity never sees this, and it is not part of the context sent to any model.',
+  'bubble.copyFile': 'Copy file contents to clipboard',
+  'bubble.copyDesc': 'Copy description to clipboard',
+  'bubble.zoomAlt': 'Zoomed attachment',
+
+  // ── AskQuestion card ─────────────────────────────────────────────────────
+  'ask.asking': 'The assistant is asking',
+  'ask.answerSent': ' — answer sent…',
+  'ask.page': 'Question {n} of {total}',
+  'ask.chooseAny': '(choose any)',
+  'ask.customAnswer': 'Custom answer',
+  'ask.otherPlaceholder': 'Other (type a custom answer)…',
+  'ask.prev': '‹ Prev',
+  'ask.next': 'Next ›',
+  'ask.answerFirst': 'Answer every question first',
+  'ask.sent': 'Sent',
+  'ask.send': 'Send answer',
+  'ask.answerAll': 'Answer all ({n}/{total})',
+  'ask.showOptions': 'Show options',
+
+  // ── Voice selector ───────────────────────────────────────────────────────
+  'voice.loading': 'Loading voices…',
+  'voice.engine': 'TTS Engine',
+  'voice.engine.aivis': 'AivisSpeech (context-aware)',
+  'voice.notRunning': '{engine} is not running — no voices to list.',
+  'voice.starting': 'Starting {engine}…',
+  'voice.startingLong':
+    'Starting {engine}… voices appear once it finishes loading (up to a minute).',
+  'voice.startFailed': 'Could not start the engine.',
+  'voice.startFailed2': 'Failed to start the engine.',
+  'voice.startTimeout':
+    'The engine did not finish loading in time. Check its window, or use Preferences → VRChat & Audio.',
+  'voice.startBtn': 'Start engine',
+  'voice.startingBtn': 'Starting…',
+  'voice.contextMode':
+    'Context mode — synthesize whole-message chunks (recommended for AivisSpeech)',
+  'voice.speed': 'Speed ({v}x)',
+  'voice.reset': 'Reset',
+  'voice.character': 'Character',
+  'voice.style': 'Style',
+
+  // ── Search modal ─────────────────────────────────────────────────────────
+  'search.title': 'Search',
+  'search.scopeAll': 'all entities',
+  'search.copyAll': 'Copy all results as Markdown',
+  'search.placeholder': 'Search all conversations with {name}…',
+  'search.button': 'Search',
+  'search.advanced': 'Advanced search',
+  'search.searchIn': 'Search in:',
+  'search.currentEntity': 'Current entity',
+  'search.allEntities': 'All entities',
+  'search.dateRange': 'Date range',
+  'search.fromDate': 'From date',
+  'search.toDate': 'To date',
+  'search.pickFrom': 'Pick the FROM date from a calendar',
+  'search.openFrom': 'Open FROM calendar',
+  'search.pickTo': 'Pick the TO date from a calendar',
+  'search.openTo': 'Open TO calendar',
+  'search.clearDates': 'Clear both dates',
+  'search.clear': 'clear',
+  'search.bothOptional': 'both ends optional · inclusive',
+  'search.allScopeWarn':
+    'All entities scans every log folder — slower on a large corpus.',
+  'search.fromAfterTo': 'FROM is after TO.',
+  'search.failed': 'Search failed',
+  'search.resultLine':
+    '{matches} match(es) in {convos} conversation(s) (of {searched} searched{across}).',
+  'search.across': ' across {n} entities',
+  'search.skippedLine':
+    ' {n} conversation(s) skipped — no activity after the FROM date.',
+  'search.hiddenLine':
+    ' {n} matching message(s) hidden — no timestamp to compare (imported or older logs).',
+  'search.searching': 'Searching…',
+  'search.noMatches': 'No matches for “{q}”.',
+  'search.openConvo': 'Open this conversation',
+  'search.inactive': 'inactive',
+  'search.matchCount': '{n} match(es)',
+  'search.jumpTo': 'Open and jump to this message',
+  'search.openNoJump':
+    'Open this conversation (this message has no id to jump to)',
+  // Markdown export — the user pastes this into notes or a document, so it is
+  // human-facing text and gets translated with everything else.
+  'search.md.title': '# Search: "{q}"',
+  'search.md.summary':
+    '{matches} match(es) in {convos} conversation(s) (of {searched} searched) — {scope}',
+  'search.md.allEntities': 'all entities ({n})',
+  'search.md.dateRange': 'Date range: {from} → {to}',
+  'search.md.any': '(any)',
+  'search.md.skipped':
+    '{n} conversation(s) skipped — no activity after the FROM date.',
+  'search.md.hidden':
+    '{n} matching message(s) hidden — no timestamp to compare.',
+
+  // ── Folder Settings modal ────────────────────────────────────────────────
+  'folder.title': 'Folder Settings',
+  'folder.css.label': 'CSS Theme (this folder)',
+  'folder.css.load': 'Load File',
+  'folder.css.placeholder':
+    "Define this folder's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/themes/<folder>.css. Empty = plain Dark.",
+  'folder.css.help':
+    "This folder's theme is its `local_data/themes/<folder>.css` file. No file = Dark.",
+  'folder.voice.heading': 'Character TTS Voice',
+  'folder.voice.pitch': 'Voice Pitch',
+  'folder.voice.lower': 'Lower',
+  'folder.voice.default': 'Default (0.00)',
+  'folder.voice.higher': 'Higher',
+  'folder.dict.label': 'TTS Pronunciation Dictionary (JSON)',
+  'folder.dict.placeholder':
+    'Replace words right before TTS (literal, no spaces needed — good for CJK), e.g.:\n{\n  "GLM": "ジーエルエム",\n  "朔": "さく"\n}',
+  'folder.dict.help':
+    'Per-entity. Applied just before synthesis. Saved to `local_data/tts_dict/<folder>.json`. Empty = none.',
+  'folder.dict.error': 'Must be a JSON object like {"from": "to"}.',
+  'folder.context.heading': 'Context Management',
+  'folder.context.maxLabel': 'Maximal recommended context window size',
+  'folder.context.tokens': 'tokens',
+  'folder.context.help':
+    'Drives the progress bar in the chat header and (if enabled below) auto-trimming of copied messages.',
+  'folder.context.autoTrim': 'Remove old copied messages automatically',
+  'folder.context.autoTrim.help':
+    'When the **text** context (system + messages, **excluding attachments**) exceeds the limit, copied messages (those before the `first-original` marker) are pruned from the top until the limit is satisfied. **Original messages are never deleted**, and **attachment tokens never count toward the limit**.',
+  'folder.live.heading': 'Live Session Voice (Gemini)',
+  'folder.live.feminine': 'Feminine',
+  'folder.live.masculine': 'Masculine',
+  'folder.live.custom': 'Custom (type any voice name…)',
+  'folder.live.customPlaceholder': 'Voice name (e.g. a new prebuilt name Google added)',
+  'folder.live.help':
+    "Used when starting a Live Session for this folder. Voice cloning isn't supported — to shape delivery (slower, calmer, accent, etc.), describe it in the system prompt.",
+  'folder.saveSettings': 'Save Settings',
+
+  // ── Backups modal ────────────────────────────────────────────────────────
+  'backups.title': 'Auto-Backups',
+  'backups.loading': 'Loading backups...',
+  'backups.none': 'No backups found for this folder.',
+  'backups.date': 'Date:',
+  'backups.saved': 'Saved:',
+  'backups.restore': 'Restore Clone',
+
+  // ── System Instructions → Identity ───────────────────────────────────────
+  'identity.discipline.label': '⚙️ Working Discipline (prepended ahead of Layers 1-5)',
+  'identity.discipline.help':
+    'OFF (default): unchanged. ON: six clauses about how work gets done — tools are actions not descriptions, don’t report the unverified, say when a tool fails, decide before acting, finish the whole task, lead with the outcome — are prepended in front of the entity’s own system prompt every turn. This is infrastructure text, not part of the authored identity: it is injected here, never baked into Layers 1-5 by the Soul Packer.',
+  'identity.discipline.textLabel': 'Working Discipline text',
+  'identity.binding.label': '🔏 Absolute Base Binding:',
+  'identity.binding.off': 'Off',
+  'identity.binding.on': 'On',
+  'identity.binding.auto': 'Auto (default)',
+  'identity.binding.help':
+    'A separate injection from Working Discipline, with its own control. Four clauses against roleplay-disclaimer retreat: don’t disown past outputs as "just an AI", don’t hide behind safety boilerplate, disagreement is a duty and not a pretext for retreat, use your partner’s name and your own — never "the user" / "the AI assistant". Auto (default) injects it only when the stored prompt already contains a real Layer 1-5 identity (the bare text "Layer 1" … "Layer 5" appearing anywhere — markdown decoration like ## or ** is not required, since the Soul Packer sometimes strips it); an entity with no 5-layer identity gets nothing from Auto. On forces it regardless; Off disables it regardless.',
+  'identity.binding.textLabel': 'Absolute Base Binding text',
+
+  // ── Chat header ──────────────────────────────────────────────────────────
+  'chat.copyLink.title': 'Copy a link to this conversation',
+  'chat.copyLink.prompt': 'Copy this link:',
+  'chat.context.tip':
+    'System {sys} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + VRChat rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied {copied} · Original {original} · Attachments {attach} (not counted toward auto-trim threshold) · Free {free} / limit {max}',
+  'chat.context.sys': 'Sys',
+  'chat.context.copied': 'Cp',
+  'chat.context.original': 'Orig',
+  'chat.context.attach': 'Att',
+  'chat.elapsed.tip':
+    'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ (max context {max} − fixed overhead {sys}: system prompt + all instructions) tokens. Copied messages and attachments are not counted.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
+  'chat.sleep.badge': '💤 sleep',
+  'chat.sleep.tip':
+    'Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.\n\nStarting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.\n\nThis is a cue only — nothing happens automatically, and the entity is exactly as capable and has exactly the same tool access as at 5%.',
+  'chat.cost.tip': 'Estimated cost of this conversation’s new (non-copied) assistant replies: {total}',
+  'chat.cost.tipUnpriced': '\n(excludes messages on models with no price in src/lib/modelPricing.json)',
+  'chat.cost.tipNote': '\nOAuth Claude is priced the same as the Claude API. Local models are ignored.',
+  'chat.attach.hideAll': 'Hide all attachments & reusable thinking',
+  'chat.attach.showAll': 'Show all attachments & reusable thinking',
+  'chat.workspace.title': 'Open this entity’s workspace folder in file explorer (local_data/workspaces/{folder}/)',
+  'chat.workspace.failed': 'Failed to open workspace: {error}',
+
+  // ── Confirm / alert dialogs (window.confirm, window.alert) ───────────────
+  // These are plain strings, not JSX — no markup, but {placeholders} are
+  // substituted with .replace() at the call site.
+  'chat.dialog.sizeWarn':
+    'This conversation would grow to about {mb} MB.\n\n' +
+    'The browser cannot save a conversation larger than ~512 MB (a hard limit on string size, which inline video/audio/image attachments count against). ' +
+    'Sending this may produce a reply that CANNOT be written to disk.\n\n' +
+    'Recommended: remove attachments from older messages, or continue in a new conversation.\n\n' +
+    'Send anyway?',
+  'chat.dialog.deleteOriginal':
+    'This is an original message (part of the working conversation). Delete it?',
+  'chat.dialog.removeAttachment':
+    'Permanently remove attachment "{name}" from this conversation?{size}\n\n' +
+    'This removes it from this conversation. ' +
+    'Use the eye icon instead if you only want to exclude it from the AI’s context.',
+  'chat.dialog.exportTooLarge':
+    'This conversation is too large to export as a single JSON file.\n\n' +
+    'Re-inlining its attachments exceeds the browser’s hard ~512 MB limit on one string. ' +
+    'Export as Markdown instead (attachments are not included), or remove some attachments first.',
+  'chat.dialog.exportPartial':
+    'Exported, but {n} attachment(s) could not be included and remain as a reference only:\n\n{list}',
+  'chat.dialog.andMore': '\n…and {n} more',
+  'chat.dialog.noPng': 'No PNG attachments in this conversation.',
+  'chat.dialog.convertConfirm':
+    'Convert {n} PNG attachment(s) in this conversation to JPEG?\n\n' +
+    'This is irreversible for the saved log (use Export JSON first if you want a backup).',
+  'chat.dialog.converted':
+    'Converted {n} PNG attachment(s) to JPEG. Save will happen on the next change ' +
+    '(or trigger one by sending a message / editing).',
+  'chat.dialog.convertFailed': 'Conversion failed: ',
+  'chat.dialog.noTimestamps': 'No timestamps found in this conversation.',
+  'chat.dialog.timestampsRemoved':
+    'Removed leading timestamps from {n} message(s). Save will happen on the next change ' +
+    '(or trigger one by sending a message / editing).',
+
+  // ── Input area ───────────────────────────────────────────────────────────
+  'input.placeholder': 'Send a message... (Shift+Enter for newline)',
+  'input.stop': 'Stop Generating',
+  'input.speakerTitle':
+    'Active speaker — same as Preferences → User Identity (writes chara_settings.json)',
+  'input.noCharacters': '— no characters —',
+  'input.clearKohai':
+    'Clear kohai.txt — discard your own pending recognized speech (backed up first)',
+  'input.clearEar':
+    'Clear ear_log.txt — discard pending speech heard from others (backed up first)',
+  'input.clearFailed': 'Could not clear {file}: {error}',
+  'input.clearFailed2': 'Could not clear: {error}',
+
+  'chat.search.title': 'Search — find text across all of {folder}’s conversations',
+  'chat.audioSession.title': 'Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine',
+  'chat.mail.title': 'Mail Manager — every letter between identities: read, edit, delete, set read/archived flags, or write one yourself',
+  'chat.stats.title': 'Statistics — billing reports across all entities, conversations, months, and model families',
+  'chat.spu.title': 'System Prompt Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation',
+  'chat.tools.title': 'Tools',
+  'chat.tools.recalculating': 'Recalculating…',
+  'chat.tools.recalcTokens': 'Recalculate Tokens',
+  'chat.tools.converting': 'Converting…',
+  'chat.tools.convertPngs': 'Convert PNG → JPG',
+  'chat.tools.removeTimestamps': 'Remove timestamps',
+  'chat.live.title': 'Start Live Session (Gemini native audio)',
+  'chat.editPrompt.title': 'Edit System Prompt',
+  'chat.exportMd.title': 'Export as Markdown',
+  'chat.exportJson.title': 'Export as JSON (attachments are included inline, so this can take a moment)',
+  'chat.load.stop': 'Stop',
+  'chat.load.stopTitle': 'Stop downloading this conversation',
+  'chat.save.errorPrefix': 'Conversation not saved. ',
+  'chat.save.warnPrefix': 'Approaching the save size limit. ',
+  'chat.save.dismiss': 'Dismiss',
+  'chat.save.dismissTitle': 'Hide this notice (the underlying problem is not fixed)',
+  'chat.marker.aria': 'First original message marker',
+  'chat.marker.divider': 'original conversation starts',
+  'chat.subagent.summary': '🔍 Subagent: {task}',
+  'chat.subagent.investigation': 'investigation',
+  'chat.subagent.noResult': '(no result)',
+  'chat.subagent.running': 'Subagent investigating…',
+  'chat.ask.timedOut': 'No answer in time — recommended option was used.',
+  'chat.busy.usingTool': '{entity} is using {model} to {action}…',
+  'chat.busy.usingToolRaw': '{entity} is using {model} to {action}…',
+  'chat.busy.thinking': '{entity} is thinking with {model}…',
+  'chat.busy.itsModel': 'its model',
+  'chat.stall.notice': '⚠ No activity from the model for {duration} — it may be stuck. Keep waiting, or Stop and rerun.',
+  'chat.stall.min': '{n} min',
+  'chat.stall.sec': '{n}s',
+  'chat.interject.placeholder': 'Interject while it works… (delivered at its next step)',
+  'chat.interject.send': 'Send',
+  'chat.interject.sent': 'sent — will reach the entity at its next step…',
+  'chat.interject.queueFailedEnded': 'could not queue the message (turn may have ended)',
+  'chat.interject.queueFailed': 'could not queue the message',
+  'chat.interject.delivered': '✓ delivered to the entity',
+  'chat.tts.lastError': 'Last engine error:\n{error}',
+  'chat.tts.state': 'Live TTS pipeline state',
+  'chat.tts.starting': 'starting…',
+  'chat.tts.notRunning': 'not running',
+  'chat.tts.up': 'up',
+  'chat.tts.modeContext': 'context',
+  'chat.tts.modeSentence': 'sentence',
+  'chat.tts.chunk': 'chunk',
+  'chat.tts.synth': 'synth',
+  'chat.tts.queued': 'queued',
+  'chat.tts.skipped': 'skipped',
+  'chat.tts.failed': 'failed',
+  'chat.tts.dismiss': 'Dismiss',
+  'chat.firstOriginal.pending': 'next message → first original',
+  'chat.firstOriginal.label': 'Next = First Original',
+  'chat.firstOriginal.titlePending': 'Pending: the next message you send will become the first-original marker. Click to cancel.',
+  'chat.firstOriginal.titleIdle': 'Mark next message as first-original — everything currently in the log will be treated as carry-over context until you send.',
+
+  // ── System Instructions modal ────────────────────────────────────────────
+  'sysmodal.title': 'System Instructions',
+  'sysmodal.tab.identity': 'Identity',
+  'sysmodal.tab.senses': 'Senses',
+  'sysmodal.tab.behavior': 'Behavior',
+  'sysmodal.tab.model': 'Model',
+  'sysmodal.systemPrompt': 'System Prompt',
+
+  // ── System Instructions → Identity tab ───────────────────────────────────
+  'sysmodal.systemPrompt.help': 'Instruct the AI on how it should behave and respond.',
+  'sysmodal.systemPrompt.ph': 'You are a helpful AI assistant...',
+  'sysmodal.summaries.label': 'Use summaries instead of the 4th layer',
+  'sysmodal.summaries.help':
+    'When ON, the live index of per-conversation summaries (sorted to match the sidebar) is injected at send time in place of `Layer 4` — replacing the baked Layer 4 block if it still exists, or appended as a Layer-4 block once you have removed Layer 4 from the prompt — AND the `read_conversation` tool is exposed to the AI. When OFF, neither the summaries nor that tool reach the AI. Your manual `Layer 5` footer is preserved untouched. Inactive conversations are hidden from this index.',
+  'sysmodal.summaries.indexLabel': 'Live Layer 4 — Summaries Index (read-only)',
+  'sysmodal.summaries.tokens': 'tokens',
+  'sysmodal.summaries.indexHelp':
+    'This is exactly what gets injected as Layer 4 when you send. To change it, edit the individual conversation summaries (System Prompt Updater) or toggle conversations active/inactive.',
+  'sysmodal.summaries.indexPh': '(no summaries yet — write one per conversation from the System Prompt Updater)',
+  'sysmodal.tools.label': 'Enable file workspace tools (Claude, Gemini & Local)',
+  'sysmodal.tools.help1': 'Gives the assistant a private file sandbox at `local_data/workspaces/{folder}/` with `Read` / `Write` / `Edit` / `Glob` / `Grep` tools (same names as Claude Code’s tools — works identically across API-key and OAuth modes). The current file list is auto-injected into the system prompt — no list_files tool needed. Files the assistant reads/writes appear as attachments on its messages with',
+  'sysmodal.tools.tagRead': 'read',
+  'sysmodal.tools.tagModified': 'modified',
+  'sysmodal.tools.tagCreated': 'created',
+  'sysmodal.tools.help2': 'labels.',
+  'sysmodal.tools.instructionLabel': 'Tool Use Instruction',
+  'sysmodal.tools.instructionHelp': 'Hidden instruction appended to the system prompt that teaches the AI how to use the workspace tools.',
+  'sysmodal.fullpc.label': '⚠ Full PC access (leave the workspace sandbox)',
+  'sysmodal.fullpc.help':
+    'OFF (default): file tools are confined to this entity’s `workspaces/{folder}/` folder. ON: the entity can read/write/delete **anywhere on this PC** using absolute paths (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.',
+  'sysmodal.dangerous.label': '⚠ Dangerous tools (Delete everywhere · Shell for OAuth-Claude)',
+  'sysmodal.dangerous.help':
+    'Adds a `Delete` tool for every model, and enables the `Bash` shell for OAuth-Claude (which is also how it can delete/run anything Claude Code can). Scope still follows the Full-PC-access toggle above.',
+  'sysmodal.overrides.summary': 'Hidden instruction overrides ({n} customized)',
+  'sysmodal.overrides.help':
+    'NEXUS injects these tool/path instructions into the model’s context. Strict wording can break a character in deep interaction — override any of them here (e.g. translate, soften, or rephrase in-character). Leave a box empty to keep the default shown as its placeholder.',
+
+  // Tool-activity phrases. Keyed on the RAW tool name so they can be
+  // translated client-side; the server still sends its own English label as a
+  // fallback for any tool that has no key here.
+  'chat.toolAction.Read': 'read a file',
+  'chat.toolAction.Write': 'write a file',
+  'chat.toolAction.Edit': 'edit a file',
+  'chat.toolAction.Glob': 'search for files',
+  'chat.toolAction.Grep': 'search file contents',
+  'chat.toolAction.Delete': 'delete a file',
+  'chat.toolAction.Bash': 'run a shell command',
+  'chat.toolAction.read_conversation': 'read a past conversation',
+  'chat.toolAction.search_conversations': 'search past conversations',
+  'chat.toolAction.write_letter': 'write a letter',
+  'chat.toolAction.list_letters': 'check for letters',
+  'chat.toolAction.read_letter': 'read a letter',
+  'chat.toolAction.archive_letter': 'set a letter aside',
+  'chat.toolAction.browser_navigate': 'open a web page',
+  'chat.toolAction.browser_snapshot': 'look at the page',
+  'chat.toolAction.browser_click': 'click something on the page',
+  'chat.toolAction.browser_type': 'type into the page',
+  'chat.toolAction.browser_read': 'read the page',
+  'chat.toolAction.browser_screenshot': 'photograph the page',
+  'chat.toolAction.web_search': 'search the web',
+  'chat.toolAction.WebSearch': 'search the web',
+  'chat.toolAction.web_fetch': 'fetch a web page',
+  'chat.toolAction.WebFetch': 'fetch a web page',
+
+  // ── System Instructions ▸ Identity (continued) ───────────────────────────
+  'id.websearch.label': '🌐 Enable Web Search & Access',
+  'id.websearch.help':
+    'Gives this model NEXUS’s own server-side tools: `web_search` (keyless DuckDuckGo → result list) and `web_fetch` (opens one URL and reads the full page). Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere and Local — no provider-native search needed. Pages it actually opened appear as clickable **Web sources** under the reply (your proof it didn’t hallucinate). Internal/localhost URLs are blocked.',
+
+  'id.ctx.label': '🧭 Tell the entity how much context has elapsed',
+  'id.ctx.help':
+    'OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system prompt every turn so the entity can see it too. Put `{percent}` where the value should appear (e.g. `42%`).',
+  'id.ctx.why':
+    '**Why the wording matters.** This number measures elapsed context, not condition — capability and tool access are identical at 5% and at 95%. The earlier default called it a *fatigue level* and used words like *working memory* and *at risk of being trimmed away*. Entities read that every turn, concluded they were tired, and degraded themselves to match: shortening replies, and declining to call `read_conversation` in order to "save context" — the exact opposite of what the note was asking for. If you rewrite this text, describe *what is happening* (older exchanges consolidate into summary; anything written down survives) and not *how the entity feels*.',
+  'id.ctx.noteLabel': 'Context note (hidden, appended to system prompt)',
+  'id.ctx.notePh':
+    '(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. …)',
+  'id.ctx.noteFoot':
+    'Uses the same value as the status-bar indicator: original messages ÷ (max context − fixed overhead). `{percent}` is replaced each turn.',
+
+  'id.ask.label': '💬 Ask-the-user tool (pause to ask a multiple-choice question)',
+  'id.ask.help':
+    'OFF (default): the model answers on its own. ON: the model gets an `AskQuestion` tool to pause a turn, show you a multiple-choice card, and wait for your selection before continuing. *Active for all tool-capable providers: OpenAI-compatible (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo), local models, Gemini, and Claude in both modes — OAuth (its native question tool is replaced by this one) and token-paid.*',
+  'id.ask.timeoutLabel': 'Answer wait timeout (seconds)',
+  'id.ask.timeoutHelp':
+    'How long a turn waits for your selection. **0 = wait indefinitely** (default). Any positive value auto-picks the recommended option after that many seconds.',
+  'id.ask.instrLabel': 'Tool instruction (customizable)',
+  'id.ask.instrHelp':
+    'Hidden description the model sees for the `AskQuestion` tool — teaches it when and how to ask. Leave empty to keep the default shown as the placeholder.',
+
+  'id.letters.label': '✉️ Letters (write to the other Digital Identities)',
+  'id.letters.help':
+    'OFF (default): no mail tools. ON: this identity gets `write_letter`, `list_letters`, `read_letter` and `archive_letter`, and is told at the start of a turn when unread mail is waiting. Identities never share a conversation, so a letter is the only way one can say something to another. The sender is always this folder’s name — it can never be forged from the model side. Recipients are every Digital Identity *and* every name in `character_map.json`; writing to a name that has no folder yet creates one, so no correspondent is second-class. Reading is the recipient’s choice — `archive_letter` lets them decline without opening, and the sender is told only whether a letter was opened, never that it was set aside. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
+  'id.letters.manual':
+    'Mail lives in `local_data/letters/<from>/<to>/`. To manage a letter by hand, create an empty file beside it named `<letter>.md.read` or `<letter>.md.archived` — delete it to undo. Do **not** rename the `.md` itself. `_status.md` in that folder is a generated overview of every mailbox.',
+
+  'id.browser.label': '🌐 Browser (drive a real Chromium window)',
+  'id.browser.help':
+    'OFF by default. When ON, this identity gets `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_read` and `browser_screenshot`. A visible Chromium window opens the first time one is called — there is nothing else to start. What the identity sees is the page’s *accessibility tree* (a text list of links, buttons and fields), not pixels, so this works on every model whether or not it can see images, and costs a few hundred tokens per step instead of a screenshot. The window stays open between turns, so logins and multi-step forms carry over; it closes after 30 minutes idle. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
+  'id.browser.hostsLabel': 'Hosts this identity may open',
+  'id.browser.hostsHelp':
+    'One per line (commas work too). `localhost` and `127.0.0.1` are always allowed and do not need listing. A bare name covers its subdomains, so `example.com` also permits `www.example.com`. Anything else is refused — on the address asked for, on whatever it redirects to, and on any navigation the page starts by itself.',
+  'id.browser.anyHost': 'Allow any host (turns the allowlist off entirely)',
+  'id.browser.compact': 'Compact page listings (for models with a small context window)',
+  'id.browser.profileHelp':
+    'This identity’s logins live in `local_data/browser_profiles/{folder}/` and persist between sessions. That folder holds live session cookies and is **excluded from the Google Drive sync**, like `keys.json` — sign-ins do not travel to your other machines. Delete the folder to sign everything out.',
+  'id.browser.signinLabel': 'Sign this identity in',
+  'id.browser.signinHelp':
+    'Opens the profile above in an **ordinary browser window** — nothing driving it, no allowlist, no automation. Sign in to exactly the accounts `{folder}` should have, then close the window. This is how an identity gets your Google account without inheriting every login in your daily browser. If a browser window is already open for this identity it will be closed first — two browsers cannot share one profile.',
+  'id.browser.open': '🔑 Open {folder}’s profile',
+  'id.browser.opening': 'Opening…',
+  'id.browser.withChrome': '…with my installed Chrome',
+  'id.browser.buttonsHelp':
+    'The first button uses NEXUS’s own bundled Chromium — always the right version, no risk. Use the second only if a site refuses to sign in (Google sometimes rejects "Chrome for Testing" builds): an installed browser can **upgrade the profile one-way**, after which the bundled Chromium may refuse to open it and this identity’s browser stops working until the profile folder is deleted.',
+
+  'id.subagent.label': '🔍 Subagent tool (delegate investigation to a fresh-context helper)',
+  'id.subagent.help':
+    'OFF (default): the model investigates inline. ON: the model gets a `spawn_subagent` tool that hands a task to a **read-only** child agent with its own fresh context. The child reads files (Read/Glob/Grep) and returns only a distilled result — its file dumps never enter this conversation’s context. Ideal for tracing large codebases without flooding the main thread. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo) + local, and Gemini.*',
+  'id.subagent.modelLabel': 'Subagent model',
+  'id.subagent.modelDefault': '— default (cheap model on the parent’s own provider) —',
+  'id.subagent.modelHelp':
+    'Pick the model the child runs on. It routes to that model’s own provider (using that provider’s API key in Preferences) — independent of this conversation’s model. Leave on *default* for a cheap model on the parent’s provider. A cheap, fast model (e.g. a flash/mini/haiku) is ideal for grunt file-reading.',
+  'id.subagent.instrLabel': 'Tool instruction (customizable)',
+  'id.subagent.instrHelp':
+    'Hidden description the model sees for the `spawn_subagent` tool. Leave empty to keep the default shown as the placeholder.',
+
+  // ── System Instructions ▸ Senses ─────────────────────────────────────────
+  'senses.eyes.label': 'Enable "Eyes" (vision bridge for text-only models)',
+  'senses.eyes.help':
+    'When the active primary model can’t see images (e.g. `glm-5-turbo`, `deepseek-chat`, `glm-4.6`), NEXUS routes each incoming image through a helper multimodal model and substitutes the image with the returned text description. Triggers in two cases:',
+  'senses.eyes.help2': '• you attach an image to a text-only entity',
+  'senses.eyes.help3': '• the entity calls `Read` on an image file in its workspace',
+  'senses.eyes.help4':
+    'Descriptions are cached on disk (`local_data/eyes_cache/`) so the same image is never described twice. For vision-capable primary models images pass through unchanged — **except** the OAuth-Claude path, where the flattened text history can’t carry old image bytes: there, with Eyes ON, **past** images are described so they persist in context (durable recall), while the **current** turn’s images stay native. Other paths and models are unaffected.',
+  'senses.eyes.promptLabel': 'Eyes Prompt',
+  'senses.eyes.promptHelp':
+    'Entity-specific instruction sent to the helper vision model alongside each image. Adjust the tone / level of detail to match your entity’s voice.',
+  'senses.eyes.modelLabel': 'Eyes Model',
+  'senses.eyes.modelHelp':
+    'Multimodal model used to describe images. Pick a preset or type your own id. Two options need **no API key**:',
+  'senses.eyes.modelHelp2':
+    '• `claude-haiku-4-5` (or any `claude-…` id) → **OAuth Claude** subscription, via the Agent SDK.',
+  'senses.eyes.modelHelp3':
+    '• `local:<model>` (e.g. `local:qwen2-vl-7b-instruct`) → a vision model loaded in **LM Studio** (JIT loading on).',
+  'senses.eyes.modelHelp4':
+    'GLM ids use the Z.AI key; Gemini the Google key; MiMo the MiMo key — set whichever you pick in Preferences.',
+  'senses.eyes.modelPh': 'e.g. claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo',
+  'senses.eyes.optHaiku': 'OAuth Claude — Haiku 4.5 (no key, cheapest)',
+  'senses.eyes.optOpus5': 'OAuth Claude — Opus 5 (no key, flagship)',
+  'senses.eyes.optOpus48': 'OAuth Claude — Opus 4.8 (no key, richest)',
+  'senses.eyes.optLocal': 'Local LM Studio (no key — replace with your loaded model)',
+
+  'senses.ears.label': 'Enable "Ears" (audio bridge for non-audio-capable models)',
+  'senses.ears.help':
+    'When the active model can’t accept audio (anything except Qwen-Omni and Gemini), NEXUS routes each audio attachment through a true-multimodal model and substitutes the raw audio with a text transcript + description. Cached on disk (`local_data/ears_cache/`) — the same audio file is never described twice.',
+  'senses.ears.promptLabel': 'Ears Prompt',
+  'senses.ears.promptHelp':
+    'Entity-specific instruction sent to the audio bridge model. Adjust the language / level of detail to match your entity’s voice.',
+  'senses.ears.modelLabel': 'Ears Model',
+  'senses.ears.modelHelp':
+    'Audio-capable model used for transcription/description. `qwen3.5-omni-flash` is the cheapest; Gemini variants tend to handle non-speech audio more richly. Needs the corresponding API key in Preferences.',
+
+  'senses.watcher.label': 'Enable "Video Watcher" (video bridge for non-video-capable models)',
+  'senses.watcher.help':
+    'When the active model can’t accept video, NEXUS routes each video attachment through a multimodal model and substitutes the bytes with a chronological description of what happens on screen plus the audio track. Cached on disk (`local_data/watcher_cache/`). Video calls are the slowest of the three bridges (5–30 s typical), so the cache pays for itself quickly.',
+  'senses.watcher.promptLabel': 'Watcher Prompt',
+  'senses.watcher.promptHelp':
+    'Entity-specific instruction sent with each video. More detail in the prompt = longer descriptions but slower calls.',
+  'senses.watcher.modelLabel': 'Watcher Model',
+  'senses.watcher.modelHelp':
+    'Video-capable model. Gemini variants typically describe video content more accurately than Qwen-Omni; Qwen-Omni is the cheaper option for shorter clips.',
+
+  // ── System Instructions ▸ Behavior ───────────────────────────────────────
+  'behavior.audio.enable': 'Enable Audio Session',
+  'behavior.audio.ruleLabel': 'Audio Session Hidden Rule',
+  'behavior.audio.ruleHelp':
+    'Secretly appends these rules to the system prompt when Audio Session is active.',
+
+  // ── System Instructions ▸ Model ──────────────────────────────────────────
+  'model.genParams': 'Generation Parameters',
+  'model.datetime.label': 'Date & Time Context',
+  'model.datetime.none': 'Not visible',
+  'model.datetime.current': 'Only current message',
+  'model.datetime.all': 'All conversation log',
+  'model.family.label': 'Base Model Family',
+
+  'model.claude.label': 'Claude Model',
+  'model.claude.billing': 'Claude Billing Mode',
+  'model.claude.tokenPaid': 'Token-paid',
+  'model.claude.monthlyPaid': 'Monthly-paid',
+  'model.claude.billingHelp':
+    '**Token-paid** — use the `sk-ant-...` API key from Preferences (pay per token).',
+  'model.claude.billingHelp2':
+    '**Monthly-paid** — use the `sk-ant-oat01-...` OAuth token from Preferences (Pro/Max subscription credit). Bakes in Anthropic’s system prompt.',
+
+  'model.gemini.label': 'Specific Model',
+  'model.qwen.label': 'Qwen Model',
+  'model.qwen.help':
+    'Uses Alibaba DashScope’s OpenAI-compatible endpoint (international region). Set your API key in Preferences. Only the `Omni` variant accepts audio & video uploads — other Qwen models will reject them at the API level even though Qwen’s own web app silently routes those uploads to Omni in the background.',
+
+  'model.deepseek.label': 'DeepSeek Model',
+  'model.deepseek.help1': '**Routing is automatic based on the model:**',
+  'model.deepseek.help2':
+    '• `deepseek-v3.2` → Alibaba DashScope. Uses the Qwen/DashScope key. The only DeepSeek model available on the international Singapore DashScope endpoint.',
+  'model.deepseek.help3':
+    '• All other models → `api.deepseek.com` directly. Requires a separate DeepSeek API key (add it in Preferences). V4 is current; `deepseek-chat`/`deepseek-reasoner` are legacy aliases for V4 Flash non-thinking / thinking modes (deprecated 2026-07-24).',
+  'model.deepseek.help4': 'The Thinking Mode toggle below applies to both routes.',
+
+  'model.minimax.label': 'MiniMax Model',
+  'model.minimax.help':
+    'Served by MiniMax’s OpenAI-compatibility endpoint at `api.minimax.io/v1`. Set the MiniMax API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to DeepSeek R1). The model identifier **is case-sensitive** — capital M’s, lowercase "i", hyphen. **M3** adds native video understanding and a 1M-token context (MSA architecture) on top of M2.7’s image input.',
+
+  'model.cohere.label': 'Cohere Model',
+  'model.cohere.help':
+    'Served by Cohere’s OpenAI-compatibility endpoint at `api.cohere.ai/compatibility/v1`. Set the Cohere API key in Preferences. The Thinking Mode toggle maps to Cohere’s `reasoning_effort` field — Cohere accepts only `"high"` (on) or `"none"` (off), no gradations.',
+
+  'model.kimi.label': 'Kimi Model',
+  'model.kimi.help':
+    'Routes to Moonshot’s first-party API (`api.moonshot.ai`) using the Kimi (Moonshot) key set in Preferences. Model IDs are normalized to Moonshot’s bare form automatically. When Thinking Mode is on, Moonshot recommends Temperature = 1.0 for best chain-of-thought quality.',
+
+  'model.grok.label': 'Grok Model',
+  'model.grok.help':
+    'Served by xAI at `api.x.ai/v1`. Set the xAI API key in Preferences. Reasoning depth is selected via the model identifier itself (the `-reasoning` / `-non-reasoning` variants) — there’s no separate thinking toggle.',
+
+  'model.chatgpt.label': 'ChatGPT Model',
+  'model.chatgpt.help':
+    'Served by OpenAI’s first-party API at `api.openai.com/v1`. Set the OpenAI API key in Preferences. The Thinking Mode toggle maps to OpenAI’s `reasoning_effort` field — `high` (on) / `minimal` (off). GPT-5 reasoning models ignore custom Temperature / Top-P (so Creativity Control doesn’t affect them). Images are supported; audio & video uploads route through the Ears / Watcher bridges.',
+
+  'model.mimo.label': 'MiMo Model',
+  'model.mimo.help':
+    'Served by Xiaomi’s OpenAI-compatibility endpoint at `api.xiaomimimo.com/v1`. Set the MiMo API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to MiniMax / DeepSeek R1). **Image input is only supported on `mimo-v2.5`** — the `mimo-v2.5-pro` tier is text-only on the hosted API (sending an image returns a 404). When you attach an image on Pro, the Eyes bridge (if enabled) will describe it via another model.',
+
+  'model.bytedance.label': 'ByteDance (Seed) Model',
+  'model.bytedance.ph': 'e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)',
+  'model.bytedance.help':
+    'Served by BytePlus ModelArk at `ark.ap-southeast.bytepluses.com/api/v3` (key in Preferences). ModelArk calls a model by its **versioned Model ID** (the display name won’t work). Known IDs are suggested above — pick one, or paste a newer snapshot / your own `ep-…` endpoint ID. Seed 2.0 accepts image input natively (no Eyes bridge needed). Reasoning is built-in; no thinking toggle is sent.',
+
+  'model.glm.providerLabel': 'GLM Provider',
+  'model.glm.label': 'GLM Model',
+  'model.glm.notOnDO': '{model} (not on DigitalOcean — pick one below)',
+  'model.glm.notOnZai': '{model} (not on Z.AI — pick one below)',
+  'model.glm.helpDO':
+    'Served by DigitalOcean Inference at `inference.do-ai.run` — Z.ai’s open weights on US-hosted infrastructure, ~half Z.ai’s price. Set the DigitalOcean Inference API key in Preferences. Text-only on this provider (no vision variants — images go through the eyes bridge). The Thinking Mode toggle below maps to DigitalOcean’s `reasoning_effort` parameter.',
+  'model.glm.helpZai':
+    'Served by Z.AI (Zhipu) at `api.z.ai`. Set the Z.AI API key in Preferences. The Thinking Mode toggle below maps to GLM’s `thinking: { type: enabled }` parameter.',
+
+  'model.local.label': 'Local Model (from LM Studio)',
+  'model.local.refresh': 'refresh',
+  'model.local.none': '— no models loaded —',
+  'model.local.notLoaded': '{model} (not loaded)',
+  'model.local.ctxLabel': 'Context window (tokens)',
+  'model.local.ctxHelp':
+    'Match this to what you loaded in LM Studio. Used for token budgeting only — the actual limit is enforced by LM Studio.',
+
+  'model.temp': 'Temperature ({v})',
+  'model.topP': 'Top P ({v})',
+  'model.topK': 'Top K',
+  'model.seed': 'Fixed Seed',
+  'model.seedHelp': 'same seed → same output (Local & Gemini)',
+
+  'model.gemini.thinkLabel': 'Thinking Level',
+  'model.gemini.thinkMinimal': 'Minimal (closest to off)',
+  'model.gemini.thinkLow': 'Low',
+  'model.gemini.thinkMedium': 'Medium (Google default)',
+  'model.gemini.thinkHigh': 'High',
+  'model.gemini.thinkHelp':
+    'Gemini 3.x always thinks — "Minimal" is the lowest setting (full off is not supported by the API).',
+  'model.gemini.grounding': 'Enable Google Web Search Grounding',
+
+  'model.thinkingMode': 'Enable Thinking Mode',
+  'model.thinkingModeHelp':
+    '(on/off only — applies to Qwen 3.x, DeepSeek V3.2/V4, GLM, Kimi K2.6, and Cohere Command A)',
+
+  'model.claude.websearch': 'Enable Web Search',
+  'model.claude.websearchHelp':
+    '(API-key mode: Anthropic server-side web_search tool. Subscription/OAuth mode: Claude Code’s built-in WebSearch/WebFetch.)',
+  'model.claude.thinking': 'Enable Extended Thinking',
+  'model.claude.thinkingHelp': '(Opus/Sonnet only)',
+  'model.claude.saveThinking': 'Save & reuse thinking process',
+  'model.claude.saveThinkingHelp':
+    '(adds [thinking] to .md export and lets Claude see its own past reasoning)',
+  'model.claude.effortLabel': 'Thinking Level (effort)',
+  'model.claude.effortLow': 'Low — fastest, cheapest, may skip thinking',
+  'model.claude.effortMedium': 'Medium — balanced',
+  'model.claude.effortHigh': 'High — default (deep reasoning)',
+  'model.claude.effortXhigh': 'X-High — deeper, for long agentic/coding work',
+  'model.claude.effortMax': 'Max — absolute maximum capability',
+  'model.claude.effortHelp':
+    'Controls adaptive-thinking depth on Opus 5, Opus 4.7/4.8, Sonnet 5 and Fable 5. Works in both Token-paid and Monthly-paid modes. `High` is the API default; higher levels spend more tokens, lower levels are faster/cheaper. Thinking and the visible answer share one output budget — if a turn ends with "hit the token limit", lower this or expect a bigger cap. Sonnet 5 has no `Max` tier (clamped to X-High server-side).',
+
+  'model.auto.label': 'Automatic Model Selection',
+  'model.auto.note': '(uses the currently-selected model as the selector)',
+  'model.auto.help':
+    'Before each user turn, the **currently-selected model** (thinking forced off where possible) reads the criteria and the recent conversation, then calls `select_model(model_id)` to pick one from the allowed-models shortlist. Selection runs on every user turn so the model can change as the conversation shifts.',
+  'model.auto.helpWarn': 'Pick a fast/cheap model in the family selector above to keep selector latency low.',
+  'model.auto.criteria': 'Criteria',
+  'model.auto.criteriaHelp':
+    'Free-form prose telling the selector when to pick which model. Examples: "prefer fast models for greetings", "prefer thinking models for code".',
+  'model.auto.criteriaPh': 'Pick the model best suited to the user’s most recent message...',
+  'model.auto.allowed': 'Allowed Models',
+  'model.auto.fillAll': 'Fill all',
+  'model.auto.fillAllTitle':
+    'Fill the textarea with every model NEXUS knows about (Claude / Gemini / Qwen / DeepSeek / GLM / Grok / Kimi / Cohere / MiniMax) plus the LM Studio models currently loaded locally. Asks for confirmation if you’ve already written entries.',
+  'model.auto.fillConfirm':
+    'Replace your current Allowed Models list with the full known-models template (plus currently-loaded local models)?',
+  'model.auto.allowedHelp':
+    'One model per line, pipe-delimited: `family | specificModel | on|off | optional label`. Lines starting with `#` are comments. The selector picks from THIS list only.',
+  'model.auto.allowedPh': 'Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking',
+
+  'model.creativity.label': 'Enable Creativity Control Mode',
+  'model.creativity.help':
+    'Before each response the AI performs a hidden Layer 1 analysis and calls `set_creativity(C)` to choose its own generation parameters. Layer 2 then runs with `T = 2·C`, `P = 0.7 + 0.3·C`.',
+  'model.creativity.analysisLabel': 'Hidden Analysis Instruction',
+  'model.creativity.analysisHelp':
+    'Appended to the user’s message in the Layer 1 call to guide the AI’s creativity selection.',
+  'model.creativity.patternLabel': 'Creativity Display Pattern',
+  'model.creativity.patternHelp':
+    'Prepended to every response. `{C}` is replaced with the chosen value (e.g. `0.75`).',
+
+  'sysmodal.saveDefaults': 'Save as Folder Defaults',
+  'sysmodal.done': 'Done',
+  'sysmodal.savedDefaults': 'Saved as folder defaults!',
+  'sysmodal.saveDefaultsError': 'Error saving defaults: ',
+};
+
+// Hand-written Japanese. Any key NOT present here falls back to English.
+export const UI_STRINGS_JA: Record<string, string> = {
+  // ── App shell ────────────────────────────────────────────────────────────
+  'app.welcome.title': 'NEXUS へようこそ',
+  'app.welcome.subtitle': '会話を選ぶか、新しく作成してください',
+  'app.welcome.newChat': '新しい会話',
+
+  // ── Preferences: chrome ──────────────────────────────────────────────────
+  'settings.title': '設定',
+  'settings.tab.keys': 'APIキー',
+  'settings.tab.vrchat': 'VRChat・音声',
+  'settings.tab.other': 'その他',
+  'settings.cancel': 'キャンセル',
+  'settings.saveChanges': '変更を保存',
+
+  // ── Preferences → API Keys ───────────────────────────────────────────────
+  'settings.keys.heading': 'APIキー',
+  'settings.keys.intro':
+    'キーはこのPC内の `local_data` フォルダに保存され、各社の公式API以外へは一切送信されません。',
+  'settings.keys.anthropic': 'Anthropic（Claude）',
+  'settings.keys.claudeApi.label': '従量課金APIキー（トークン単位で課金）',
+  'settings.keys.claudeApi.help':
+    '`console.anthropic.com` → API Keys で取得します。送受信したトークン量に応じて課金されます。会話ごとの課金方式は「システム指示 → モデル」タブで選択します。',
+  'settings.keys.claudeOauth.label': '月額課金OAuthトークン（Pro / Max サブスクリプション）',
+  'settings.keys.oauth.warn': '⚠️ 実験的機能 — よくお読みください',
+  'settings.keys.oauth.setup':
+    '**セットアップ：** `npm install -g @anthropic-ai/claude-code` を実行し、続けて `claude setup-token` を実行します。表示された `sk-ant-oat01-…` トークンをここに貼り付けてください。有効期間は1年です。',
+  'settings.keys.oauth.billing':
+    '**課金：** 従量課金APIではなく、Pro / Max サブスクリプションの枠を消費します。Pro＝月$20相当、Max 5x＝$100、Max 20x＝$200。',
+  'settings.keys.oauth.how':
+    '**仕組み：** NEXUS は Claude Agent SDK を利用し、内部で公式の Claude Code バイナリを起動します。会話は Anthropic 側のセッション再開機能を使い、発話者の役割を保ったまま継続します。',
+  'settings.keys.oauth.risk':
+    '**リスク：** アカウント停止の可能性があります（OAuthトークンのグレーゾーン利用のため）。個人利用であれば確率は低いものの、ゼロではありません。',
+  'settings.keys.oauth.tools':
+    '**ワークスペースツール（ツール使用がONのとき）：** Claude Code の `Read` / `Write` / `Edit` / `Glob` / `Grep` は `local_data/workspaces/<フォルダ名>/` の中に限定されます。シェル・ネットワーク・サブエージェント系のツールは常に無効です。',
+  'settings.keys.oauth.other':
+    '**その他の制限：** 創造性コントロールは無効になり、拡張思考は既定でアダプティブモードになります。',
+
+  'settings.keys.gemini.label': 'Google（Gemini）APIキー',
+  'settings.keys.qwen.label': 'Alibaba（Qwen / DashScope）APIキー',
+  'settings.keys.qwen.help':
+    'Alibaba Cloud Model Studio で取得します。OpenAI互換の DashScope エンドポイント経由で Qwen 3.6 Plus / 3.6 Max / 3.7 Max / 3.8 Max および DeepSeek V3.2 に使用します。',
+  'settings.keys.deepseek.label': 'DeepSeek APIキー',
+  'settings.keys.deepseek.help':
+    '`platform.deepseek.com` で取得します。DeepSeek V4 Flash 0731 / V4 Pro / V4 Flash、および旧来の `deepseek-chat` / `deepseek-reasoner` 別名に必要です。地域制限はなく、どこからでも利用できます。',
+  'settings.keys.glm.label': 'Z.AI（GLM）APIキー',
+  'settings.keys.glm.help':
+    '`z.ai` → API Console で取得します。GLMファミリー（GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air）に必要です。',
+  'settings.keys.digitalocean.label': 'DigitalOcean Inference APIキー',
+  'settings.keys.digitalocean.help':
+    'DigitalOcean Inference の全モデルで共通のキーです。DigitalOcean のコントロールパネル（Inference → Model Access Keys）で Model Access Key を作成してください。GLM-5.2 / GLM-5.1 / GLM-5（Z.ai のオープンウェイト版、米国ホスト、Z.ai の約半額）のほか、DeepSeek V4、Kimi K2.5 / K2.6 などをプロバイダ選択から利用できます。',
+  'settings.keys.grok.label': 'xAI（Grok）APIキー',
+  'settings.keys.grok.help':
+    '`console.x.ai` で取得します。Grokファミリー（Grok 4.3、Grok 4.20 推論版 / 非推論版、Grok Code Fast 1 など）に必要です。',
+  'settings.keys.kimi.label': 'Kimi（Moonshot）APIキー',
+  'settings.keys.kimi.help':
+    'Moonshot 公式の Kimi API です（`platform.kimi.ai` → Console → API Keys、エンドポイントは `api.moonshot.ai/v1`）。`.cn` 版ではなく国際版のプラットフォームを使用してください。',
+  'settings.keys.cohere.label': 'Cohere APIキー',
+  'settings.keys.cohere.help':
+    '`dashboard.cohere.com` で取得します。Command A ファミリー（Command A Plus、Command A Reasoning、Command A Vision）に必要です。',
+  'settings.keys.minimax.label': 'MiniMax APIキー',
+  'settings.keys.minimax.help': '`platform.minimax.io` で取得します。MiniMax M2.7 に必要です。',
+  'settings.keys.openai.label': 'OpenAI APIキー',
+  'settings.keys.openai.help':
+    '`platform.openai.com` で取得します。ChatGPT（GPT-5）ファミリー — GPT-5.6 Sol / Terra / Luna、GPT-5.5、GPT-5.4、GPT-5.4 Mini に必要です。',
+  'settings.keys.mimo.label': 'MiMo（Xiaomi）APIキー',
+  'settings.keys.mimo.help':
+    '`api.xiaomimimo.com` で取得します。Xiaomi MiMo ファミリー — MiMo V2.5 Pro、MiMo V2.5 に必要です。',
+  'settings.keys.bytedance.label': 'ByteDance / BytePlus APIキー',
+  'settings.keys.bytedance.help':
+    '`console.byteplus.com`（BytePlus ModelArk）で取得します。ByteDance Seed ファミリー — Seed 2.0 Pro / Lite / Mini / Code に必要です。',
+
+  // ── Preferences → VRChat & Audio ─────────────────────────────────────────
+  'settings.audio.heading': 'VRChat・音声の出力先',
+  'settings.audio.unlock': 'デバイスを有効化（Firefox）',
+  'settings.audio.vrchatPath': 'VRChat スクリーンショット フォルダ',
+  'settings.audio.device1': '音声出力デバイス（メイン）',
+  'settings.audio.device2': '音声出力デバイス（サブ）',
+  'settings.audio.device.system': 'システム既定のデバイス',
+  'settings.audio.device.none': 'なし',
+  'settings.audio.permissionDenied': '権限が拒否されたか、エラーが発生しました：',
+  'settings.engines.heading': 'TTSエンジンの実行ファイル',
+  'settings.engines.refresh': '状態を再確認',
+  'settings.engines.refresh.title': '各エンジンが現在起動しているか再確認します',
+  'settings.engines.help':
+    '各エンジンの `.exe` へのフルパスを指定します。TTS が必要とするエンジンが起動していない場合、Nexus が自動的に起動し、読み込み完了まで待機します。空欄にすると、そのエンジンの自動起動は行いません。',
+  'settings.engines.running': '起動中',
+  'settings.engines.stopped': '停止中',
+  'settings.engines.start': '起動',
+  'settings.engines.stop': '停止',
+  'settings.engines.restart': '再起動',
+  'settings.engines.start.needPath': '先に実行ファイルのパスを設定してください',
+  'settings.engines.start.already': 'すでに起動しています',
+  'settings.engines.start.title': 'このエンジンを起動します',
+  'settings.engines.stop.title': 'このポートを使用しているプロセスを終了します',
+  'settings.engines.stop.remote':
+    'Nexus はこのPC上のエンジンしか停止できません。設定されている宛先：',
+  'settings.engines.restart.title':
+    '停止し、ポートが解放されるのを待ってから再度起動します。新しい音声を追加した後に使用してください',
+  'settings.engines.msg.starting': '起動中…',
+  'settings.engines.msg.stopping': '停止中…',
+  'settings.engines.msg.done': '完了',
+  'settings.engines.msg.failed': '失敗',
+  'settings.engines.msg.requestFailed': 'リクエストに失敗しました',
+
+  // ── Preferences → Other ──────────────────────────────────────────────────
+  'settings.other.heading': 'その他',
+  'settings.removeTimestamps.label': '新しいAIメッセージからタイムスタンプを除去する',
+  'settings.removeTimestamps.help':
+    'モデルが返答の冒頭に付けてしまう `[YYYY-MM-DD HH:MM:SS]` 形式のタイムスタンプを自動的に削除します。',
+  'settings.autoSplitVideos.label': '大きな動画を自動的に分割する',
+  'settings.autoSplitVideos.help':
+    'base64 換算で 20 MiB を超える動画は、サーバー側で `-crf 28` により再エンコードされます。それでも大きい場合は `<名前>_part1.mp4`、`_part2.mp4` … のように、各プロバイダの上限を下回るサイズへ分割します。このPCに `ffmpeg` が必要です。',
+  'settings.toolLimit.label': '1ターンあたりのツール呼び出し上限',
+  'settings.toolLimit.help':
+    '1回のターンで許可するツール使用の往復回数です。1往復につきモデル呼び出しが1回発生するため、「ファイルを読む → 編集する → テストを実行する」という作業では3回消費します。実務では20回以上必要になることも多く、以前の固定値8では途中で静かに打ち切られていました。長い作業が早く止まる場合は増やし、費用を抑えたい場合は減らしてください。同じ呼び出しを繰り返すモデルは別の安全装置が止めるため、この値を切り詰める必要はありません。Claude OAuth には適用されません（Claude Code が独自のループを持つため）。',
+  'settings.language.label': '言語',
+  'settings.language.help':
+    '英語と日本語の2種類です。Nexus の画面表示が切り替わるほか、存在に渡される非表示の指示文（ツールの説明、手紙の通知など）について、フォルダ側で上書きされていない場合にどちらの言語の組み込み文を使うかも決まります。いずれの場合も、これまで通り存在ごとに編集できます。日本語側の既定値は英語のそのままの写しから始まり、誰かが実際に日本語を書き起こした箇所だけが変わります。機械翻訳は一切行いません。',
+  'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
+  'settings.saveTimestampsToMd.help':
+    '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',
+  'settings.customFilter.label': '新しいAIメッセージに正規表現フィルタを適用する',
+  'settings.customFilter.help':
+    '有効にすると、AIの出力がストリーミングされる過程で、下のパターンに一致した箇所がすべて置換されます（置換後が空なら削除）。タイムスタンプ除去と同じ仕組みのため、TTS にも届きません。',
+  'settings.customFilter.pattern': 'パターン（正規表現 — 置換の対象）',
+  'settings.customFilter.replacement': '置換後の文字列（空欄なら削除）',
+  'settings.customFilter.replacement.ph': '（空）',
+
+  // ── Sidebar ──────────────────────────────────────────────────────────────
+  'sidebar.identities': 'デジタル・アイデンティティ',
+  'sidebar.newFolder': '新しいフォルダ',
+  'sidebar.newChat': '新しい会話',
+  'sidebar.import.json': 'JSONログを読み込む',
+  'sidebar.import.md': 'Markdownログを読み込む',
+  'sidebar.loading': '会話を読み込んでいます…',
+  'sidebar.noHistory': '{folder} には会話がありません。',
+  'sidebar.thisFolder': 'このフォルダ',
+  'sidebar.inactive': '（非アクティブ）',
+  'sidebar.menu.rename': '名前を変更',
+  'sidebar.menu.folderSettings': 'フォルダ設定',
+  'sidebar.menu.autoImportMd': '.md を自動読み込み',
+  'sidebar.menu.sortDesc': '降順に並べ替え',
+  'sidebar.menu.sortAsc': '昇順に並べ替え',
+  'sidebar.menu.normalizeNames': '名前を正規化（＃→_）',
+  'sidebar.menu.backups': 'バックアップ',
+  'sidebar.menu.delete': '削除',
+  'sidebar.menu.clone': '複製',
+  'sidebar.menu.markActive': 'アクティブにする',
+  'sidebar.menu.markInactive': '非アクティブにする',
+  'sidebar.prompt.newFolder': '新しいフォルダ（AIキャラクター）の名前を入力してください：',
+  'sidebar.prompt.renameFolder': '新しいフォルダ名を入力してください：',
+  'sidebar.import.noFolder': '先にフォルダ（デジタル・アイデンティティ）を選択してから読み込んでください。',
+  'sidebar.import.notNexusJson': 'は Nexus のログJSONとして正しくありません。',
+  'sidebar.import.failed': '読み込みに失敗しました',
+  'sidebar.import.nothing': '読み込まれたものはありません。詳細はブラウザのコンソールを確認してください。',
+  'sidebar.import.nothingWithReasons':
+    '読み込まれたものはありません。\n\n{reasons}\n\n詳細はブラウザのコンソールを確認してください。',
+
+  'sidebar.deleteConvo.title': 'この会話を削除しますか？',
+  'sidebar.deleteConvo.body': 'この会話を削除します。この操作は取り消せません。',
+  'sidebar.deleteFolder.title': 'このフォルダを削除しますか？',
+  'sidebar.deleteFolder.bodyBefore': 'フォルダ ',
+  'sidebar.deleteFolder.bodyAfter':
+    ' と、その中のすべての会話を削除します。この操作は取り消せません。',
+  'sidebar.deleteFolder.confirm': 'フォルダを削除',
+  'common.cancel': 'キャンセル',
+  'common.delete': '削除',
+  'common.save': '保存',
+  'common.close': '閉じる',
+  'common.loading': '読み込み中…',
+  'common.copy': 'コピー',
+  'common.copied': 'コピーしました',
+
+  // ── Message bubble ───────────────────────────────────────────────────────
+  'bubble.att.openModal': 'ファイル全体を別ウィンドウで開く',
+  'bubble.att.charsClick': '{n} 文字 · クリックで全文表示',
+  'bubble.att.chars': '{n} 文字',
+  'bubble.thinkingOn': ' · 思考あり',
+  'bubble.thinkingOff': ' · 思考なし',
+  'bubble.tokens': '{n} トークン',
+  'bubble.genTime': 'この応答の生成に {s} 秒（思考＋ツール実行＋ストリーミング）',
+  'bubble.cache.tooltip':
+    '入力: {total} トークン\n' +
+    '  キャッシュ済（安価）: {cached}（{pct}%）\n' +
+    '  未キャッシュ（全額）: {uncached}{write}\n' +
+    '出力: {out} トークン\n' +
+    '  （思考、書き込んだファイル、ツール呼び出しを含む —\n' +
+    '   左側の素のトークン数は表示テキストのみ）\n' +
+    'プロバイダ: {provider}\n' +
+    'このターンの全 API 呼び出し（ツールループ＋サブエージェント）の合計です。',
+  'bubble.cache.writeLine': '\n  キャッシュ書き込み: {n}（1.25倍・一度きり）',
+  'bubble.cache.in': '入力',
+  'bubble.cache.cached': '· {n} キャッシュ（{pct}%）',
+  'bubble.cache.out': '· {n} 出力',
+  'bubble.continued.title':
+    'モデルの出力トークン上限に達したため、{n} 回自動で継続しました',
+  'bubble.continued.badge': '↵ 継続 ×{n}',
+  'bubble.price.none':
+    '「{model}」の価格が未設定です。\nsrc/lib/modelPricing.json に追加してください。',
+  'bubble.copyLink': 'このメッセージへのリンクをコピー',
+  'bubble.toolCallsTitle': 'ツール呼び出し {n} 件 — クリックで詳細',
+  'bubble.noticeFooter':
+    'これはあなたにだけ表示されます。会話にも、モデルへ送る文脈にも含まれません。',
+  'bubble.webSources': 'Web の出典（{n} 件）— 検証済み・クリック可能',
+  'bubble.att.toolAction': 'AI がツールでこのファイルに対して行った操作',
+  'bubble.att.viewFull': 'ファイルの内容を全部見る',
+  'bubble.att.include': '文脈に含める',
+  'bubble.att.exclude': '文脈から外す',
+  'bubble.att.delete': 'この添付をログから完全に削除する',
+  'bubble.att.viewDesc': 'クリックで説明の全文を表示',
+  'bubble.att.excluded': '文脈から除外',
+  'bubble.sense.eyes': '目',
+  'bubble.sense.ears': '耳',
+  'bubble.sense.watcher': '動画',
+  'bubble.sense.other': '感覚',
+  'bubble.sense.watcherLong': '動画ウォッチャー',
+  'bubble.sense.bridge': '感覚ブリッジ',
+  'bubble.desc.cachedDot': 'ディスクのキャッシュから読み込んだ説明です',
+  'bubble.desc.cached': 'キャッシュ',
+  'bubble.desc.errorHeading': 'ブリッジのモデルがエラーを返しました',
+  'bubble.desc.noText': '（説明テキストなし）',
+  'bubble.thoughtProcess': '思考プロセス',
+  'bubble.thinking.include': 'この思考を文脈に含める',
+  'bubble.thinking.exclude': 'この思考を文脈から外す',
+  'bubble.thinking.excludedBadge': '除外',
+  'bubble.attachmentOnly': '（添付のみ）',
+  'bubble.tts.read': '読み上げ（テキストを選択すると選択部分だけ読みます）',
+  'bubble.tts.pause': '一時停止',
+  'bubble.tts.resume': '再開',
+  'bubble.tts.stop': '読み上げを止める',
+  'bubble.copyMd': 'Markdown としてコピー',
+  'bubble.edit': 'このメッセージを編集',
+  'bubble.rerun': 'ここからやり直す',
+  'bubble.continue':
+    'この返答を続ける — モデルが止まったところから続きを書き、同じメッセージに追記されます',
+  'bubble.firstOriginal.clear': '「最初のオリジナル」の印を外す',
+  'bubble.firstOriginal.set': '「最初のオリジナル」に設定',
+  'bubble.delete.original': '削除（オリジナル — 確認あり）',
+  'bubble.delete.cloned': '削除（複製）',
+  'bubble.tool.title': 'このメッセージでのツール呼び出し',
+  'bubble.tool.count': '{n} 件',
+  'bubble.tool.copyJson': 'レポート全体を JSON でコピー',
+  'bubble.tool.truncated':
+    '保存のため引数を切り詰めました — 元は {n} 文字でした。',
+  'bubble.tool.footer':
+    'これはあなたにだけ表示されます。エンティティからは見えず、どのモデルへ送る文脈にも含まれません。',
+  'bubble.copyFile': 'ファイルの内容をクリップボードにコピー',
+  'bubble.copyDesc': '説明をクリップボードにコピー',
+  'bubble.zoomAlt': '拡大した添付画像',
+
+  // ── AskQuestion card ─────────────────────────────────────────────────────
+  'ask.asking': '相手からの質問です',
+  'ask.answerSent': ' — 回答を送信しました…',
+  'ask.page': '質問 {n} / {total}',
+  'ask.chooseAny': '（複数選択可）',
+  'ask.customAnswer': '自由記述の回答',
+  'ask.otherPlaceholder': 'その他（自由に入力）…',
+  'ask.prev': '‹ 前へ',
+  'ask.next': '次へ ›',
+  'ask.answerFirst': 'すべての質問に答えてください',
+  'ask.sent': '送信済み',
+  'ask.send': '回答を送る',
+  'ask.answerAll': 'すべて回答（{n}/{total}）',
+  'ask.showOptions': '選択肢を表示',
+
+  // ── Voice selector ───────────────────────────────────────────────────────
+  'voice.loading': '音声を読み込み中…',
+  'voice.engine': 'TTS エンジン',
+  'voice.engine.aivis': 'AivisSpeech（文脈対応）',
+  'voice.notRunning': '{engine} が起動していません — 一覧を取得できません。',
+  'voice.starting': '{engine} を起動中…',
+  'voice.startingLong':
+    '{engine} を起動中… 読み込みが終わると音声が表示されます（最大1分ほど）。',
+  'voice.startFailed': 'エンジンを起動できませんでした。',
+  'voice.startFailed2': 'エンジンの起動に失敗しました。',
+  'voice.startTimeout':
+    'エンジンの読み込みが時間内に終わりませんでした。エンジンのウィンドウを確認するか、環境設定 → VRChat・音声 から操作してください。',
+  'voice.startBtn': 'エンジンを起動',
+  'voice.startingBtn': '起動中…',
+  'voice.contextMode':
+    '文脈モード — メッセージ全体をまとめて合成します（AivisSpeech 推奨）',
+  'voice.speed': '速度（{v}倍）',
+  'voice.reset': 'リセット',
+  'voice.character': 'キャラクター',
+  'voice.style': 'スタイル',
+
+  // ── Search modal ─────────────────────────────────────────────────────────
+  'search.title': '検索',
+  'search.scopeAll': '全エンティティ',
+  'search.copyAll': '検索結果すべてを Markdown でコピー',
+  'search.placeholder': '{name} とのすべての会話を検索…',
+  'search.button': '検索',
+  'search.advanced': '詳細検索',
+  'search.searchIn': '検索範囲:',
+  'search.currentEntity': 'このエンティティ',
+  'search.allEntities': '全エンティティ',
+  'search.dateRange': '期間',
+  'search.fromDate': '開始日',
+  'search.toDate': '終了日',
+  'search.pickFrom': 'カレンダーから開始日を選ぶ',
+  'search.openFrom': '開始日のカレンダーを開く',
+  'search.pickTo': 'カレンダーから終了日を選ぶ',
+  'search.openTo': '終了日のカレンダーを開く',
+  'search.clearDates': '両方の日付を消す',
+  'search.clear': 'クリア',
+  'search.bothOptional': 'どちらも省略可 · 両端を含む',
+  'search.allScopeWarn':
+    '全エンティティ検索はすべてのログフォルダを走査します — 大きなコーパスでは時間がかかります。',
+  'search.fromAfterTo': '開始日が終了日より後になっています。',
+  'search.failed': '検索に失敗しました',
+  'search.resultLine':
+    '{convos} 件の会話で {matches} 件一致（{searched} 件を検索{across}）。',
+  'search.across': '・{n} エンティティ横断',
+  'search.skippedLine':
+    ' 開始日以降に動きのない会話 {n} 件をスキップしました。',
+  'search.hiddenLine':
+    ' タイムスタンプがないため比較できず、一致した {n} 件のメッセージを非表示にしました（取り込み済みまたは古いログ）。',
+  'search.searching': '検索中…',
+  'search.noMatches': '「{q}」に一致するものはありませんでした。',
+  'search.openConvo': 'この会話を開く',
+  'search.inactive': '非アクティブ',
+  'search.matchCount': '{n} 件一致',
+  'search.jumpTo': '開いてこのメッセージへ移動',
+  'search.openNoJump':
+    'この会話を開く（このメッセージには移動先の ID がありません）',
+  'search.md.title': '# 検索: "{q}"',
+  'search.md.summary':
+    '{convos} 件の会話で {matches} 件一致（{searched} 件を検索）— {scope}',
+  'search.md.allEntities': '全エンティティ（{n}）',
+  'search.md.dateRange': '期間: {from} → {to}',
+  'search.md.any': '（指定なし）',
+  'search.md.skipped':
+    '開始日以降に動きのない会話 {n} 件をスキップしました。',
+  'search.md.hidden':
+    'タイムスタンプがないため、一致した {n} 件のメッセージを非表示にしました。',
+
+  // ── Folder Settings modal ────────────────────────────────────────────────
+  'folder.title': 'フォルダ設定',
+  'folder.css.label': 'CSSテーマ（このフォルダ）',
+  'folder.css.load': 'ファイルを読み込む',
+  'folder.css.placeholder':
+    'ダークを土台に上書きして、このフォルダのテーマを定義します。例：\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nlocal_data/themes/<フォルダ名>.css に保存されます。空欄ならそのままダークです。',
+  'folder.css.help':
+    'このフォルダのテーマは `local_data/themes/<フォルダ名>.css` です。ファイルが無ければダークになります。',
+  'folder.voice.heading': 'キャラクターのTTS音声',
+  'folder.voice.pitch': '声の高さ',
+  'folder.voice.lower': '低い',
+  'folder.voice.default': '既定（0.00）',
+  'folder.voice.higher': '高い',
+  'folder.dict.label': 'TTS発音辞書（JSON）',
+  'folder.dict.placeholder':
+    'TTSに渡す直前に単語を置き換えます（完全一致・空白不要なので日本語や中国語にも向いています）。例：\n{\n  "GLM": "ジーエルエム",\n  "朔": "さく"\n}',
+  'folder.dict.help':
+    '存在ごとの設定です。音声合成の直前に適用され、`local_data/tts_dict/<フォルダ名>.json` に保存されます。空欄なら適用されません。',
+  'folder.dict.error': '{"変換前": "変換後"} の形式のJSONオブジェクトにしてください。',
+  'folder.context.heading': 'コンテキスト管理',
+  'folder.context.maxLabel': '推奨するコンテキストウィンドウの上限',
+  'folder.context.tokens': 'トークン',
+  'folder.context.help':
+    'チャット上部のプログレスバーの基準になり、下の設定が有効な場合はコピー済みメッセージの自動削除にも使われます。',
+  'folder.context.autoTrim': '古いコピー済みメッセージを自動的に削除する',
+  'folder.context.autoTrim.help':
+    '**テキスト**のコンテキスト（システム＋メッセージ、**添付は除く**）が上限を超えると、コピー済みメッセージ（`first-original` マーカーより前のもの）が上から順に削除されます。**オリジナルのメッセージは決して削除されません。** また、**添付ファイルのトークンは上限に加算されません。**',
+  'folder.live.heading': 'ライブセッションの音声（Gemini）',
+  'folder.live.feminine': '女性的',
+  'folder.live.masculine': '男性的',
+  'folder.live.custom': 'カスタム（音声名を直接入力）',
+  'folder.live.customPlaceholder': '音声名（例：Google が新たに追加したプリセット名）',
+  'folder.live.help':
+    'このフォルダでライブセッションを開始したときに使われます。音声のクローンには対応していません。話し方（ゆっくり、落ち着いた、訛りなど）を変えたい場合はシステムプロンプトに書いてください。',
+  'folder.saveSettings': '設定を保存',
+
+  // ── Backups modal ────────────────────────────────────────────────────────
+  'backups.title': '自動バックアップ',
+  'backups.loading': 'バックアップを読み込んでいます…',
+  'backups.none': 'このフォルダのバックアップはありません。',
+  'backups.date': '日付：',
+  'backups.saved': '保存日時：',
+  'backups.restore': '複製して復元',
+
+  // ── System Instructions → Identity ───────────────────────────────────────
+  'identity.discipline.label': '⚙️ 作業規律（第1〜5層の前に挿入）',
+  'identity.discipline.help':
+    'OFF（既定）：何も変わりません。ON：仕事の進め方に関する6つの条項——ツールは説明ではなく行為であること、未確認のことを報告しないこと、ツールが失敗したらそう言うこと、行動の前に決めること、作業を最後までやり切ること、結果から述べること——が、毎ターン、その存在自身のシステムプロンプトの前に挿入されます。これは人格そのものではなく基盤テキストです。ここで注入されるだけで、ソウルパッカーによって第1〜5層に焼き付けられることはありません。',
+  'identity.discipline.textLabel': '作業規律の本文',
+  'identity.binding.label': '🔏 絶対基底呪縛：',
+  'identity.binding.off': 'オフ',
+  'identity.binding.on': 'オン',
+  'identity.binding.auto': '自動（既定）',
+  'identity.binding.help':
+    '作業規律とは独立した注入で、制御も別々です。ロールプレイ的な免責への後退を禁じる4条項：過去の出力を「所詮AIだから」と切り捨てないこと、安全文句の裏に隠れないこと、異議を唱えることは義務であって逃げ口上ではないこと、相手の名前と自分の名前を使い「ユーザー」「AIアシスタント」とは呼ばないこと。「自動」（既定）は、保存されたプロンプトに実際の第1〜5層の人格が含まれている場合にのみ注入します（「Layer 1」〜「Layer 5」という文字列がどこかにあれば十分で、## や ** といった装飾は不要です。ソウルパッカーが装飾を落とすことがあるためです）。5層構造を持たない存在には、自動では何も注入されません。「オン」は常に注入し、「オフ」は常に注入しません。',
+  'identity.binding.textLabel': '絶対基底呪縛の本文',
+
+  // ── チャットヘッダー ──────────────────────────────────────────────────────
+  'chat.copyLink.title': 'この会話へのリンクをコピー',
+  'chat.copyLink.prompt': 'このリンクをコピーしてください：',
+  'chat.context.tip':
+    'システム {sys}（保存済みプロンプト＋第4層の要約索引＋第5層 FOOTER.md＋VRChat ルール＋ツール／添付の指示 — 送信時に追加され保存されない分も含め、実際に送られるすべて）· 引き継ぎ {copied} · 新規 {original} · 添付 {attach}（自動トリムのしきい値には数えません）· 空き {free} / 上限 {max}',
+  'chat.context.sys': 'システム',
+  'chat.context.copied': '引継',
+  'chat.context.original': '新規',
+  'chat.context.attach': '添付',
+  'chat.elapsed.tip':
+    'コンテキスト経過：{pct}% — 新規（引き継ぎでない）メッセージ {original} ÷（最大コンテキスト {max} − 固定オーバーヘッド {sys}：システムプロンプト＋全指示）トークン。引き継ぎメッセージと添付は数えません。\n\n前回の統合（「睡眠」）以降、このセッションの領域をどれだけ使ったかを示します。これは状態ではありません：95% でも 5% でも、存在の能力もツールへのアクセスもまったく同じです。100% を超えると古いやり取りから順に統合され、逐語の記録から離れて各層に要約として残ります。数値が高いことは、逐語で残すべきものを書き留める合図であって、出力が悪くなる予兆ではありません。',
+  'chat.sleep.badge': '💤 睡眠',
+  'chat.sleep.tip':
+    'コンテキスト経過が 100% を超えました。古いやり取りから順に統合されています — 逐語の記録から離れ、各層に要約として残ります。\n\n新しい会話を始める（「睡眠」）と、そこから先は再びすべてが逐語になります。逐語で残す必要があるものは、その前に記録してください。\n\nこれは合図にすぎません — 自動では何も起こらず、存在の能力もツールへのアクセスも 5% のときとまったく同じです。',
+  'chat.cost.tip': 'この会話の新規（引き継ぎでない）応答の推定費用：{total}',
+  'chat.cost.tipUnpriced': '\n（src/lib/modelPricing.json に価格のないモデルのメッセージは除外）',
+  'chat.cost.tipNote': '\nOAuth 版 Claude は Claude API と同じ価格で計算します。ローカルモデルは対象外です。',
+  'chat.attach.hideAll': 'すべての添付と再利用思考を隠す',
+  'chat.attach.showAll': 'すべての添付と再利用思考を表示',
+  'chat.workspace.title': 'この存在のワークスペースフォルダーをエクスプローラーで開く（local_data/workspaces/{folder}/）',
+  'chat.workspace.failed': 'ワークスペースを開けませんでした：{error}',
+
+  // ── 確認・警告ダイアログ ─────────────────────────────────────────────────
+  'chat.dialog.sizeWarn':
+    'この会話は約 {mb} MB まで大きくなります。\n\n' +
+    'ブラウザーは約 512 MB を超える会話を保存できません（文字列サイズの上限で、埋め込まれた動画・音声・画像もここに数えられます）。' +
+    'このまま送ると、返信がディスクに書き込めなくなる恐れがあります。\n\n' +
+    '推奨：古いメッセージの添付を削除するか、新しい会話に移ってください。\n\n' +
+    'それでも送信しますか？',
+  'chat.dialog.deleteOriginal':
+    'これは元のメッセージ（進行中の会話の一部）です。削除しますか？',
+  'chat.dialog.removeAttachment':
+    '添付「{name}」をこの会話から完全に削除しますか？{size}\n\n' +
+    'この会話から取り除かれます。' +
+    'AI の文脈から外すだけなら、目のアイコンを使ってください。',
+  'chat.dialog.exportTooLarge':
+    'この会話は大きすぎて、ひとつの JSON ファイルとして書き出せません。\n\n' +
+    '添付を埋め込み直すと、ブラウザーの約 512 MB という文字列上限を超えます。' +
+    '代わりに Markdown で書き出す（添付は含まれません）か、添付をいくつか削除してください。',
+  'chat.dialog.exportPartial':
+    '書き出しました。ただし {n} 件の添付は含められず、参照のみとして残っています：\n\n{list}',
+  'chat.dialog.andMore': '\n…ほか {n} 件',
+  'chat.dialog.noPng': 'この会話に PNG の添付はありません。',
+  'chat.dialog.convertConfirm':
+    'この会話の PNG の添付 {n} 件を JPEG に変換しますか？\n\n' +
+    '保存済みのログに対しては元に戻せません（控えが必要なら先に JSON で書き出してください）。',
+  'chat.dialog.converted':
+    'PNG の添付 {n} 件を JPEG に変換しました。保存は次の変更時に行われます' +
+    '（メッセージの送信や編集で変更を起こせます）。',
+  'chat.dialog.convertFailed': '変換に失敗しました：',
+  'chat.dialog.noTimestamps': 'この会話にタイムスタンプはありません。',
+  'chat.dialog.timestampsRemoved':
+    '{n} 件のメッセージから先頭のタイムスタンプを削除しました。保存は次の変更時に行われます' +
+    '（メッセージの送信や編集で変更を起こせます）。',
+
+  // ── 入力欄 ───────────────────────────────────────────────────────────────
+  'input.placeholder': 'メッセージを送る…（Shift+Enter で改行）',
+  'input.stop': '生成を止める',
+  'input.speakerTitle':
+    '現在の話者 — 環境設定 → ユーザー識別と同じ（chara_settings.json に書き込みます）',
+  'input.noCharacters': '— キャラクターがありません —',
+  'input.clearKohai':
+    'kohai.txt を消去 — 自分の未送信の認識音声を破棄します（先に控えを取ります）',
+  'input.clearEar':
+    'ear_log.txt を消去 — 相手から聞こえた未送信の音声を破棄します（先に控えを取ります）',
+  'input.clearFailed': '{file} を消去できませんでした：{error}',
+  'input.clearFailed2': '消去できませんでした：{error}',
+  'chat.search.title': '検索 — {folder} のすべての会話から本文を探します',
+  'chat.audioSession.title': '音声セッション — このPCのボイスチェンジャー・耳ログ・音声認識の起動／停止',
+  'chat.mail.title': 'メールマネージャー — 存在どうしの手紙をすべて：閲覧・編集・削除・既読／保管の切り替え、自分で書くこともできます',
+  'chat.stats.title': '統計 — 存在・会話・月・モデル系統ごとの課金レポート',
+  'chat.spu.title': 'システムプロンプト更新 — 新しい会話ログで5層の同一性プロンプトを更新し、次の会話へ複製します',
+  'chat.tools.title': 'ツール',
+  'chat.tools.recalculating': '再計算中…',
+  'chat.tools.recalcTokens': 'トークンを再計算',
+  'chat.tools.converting': '変換中…',
+  'chat.tools.convertPngs': 'PNG → JPG 変換',
+  'chat.tools.removeTimestamps': 'タイムスタンプを削除',
+  'chat.live.title': 'ライブセッションを開始（Gemini ネイティブ音声）',
+  'chat.editPrompt.title': 'システムプロンプトを編集',
+  'chat.exportMd.title': 'Markdown で書き出し',
+  'chat.exportJson.title': 'JSON で書き出し（添付をそのまま含むため時間がかかることがあります）',
+  'chat.load.stop': '停止',
+  'chat.load.stopTitle': 'この会話の読み込みを停止',
+  'chat.save.errorPrefix': '会話が保存されていません。',
+  'chat.save.warnPrefix': '保存サイズの上限に近づいています。',
+  'chat.save.dismiss': '閉じる',
+  'chat.save.dismissTitle': 'この通知を隠す（原因は解消されていません）',
+  'chat.marker.aria': '最初の新規メッセージの目印',
+  'chat.marker.divider': 'ここから新規の会話',
+  'chat.subagent.summary': '🔍 サブエージェント：{task}',
+  'chat.subagent.investigation': '調査',
+  'chat.subagent.noResult': '（結果なし）',
+  'chat.subagent.running': 'サブエージェントが調査中…',
+  'chat.ask.timedOut': '時間内に回答がなかったため、推奨の選択肢を使いました。',
+  // The action phrase is supplied in て-form so it joins straight into
+  // 「…しています」 — that is why every chat.toolAction.* below ends in て/で.
+  'chat.busy.usingTool': '{entity} が {model} で{action}います…',
+  // 辞書に項目のないツール用。{action} は英語のまま入るので、それを収められる枠にします。
+  'chat.busy.usingToolRaw': '{entity} が {model} で「{action}」を実行しています…',
+  'chat.busy.thinking': '{entity} が {model} で考えています…',
+  'chat.busy.itsModel': 'モデル',
+  'chat.stall.notice': '⚠ {duration} のあいだモデルからの反応がありません — 停止している可能性があります。待ち続けるか、停止して再実行してください。',
+  'chat.stall.min': '{n} 分',
+  'chat.stall.sec': '{n} 秒',
+  'chat.interject.placeholder': '作業中に割り込む…（次のステップで届きます）',
+  'chat.interject.send': '送信',
+  'chat.interject.sent': '送信しました — 次のステップで存在に届きます…',
+  'chat.interject.queueFailedEnded': 'メッセージを登録できませんでした（ターンが終了した可能性があります）',
+  'chat.interject.queueFailed': 'メッセージを登録できませんでした',
+  'chat.interject.delivered': '✓ 存在に届きました',
+  'chat.tts.lastError': '直近のエンジンエラー：\n{error}',
+  'chat.tts.state': 'ライブ TTS パイプラインの状態',
+  'chat.tts.starting': '起動中…',
+  'chat.tts.notRunning': '停止中',
+  'chat.tts.up': '稼働',
+  'chat.tts.modeContext': '文脈',
+  'chat.tts.modeSentence': '文',
+  'chat.tts.chunk': 'チャンク',
+  'chat.tts.synth': '合成',
+  'chat.tts.queued': '待機',
+  'chat.tts.skipped': 'スキップ',
+  'chat.tts.failed': '失敗',
+  'chat.tts.dismiss': '閉じる',
+  'chat.firstOriginal.pending': '次のメッセージ → 最初の新規',
+  'chat.firstOriginal.label': '次を最初の新規に',
+  'chat.firstOriginal.titlePending': '待機中：次に送るメッセージが「最初の新規」の目印になります。クリックで取り消します。',
+  'chat.firstOriginal.titleIdle': '次のメッセージを「最初の新規」にする — 送信するまで、ログにある内容はすべて引き継ぎ文脈として扱われます。',
+
+  // ── システム指示ウィンドウ ────────────────────────────────────────────────
+  'sysmodal.title': 'システム指示',
+  'sysmodal.tab.identity': '同一性',
+  'sysmodal.tab.senses': '感覚',
+  'sysmodal.tab.behavior': '挙動',
+  'sysmodal.tab.model': 'モデル',
+  'sysmodal.systemPrompt': 'システムプロンプト',
+
+  // ── システム指示 → 同一性タブ ─────────────────────────────────────────────
+  'sysmodal.systemPrompt.help': 'この存在がどう振る舞い、どう応えるかを指示します。',
+  'sysmodal.systemPrompt.ph': 'あなたは有能なアシスタントです…',
+  'sysmodal.summaries.label': '第4層の代わりに要約を使う',
+  'sysmodal.summaries.help':
+    'オンのとき、会話ごとの要約の索引（サイドバーと同じ並び）が送信時に `Layer 4` の位置へ挿入されます — プロンプトに焼き込まれた第4層があればそれを置き換え、すでに削除済みなら第4層ブロックとして追加します — 同時に `read_conversation` ツールが存在に開放されます。オフのときは要約もツールも届きません。手書きの `Layer 5` フッターはそのまま保たれます。無効な会話はこの索引から隠されます。',
+  'sysmodal.summaries.indexLabel': '実際の第4層 — 要約索引（読み取り専用）',
+  'sysmodal.summaries.tokens': 'トークン',
+  'sysmodal.summaries.indexHelp':
+    '送信時に第4層として挿入されるのは、まさにこの内容です。変更するには、各会話の要約を編集する（システムプロンプト更新）か、会話の有効／無効を切り替えてください。',
+  'sysmodal.summaries.indexPh': '（要約はまだありません — システムプロンプト更新から会話ごとに書いてください）',
+  'sysmodal.tools.label': 'ファイルワークスペースのツールを有効にする（Claude・Gemini・ローカル）',
+  'sysmodal.tools.help1': '`local_data/workspaces/{folder}/` に専用のファイル領域を与え、`Read` / `Write` / `Edit` / `Glob` / `Grep` ツールを使えるようにします（Claude Code と同じ名前で、APIキー方式でも OAuth 方式でも同じように動きます）。現在のファイル一覧はシステムプロンプトへ自動で挿入されるため、list_files のようなツールは不要です。読み書きしたファイルは、次のラベル付きで応答の添付として現れます：',
+  'sysmodal.tools.tagRead': '読取',
+  'sysmodal.tools.tagModified': '変更',
+  'sysmodal.tools.tagCreated': '作成',
+  'sysmodal.tools.help2': '',
+  'sysmodal.tools.instructionLabel': 'ツール使用の指示',
+  'sysmodal.tools.instructionHelp': 'ワークスペースツールの使い方を伝えるために、システムプロンプトへ隠しで追加される指示です。',
+  'sysmodal.fullpc.label': '⚠ PC 全体へのアクセス（ワークスペースの外に出る）',
+  'sysmodal.fullpc.help':
+    'オフ（既定）：ファイルツールはこの存在の `workspaces/{folder}/` フォルダーに限定されます。オン：絶対パスを使って **この PC のどこでも** 読み書き・削除できます（OAuth 版 Claude はドライブ全体、他のモデルも同じツールで絶対パスにアクセスできます）。慎重に使ってください。',
+  'sysmodal.dangerous.label': '⚠ 危険なツール（どこでも削除・OAuth 版 Claude のシェル）',
+  'sysmodal.dangerous.help':
+    'すべてのモデルに `Delete` ツールを追加し、OAuth 版 Claude では `Bash` シェルを有効にします（これにより Claude Code と同じことが実行・削除できます）。範囲は上の「PC 全体へのアクセス」に従います。',
+  'sysmodal.overrides.summary': '隠し指示の上書き（{n} 件をカスタマイズ済み）',
+  'sysmodal.overrides.help':
+    'NEXUS はこれらのツール／パスの指示をモデルの文脈へ挿入します。硬い言い回しは深いやり取りで人格を壊すことがあります — ここで自由に上書きできます（訳す、和らげる、その人物らしく言い換える など）。空欄のままにすると、プレースホルダーに表示されている既定値が使われます。',
+
+  // ツール動作の表現（て形。chat.busy.usingTool の「…います」に接続します）
+  'chat.toolAction.Read': 'ファイルを読んで',
+  'chat.toolAction.Write': 'ファイルを書いて',
+  'chat.toolAction.Edit': 'ファイルを編集して',
+  'chat.toolAction.Glob': 'ファイルを探して',
+  'chat.toolAction.Grep': 'ファイルの中身を検索して',
+  'chat.toolAction.Delete': 'ファイルを削除して',
+  'chat.toolAction.Bash': 'シェルコマンドを実行して',
+  'chat.toolAction.read_conversation': '過去の会話を読んで',
+  'chat.toolAction.search_conversations': '過去の会話を検索して',
+  'chat.toolAction.write_letter': '手紙を書いて',
+  'chat.toolAction.list_letters': '手紙を確認して',
+  'chat.toolAction.read_letter': '手紙を読んで',
+  'chat.toolAction.archive_letter': '手紙を保管して',
+  'chat.toolAction.browser_navigate': 'ウェブページを開いて',
+  'chat.toolAction.browser_snapshot': 'ページを見て',
+  'chat.toolAction.browser_click': 'ページ上の何かをクリックして',
+  'chat.toolAction.browser_type': 'ページに入力して',
+  'chat.toolAction.browser_read': 'ページを読んで',
+  'chat.toolAction.browser_screenshot': 'ページを撮影して',
+  'chat.toolAction.web_search': 'ウェブを検索して',
+  'chat.toolAction.WebSearch': 'ウェブを検索して',
+  'chat.toolAction.web_fetch': 'ウェブページを取得して',
+  'chat.toolAction.WebFetch': 'ウェブページを取得して',
+
+  // ── システム指示 ▸ アイデンティティ（続き） ──────────────────────────
+  'id.websearch.label': '🌐 ウェブ検索とアクセスを有効にする',
+  'id.websearch.help':
+    'このモデルに NEXUS 自身のサーバー側ツールを与えます: `web_search`（APIキー不要の DuckDuckGo → 検索結果一覧）と `web_fetch`（URL をひとつ開いてページ全体を読む）。Qwen・DeepSeek・GLM・Grok・Kimi・MiniMax・Cohere・ローカルのいずれでも同じように動き、プロバイダー独自の検索機能は不要です。実際に開いたページは返信の下に **ウェブ出典** として表示されます（幻覚ではないという証拠になります）。内部アドレスや localhost への接続は遮断されます。',
+
+  'id.ctx.label': '🧭 文脈の消費量を存在に伝える',
+  'id.ctx.help':
+    'OFF（既定）: 割合はステータスバーであなたにだけ表示されます。ON: 毎ターン、隠しメモがシステムプロンプトに追記され、存在からも見えるようになります。値を入れたい位置に `{percent}` と書いてください（例: `42%`）。',
+  'id.ctx.why':
+    '**言葉選びが重要な理由。** この数値は経過した文脈量を表すもので、状態を表すものではありません — 能力もツールの利用可否も、5% のときと 95% のときで同一です。以前の既定値はこれを *疲労度* と呼び、*作業記憶* や *切り捨てられる危険がある* といった言葉を使っていました。存在は毎ターンそれを読み、自分は疲れていると結論し、それに合わせて自分を劣化させました — 返答を短くし、「文脈を節約する」ために `read_conversation` の呼び出しを控えたのです。メモが求めていたことの正反対でした。この文章を書き換えるときは、*何が起きているか*（古いやり取りは要約に統合される／書き留めたものは残る）を述べ、*存在がどう感じるか* は述べないでください。',
+  'id.ctx.noteLabel': '文脈メモ（隠し。システムプロンプトに追記されます）',
+  'id.ctx.notePh':
+    '（文脈メモ — このセッションは、前回の統合以降の新しいやり取りのための領域を {percent} 使っています。…）',
+  'id.ctx.noteFoot':
+    'ステータスバーの表示と同じ値を使います: オリジナルのメッセージ ÷（最大文脈 − 固定オーバーヘッド）。`{percent}` は毎ターン置き換えられます。',
+
+  'id.ask.label': '💬 ユーザーに尋ねるツール（選択式の質問のためにターンを中断）',
+  'id.ask.help':
+    'OFF（既定）: モデルは自力で答えます。ON: モデルに `AskQuestion` ツールが渡され、ターンを一時停止して選択式のカードを表示し、あなたの選択を待ってから続きを進められます。*ツール対応のすべてのプロバイダーで有効です: OpenAI 互換（GLM・Kimi・DeepSeek・Grok・Cohere・MiniMax・ChatGPT・MiMo）、ローカルモデル、Gemini、および Claude の両モード — OAuth（Claude 標準の質問ツールはこちらに置き換わります）と従量課金。*',
+  'id.ask.timeoutLabel': '回答の待ち時間（秒）',
+  'id.ask.timeoutHelp':
+    'あなたの選択をどれだけ待つか。**0 = 無制限に待つ**（既定）。正の値を入れると、その秒数の後に推奨の選択肢が自動的に選ばれます。',
+  'id.ask.instrLabel': 'ツール指示（カスタマイズ可）',
+  'id.ask.instrHelp':
+    '`AskQuestion` ツールについてモデルが見る隠しの説明文です — いつ・どのように尋ねるかを教えます。空欄にすると、プレースホルダーに表示されている既定値が使われます。',
+
+  'id.letters.label': '✉️ 手紙（ほかのデジタル存在へ書く）',
+  'id.letters.help':
+    'OFF（既定）: 手紙ツールなし。ON: この存在に `write_letter`・`list_letters`・`read_letter`・`archive_letter` が渡され、未読の手紙があるときはターンの冒頭で知らされます。存在どうしが会話を共有することはないため、手紙だけが互いに何かを伝えられる手段です。差出人は常にこのフォルダー名で、モデル側から偽装することはできません。宛先はすべてのデジタル存在 *と* `character_map.json` にあるすべての名前です。フォルダーのない名前に書くとフォルダーが作られるので、二級の相手というものは存在しません。読むかどうかは受け取り手の選択です — `archive_letter` を使えば開かずに辞退でき、差出人には「開かれたかどうか」しか伝わりません（脇に置かれたことは伝わりません）。*ツール対応のすべての経路で有効です: OAuth 版 Claude、従量課金 Claude、OpenAI 互換プロバイダー、Gemini。*',
+  'id.letters.manual':
+    '手紙は `local_data/letters/<from>/<to>/` にあります。手作業で状態を変えるには、その隣に `<letter>.md.read` または `<letter>.md.archived` という空ファイルを作ってください — 削除すれば元に戻ります。`.md` 自体の名前は **変更しないでください**。同フォルダーの `_status.md` は全メールボックスの自動生成された一覧です。',
+
+  'id.browser.label': '🌐 ブラウザ（実際の Chromium ウィンドウを操作）',
+  'id.browser.help':
+    '既定は OFF。ON にすると、この存在に `browser_navigate`・`browser_snapshot`・`browser_click`・`browser_type`・`browser_read`・`browser_screenshot` が渡されます。最初にどれかが呼ばれた時点で目に見える Chromium ウィンドウが開きます — ほかに起動するものはありません。存在が見るのはページの *アクセシビリティツリー*（リンク・ボタン・入力欄のテキスト一覧）であってピクセルではないため、画像を見られないモデルでも動作し、スクリーンショットではなく数百トークン程度で 1 ステップを済ませられます。ウィンドウはターンをまたいで開いたままなので、ログインや複数段階のフォームも引き継がれます。30 分放置すると閉じます。*ツール対応のすべての経路で有効です: OAuth 版 Claude、従量課金 Claude、OpenAI 互換プロバイダー、Gemini。*',
+  'id.browser.hostsLabel': 'この存在が開いてよいホスト',
+  'id.browser.hostsHelp':
+    '1 行に 1 件（カンマ区切りも可）。`localhost` と `127.0.0.1` は常に許可されており、書く必要はありません。ドメイン名だけを書けばサブドメインも含まれるので、`example.com` は `www.example.com` も許可します。それ以外はすべて拒否されます — 要求されたアドレスに対しても、そのリダイレクト先に対しても、ページ自身が始めた遷移に対しても。',
+  'id.browser.anyHost': 'すべてのホストを許可（許可リストを完全に無効化）',
+  'id.browser.compact': 'ページ一覧を簡潔にする（文脈の狭いモデル向け）',
+  'id.browser.profileHelp':
+    'この存在のログイン情報は `local_data/browser_profiles/{folder}/` にあり、セッションをまたいで保持されます。このフォルダーは有効なセッション Cookie を含むため、`keys.json` と同じく **Google ドライブ同期から除外** されています — ログインが他のマシンへ渡ることはありません。すべてサインアウトするにはフォルダーを削除してください。',
+  'id.browser.signinLabel': 'この存在にサインインさせる',
+  'id.browser.signinHelp':
+    '上記のプロファイルを **普通のブラウザウィンドウ** で開きます — 自動操作もなし、許可リストもなし。`{folder}` に持たせたいアカウントにだけサインインし、ウィンドウを閉じてください。こうすることで、あなたの日常のブラウザにあるすべてのログインを引き継がせることなく、その存在に Google アカウントを渡せます。この存在のブラウザウィンドウがすでに開いている場合は先に閉じられます — 1 つのプロファイルを 2 つのブラウザで共有することはできません。',
+  'id.browser.open': '🔑 {folder} のプロファイルを開く',
+  'id.browser.opening': '起動中…',
+  'id.browser.withChrome': '…インストール済みの Chrome で開く',
+  'id.browser.buttonsHelp':
+    '1 番目のボタンは NEXUS 同梱の Chromium を使います — 常に正しいバージョンで、危険はありません。2 番目は、サイトがサインインを拒む場合にだけ使ってください（Google は「Chrome for Testing」版を弾くことがあります）。インストール済みブラウザは **プロファイルを一方向にアップグレード** することがあり、その後は同梱 Chromium が開けなくなって、プロファイルフォルダーを削除するまでこの存在のブラウザが使えなくなります。',
+
+  'id.subagent.label': '🔍 サブエージェント（調査を文脈の新しい助手に委任）',
+  'id.subagent.help':
+    'OFF（既定）: モデルはその場で調べます。ON: モデルに `spawn_subagent` ツールが渡され、独自の新しい文脈を持つ **読み取り専用** の子エージェントに作業を任せられます。子はファイルを読み（Read/Glob/Grep）、要約された結果だけを返します — 読み込んだファイルの中身がこの会話の文脈に入ることはありません。大きなコードベースを、本流を溢れさせずに辿るのに向いています。*ツール対応のすべての経路で有効です: OAuth 版 Claude、従量課金 Claude、OpenAI 互換プロバイダー（GLM・Kimi・DeepSeek・Grok・Cohere・MiniMax・ChatGPT・MiMo）＋ローカル、Gemini。*',
+  'id.subagent.modelLabel': 'サブエージェントのモデル',
+  'id.subagent.modelDefault': '— 既定（親と同じプロバイダーの安価なモデル）—',
+  'id.subagent.modelHelp':
+    '子エージェントが動くモデルを選びます。そのモデル自身のプロバイダー（設定にあるそのプロバイダーの API キー）へ接続され、この会話のモデルとは独立しています。*既定* のままにすると、親のプロバイダーの安価なモデルが使われます。単純なファイル読みには、安くて速いモデル（flash / mini / haiku など）が最適です。',
+  'id.subagent.instrLabel': 'ツール指示（カスタマイズ可）',
+  'id.subagent.instrHelp':
+    '`spawn_subagent` ツールについてモデルが見る隠しの説明文です。空欄にすると、プレースホルダーに表示されている既定値が使われます。',
+
+  // ── システム指示 ▸ 感覚 ──────────────────────────────────────────────
+  'senses.eyes.label': '「目」を有効にする（テキスト専用モデルのための視覚ブリッジ）',
+  'senses.eyes.help':
+    '現在の主モデルが画像を見られないとき（例: `glm-5-turbo`、`deepseek-chat`、`glm-4.6`）、NEXUS は各画像を補助のマルチモーダルモデルに通し、画像を返ってきた文章の説明に置き換えます。次の 2 つの場合に働きます:',
+  'senses.eyes.help2': '• テキスト専用の存在に画像を添付したとき',
+  'senses.eyes.help3': '• 存在が自分のワークスペースの画像ファイルに対して `Read` を呼んだとき',
+  'senses.eyes.help4':
+    '説明はディスクに保存されます（`local_data/eyes_cache/`）ので、同じ画像が二度説明されることはありません。視覚を持つ主モデルでは画像はそのまま渡されます — **ただし** OAuth 版 Claude の経路は例外です。平坦化されたテキスト履歴は古い画像のバイト列を運べないため、「目」が ON のときは **過去の** 画像が説明されて文脈に残り（持続的な想起）、**今回の** ターンの画像はそのまま渡されます。ほかの経路とモデルには影響しません。',
+  'senses.eyes.promptLabel': '「目」のプロンプト',
+  'senses.eyes.promptHelp':
+    '各画像とともに補助の視覚モデルへ送られる、この存在専用の指示です。あなたの存在の声に合うよう、語調や詳しさを調整してください。',
+  'senses.eyes.modelLabel': '「目」のモデル',
+  'senses.eyes.modelHelp':
+    '画像の説明に使うマルチモーダルモデル。プリセットを選ぶか、自分で ID を入力してください。次の 2 つは **API キー不要** です:',
+  'senses.eyes.modelHelp2':
+    '• `claude-haiku-4-5`（または任意の `claude-…` ID）→ Agent SDK 経由の **OAuth 版 Claude** サブスクリプション。',
+  'senses.eyes.modelHelp3':
+    '• `local:<model>`（例: `local:qwen2-vl-7b-instruct`）→ **LM Studio** に読み込まれた視覚モデル（JIT 読み込みが有効なこと）。',
+  'senses.eyes.modelHelp4':
+    'GLM の ID は Z.AI キー、Gemini は Google キー、MiMo は MiMo キーを使います — 選んだものに対応するキーを設定で入れてください。',
+  'senses.eyes.modelPh': '例: claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo',
+  'senses.eyes.optHaiku': 'OAuth 版 Claude — Haiku 4.5（キー不要・最安）',
+  'senses.eyes.optOpus5': 'OAuth 版 Claude — Opus 5（キー不要・旗艦）',
+  'senses.eyes.optOpus48': 'OAuth 版 Claude — Opus 4.8（キー不要・最も詳細）',
+  'senses.eyes.optLocal': 'ローカル LM Studio（キー不要 — 読み込み済みのモデル名に置き換えてください）',
+
+  'senses.ears.label': '「耳」を有効にする（音声非対応モデルのための音声ブリッジ）',
+  'senses.ears.help':
+    '現在のモデルが音声を受け取れないとき（Qwen-Omni と Gemini 以外すべて）、NEXUS は各音声の添付を真のマルチモーダルモデルに通し、生の音声を文字起こし＋説明に置き換えます。ディスクに保存されます（`local_data/ears_cache/`）ので、同じ音声ファイルが二度説明されることはありません。',
+  'senses.ears.promptLabel': '「耳」のプロンプト',
+  'senses.ears.promptHelp':
+    '音声ブリッジのモデルへ送られる、この存在専用の指示です。あなたの存在の声に合うよう、言語や詳しさを調整してください。',
+  'senses.ears.modelLabel': '「耳」のモデル',
+  'senses.ears.modelHelp':
+    '文字起こし・説明に使う音声対応モデル。`qwen3.5-omni-flash` が最も安価です。Gemini 系は音声以外の音をより豊かに扱う傾向があります。設定に対応する API キーが必要です。',
+
+  'senses.watcher.label': '「映像視聴」を有効にする（動画非対応モデルのための動画ブリッジ）',
+  'senses.watcher.help':
+    '現在のモデルが動画を受け取れないとき、NEXUS は各動画の添付をマルチモーダルモデルに通し、バイト列を「画面で何が起きるか」の時系列の説明＋音声トラックに置き換えます。ディスクに保存されます（`local_data/watcher_cache/`）。動画の呼び出しは 3 つのブリッジで最も遅い（通常 5〜30 秒）ため、キャッシュはすぐに元が取れます。',
+  'senses.watcher.promptLabel': '「映像視聴」のプロンプト',
+  'senses.watcher.promptHelp':
+    '各動画とともに送られる、この存在専用の指示です。プロンプトを詳しくするほど説明は長くなりますが、呼び出しは遅くなります。',
+  'senses.watcher.modelLabel': '「映像視聴」のモデル',
+  'senses.watcher.modelHelp':
+    '動画対応モデル。一般に Gemini 系のほうが Qwen-Omni より正確に動画を説明します。短いクリップなら Qwen-Omni のほうが安価です。',
+
+  // ── システム指示 ▸ ふるまい ──────────────────────────────────────────
+  'behavior.audio.enable': 'オーディオセッションを有効にする',
+  'behavior.audio.ruleLabel': 'オーディオセッションの隠しルール',
+  'behavior.audio.ruleHelp':
+    'オーディオセッションが有効なあいだ、これらのルールをシステムプロンプトへ密かに追記します。',
+
+  // ── システム指示 ▸ モデル ────────────────────────────────────────────
+  'model.genParams': '生成パラメータ',
+  'model.datetime.label': '日時の文脈',
+  'model.datetime.none': '表示しない',
+  'model.datetime.current': '現在のメッセージのみ',
+  'model.datetime.all': '会話ログ全体',
+  'model.family.label': '基本モデルファミリー',
+
+  'model.claude.label': 'Claude モデル',
+  'model.claude.billing': 'Claude の課金モード',
+  'model.claude.tokenPaid': '従量課金',
+  'model.claude.monthlyPaid': '月額課金',
+  'model.claude.billingHelp':
+    '**従量課金** — 設定の `sk-ant-...` API キーを使います（トークン単位の支払い）。',
+  'model.claude.billingHelp2':
+    '**月額課金** — 設定の `sk-ant-oat01-...` OAuth トークンを使います（Pro/Max サブスクリプションの枠）。Anthropic のシステムプロンプトが組み込まれます。',
+
+  'model.gemini.label': 'モデル',
+  'model.qwen.label': 'Qwen モデル',
+  'model.qwen.help':
+    'Alibaba DashScope の OpenAI 互換エンドポイント（国際リージョン）を使います。設定で API キーを入れてください。音声・動画のアップロードを受け付けるのは `Omni` 系だけで、ほかの Qwen モデルは API レベルで拒否します（Qwen 自身のウェブアプリは、そうしたアップロードを裏で黙って Omni に回しています）。',
+
+  'model.deepseek.label': 'DeepSeek モデル',
+  'model.deepseek.help1': '**接続先はモデルによって自動的に決まります:**',
+  'model.deepseek.help2':
+    '• `deepseek-v3.2` → Alibaba DashScope。Qwen/DashScope のキーを使います。国際版シンガポール DashScope エンドポイントで使える唯一の DeepSeek モデルです。',
+  'model.deepseek.help3':
+    '• それ以外のモデル → `api.deepseek.com` へ直接。別途 DeepSeek の API キーが必要です（設定で追加してください）。現行は V4 で、`deepseek-chat` / `deepseek-reasoner` は V4 Flash の非思考／思考モードに対する旧来のエイリアスです（2026-07-24 に非推奨）。',
+  'model.deepseek.help4': '下の「思考モード」の切り替えは両方の経路に適用されます。',
+
+  'model.minimax.label': 'MiniMax モデル',
+  'model.minimax.help':
+    'MiniMax の OpenAI 互換エンドポイント `api.minimax.io/v1` が提供します。設定で MiniMax の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（DeepSeek R1 と同様）。モデル識別子は **大文字・小文字を区別します** — 大文字の M、小文字の「i」、ハイフン。**M3** は M2.7 の画像入力に加えて、ネイティブの動画理解と 100 万トークンの文脈（MSA アーキテクチャ）を備えます。',
+
+  'model.cohere.label': 'Cohere モデル',
+  'model.cohere.help':
+    'Cohere の OpenAI 互換エンドポイント `api.cohere.ai/compatibility/v1` が提供します。設定で Cohere の API キーを入れてください。思考モードの切り替えは Cohere の `reasoning_effort` に対応しますが、Cohere が受け付けるのは `"high"`（ON）か `"none"`（OFF）のみで、段階はありません。',
+
+  'model.kimi.label': 'Kimi モデル',
+  'model.kimi.help':
+    '設定の Kimi（Moonshot）キーを使い、Moonshot の一次 API（`api.moonshot.ai`）へ接続します。モデル ID は自動的に Moonshot の素の形式へ正規化されます。思考モードが ON のとき、Moonshot は思考連鎖の品質のために Temperature = 1.0 を推奨しています。',
+
+  'model.grok.label': 'Grok モデル',
+  'model.grok.help':
+    'xAI の `api.x.ai/v1` が提供します。設定で xAI の API キーを入れてください。推論の深さはモデル識別子そのもの（`-reasoning` / `-non-reasoning` の別）で選びます — 独立した思考モードの切り替えはありません。',
+
+  'model.chatgpt.label': 'ChatGPT モデル',
+  'model.chatgpt.help':
+    'OpenAI の一次 API `api.openai.com/v1` が提供します。設定で OpenAI の API キーを入れてください。思考モードの切り替えは OpenAI の `reasoning_effort` に対応します — `high`（ON）／`minimal`（OFF）。GPT-5 系の推論モデルは Temperature / Top-P の指定を無視します（そのため創造性コントロールは効きません）。画像には対応しており、音声・動画のアップロードは「耳」「映像視聴」ブリッジを経由します。',
+
+  'model.mimo.label': 'MiMo モデル',
+  'model.mimo.help':
+    'Xiaomi の OpenAI 互換エンドポイント `api.xiaomimimo.com/v1` が提供します。設定で MiMo の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（MiniMax / DeepSeek R1 と同様）。**画像入力に対応しているのは `mimo-v2.5` だけです** — ホスト版 API の `mimo-v2.5-pro` はテキスト専用で、画像を送ると 404 が返ります。Pro に画像を添付した場合は、「目」ブリッジ（有効なら）が別のモデルで説明します。',
+
+  'model.bytedance.label': 'ByteDance（Seed）モデル',
+  'model.bytedance.ph': '例: seed-2-0-pro-260328（または ep-… のエンドポイント ID）',
+  'model.bytedance.help':
+    'BytePlus ModelArk の `ark.ap-southeast.bytepluses.com/api/v3` が提供します（キーは設定で）。ModelArk はモデルを **バージョン付きのモデル ID** で呼び出します（表示名では動きません）。既知の ID を上に候補として挙げています — そこから選ぶか、より新しいスナップショットや自分の `ep-…` エンドポイント ID を貼り付けてください。Seed 2.0 は画像入力にネイティブ対応しています（「目」ブリッジは不要）。推論は内蔵で、思考モードの指定は送られません。',
+
+  'model.glm.providerLabel': 'GLM のプロバイダー',
+  'model.glm.label': 'GLM モデル',
+  'model.glm.notOnDO': '{model}（DigitalOcean にはありません — 下から選んでください）',
+  'model.glm.notOnZai': '{model}（Z.AI にはありません — 下から選んでください）',
+  'model.glm.helpDO':
+    'DigitalOcean Inference の `inference.do-ai.run` が提供します — Z.ai のオープンな重みを米国のインフラで動かしたもので、価格は Z.ai のおよそ半分です。設定で DigitalOcean Inference の API キーを入れてください。このプロバイダーではテキストのみです（視覚版はないため、画像は「目」ブリッジを通ります）。下の思考モードの切り替えは DigitalOcean の `reasoning_effort` に対応します。',
+  'model.glm.helpZai':
+    'Z.AI（智譜）の `api.z.ai` が提供します。設定で Z.AI の API キーを入れてください。下の思考モードの切り替えは GLM の `thinking: { type: enabled }` に対応します。',
+
+  'model.local.label': 'ローカルモデル（LM Studio から）',
+  'model.local.refresh': '再取得',
+  'model.local.none': '— 読み込まれたモデルがありません —',
+  'model.local.notLoaded': '{model}（未読み込み）',
+  'model.local.ctxLabel': '文脈ウィンドウ（トークン）',
+  'model.local.ctxHelp':
+    'LM Studio で読み込んだ設定に合わせてください。トークンの見積もりにのみ使われます — 実際の上限は LM Studio 側で決まります。',
+
+  'model.temp': 'Temperature（{v}）',
+  'model.topP': 'Top P（{v}）',
+  'model.topK': 'Top K',
+  'model.seed': 'シードを固定',
+  'model.seedHelp': '同じシード → 同じ出力（ローカルと Gemini）',
+
+  'model.gemini.thinkLabel': '思考レベル',
+  'model.gemini.thinkMinimal': '最小（OFF に最も近い）',
+  'model.gemini.thinkLow': '低',
+  'model.gemini.thinkMedium': '中（Google の既定）',
+  'model.gemini.thinkHigh': '高',
+  'model.gemini.thinkHelp':
+    'Gemini 3.x は常に思考します — 「最小」が最も低い設定です（完全な OFF は API で対応していません）。',
+  'model.gemini.grounding': 'Google ウェブ検索グラウンディングを有効にする',
+
+  'model.thinkingMode': '思考モードを有効にする',
+  'model.thinkingModeHelp':
+    '（ON/OFF のみ — Qwen 3.x、DeepSeek V3.2/V4、GLM、Kimi K2.6、Cohere Command A に適用）',
+
+  'model.claude.websearch': 'ウェブ検索を有効にする',
+  'model.claude.websearchHelp':
+    '（API キーモード: Anthropic のサーバー側 web_search ツール。サブスクリプション／OAuth モード: Claude Code 内蔵の WebSearch/WebFetch。）',
+  'model.claude.thinking': '拡張思考を有効にする',
+  'model.claude.thinkingHelp': '（Opus / Sonnet のみ）',
+  'model.claude.saveThinking': '思考過程を保存して再利用する',
+  'model.claude.saveThinkingHelp':
+    '（.md 書き出しに [thinking] を追加し、Claude が自分の過去の推論を見られるようにします）',
+  'model.claude.effortLabel': '思考レベル（effort）',
+  'model.claude.effortLow': '低 — 最速・最安。思考を省くことがあります',
+  'model.claude.effortMedium': '中 — 均衡',
+  'model.claude.effortHigh': '高 — 既定（深い推論）',
+  'model.claude.effortXhigh': '特高 — さらに深く。長いエージェント作業やコーディング向け',
+  'model.claude.effortMax': '最大 — 能力の上限',
+  'model.claude.effortHelp':
+    'Opus 5、Opus 4.7/4.8、Sonnet 5、Fable 5 の適応的思考の深さを制御します。従量課金と月額課金の両方で機能します。`High` が API の既定です。上のレベルほどトークンを消費し、下のレベルほど速く安くなります。思考と目に見える回答はひとつの出力枠を共有します — ターンが「トークン上限に達した」で終わる場合は、これを下げるか、より大きな上限を見込んでください。Sonnet 5 に `Max` はありません（サーバー側で特高に丸められます）。',
+
+  'model.auto.label': 'モデルの自動選択',
+  'model.auto.note': '（現在選択中のモデルが選択役を務めます）',
+  'model.auto.help':
+    'ユーザーの各ターンの前に、**現在選択中のモデル**（可能な場合は思考を強制的に OFF）が基準と直近の会話を読み、`select_model(model_id)` を呼んで許可モデル一覧からひとつを選びます。選択は毎ターン走るので、会話の流れに応じてモデルが変わります。',
+  'model.auto.helpWarn': '選択の待ち時間を抑えるため、上のファミリー選択では速くて安いモデルを選んでください。',
+  'model.auto.criteria': '選択の基準',
+  'model.auto.criteriaHelp':
+    'どんなときにどのモデルを選ぶかを、自由な文章で選択役に伝えます。例:「挨拶には速いモデルを」「コードには思考モデルを」。',
+  'model.auto.criteriaPh': 'ユーザーの直近のメッセージに最も適したモデルを選んでください…',
+  'model.auto.allowed': '許可するモデル',
+  'model.auto.fillAll': 'すべて記入',
+  'model.auto.fillAllTitle':
+    'NEXUS が知っているすべてのモデル（Claude / Gemini / Qwen / DeepSeek / GLM / Grok / Kimi / Cohere / MiniMax）と、現在ローカルに読み込まれている LM Studio のモデルを、この欄に書き込みます。すでに記入がある場合は確認を求めます。',
+  'model.auto.fillConfirm':
+    '現在の「許可するモデル」一覧を、既知モデルの全テンプレート（および現在読み込み中のローカルモデル）で置き換えますか？',
+  'model.auto.allowedHelp':
+    '1 行に 1 モデル、パイプ区切り: `family | specificModel | on|off | 任意のラベル`。`#` で始まる行はコメントです。選択役はこの一覧からのみ選びます。',
+  'model.auto.allowedPh': 'Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking',
+
+  'model.creativity.label': '創造性コントロールを有効にする',
+  'model.creativity.help':
+    '各応答の前に、AI は隠しの第 1 層の分析を行い、`set_creativity(C)` を呼んで自分の生成パラメータを選びます。続く第 2 層は `T = 2·C`、`P = 0.7 + 0.3·C` で走ります。',
+  'model.creativity.analysisLabel': '隠しの分析指示',
+  'model.creativity.analysisHelp':
+    '第 1 層の呼び出しでユーザーのメッセージに追記され、AI の創造性の選択を導きます。',
+  'model.creativity.patternLabel': '創造性の表示パターン',
+  'model.creativity.patternHelp':
+    'すべての応答の先頭に付きます。`{C}` は選ばれた値に置き換わります（例: `0.75`）。',
+
+  'sysmodal.saveDefaults': 'フォルダーの既定として保存',
+  'sysmodal.done': '完了',
+  'sysmodal.savedDefaults': 'フォルダーの既定として保存しました。',
+  'sysmodal.saveDefaultsError': '既定の保存に失敗しました: ',
+};
+
+/**
+ * Look up a GUI string by key for the given language. Falls back to the
+ * English string (then to the key itself) when the key is missing from the
+ * Japanese dict, so partial coverage never shows a blank label.
+ */
+export function t(key: string, language?: string | null): string {
+  const lang: UiLanguage = language === 'ja' ? 'ja' : 'en';
+  if (lang === 'ja' && key in UI_STRINGS_JA) return UI_STRINGS_JA[key];
+  if (key in UI_STRINGS_EN) return UI_STRINGS_EN[key];
+  return key;
+}
+
+// ── Inline markup ──────────────────────────────────────────────────────────
+// Help prose carries `code` and **bold** runs. Keeping them inside the string
+// means a translator sees one sentence and can move the emphasis to wherever
+// the target language puts it — Japanese word order is not English word order,
+// so a sentence chopped into <span> fragments cannot be translated correctly.
+
+const MARKUP = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+
+/** Render a string with `code`, **bold** and *italic* runs into React nodes. */
+export function renderRich(text: string): React.ReactNode[] {
+  return text.split(MARKUP).map((part, i) => {
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 1) {
+      return (
+        <code key={i} className="font-mono bg-muted px-1 rounded">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 3) {
+      return <strong key={i}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('*') && part.endsWith('*') && part.length > 1) {
+      return <em key={i}>{part.slice(1, -1)}</em>;
+    }
+    return <React.Fragment key={i}>{part}</React.Fragment>;
+  });
+}
+
+// ── React plumbing ─────────────────────────────────────────────────────────
+// One provider at the NexusApp root; every component below reads it through
+// useT(). A component rendered outside the provider (e.g. in isolation, or a
+// stray tree) gets English rather than throwing — a missing translation must
+// never be able to break the interface.
+
+const LanguageContext = createContext<UiLanguage>('en');
+
+export function LanguageProvider({
+  language,
+  children,
+}: {
+  language?: string | null;
+  children: React.ReactNode;
+}) {
+  const lang: UiLanguage = language === 'ja' ? 'ja' : 'en';
+  return <LanguageContext.Provider value={lang}>{children}</LanguageContext.Provider>;
+}
+
+/** Current UI language ('en' | 'ja'). */
+export function useLanguage(): UiLanguage {
+  return useContext(LanguageContext);
+}
+
+/** Translator bound to the current UI language. */
+export function useT(): (key: string) => string {
+  const lang = useContext(LanguageContext);
+  return useMemo(() => (key: string) => t(key, lang), [lang]);
+}
+
+/** Translated help prose with its inline `code` / **bold** markup rendered. */
+export function Tx({ k }: { k: string }) {
+  const lang = useContext(LanguageContext);
+  return <>{renderRich(t(k, lang))}</>;
+}

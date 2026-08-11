@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useT } from '@/lib/i18n';
 
 interface VoiceSettings {
   engine: number;
@@ -24,6 +25,7 @@ interface VoiceSelectorProps {
 }
 
 export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
+  const t = useT();
   const [speakers, setSpeakers] = useState<{voicevox: any[], coeiroink: any[], aivisspeech: any[]}>({ voicevox: [], coeiroink: [], aivisspeech: [] });
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -55,7 +57,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
    */
   const startEngineAndWait = React.useCallback(async (eng: number) => {
     setStarting(true);
-    setStartMsg(`Starting ${ENGINE_NAMES[eng]}…`);
+    setStartMsg(t('voice.starting').replace('{engine}', ENGINE_NAMES[eng]));
     try {
       const r = await fetch('/api/tts/engines', {
         method: 'POST',
@@ -64,10 +66,10 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
       }).then(res => res.json());
 
       if (!r?.ok) {
-        setStartMsg(r?.message || 'Could not start the engine.');
+        setStartMsg(r?.message || t('voice.startFailed'));
         return;
       }
-      setStartMsg(`Starting ${ENGINE_NAMES[eng]}… voices appear once it finishes loading (up to a minute).`);
+      setStartMsg(t('voice.startingLong').replace('{engine}', ENGINE_NAMES[eng]));
 
       // Poll the speaker list rather than a health endpoint: the list appearing
       // is the thing we actually need, and these engines answer /speakers only
@@ -79,9 +81,9 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
         const got = eng === 2 ? (d.aivisspeech || []) : (d.coeiroink || []);
         if (got.length > 0) { setStartMsg(null); return; }
       }
-      setStartMsg('The engine did not finish loading in time. Check its window, or use Preferences → VRChat & Audio.');
+      setStartMsg(t('voice.startTimeout'));
     } catch (e: any) {
-      setStartMsg(e?.message || 'Failed to start the engine.');
+      setStartMsg(e?.message || t('voice.startFailed2'));
     } finally {
       setStarting(false);
     }
@@ -95,7 +97,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
     if (list.length === 0 && !starting) startEngineAndWait(eng);
   };
 
-  if (loading) return <div className="text-xs text-muted-foreground">Loading voices...</div>;
+  if (loading) return <div className="text-xs text-muted-foreground">{t('voice.loading')}</div>;
 
   const currentEngineData = value.engine === 0 ? speakers.voicevox : value.engine === 2 ? speakers.aivisspeech : speakers.coeiroink;
   // Resolve by NAME first, so a saved selection keeps pointing at the same
@@ -116,7 +118,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   return (
     <div className="space-y-3 bg-secondary/20 p-3 rounded-lg border border-border">
       <div>
-        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">TTS Engine</label>
+        <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">{t('voice.engine')}</label>
         <select
           value={value.engine}
           onChange={e => handleEngineChange(parseInt(e.target.value))}
@@ -124,7 +126,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
         >
           <option value={0}>Voicevox</option>
           <option value={1}>Coeiroink</option>
-          <option value={2}>AivisSpeech (context-aware)</option>
+          <option value={2}>{t('voice.engine.aivis')}</option>
         </select>
         {/* Engines 1 and 2 serve their character list from the running process.
             Rather than the old "go start the app yourself, then reopen this
@@ -132,14 +134,14 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
         {value.engine !== 0 && currentEngineData.length === 0 && (
           <div className="mt-1 flex items-center gap-2 flex-wrap">
             <p className="text-[10px] text-amber-500 flex-1 min-w-[12rem]">
-              {startMsg || `${ENGINE_NAMES[value.engine]} is not running — no voices to list.`}
+              {startMsg || t('voice.notRunning').replace('{engine}', ENGINE_NAMES[value.engine])}
             </p>
             <button
               onClick={() => startEngineAndWait(value.engine)}
               disabled={starting}
               className="text-[10px] px-2 py-1 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 transition disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {starting ? 'Starting…' : 'Start engine'}
+              {starting ? t('voice.startingBtn') : t('voice.startBtn')}
             </button>
           </div>
         )}
@@ -156,17 +158,17 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
           onChange={e => onChange({ ...value, contextChunks: e.target.checked })}
           className="w-3.5 h-3.5 accent-indigo-500"
         />
-        <span className="text-[11px] text-muted-foreground">Context mode — synthesize whole-message chunks (recommended for AivisSpeech)</span>
+        <span className="text-[11px] text-muted-foreground">{t('voice.contextMode')}</span>
       </label>
 
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">Speed ({(value.speed || 1.0).toFixed(1)}x)</label>
+          <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">{t('voice.speed').replace('{v}', (value.speed || 1.0).toFixed(1))}</label>
           <button 
             onClick={() => onChange({ ...value, speed: 1.0 })} 
             className="text-[9px] text-indigo-500 hover:text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded"
           >
-            Reset
+            {t('voice.reset')}
           </button>
         </div>
         <input 
@@ -183,7 +185,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
       {currentEngineData && currentEngineData.length > 0 && (
         <>
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">Character</label>
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">{t('voice.character')}</label>
             <select
               value={resolvedCharIdx}
               onChange={e => {
@@ -200,7 +202,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
           </div>
 
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">Style</label>
+            <label className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">{t('voice.style')}</label>
             <select
               value={resolvedStyleIdx}
               onChange={e => {

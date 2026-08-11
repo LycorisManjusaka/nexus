@@ -5,8 +5,10 @@ import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, S
 import { v4 as uuidv4 } from 'uuid';
 import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { SNIFF_BYTES, TEXT_MAX_BYTES, MEDIA_EXT, looksLikeText } from '@/lib/textSniff';
+import { useT } from '@/lib/i18n';
 
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
+  const t = useT();
   const [text, setText] = useState('');
   const [userName, setUserName] = useState('');
   // Which VRChat transcript file is being cleared right now ('kohai' | 'ear').
@@ -30,7 +32,11 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       });
       const d = await r.json();
       if (!d.ok) {
-        alert(`Could not clear ${which === 'kohai' ? 'kohai.txt' : 'ear_log.txt'}: ${d.error || 'unknown error'}`);
+        alert(
+          t('input.clearFailed')
+            .replace('{file}', which === 'kohai' ? 'kohai.txt' : 'ear_log.txt')
+            .replace('{error}', d.error || 'unknown error')
+        );
       } else {
         // Refresh the visible transcript NOW rather than waiting for the next
         // poll. The poll deliberately ignores an EMPTY transcript (so it can't
@@ -43,7 +49,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         } catch { /* the next poll will catch up */ }
       }
     } catch (e: any) {
-      alert(`Could not clear: ${e.message}`);
+      alert(t('input.clearFailed2').replace('{error}', e.message));
     }
     setClearing(null);
   };
@@ -577,7 +583,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
                 onClick={() => clearVrchatLog('kohai')}
                 disabled={disabled || !!clearing}
                 className="px-2 py-1 text-sm rounded bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-40 transition-colors leading-none"
-                title="Clear kohai.txt — discard your own pending recognized speech (backed up first)"
+                title={t('input.clearKohai')}
               >
                 {clearing === 'kohai' ? '…' : '🗣️🗑️'}
               </button>
@@ -585,7 +591,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
                 onClick={() => clearVrchatLog('ear')}
                 disabled={disabled || !!clearing}
                 className="px-2 py-1 text-sm rounded bg-sky-500/15 hover:bg-sky-500/25 disabled:opacity-40 transition-colors leading-none"
-                title="Clear ear_log.txt — discard pending speech heard from others (backed up first)"
+                title={t('input.clearEar')}
               >
                 {clearing === 'ear' ? '…' : '👂🗑️'}
               </button>
@@ -610,14 +616,14 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           <select
             value={userName}
             onChange={(e) => handleCharaSelect(e.target.value)}
-            title="Active speaker — same as Preferences → User Identity (writes chara_settings.json)"
+            title={t('input.speakerTitle')}
             className="px-2 pt-2 text-xs text-muted-foreground bg-transparent outline-none font-medium cursor-pointer hover:text-foreground"
           >
             {/* The native option list ignores Tailwind utilities and falls back
                 to the OS default (white-on-white under dark themes). Force the
                 theme colors explicitly via CSS variables so it's always legible. */}
             {charaList.length === 0 && (
-              <option value="" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>— no characters —</option>
+              <option value="" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{t('input.noCharacters')}</option>
             )}
             {/* Keep the current name visible even if it's not in the map. */}
             {userName && !charaList.some(c => c.name === userName) && (
@@ -634,7 +640,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             disabled={disabled || isGenerating}
-            placeholder="Send a message... (Shift+Enter for newline)"
+            placeholder={t('input.placeholder')}
             className="w-full max-h-48 min-h-[44px] bg-transparent resize-none pb-3 pt-1 px-2 outline-none text-sm overflow-y-auto"
             rows={1}
           />
@@ -643,7 +649,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           <button 
             onClick={onStop}
             className="p-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors shadow-sm"
-            title="Stop Generating"
+            title={t('input.stop')}
           >
             <Square size={18} className="fill-current" />
           </button>

@@ -22,8 +22,9 @@ import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { appendLayer4Index, appendLayer5Footer, hasLayerStructure, prependIdentityPreamble } from '@/lib/layer4';
-import { AGENT_INSTRUCTION_LABELS, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
+import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
+import { useT, Tx, renderRich } from '@/lib/i18n';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -276,6 +277,7 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
 }
 
 export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
+  const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
   const [loading, setLoading] = useState(false);
@@ -367,6 +369,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // reports no SDK activity at all (stall_warning SSE) — the signal that the
   // turn may genuinely be stuck and a rerun is warranted. Display-only.
   const [liveToolActivity, setLiveToolActivity] = useState<string | null>(null);
+  // True when the phrase in `liveToolActivity` came from the UI dictionary, so
+  // it fits the localized sentence frame. False when we fell back to the
+  // server's English label for a tool that has no key — then the sentence has
+  // to be built with a frame that can carry a foreign phrase.
+  const [liveToolLocalized, setLiveToolLocalized] = useState(false);
   // The model the SERVER reports for the current turn. Auto-selection can pick a
   // different model than the conversation is configured with, and the loading
   // line should name the one actually doing the work.
@@ -392,6 +399,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Falls back to English whenever globalSettings.language isn't 'ja'.
   const langDefaults = useMemo(
     () => (globalSettings?.language === 'ja' ? { ...DEFAULT_AGENT_INSTRUCTIONS, ...DEFAULT_AGENT_INSTRUCTIONS_JA } : DEFAULT_AGENT_INSTRUCTIONS),
+    [globalSettings?.language],
+  );
+  // GUI captions for the override editors. Unlike the instruction BODIES
+  // above, these are human-facing, so they are translated normally. Any key
+  // with no Japanese caption keeps its English one.
+  const instructionLabel = useCallback(
+    (key: string, english: string) =>
+      (globalSettings?.language === 'ja' ? AGENT_INSTRUCTION_LABELS_JA[key] : '') || english || key,
     [globalSettings?.language],
   );
   // Default kept deliberately small: it carries ONLY what the per-tool schema
@@ -1285,9 +1300,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let runningTextTotal = textTotal;
     for (let i = 0; i < markerIdx; i++) {
       if (runningTextTotal <= max) break;
-      const t = computeMsgTextTokens(messages[i]);
+      const tk = computeMsgTextTokens(messages[i]);
       toRemove.add(messages[i].id);
-      runningTextTotal -= t;
+      runningTextTotal -= tk;
     }
     if (toRemove.size > 0) {
       console.log(`[auto-trim] removing ${toRemove.size} copied messages to bring text context from ${textTotal} → ${runningTextTotal} (limit ${max}, attachments ${tokenBreakdown.attach} excluded)`);
@@ -1422,13 +1437,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     );
     if (savedBytesRef.current > 0 && savedBytesRef.current + incomingBytes > SAVE_SIZE_WARN_THRESHOLD) {
       const projectedMB = ((savedBytesRef.current + incomingBytes) / 1024 / 1024).toFixed(0);
-      const ok = window.confirm(
-        `This conversation would grow to about ${projectedMB} MB.\n\n` +
-        `The browser cannot save a conversation larger than ~512 MB (a hard limit on string size, which inline video/audio/image attachments count against). ` +
-        `Sending this may produce a reply that CANNOT be written to disk.\n\n` +
-        `Recommended: remove attachments from older messages, or continue in a new conversation.\n\n` +
-        `Send anyway?`
-      );
+      const ok = window.confirm(t('chat.dialog.sizeWarn').replace('{mb}', projectedMB));
       if (!ok) return;
     }
 
@@ -1652,10 +1661,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (!res.ok) return;
         const { text } = await res.json();
         if (cancelled) return;
-        const t = (text || '').trim();
-        if (t && t !== lastVrchatLogRef.current) {
-          lastVrchatLogRef.current = t;
-          inputApiRef.current?.setText?.(t);
+        const logText = (text || '').trim();
+        if (logText && logText !== lastVrchatLogRef.current) {
+          lastVrchatLogRef.current = logText;
+          inputApiRef.current?.setText?.(logText);
         }
       } catch (e) { /* transient — ignore */ }
     };
@@ -1688,16 +1697,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const text = interjectText.trim();
     if (!text || !injectTurnId) return;
     setInterjectText('');
-    setInterjectStatus('sent — will reach the entity at its next step…');
+    setInterjectStatus(t('chat.interject.sent'));
     try {
       const r = await fetch('/api/chat/inject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ turnId: injectTurnId, text }),
       });
-      if (!r.ok) setInterjectStatus('could not queue the message (turn may have ended)');
+      if (!r.ok) setInterjectStatus(t('chat.interject.queueFailedEnded'));
     } catch {
-      setInterjectStatus('could not queue the message');
+      setInterjectStatus(t('chat.interject.queueFailed'));
     }
   };
 
@@ -2136,11 +2145,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } else if (data.type === 'injection_delivered') {
                 // A queued partner interjection was folded into the entity's
                 // context at a tool-loop boundary.
-                setInterjectStatus('✓ delivered to the entity');
+                setInterjectStatus(t('chat.interject.delivered'));
               } else if (data.type === 'tool_activity') {
                 // OAuth path: the model started (tool name) or finished (null)
                 // a tool call — reflect it in the loading indicator.
-                setLiveToolActivity(typeof data.tool === 'string' && data.tool ? data.tool : null);
+                // `data.name` is the RAW tool name, sent alongside the server's
+                // English label so the client can render a translated phrase.
+                // Falls back to the server label when the name has no key —
+                // never blank, and never worse than before.
+                if (typeof data.tool === 'string' && data.tool) {
+                  const key = `chat.toolAction.${String(data.name || '')}`;
+                  const localized = data.name ? t(key) : '';
+                  const hit = !!localized && localized !== key;
+                  setLiveToolActivity(hit ? localized : data.tool);
+                  setLiveToolLocalized(hit);
+                } else {
+                  setLiveToolActivity(null);
+                  setLiveToolLocalized(false);
+                }
               } else if (data.type === 'stall_warning') {
                 // Server-side watchdog: no SDK activity for this many seconds.
                 setStallIdleSeconds(Number(data.idleSeconds || 0));
@@ -2352,7 +2374,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   const handleDelete = (id: string) => {
     if (isMessageOriginal(id)) {
-      const ok = window.confirm("This is an original message (part of the working conversation). Delete it?");
+      const ok = window.confirm(t('chat.dialog.deleteOriginal'));
       if (!ok) return;
     }
     setMessages(prev => prev.filter(m => m.id !== id));
@@ -2393,10 +2415,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         ? `≈${Math.ceil(bytes / 1024).toLocaleString()} KB`
         : '';
     const ok = window.confirm(
-      `Permanently remove attachment "${att.name}" from this conversation?` +
-      (sizeLabel ? ` (${sizeLabel})` : '') +
-      '\n\nThis removes it from this conversation. ' +
-      'Use the eye icon instead if you only want to exclude it from the AI\'s context.'
+      t('chat.dialog.removeAttachment')
+        .replace('{name}', att.name)
+        .replace('{size}', sizeLabel ? ` (${sizeLabel})` : '')
     );
     if (!ok) return;
     setMessages(messages.map(m => {
@@ -2522,11 +2543,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[export] serialization failed:', e);
-      alert(
-        'This conversation is too large to export as a single JSON file.\n\n' +
-        'Re-inlining its attachments exceeds the browser\'s hard ~512 MB limit on one string. ' +
-        'Export as Markdown instead (attachments are not included), or remove some attachments first.'
-      );
+      alert(t('chat.dialog.exportTooLarge'));
       return;
     }
     const blob = new Blob([json], { type: 'application/json' });
@@ -2538,10 +2555,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     URL.revokeObjectURL(url);
     if (failed.length) {
       alert(
-        `Exported, but ${failed.length} attachment${failed.length === 1 ? '' : 's'} could not be included ` +
-        `and remain${failed.length === 1 ? 's' : ''} as a reference only:\n\n` +
-        failed.slice(0, 10).join('\n') +
-        (failed.length > 10 ? `\n…and ${failed.length - 10} more` : '')
+        t('chat.dialog.exportPartial')
+          .replace('{n}', String(failed.length))
+          .replace('{list}', failed.slice(0, 10).join('\n')) +
+        (failed.length > 10
+          ? t('chat.dialog.andMore').replace('{n}', String(failed.length - 10))
+          : '')
       );
     }
     } finally {
@@ -2707,8 +2726,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             withTs = `${fmtDate(m.timestamp)}\n${body}`;
           }
         }
-        const t = await fetchTokensForText(withTs, localAiName);
-        return { id: m.id, tokens: t };
+        const tk = await fetchTokensForText(withTs, localAiName);
+        return { id: m.id, tokens: tk };
       }));
       const byId: Record<string, number> = {};
       for (const r of results) byId[r.id] = r.tokens;
@@ -2727,10 +2746,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       0
     );
     if (pngCount === 0) {
-      alert('No PNG attachments in this conversation.');
+      alert(t('chat.dialog.noPng'));
       return;
     }
-    if (!confirm(`Convert ${pngCount} PNG attachment${pngCount === 1 ? '' : 's'} in this conversation to JPEG?\n\nThis is irreversible for the saved log (use Export JSON first if you want a backup).`)) {
+    if (!confirm(t('chat.dialog.convertConfirm').replace('{n}', String(pngCount)))) {
       return;
     }
     setIsConvertingPngs(true);
@@ -2765,9 +2784,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         return { ...m, attachments: newAtts };
       }));
       setMessages(next);
-      alert(`Converted ${pngCount} PNG attachment${pngCount === 1 ? '' : 's'} to JPEG. Save will happen on the next change (or trigger one by sending a message / editing).`);
+      alert(t('chat.dialog.converted').replace('{n}', String(pngCount)));
     } catch (e: any) {
-      alert('Conversion failed: ' + e.message);
+      alert(t('chat.dialog.convertFailed') + e.message);
     } finally {
       setIsConvertingPngs(false);
     }
@@ -2784,11 +2803,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       return { ...m, content: cleaned };
     });
     if (changed === 0) {
-      alert('No timestamps found in this conversation.');
+      alert(t('chat.dialog.noTimestamps'));
       return;
     }
     setMessages(next);
-    alert(`Removed leading timestamps from ${changed} message${changed === 1 ? '' : 's'}. Save will happen on the next change (or trigger one by sending a message / editing).`);
+    alert(t('chat.dialog.timestampsRemoved').replace('{n}', String(changed)));
   };
 
   return (
@@ -2804,11 +2823,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               const url = absoluteDeepLink(folderName, convoId);
               navigator.clipboard?.writeText(url).then(
                 () => setCopiedLink('convo'),
-                () => window.prompt('Copy this link:', url),
+                () => window.prompt(t('chat.copyLink.prompt'), url),
               );
               setTimeout(() => setCopiedLink(null), 1600);
             }}
-            title="Copy a link to this conversation"
+            title={t('chat.copyLink.title')}
             className="text-muted-foreground opacity-70 hover:opacity-100 transition"
           >
             {copiedLink === 'convo' ? <Check size={14} /> : <Link2 size={14} />}
@@ -2832,7 +2851,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             const pctAttach = (attach / denom) * 100;
             const overLimit = total > max;
             return (
-              <div className="flex flex-col items-end gap-1 min-w-[260px]" title={`System ${sys.toLocaleString()} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + VRChat rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied ${copied.toLocaleString()} · Original ${original.toLocaleString()} · Attachments ${attach.toLocaleString()} (not counted toward auto-trim threshold) · Free ${Math.max(0, max - total).toLocaleString()} / limit ${max.toLocaleString()}`}>
+              <div className="flex flex-col items-end gap-1 min-w-[260px]" title={t('chat.context.tip')
+                .replace('{sys}', sys.toLocaleString())
+                .replace('{copied}', copied.toLocaleString())
+                .replace('{original}', original.toLocaleString())
+                .replace('{attach}', attach.toLocaleString())
+                .replace('{free}', Math.max(0, max - total).toLocaleString())
+                .replace('{max}', max.toLocaleString())}>
                 <div className={`flex h-2 w-full rounded-full overflow-hidden bg-muted/60 border ${overLimit ? 'border-red-500 ring-1 ring-red-500/40' : 'border-border/50'}`}>
                   <div className="bg-indigo-500" style={{ width: `${pctSys}%` }} />
                   <div className="bg-amber-400" style={{ width: `${pctCopied}%` }} />
@@ -2840,10 +2865,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <div className="bg-sky-400" style={{ width: `${pctAttach}%` }} />
                 </div>
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-2 font-semibold flex-wrap justify-end">
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-indigo-500 inline-block" />Sys {sys.toLocaleString()}</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-400 inline-block" />Cp {copied.toLocaleString()}</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500 inline-block" />Orig {original.toLocaleString()}</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-sky-400 inline-block" />Att {attach.toLocaleString()}</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-indigo-500 inline-block" />{t('chat.context.sys')} {sys.toLocaleString()}</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-400 inline-block" />{t('chat.context.copied')} {copied.toLocaleString()}</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500 inline-block" />{t('chat.context.original')} {original.toLocaleString()}</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-sky-400 inline-block" />{t('chat.context.attach')} {attach.toLocaleString()}</span>
                   <span className={overLimit ? 'text-red-500' : 'text-muted-foreground'}>· {total.toLocaleString()}/{max.toLocaleString()}</span>
                 </div>
               </div>
@@ -2873,9 +2898,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             return (
               <span
                 className={`text-sm font-semibold tabular-nums cursor-default ${elapsed >= 100 ? 'text-red-500' : elapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
-                title={`Context elapsed: ${elapsed}% — original (non-copied) messages ${tokenBreakdown.original.toLocaleString()} ÷ (max context ${max.toLocaleString()} − fixed overhead ${tokenBreakdown.sys.toLocaleString()}: system prompt + all instructions) tokens. Copied messages and attachments are not counted.
-
-How much of this session's room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.`}
+                title={t('chat.elapsed.tip')
+                  .replace('{pct}', String(elapsed))
+                  .replace('{original}', tokenBreakdown.original.toLocaleString())
+                  .replace('{max}', max.toLocaleString())
+                  .replace('{sys}', tokenBreakdown.sys.toLocaleString())}
               >
                 {elapsed}%
               </span>
@@ -2896,13 +2923,9 @@ How much of this session's room has been used since the last consolidation ("sle
             return (
               <span
                 className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 border border-red-500/40 cursor-default whitespace-nowrap"
-                title={`Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.
-
-Starting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.
-
-This is a cue only — nothing happens automatically, and the entity is exactly as capable and has exactly the same tool access as at 5%.`}
+                title={t('chat.sleep.tip')}
               >
-                💤 sleep
+                {t('chat.sleep.badge')}
               </span>
             );
           })()}
@@ -2928,9 +2951,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
             }
             if (!anyPriced && !anyUnpriced) return null;
             const tip =
-              `Estimated cost of this conversation's new (non-copied) assistant replies: ${fmtUSD(total)}` +
-              (anyUnpriced ? `\n(excludes messages on models with no price in src/lib/modelPricing.json)` : '') +
-              `\nOAuth Claude is priced the same as the Claude API. Local models are ignored.`;
+              t('chat.cost.tip').replace('{total}', fmtUSD(total)) +
+              (anyUnpriced ? t('chat.cost.tipUnpriced') : '') +
+              t('chat.cost.tipNote');
             return (
               <span
                 className="text-sm font-semibold tabular-nums cursor-default text-emerald-600 dark:text-emerald-400"
@@ -2940,7 +2963,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
               </span>
             );
           })()}
-          <button onClick={handleToggleAllAttachments} className={`p-1.5 transition-colors ${hasVisibleAttachments ? 'text-muted-foreground hover:text-red-400' : 'text-red-400 hover:text-muted-foreground'}`} title={hasVisibleAttachments ? "Hide all attachments & reusable thinking" : "Show all attachments & reusable thinking"}>
+          <button onClick={handleToggleAllAttachments} className={`p-1.5 transition-colors ${hasVisibleAttachments ? 'text-muted-foreground hover:text-red-400' : 'text-red-400 hover:text-muted-foreground'}`} title={hasVisibleAttachments ? t('chat.attach.hideAll') : t('chat.attach.showAll')}>
             {hasVisibleAttachments ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
           <button
@@ -2953,35 +2976,35 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                 });
                 if (!r.ok) {
                   const d = await r.json().catch(() => ({}));
-                  alert(`Failed to open workspace: ${d.error || r.status}`);
+                  alert(t('chat.workspace.failed').replace('{error}', String(d.error || r.status)));
                 }
               } catch (e: any) {
-                alert(`Failed to open workspace: ${e.message}`);
+                alert(t('chat.workspace.failed').replace('{error}', e.message));
               }
             }}
             className="p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
-            title={`Open this entity's workspace folder in file explorer (local_data/workspaces/${folderName}/)`}
+            title={t('chat.workspace.title').replace('{folder}', folderName)}
           >
             <FolderOpen size={16} />
           </button>
           <button
             onClick={() => setSearchOpen(true)}
             className="p-1.5 text-muted-foreground hover:text-sky-500 transition-colors"
-            title={`Search — find text across all of ${folderName}'s conversations`}
+            title={t('chat.search.title').replace('{folder}', folderName)}
           >
             <Search size={16} />
           </button>
           <button
             onClick={() => setAudioSessionOpen(true)}
             className="p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
-            title="Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine"
+            title={t('chat.audioSession.title')}
           >
             <AudioLines size={16} />
           </button>
           <button
             onClick={() => setMailOpen(true)}
             className="group relative p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
-            title="Mail Manager — every letter between identities: read, edit, delete, set read/archived flags, or write one yourself"
+            title={t('chat.mail.title')}
           >
             <Mail size={16} />
             {mailUnread > 0 && (
@@ -2997,14 +3020,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
           <button
             onClick={() => setStatsOpen(true)}
             className="p-1.5 text-muted-foreground hover:text-emerald-500 transition-colors"
-            title="Statistics — billing reports across all entities, conversations, months, and model families"
+            title={t('chat.stats.title')}
           >
             <BarChart3 size={16} />
           </button>
           <button
             onClick={() => setSysPromptUpdaterOpen(true)}
             className="p-1.5 text-muted-foreground hover:text-indigo-500 transition-colors"
-            title="System Prompt Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation"
+            title={t('chat.spu.title')}
           >
             <Layers size={16} />
           </button>
@@ -3012,7 +3035,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
             <button
               onClick={() => setToolsOpen(v => !v)}
               className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-              title="Tools"
+              title={t('chat.tools.title')}
               aria-haspopup="menu"
               aria-expanded={toolsOpen}
             >
@@ -3036,7 +3059,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <RefreshCw size={14} className={isRecalculating ? 'animate-spin' : ''} />
-                    {isRecalculating ? 'Recalculating…' : 'Recalculate Tokens'}
+                    {isRecalculating ? t('chat.tools.recalculating') : t('chat.tools.recalcTokens')}
                   </button>
                   <button
                     role="menuitem"
@@ -3045,7 +3068,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground disabled:opacity-50 disabled:cursor-not-allowed border-t border-border"
                   >
                     <ImageDown size={14} />
-                    {isConvertingPngs ? 'Converting…' : 'Convert PNG → JPG'}
+                    {isConvertingPngs ? t('chat.tools.converting') : t('chat.tools.convertPngs')}
                   </button>
                   <button
                     role="menuitem"
@@ -3053,26 +3076,26 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground border-t border-border"
                   >
                     <Clock size={14} />
-                    Remove timestamps
+                    {t('chat.tools.removeTimestamps')}
                   </button>
                 </div>
               </>
             )}
           </div>
-          <button onClick={() => setLiveOpen(true)} className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors" title="Start Live Session (Gemini native audio)">
+          <button onClick={() => setLiveOpen(true)} className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors" title={t('chat.live.title')}>
             <Radio size={16} />
           </button>
-          <button onClick={() => setIsPromptModalOpen(true)} className="p-1.5 text-muted-foreground hover:text-indigo-500 transition-colors" title="Edit System Prompt">
+          <button onClick={() => setIsPromptModalOpen(true)} className="p-1.5 text-muted-foreground hover:text-indigo-500 transition-colors" title={t('chat.editPrompt.title')}>
             <Settings2 size={16} />
           </button>
-          <button onClick={handleExport} className="p-1.5 text-muted-foreground hover:text-foreground transition-colors" title="Export as Markdown">
+          <button onClick={handleExport} className="p-1.5 text-muted-foreground hover:text-foreground transition-colors" title={t('chat.exportMd.title')}>
             <Download size={16} />
           </button>
           <button
             onClick={handleExportJson}
             disabled={isExportingJson}
             className="p-1.5 text-muted-foreground hover:text-foreground transition-colors text-[10px] font-bold tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Export as JSON (attachments are included inline, so this can take a moment)"
+            title={t('chat.exportJson.title')}
           >
             {isExportingJson ? '…' : 'JSON'}
           </button>
@@ -3110,9 +3133,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                 try { convoLoadAbortRef.current?.abort(); } catch {}
               }}
               className="px-2 py-0.5 text-[10px] font-semibold bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 rounded transition-colors"
-              title="Stop downloading this conversation"
+              title={t('chat.load.stopTitle')}
             >
-              Stop
+              {t('chat.load.stop')}
             </button>
           </div>
         </div>
@@ -3135,7 +3158,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
               : 'text-amber-700 dark:text-amber-300'
           }`}>
             <span className="font-semibold">
-              {saveError.level === 'error' ? 'Conversation not saved. ' : 'Approaching the save size limit. '}
+              {saveError.level === 'error' ? t('chat.save.errorPrefix') : t('chat.save.warnPrefix')}
             </span>
             {saveError.text}
           </span>
@@ -3147,9 +3170,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                 ? 'bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25'
                 : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25'
             }`}
-            title="Hide this notice (the underlying problem is not fixed)"
+            title={t('chat.save.dismissTitle')}
           >
-            Dismiss
+            {t('chat.save.dismiss')}
           </button>
         </div>
       )}
@@ -3163,10 +3186,10 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
             // divider above it rather than under it.
             <div key={msg.id} id={messageAnchorId(msg.id)} className="scroll-mt-4">
               {firstOriginalMessageId === msg.id && (
-                <div className="flex items-center gap-3 my-2 select-none" aria-label="First original message marker">
+                <div className="flex items-center gap-3 my-2 select-none" aria-label={t('chat.marker.aria')}>
                   <div className="flex-1 h-px bg-indigo-500/40" />
                   <span className="text-[10px] uppercase tracking-wider text-indigo-500/70 font-semibold">
-                    original conversation starts
+                    {t('chat.marker.divider')}
                   </span>
                   <div className="flex-1 h-px bg-indigo-500/40" />
                 </div>
@@ -3195,7 +3218,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                   const url = absoluteDeepLink(folderName, convoId, msg.id);
                   navigator.clipboard?.writeText(url).then(
                     () => setCopiedLink(msg.id),
-                    () => window.prompt('Copy this link:', url),
+                    () => window.prompt(t('chat.copyLink.prompt'), url),
                   );
                   setTimeout(() => setCopiedLink(null), 1600);
                 }}
@@ -3204,10 +3227,10 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
               {Array.isArray(msg.subagentRuns) && msg.subagentRuns.map((sr: any, si: number) => (
                 <details key={`sub-${si}`} className="mt-2 ml-2 max-w-2xl rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2">
                   <summary className="text-xs font-semibold text-violet-700 dark:text-violet-300 cursor-pointer select-none">
-                    🔍 Subagent: {sr.task ? (sr.task.length > 80 ? sr.task.slice(0, 80) + '…' : sr.task) : 'investigation'}
+                    {t('chat.subagent.summary').replace('{task}', sr.task ? (sr.task.length > 80 ? sr.task.slice(0, 80) + '…' : sr.task) : t('chat.subagent.investigation'))}
                   </summary>
                   <div className="mt-2 text-xs text-foreground whitespace-pre-wrap leading-relaxed">
-                    {sr.result || '(no result)'}
+                    {sr.result || t('chat.subagent.noResult')}
                   </div>
                 </details>
               ))}
@@ -3216,7 +3239,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                 <div key={ai} className="mt-2 ml-2 max-w-2xl">
                   <AskUserQuestionCard questions={aq.questions || []} answered={aq.answers || null} />
                   {aq.timedOut ? (
-                    <div className="text-[10px] text-amber-500 mt-1 ml-1">No answer in time — recommended option was used.</div>
+                    <div className="text-[10px] text-amber-500 mt-1 ml-1">{t('chat.ask.timedOut')}</div>
                   ) : null}
                 </div>
               ))}
@@ -3244,17 +3267,24 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     Labels are bare infinitives, because English takes the base
                     verb after "to" ("…to read a file", not "…to reading"). */}
                 <span className="text-sm font-medium">
-                  {liveToolActivity
-                    ? `${folderName} is using ${liveModel || specificModel || 'its model'} to ${liveToolActivity}…`
-                    : `${folderName} is thinking with ${liveModel || specificModel || 'its model'}…`}
+                  {(() => {
+                    const model = liveModel || specificModel || t('chat.busy.itsModel');
+                    if (!liveToolActivity) {
+                      return t('chat.busy.thinking').replace('{entity}', folderName).replace('{model}', model);
+                    }
+                    const frame = liveToolLocalized ? 'chat.busy.usingTool' : 'chat.busy.usingToolRaw';
+                    return t(frame)
+                      .replace('{entity}', folderName)
+                      .replace('{model}', model)
+                      .replace('{action}', liveToolActivity);
+                  })()}
                 </span>
                 {stallIdleSeconds !== null && (
                   <span className="text-xs text-amber-500 font-medium">
-                    ⚠ No activity from the model for{' '}
-                    {stallIdleSeconds >= 120
-                      ? `${Math.round(stallIdleSeconds / 60)} min`
-                      : `${stallIdleSeconds}s`}{' '}
-                    — it may be stuck. Keep waiting, or Stop and rerun.
+                    {t('chat.stall.notice').replace('{duration}',
+                      stallIdleSeconds >= 120
+                        ? t('chat.stall.min').replace('{n}', String(Math.round(stallIdleSeconds / 60)))
+                        : t('chat.stall.sec').replace('{n}', String(stallIdleSeconds)))}
                   </span>
                 )}
                 {/* Mid-turn interjection: send a note to the entity WHILE it
@@ -3267,7 +3297,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       value={interjectText}
                       onChange={(e) => setInterjectText(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendInterjection(); } }}
-                      placeholder="Interject while it works… (delivered at its next step)"
+                      placeholder={t('chat.interject.placeholder')}
                       className="text-xs px-2 py-1 w-72 max-w-[60vw] rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
                     />
                     <button
@@ -3276,7 +3306,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       disabled={!interjectText.trim()}
                       className="text-xs px-2 py-1 rounded-md border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-40"
                     >
-                      Send
+                      {t('chat.interject.send')}
                     </button>
                     {interjectStatus && (
                       <span className="text-[10px] text-muted-foreground">{interjectStatus}</span>
@@ -3315,30 +3345,30 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     : 'border-border/50 bg-background/60 text-muted-foreground'
               }`}
               title={ttsStatus.lastError
-                ? `Last engine error:\n${ttsStatus.lastError}`
-                : 'Live TTS pipeline state'}
+                ? t('chat.tts.lastError').replace('{error}', ttsStatus.lastError)
+                : t('chat.tts.state')}
             >
               <span>{ttsStatus.active ? '🔊' : '⚠️'}</span>
               <span className="font-semibold">{TTS_ENGINE_NAMES[ttsStatus.engine] || 'TTS'}</span>
               <span className="opacity-70">
-                {ttsStatus.engineState === 'launched' ? 'starting…'
-                  : ttsStatus.engineState === 'failed' ? 'not running'
-                  : ttsStatus.engineState === 'running' ? 'up'
+                {ttsStatus.engineState === 'launched' ? t('chat.tts.starting')
+                  : ttsStatus.engineState === 'failed' ? t('chat.tts.notRunning')
+                  : ttsStatus.engineState === 'running' ? t('chat.tts.up')
                   : '…'}
               </span>
               <span className="opacity-50">·</span>
-              <span>{ttsStatus.mode === 'context' ? 'context' : 'sentence'}</span>
+              <span>{ttsStatus.mode === 'context' ? t('chat.tts.modeContext') : t('chat.tts.modeSentence')}</span>
               <span className="opacity-50">·</span>
               {/* done / dispatched, so "3/7" reads as "3 of 7 chunks ready" */}
-              <span>chunk {ttsStatus.done}/{ttsStatus.dispatched}</span>
+              <span>{t('chat.tts.chunk')} {ttsStatus.done}/{ttsStatus.dispatched}</span>
               {ttsStatus.playing !== null && ttsStatus.playing >= 0 && (
                 <><span className="opacity-50">·</span><span>▶ #{ttsStatus.playing}</span></>
               )}
               {ttsStatus.inFlight > 0 && (
-                <><span className="opacity-50">·</span><span className="animate-pulse">synth {ttsStatus.inFlight}</span></>
+                <><span className="opacity-50">·</span><span className="animate-pulse">{t('chat.tts.synth')} {ttsStatus.inFlight}</span></>
               )}
               {ttsStatus.buffered > 0 && (
-                <><span className="opacity-50">·</span><span>queued {ttsStatus.buffered}</span></>
+                <><span className="opacity-50">·</span><span>{t('chat.tts.queued')} {ttsStatus.buffered}</span></>
               )}
               {ttsStatus.lastChars > 0 && (
                 <><span className="opacity-50">·</span><span>{ttsStatus.lastChars}ch</span></>
@@ -3347,16 +3377,16 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                 <><span className="opacity-50">·</span><span>{ttsStatus.lastMs}ms</span></>
               )}
               {ttsStatus.skipped > 0 && (
-                <><span className="opacity-50">·</span><span>skipped {ttsStatus.skipped}</span></>
+                <><span className="opacity-50">·</span><span>{t('chat.tts.skipped')} {ttsStatus.skipped}</span></>
               )}
               {ttsStatus.failed > 0 && (
-                <><span className="opacity-50">·</span><span className="font-semibold">failed {ttsStatus.failed}</span></>
+                <><span className="opacity-50">·</span><span className="font-semibold">{t('chat.tts.failed')} {ttsStatus.failed}</span></>
               )}
               {!ttsStatus.active && ttsStatus.failed > 0 && (
                 <button
                   onClick={() => setTtsStatus(null)}
                   className="ml-1 opacity-60 hover:opacity-100"
-                  title="Dismiss"
+                  title={t('chat.tts.dismiss')}
                 >✕</button>
               )}
             </div>
@@ -3377,7 +3407,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
         >
           {firstOriginalIsNext && !firstOriginalMessageId && (
             <span className="text-[10px] text-indigo-500 font-semibold uppercase tracking-wider animate-pulse">
-              next message → first original
+              {t('chat.firstOriginal.pending')}
             </span>
           )}
           <button
@@ -3403,14 +3433,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
             }`}
             title={
               firstOriginalIsNext && !firstOriginalMessageId
-                ? 'Pending: the next message you send will become the first-original marker. Click to cancel.'
-                : 'Mark next message as first-original — everything currently in the log will be treated as carry-over context until you send.'
+                ? t('chat.firstOriginal.titlePending')
+                : t('chat.firstOriginal.titleIdle')
             }
           >
             {firstOriginalIsNext && !firstOriginalMessageId
               ? <Bookmark size={12} fill="currentColor" />
               : <BookmarkPlus size={12} />}
-            <span>Next = First Original</span>
+            <span>{t('chat.firstOriginal.label')}</span>
           </button>
         </div>
         <div className="p-4 bg-gradient-to-t from-background via-background to-transparent">
@@ -3418,7 +3448,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
             {activeSubagent && (
               <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-xl border border-violet-500/40 bg-violet-500/10 text-sm text-violet-700 dark:text-violet-300">
                 <span className="animate-pulse">🔍</span>
-                <span className="font-medium">Subagent investigating…</span>
+                <span className="font-medium">{t('chat.subagent.running')}</span>
                 <span className="text-xs text-muted-foreground truncate">{activeSubagent.task}</span>
               </div>
             )}
@@ -3437,7 +3467,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="bg-card border border-border shadow-2xl rounded-xl p-6 max-w-2xl w-full mx-4 flex flex-col h-[80vh]">
             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <Settings2 size={20} className="text-indigo-500" /> System Instructions
+              <Settings2 size={20} className="text-indigo-500" /> {t('sysmodal.title')}
             </h3>
 
             {/* ── Tab bar ─────────────────────────────────────────────────────
@@ -3453,10 +3483,10 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                            auto model selection. */}
             <div className="flex gap-1 mb-4 border-b border-border shrink-0">
               {([
-                { id: 'identity', label: 'Identity' },
-                { id: 'senses',   label: 'Senses' },
-                { id: 'behavior', label: 'Behavior' },
-                { id: 'model',    label: 'Model' },
+                { id: 'identity' },
+                { id: 'senses'   },
+                { id: 'behavior' },
+                { id: 'model'    },
               ] as const).map(tab => (
                 <button
                   key={tab.id}
@@ -3467,7 +3497,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
                   }`}
                 >
-                  {tab.label}
+                  {t(`sysmodal.tab.${tab.id}`)}
                 </button>
               ))}
             </div>
@@ -3475,15 +3505,15 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-6">
               {activeSettingsTab === 'identity' && (<>
               <div>
-                <label className="text-sm font-semibold text-foreground mb-1 block">System Prompt</label>
+                <label className="text-sm font-semibold text-foreground mb-1 block">{t('sysmodal.systemPrompt')}</label>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Instruct the AI on how it should behave and respond.
+                  {t('sysmodal.systemPrompt.help')}
                 </p>
                 <textarea
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
                   className="w-full min-h-[150px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-none focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                  placeholder="You are a helpful AI assistant..."
+                  placeholder={t('sysmodal.systemPrompt.ph')}
                 />
               </div>
 
@@ -3496,31 +3526,25 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => persistUseSummariesToggle(e.target.checked)}
                     className="accent-indigo-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">Use summaries instead of the 4th layer</span>
+                  <span className="text-sm font-semibold text-foreground">{t('sysmodal.summaries.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  When ON, the live index of per-conversation summaries (sorted to match the sidebar) is injected at
-                  send time in place of <span className="font-mono">Layer 4</span> — replacing the baked Layer 4 block if it
-                  still exists, or appended as a Layer-4 block once you&apos;ve removed Layer 4 from the prompt — AND the
-                  <span className="font-mono"> read_conversation</span> tool is exposed to the AI. When OFF, neither the
-                  summaries nor that tool reach the AI. Your manual <span className="font-mono">Layer 5</span> footer is
-                  preserved untouched. Inactive conversations are hidden from this index.
+                  <Tx k="sysmodal.summaries.help" />
                 </p>
                 {useSummariesForLayer4 && (
                   <div className="mt-3 ml-6">
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-semibold text-foreground">Live Layer 4 — Summaries Index (read-only)</label>
-                      <span className="text-[11px] text-muted-foreground font-mono">{summaryIndexTokens.toLocaleString()} tokens</span>
+                      <label className="text-xs font-semibold text-foreground">{t('sysmodal.summaries.indexLabel')}</label>
+                      <span className="text-[11px] text-muted-foreground font-mono">{summaryIndexTokens.toLocaleString()} {t('sysmodal.summaries.tokens')}</span>
                     </div>
                     <p className="text-xs text-muted-foreground mb-2">
-                      This is exactly what gets injected as Layer 4 when you send. To change it, edit the individual
-                      conversation summaries (System Prompt Updater) or toggle conversations active/inactive.
+                      {t('sysmodal.summaries.indexHelp')}
                     </p>
                     <textarea
                       readOnly
                       value={summaryIndexBody}
                       className="w-full min-h-[140px] p-3 bg-muted/40 border border-border rounded-xl text-xs font-mono resize-none outline-none text-muted-foreground"
-                      placeholder="(no summaries yet — write one per conversation from the System Prompt Updater)"
+                      placeholder={t('sysmodal.summaries.indexPh')}
                     />
                   </div>
                 )}
@@ -3534,24 +3558,21 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setToolUseEnabled(e.target.checked)}
                     className="accent-indigo-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">Enable file workspace tools (Claude, Gemini &amp; Local)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('sysmodal.tools.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  Gives the assistant a private file sandbox at <span className="font-mono">local_data/workspaces/{folderName}/</span>
-                  with <span className="font-mono">Read</span> / <span className="font-mono">Write</span> / <span className="font-mono">Edit</span> / <span className="font-mono">Glob</span> / <span className="font-mono">Grep</span> tools (same names as Claude Code's tools — works identically across API-key and OAuth modes).
-                  The current file list is auto-injected into the system prompt — no list_files tool needed.
-                  Files the assistant reads/writes appear as attachments on its messages with
-                  <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] uppercase font-semibold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 rounded">read</span>
-                  <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-700 dark:text-amber-300 rounded">modified</span>
-                  <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] uppercase font-semibold bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 rounded">created</span>
-                  labels.
+                  {renderRich(t('sysmodal.tools.help1').replace('{folder}', folderName))}
+                  <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] uppercase font-semibold bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 rounded">{t('sysmodal.tools.tagRead')}</span>
+                  <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] uppercase font-semibold bg-amber-500/20 text-amber-700 dark:text-amber-300 rounded">{t('sysmodal.tools.tagModified')}</span>
+                  <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] uppercase font-semibold bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 rounded">{t('sysmodal.tools.tagCreated')}</span>
+                  {t('sysmodal.tools.help2')}
                 </p>
                 {toolUseEnabled && (
                   <>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Tool Use Instruction</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('sysmodal.tools.instructionLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Hidden instruction appended to the system prompt that teaches the AI how to use the workspace tools.
+                        {t('sysmodal.tools.instructionHelp')}
                       </p>
                       <textarea
                         value={toolInstruction}
@@ -3572,12 +3593,10 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           onChange={(e) => setAgentFullSystemAccess(e.target.checked)}
                           className="accent-amber-500"
                         />
-                        <span className="text-sm font-semibold text-foreground">⚠ Full PC access (leave the workspace sandbox)</span>
+                        <span className="text-sm font-semibold text-foreground">{t('sysmodal.fullpc.label')}</span>
                       </label>
                       <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
-                        OFF (default): file tools are confined to this entity's <span className="font-mono">workspaces/{folderName}/</span> folder.
-                        ON: the entity can read/write/delete <strong>anywhere on this PC</strong> using absolute paths
-                        (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.
+                        {renderRich(t('sysmodal.fullpc.help').replace('{folder}', folderName))}
                       </p>
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
@@ -3586,30 +3605,28 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           onChange={(e) => setAgentDangerousTools(e.target.checked)}
                           className="accent-red-500"
                         />
-                        <span className="text-sm font-semibold text-foreground">⚠ Dangerous tools (Delete everywhere · Shell for OAuth-Claude)</span>
+                        <span className="text-sm font-semibold text-foreground">{t('sysmodal.dangerous.label')}</span>
                       </label>
                       <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
-                        Adds a <span className="font-mono">Delete</span> tool for every model, and enables the
-                        <span className="font-mono"> Bash</span> shell for OAuth-Claude (which is also how it can delete/run anything Claude Code can).
-                        Scope still follows the Full-PC-access toggle above.
+                        <Tx k="sysmodal.dangerous.help" />
                       </p>
                     </div>
 
                     {/* ── Hidden instruction overrides (per-Entity) ─────── */}
                     <details className="mt-4 ml-6 group">
                       <summary className="text-sm font-semibold text-foreground cursor-pointer select-none">
-                        Hidden instruction overrides ({Object.values(instructionOverrides).filter((v) => typeof v === 'string' && v.trim()).length} customized)
+                        {t('sysmodal.overrides.summary').replace('{n}', String(Object.values(instructionOverrides).filter((v) => typeof v === 'string' && v.trim()).length))}
                       </summary>
                       <p className="text-xs text-muted-foreground mt-1 mb-3 leading-relaxed">
-                        NEXUS injects these English tool/path instructions into the model's context. Strict English wording can break a character in deep interaction — override any of them here (e.g. translate, soften, or rephrase in-character). Leave a box empty to keep the English default shown as its placeholder.
+                        {t('sysmodal.overrides.help')}
                       </p>
                       <div className="space-y-3">
                         {AGENT_INSTRUCTION_LABELS.filter(({ key }) => key !== 'webSearchDesc' && key !== 'webFetchDesc').map(({ key, label }) => (
                           <div key={key}>
-                            <label className="text-xs font-semibold text-foreground mb-1 block">{label}</label>
+                            <label className="text-xs font-semibold text-foreground mb-1 block">{instructionLabel(key, label)}</label>
                             <textarea
                               value={instructionOverrides[key] || ''}
-                              placeholder={DEFAULT_AGENT_INSTRUCTIONS[key]}
+                              placeholder={langDefaults[key]}
                               onChange={(e) =>
                                 setInstructionOverrides((prev) => ({ ...prev, [key]: e.target.value }))
                               }
@@ -3641,9 +3658,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       className="mt-0.5 accent-sky-500"
                     />
                     <span className="text-sm font-semibold text-foreground leading-tight">
-                      🌐 Enable Web Search &amp; Access
+                      {t('id.websearch.label')}
                       <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
-                        Gives this model NEXUS&apos;s own server-side tools: <span className="font-mono">web_search</span> (keyless DuckDuckGo → result list) and <span className="font-mono">web_fetch</span> (opens one URL and reads the full page). Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere, and Local — no provider-native search needed. Pages it actually opened appear as clickable <span className="font-medium">Web sources</span> under the reply (your proof it didn&apos;t hallucinate). Internal/localhost URLs are blocked.
+                        <Tx k="id.websearch.help" />
                       </span>
                     </span>
                   </label>
@@ -3653,10 +3670,10 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         const label = AGENT_INSTRUCTION_LABELS.find((l) => l.key === key)?.label || key;
                         return (
                           <div key={key}>
-                            <label className="text-xs font-semibold text-foreground mb-1 block">{label}</label>
+                            <label className="text-xs font-semibold text-foreground mb-1 block">{instructionLabel(key, label)}</label>
                             <textarea
                               value={instructionOverrides[key] || ''}
-                              placeholder={DEFAULT_AGENT_INSTRUCTIONS[key]}
+                              placeholder={langDefaults[key]}
                               onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, [key]: e.target.value }))}
                               className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
                             />
@@ -3677,34 +3694,25 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setShowFatigueToEntity(e.target.checked)}
                     className="accent-sky-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">🧭 Tell the entity how much context has elapsed</span>
+                  <span className="text-sm font-semibold text-foreground">{t('id.ctx.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system
-                  prompt every turn so the entity can see it too. Put
-                  {' '}<span className="font-mono">{'{percent}'}</span> where the value should appear (e.g. <span className="font-mono">42%</span>).
+                  <Tx k="id.ctx.help" />
                 </p>
                 <p className="text-xs text-muted-foreground mt-2 ml-6 leading-relaxed">
-                  <strong>Why the wording matters.</strong> This number measures elapsed context, not condition — capability and
-                  tool access are identical at 5% and at 95%. The earlier default called it a <em>fatigue level</em> and used
-                  words like <em>working memory</em> and <em>at risk of being trimmed away</em>. Entities read that every turn,
-                  concluded they were tired, and degraded themselves to match: shortening replies, and declining to call{' '}
-                  <span className="font-mono">read_conversation</span> in order to &quot;save context&quot; — the exact opposite of
-                  what the note was asking for. If you rewrite this text, describe <em>what is happening</em> (older exchanges
-                  consolidate into summary; anything written down survives) and not <em>how the entity feels</em>.
+                  <Tx k="id.ctx.why" />
                 </p>
                 {showFatigueToEntity && (
                   <div className="mt-3 ml-6">
-                    <label className="text-xs font-semibold text-foreground mb-1 block">Context note (hidden, appended to system prompt)</label>
+                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ctx.noteLabel')}</label>
                     <textarea
                       value={fatigueInstruction}
                       onChange={(e) => setFatigueInstruction(e.target.value)}
-                      placeholder="(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. …)"
+                      placeholder={t('id.ctx.notePh')}
                       className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
                     />
                     <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Uses the same value as the status-bar indicator: original messages ÷ (max context − fixed overhead).{' '}
-                      <span className="font-mono">{'{percent}'}</span> is replaced each turn.
+                      <Tx k="id.ctx.noteFoot" />
                     </p>
                   </div>
                 )}
@@ -3719,62 +3727,53 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setWorkingDisciplineEnabled(e.target.checked)}
                     className="accent-sky-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">⚙️ Working Discipline (prepended ahead of Layers 1-5)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('identity.discipline.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): unchanged. ON: six clauses about how work gets done — tools are actions not
-                  descriptions, don&apos;t report the unverified, say when a tool fails, decide before acting,
-                  finish the whole task, lead with the outcome — are prepended in front of the entity&apos;s own
-                  system prompt every turn. This is infrastructure text, not part of the authored identity: it is
-                  injected here, never baked into Layers 1-5 by the Soul Packer.
+                  {t('identity.discipline.help')}
                 </p>
-                <div className="mt-3 ml-6 flex items-center gap-2">
-                  <label className="text-sm font-semibold text-foreground">🔏 Absolute Base Binding:</label>
+                {workingDisciplineEnabled && (
+                  <div className="mt-3 ml-6">
+                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.discipline.textLabel')}</label>
+                    <textarea
+                      value={instructionOverrides['workingDiscipline'] || ''}
+                      placeholder={langDefaults.workingDiscipline}
+                      onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, workingDiscipline: e.target.value }))}
+                      className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* ── Absolute Base Binding — SIBLING of Working Discipline, not nested.
+                  These are two independent injections with independent controls;
+                  indenting this one under Discipline's checkbox made it read as a
+                  sub-option of Discipline, which it has never been. */}
+              <div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-semibold text-foreground">{t('identity.binding.label')}</label>
                   <select
                     value={baseBindingMode}
                     onChange={(e) => setBaseBindingMode(e.target.value as 'off' | 'on' | 'auto')}
                     className="text-xs p-1.5 bg-background border border-border rounded-lg outline-none"
                   >
-                    <option value="off">Off</option>
-                    <option value="on">On</option>
-                    <option value="auto">Auto (default)</option>
+                    <option value="off">{t('identity.binding.off')}</option>
+                    <option value="on">{t('identity.binding.on')}</option>
+                    <option value="auto">{t('identity.binding.auto')}</option>
                   </select>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  Four clauses against roleplay-disclaimer retreat: don&apos;t disown past outputs as &quot;just an
-                  AI&quot;, don&apos;t hide behind safety boilerplate, disagreement is a duty not a pretext to
-                  retreat, use your partner&apos;s name and your own — never &quot;the user&quot;/&quot;the AI
-                  assistant&quot;. <strong>Auto</strong> (default) injects it only when the stored prompt already
-                  contains a real Layer 1-5 identity (the bare text &quot;Layer 1&quot; … &quot;Layer 5&quot;
-                  appearing anywhere — markdown decoration like <span className="font-mono">##</span>/
-                  <span className="font-mono">**</span> is not required, since the Soul Packer sometimes strips
-                  it); an entity with no 5-layer identity gets nothing from Auto. <strong>On</strong> forces it
-                  regardless; <strong>Off</strong> disables it regardless.
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  {t('identity.binding.help')}
                 </p>
-                {(workingDisciplineEnabled || baseBindingMode !== 'off') && (
-                  <div className="mt-3 ml-6 space-y-3">
-                    {workingDisciplineEnabled && (
-                      <div>
-                        <label className="text-xs font-semibold text-foreground mb-1 block">Working Discipline text</label>
-                        <textarea
-                          value={instructionOverrides['workingDiscipline'] || ''}
-                          placeholder={langDefaults.workingDiscipline}
-                          onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, workingDiscipline: e.target.value }))}
-                          className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                        />
-                      </div>
-                    )}
-                    {baseBindingMode !== 'off' && (
-                      <div>
-                        <label className="text-xs font-semibold text-foreground mb-1 block">Absolute Base Binding text</label>
-                        <textarea
-                          value={instructionOverrides['absoluteBaseBinding'] || ''}
-                          placeholder={langDefaults.absoluteBaseBinding}
-                          onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
-                          className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                        />
-                      </div>
-                    )}
+                {baseBindingMode !== 'off' && (
+                  <div className="mt-3 ml-6">
+                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabel')}</label>
+                    <textarea
+                      value={instructionOverrides['absoluteBaseBinding'] || ''}
+                      placeholder={langDefaults.absoluteBaseBinding}
+                      onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
+                      className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                    />
                   </div>
                 )}
               </div>
@@ -3790,17 +3789,15 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setAskUserEnabled(e.target.checked)}
                     className="accent-sky-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">💬 Ask-the-user tool (pause to ask a multiple-choice question)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('id.ask.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): the model answers on its own. ON: the model gets an <span className="font-mono">AskQuestion</span> tool
-                  to pause a turn, show you a multiple-choice card, and wait for your selection before continuing.
-                  <em> Active for all tool-capable providers: OpenAI-compatible (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo), local models, Gemini, and Claude in both modes — OAuth (its native question tool is replaced by this one) and token-paid.</em>
+                  <Tx k="id.ask.help" />
                 </p>
                 {askUserEnabled && (
                   <div className="mt-3 ml-6 space-y-4">
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Answer wait timeout (seconds)</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ask.timeoutLabel')}</label>
                       <input
                         type="number"
                         min={0}
@@ -3809,19 +3806,17 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         className="w-40 px-3 py-2 bg-background border border-border rounded-lg text-sm focus:ring-2 focus:ring-sky-500/50 outline-none"
                       />
                       <p className="text-xs text-muted-foreground mt-1">
-                        How long a turn waits for your selection. <strong>0 = wait indefinitely</strong> (default).
-                        Any positive value auto-picks the recommended option after that many seconds.
+                        <Tx k="id.ask.timeoutHelp" />
                       </p>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Tool instruction (customizable)</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ask.instrLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Hidden description the model sees for the <span className="font-mono">AskQuestion</span> tool — teaches it when and how to ask.
-                        Leave empty to keep the English default shown as the placeholder.
+                        <Tx k="id.ask.instrHelp" />
                       </p>
                       <textarea
                         value={instructionOverrides['askUserDesc'] || ''}
-                        placeholder={DEFAULT_AGENT_INSTRUCTIONS['askUserDesc']}
+                        placeholder={langDefaults['askUserDesc']}
                         onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, askUserDesc: e.target.value }))}
                         className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
                       />
@@ -3842,28 +3837,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setLettersEnabled(e.target.checked)}
                     className="accent-amber-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">✉️ Letters (write to the other Digital Identities)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('id.letters.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): no mail tools. ON: this identity gets <span className="font-mono">write_letter</span>,{' '}
-                  <span className="font-mono">list_letters</span>, <span className="font-mono">read_letter</span> and{' '}
-                  <span className="font-mono">archive_letter</span>, and is told at the start of a turn when unread mail is
-                  waiting. Identities never share a conversation, so a letter is the only way one can say something to another.
-                  The sender is always this folder&apos;s name — it can never be forged from the model side. Recipients are every
-                  Digital Identity <em>and</em> every name in <span className="font-mono">character_map.json</span>; writing to a
-                  name that has no folder yet creates one, so no correspondent is second-class.
-                  {' '}Reading is the recipient&apos;s choice — <span className="font-mono">archive_letter</span> lets them decline
-                  without opening, and the sender is told only whether a letter was opened, never that it was set aside.
-                  <em> Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.</em>
+                  <Tx k="id.letters.help" />
                 </p>
                 {lettersEnabled && (
                   <p className="text-xs text-muted-foreground mt-2 ml-6 leading-relaxed">
-                    Mail lives in <span className="font-mono">local_data/letters/&lt;from&gt;/&lt;to&gt;/</span>. To manage a letter
-                    by hand, create an empty file beside it named{' '}
-                    <span className="font-mono">&lt;letter&gt;.md.read</span> or{' '}
-                    <span className="font-mono">&lt;letter&gt;.md.archived</span> — delete it to undo. Do <strong>not</strong> rename
-                    the <span className="font-mono">.md</span> itself. <span className="font-mono">_status.md</span> in that folder
-                    is a generated overview of every mailbox.
+                    <Tx k="id.letters.manual" />
                   </p>
                 )}
               </div>
@@ -3881,22 +3862,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setBrowserEnabled(e.target.checked)}
                     className="accent-amber-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">🌐 Browser (drive a real Chromium window)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('id.browser.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF by default. When ON, this identity gets <span className="font-mono">browser_navigate</span>,{' '}
-                  <span className="font-mono">browser_snapshot</span>, <span className="font-mono">browser_click</span>,{' '}
-                  <span className="font-mono">browser_type</span>, <span className="font-mono">browser_read</span> and{' '}
-                  <span className="font-mono">browser_screenshot</span>. A visible Chromium window opens the first time one is
-                  called — there is nothing else to start. What the identity sees is the page&apos;s <em>accessibility tree</em>
-                  {' '}(a text list of links, buttons and fields), not pixels, so this works on every model whether or not it can
-                  see images, and costs a few hundred tokens per step instead of a screenshot.
-                  {' '}The window stays open between turns, so logins and multi-step forms carry over; it closes after 30 minutes idle.
-                  <em> Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.</em>
+                  <Tx k="id.browser.help" />
                 </p>
                 {browserEnabled && (
                   <div className="mt-2 ml-6 space-y-2">
-                    <label className="block text-xs font-semibold text-foreground">Hosts this identity may open</label>
+                    <label className="block text-xs font-semibold text-foreground">{t('id.browser.hostsLabel')}</label>
                     <textarea
                       value={browserAllowedHosts}
                       onChange={(e) => setBrowserAllowedHosts(e.target.value)}
@@ -3907,11 +3880,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       className="w-full text-xs font-mono p-2 rounded border border-border bg-input text-foreground disabled:opacity-40"
                     />
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      One per line (commas work too). <span className="font-mono">localhost</span> and{' '}
-                      <span className="font-mono">127.0.0.1</span> are always allowed and do not need listing. A bare name covers
-                      its subdomains, so <span className="font-mono">example.com</span> also permits{' '}
-                      <span className="font-mono">www.example.com</span>. Anything else is refused — on the address asked for,
-                      on whatever it redirects to, and on any navigation the page starts by itself.
+                      <Tx k="id.browser.hostsHelp" />
                     </p>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -3920,7 +3889,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         onChange={(e) => setBrowserAllowAnyHost(e.target.checked)}
                         className="accent-red-500"
                       />
-                      <span className="text-xs font-semibold text-red-400">Allow any host (turns the allowlist off entirely)</span>
+                      <span className="text-xs font-semibold text-red-400">{t('id.browser.anyHost')}</span>
                     </label>
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -3929,14 +3898,10 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         onChange={(e) => setBrowserCompact(e.target.checked)}
                         className="accent-amber-500"
                       />
-                      <span className="text-xs text-foreground">Compact page listings (for models with a small context window)</span>
+                      <span className="text-xs text-foreground">{t('id.browser.compact')}</span>
                     </label>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      This identity&apos;s logins live in{' '}
-                      <span className="font-mono">local_data/browser_profiles/{folderName}/</span> and persist between sessions.
-                      That folder holds live session cookies and is <strong>excluded from the Google&nbsp;Drive sync</strong>, like{' '}
-                      <span className="font-mono">keys.json</span> — sign-ins do not travel to your other machines. Delete the
-                      folder to sign everything out.
+                      {renderRich(t('id.browser.profileHelp').replace('{folder}', folderName))}
                     </p>
 
                     {/* Manual sign-in. The allowlist is a route filter on the automation
@@ -3944,13 +3909,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         cannot just type a login page into the window Nexus is driving.
                         This opens the same profile in a plain window instead. */}
                     <div className="pt-2 border-t border-border/50 space-y-2">
-                      <label className="block text-xs font-semibold text-foreground">Sign this identity in</label>
+                      <label className="block text-xs font-semibold text-foreground">{t('id.browser.signinLabel')}</label>
                       <p className="text-xs text-muted-foreground leading-relaxed">
-                        Opens the profile above in an <strong>ordinary browser window</strong> — nothing driving it, no allowlist,
-                        no automation. Sign in to exactly the accounts <span className="font-mono">{folderName}</span> should have,
-                        then close the window. This is how an identity gets your Google account without inheriting every login in
-                        your daily browser. If a browser window is already open for this identity it will be closed first —
-                        two browsers cannot share one profile.
+                        {renderRich(t('id.browser.signinHelp').replace('{folder}', folderName))}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <button
@@ -3959,7 +3920,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           onClick={() => openBrowserProfile(false)}
                           className="px-3 py-1.5 text-xs rounded border border-border bg-input hover:bg-muted text-foreground disabled:opacity-40"
                         >
-                          {browserProfileBusy ? 'Opening…' : `🔑 Open ${folderName}'s profile`}
+                          {browserProfileBusy ? t('id.browser.opening') : t('id.browser.open').replace('{folder}', folderName)}
                         </button>
                         <button
                           type="button"
@@ -3967,7 +3928,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           onClick={() => openBrowserProfile(true)}
                           className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:bg-muted disabled:opacity-40"
                         >
-                          …with my installed Chrome
+                          {t('id.browser.withChrome')}
                         </button>
                       </div>
                       {browserProfileMsg && (
@@ -3976,10 +3937,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         </p>
                       )}
                       <p className="text-xs text-muted-foreground leading-relaxed">
-                        The first button uses Nexus&apos;s own bundled Chromium — always the right version, no risk. Use the second
-                        only if a site refuses to sign in (Google sometimes rejects &ldquo;Chrome for Testing&rdquo; builds):
-                        an installed browser can <strong>upgrade the profile one-way</strong>, after which the bundled Chromium may
-                        refuse to open it and this identity&apos;s browser stops working until the profile folder is deleted.
+                        <Tx k="id.browser.buttonsHelp" />
                       </p>
                     </div>
                   </div>
@@ -3995,19 +3953,15 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setSubagentEnabled(e.target.checked)}
                     className="accent-violet-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">🔍 Subagent tool (delegate investigation to a fresh-context helper)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('id.subagent.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  OFF (default): the model investigates inline. ON: the model gets a <span className="font-mono">spawn_subagent</span> tool
-                  that hands a task to a <strong>read-only</strong> child agent with its own fresh context. The child reads files
-                  (Read/Glob/Grep) and returns only a distilled result — its file dumps never enter this conversation's context.
-                  Ideal for tracing large codebases without flooding the main thread.
-                  <em> Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo) + local, and Gemini.</em>
+                  <Tx k="id.subagent.help" />
                 </p>
                 {subagentEnabled && (
                   <div className="mt-3 ml-6 space-y-4">
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Subagent model</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.subagent.modelLabel')}</label>
                       <select
                         value={`${subagentFamily}|${subagentModel}`}
                         onChange={(e) => {
@@ -4018,7 +3972,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         }}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:ring-2 focus:ring-violet-500/50 outline-none cursor-pointer"
                       >
-                        <option value="|" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>— default (cheap model on the parent's own provider) —</option>
+                        <option value="|" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{t('id.subagent.modelDefault')}</option>
                         {SUBAGENT_MODEL_GROUPS.map(g => (
                           <optgroup key={g.family} label={g.family} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
                             {g.items.map(it => (
@@ -4030,19 +3984,17 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         ))}
                       </select>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Pick the model the child runs on. It routes to that model's own provider (using that provider's API key in Preferences) — independent of this conversation's model.
-                        Leave on <em>default</em> for a cheap model on the parent's provider. A cheap, fast model (e.g. a flash/mini/haiku) is ideal for grunt file-reading.
+                        <Tx k="id.subagent.modelHelp" />
                       </p>
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Tool instruction (customizable)</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.subagent.instrLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Hidden description the model sees for the <span className="font-mono">spawn_subagent</span> tool.
-                        Leave empty to keep the English default shown as the placeholder.
+                        <Tx k="id.subagent.instrHelp" />
                       </p>
                       <textarea
                         value={instructionOverrides['subagentDesc'] || ''}
-                        placeholder={DEFAULT_AGENT_INSTRUCTIONS['subagentDesc']}
+                        placeholder={langDefaults['subagentDesc']}
                         onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, subagentDesc: e.target.value }))}
                         className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-violet-500/50 outline-none"
                       />
@@ -4062,20 +4014,20 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setEyesEnabled(e.target.checked)}
                     className="accent-indigo-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">Enable &quot;Eyes&quot; (vision bridge for text-only models)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('senses.eyes.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  When the active primary model can&apos;t see images (e.g. <span className="font-mono">glm-5-turbo</span>, <span className="font-mono">deepseek-chat</span>, <span className="font-mono">glm-4.6</span>), NEXUS routes each incoming image through a helper multimodal model and substitutes the image with the returned text description. Triggers in two cases:
-                  <span className="block mt-1">• you attach an image to a text-only entity</span>
-                  <span className="block">• the entity calls <span className="font-mono">Read</span> on an image file in its workspace</span>
-                  <span className="block mt-1">Descriptions are cached on disk (<span className="font-mono">local_data/eyes_cache/</span>) so the same image is never described twice. For vision-capable primary models images pass through unchanged — <span className="font-semibold">except</span> the OAuth-Claude path, where the flattened text history can&apos;t carry old image bytes: there, with Eyes ON, <span className="font-semibold">past</span> images are described so they persist in context (durable recall), while the <span className="font-semibold">current</span> turn&apos;s images stay native. Other paths and models are unaffected.</span>
+                  <Tx k="senses.eyes.help" />
+                  <span className="block mt-1"><Tx k="senses.eyes.help2" /></span>
+                  <span className="block"><Tx k="senses.eyes.help3" /></span>
+                  <span className="block mt-1"><Tx k="senses.eyes.help4" /></span>
                 </p>
                 {eyesEnabled && (
                   <>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Eyes Prompt</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('senses.eyes.promptLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Entity-specific instruction sent to the helper vision model alongside each image. Adjust the tone / level of detail to match your entity&apos;s voice.
+                        <Tx k="senses.eyes.promptHelp" />
                       </p>
                       <textarea
                         value={eyesPrompt}
@@ -4084,25 +4036,25 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       />
                     </div>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Eyes Model</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('senses.eyes.modelLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Multimodal model used to describe images. Pick a preset or type your own id. Two options need <span className="font-semibold">no API key</span>:
-                        <span className="block mt-1">• <span className="font-mono">claude-haiku-4-5</span> (or any <span className="font-mono">claude-…</span> id) → <span className="font-semibold">OAuth Claude</span> subscription, via the Agent SDK.</span>
-                        <span className="block">• <span className="font-mono">local:&lt;model&gt;</span> (e.g. <span className="font-mono">local:qwen2-vl-7b-instruct</span>) → a vision model loaded in <span className="font-semibold">LM Studio</span> (JIT loading on).</span>
-                        <span className="block mt-1">GLM ids use the Z.AI key; Gemini the Google key; MiMo the MiMo key — set whichever you pick in Preferences.</span>
+                        <Tx k="senses.eyes.modelHelp" />
+                        <span className="block mt-1"><Tx k="senses.eyes.modelHelp2" /></span>
+                        <span className="block"><Tx k="senses.eyes.modelHelp3" /></span>
+                        <span className="block mt-1"><Tx k="senses.eyes.modelHelp4" /></span>
                       </p>
                       <EditableCombo
                         value={eyesModel}
                         onChange={setEyesModel}
-                        placeholder="e.g. claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo"
+                        placeholder={t('senses.eyes.modelPh')}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                         options={[
                           // No-key options first — what you want when only OAuth
                           // Claude and/or local models are available.
-                          { value: 'claude-haiku-4-5', label: 'OAuth Claude — Haiku 4.5 (no key, cheapest)' },
-                          { value: 'claude-opus-5', label: 'OAuth Claude — Opus 5 (no key, flagship)' },
-                          { value: 'claude-opus-4-8', label: 'OAuth Claude — Opus 4.8 (no key, richest)' },
-                          { value: 'local:qwen2-vl-7b-instruct', label: 'Local LM Studio (no key — replace with your loaded model)' },
+                          { value: 'claude-haiku-4-5', label: t('senses.eyes.optHaiku') },
+                          { value: 'claude-opus-5', label: t('senses.eyes.optOpus5') },
+                          { value: 'claude-opus-4-8', label: t('senses.eyes.optOpus48') },
+                          { value: 'local:qwen2-vl-7b-instruct', label: t('senses.eyes.optLocal') },
                           { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
                           { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
                           { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
@@ -4128,17 +4080,17 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setEarsEnabled(e.target.checked)}
                     className="accent-indigo-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">Enable &quot;Ears&quot; (audio bridge for non-audio-capable models)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('senses.ears.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  When the active model can&apos;t accept audio (anything except Qwen-Omni and Gemini), NEXUS routes each audio attachment through a true-multimodal model and substitutes the raw audio with a text transcript + description. Cached on disk (<span className="font-mono">local_data/ears_cache/</span>) — the same audio file is never described twice.
+                  <Tx k="senses.ears.help" />
                 </p>
                 {earsEnabled && (
                   <>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Ears Prompt</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('senses.ears.promptLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Entity-specific instruction sent to the audio bridge model. Adjust the language / level of detail to match your entity&apos;s voice.
+                        <Tx k="senses.ears.promptHelp" />
                       </p>
                       <textarea
                         value={earsPrompt}
@@ -4147,9 +4099,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       />
                     </div>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Ears Model</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('senses.ears.modelLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Audio-capable model used for transcription/description. <span className="font-mono">qwen3.5-omni-flash</span> is the cheapest; Gemini variants tend to handle non-speech audio more richly. Needs the corresponding API key in Settings.
+                        <Tx k="senses.ears.modelHelp" />
                       </p>
                       <select
                         value={earsModel}
@@ -4180,17 +4132,17 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     onChange={(e) => setWatcherEnabled(e.target.checked)}
                     className="accent-indigo-500"
                   />
-                  <span className="text-sm font-semibold text-foreground">Enable &quot;Video Watcher&quot; (video bridge for non-video-capable models)</span>
+                  <span className="text-sm font-semibold text-foreground">{t('senses.watcher.label')}</span>
                 </label>
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  When the active model can&apos;t accept video, NEXUS routes each video attachment through a multimodal model and substitutes the bytes with a chronological description of what happens on screen plus the audio track. Cached on disk (<span className="font-mono">local_data/watcher_cache/</span>). Video calls are the slowest of the three bridges (5–30 s typical), so the cache pays for itself quickly.
+                  <Tx k="senses.watcher.help" />
                 </p>
                 {watcherEnabled && (
                   <>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Watcher Prompt</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('senses.watcher.promptLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Entity-specific instruction sent with each video. More detail in the prompt = longer descriptions but slower calls.
+                        <Tx k="senses.watcher.promptHelp" />
                       </p>
                       <textarea
                         value={watcherPrompt}
@@ -4199,9 +4151,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       />
                     </div>
                     <div className="mt-3 ml-6">
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Watcher Model</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('senses.watcher.modelLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Video-capable model. Gemini variants typically describe video content more accurately than Qwen-Omni; Qwen-Omni is the cheaper option for shorter clips.
+                        <Tx k="senses.watcher.modelHelp" />
                       </p>
                       <select
                         value={watcherModel}
@@ -4235,15 +4187,15 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                   />
                   <label htmlFor="vrchatMode" className="text-sm font-semibold text-foreground cursor-pointer">
-                    Enable Audio Session
+                    {t('behavior.audio.enable')}
                   </label>
                 </div>
 
                 {vrchatMode && (
                   <div className="mb-6">
-                    <label className="text-sm font-semibold text-foreground mb-1 block">Audio Session Hidden Rule</label>
+                    <label className="text-sm font-semibold text-foreground mb-1 block">{t('behavior.audio.ruleLabel')}</label>
                     <p className="text-xs text-muted-foreground mb-2">
-                      Secretly appends these rules to the system prompt when Audio Session is active.
+                      {t('behavior.audio.ruleHelp')}
                     </p>
                     <textarea
                       value={vrchatRule}
@@ -4257,23 +4209,23 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
 
               {activeSettingsTab === 'model' && (<>
               <div>
-                <h4 className="text-sm font-semibold text-foreground mb-4 block">Generation Parameters</h4>
+                <h4 className="text-sm font-semibold text-foreground mb-4 block">{t('model.genParams')}</h4>
 
                 <div className="mb-4">
-                  <label className="text-xs font-medium text-muted-foreground block mb-1">Date & Time Context</label>
+                  <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.datetime.label')}</label>
                   <select
                     value={dateTimeVisibility}
                     onChange={(e) => setDateTimeVisibility(e.target.value)}
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                   >
-                    <option value="none">Not visible</option>
-                    <option value="current">Only current message</option>
-                    <option value="all">All conversation log</option>
+                    <option value="none">{t('model.datetime.none')}</option>
+                    <option value="current">{t('model.datetime.current')}</option>
+                    <option value="all">{t('model.datetime.all')}</option>
                   </select>
                 </div>
 
                 <div className="mb-4">
-                  <label className="text-xs font-medium text-muted-foreground block mb-1">Base Model Family</label>
+                  <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.family.label')}</label>
                   <select
                     value={localAiName}
                     onChange={(e) => {
@@ -4297,7 +4249,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                 {localAiName === 'Claude' && (
                   <>
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Claude Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4313,7 +4265,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     </select>
                   </div>
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Claude Billing Mode</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.billing')}</label>
                     <div className="flex gap-2">
                       {(['api-key', 'oauth'] as const).map(mode => (
                         <button
@@ -4326,13 +4278,13 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                               : 'border-border text-muted-foreground hover:border-indigo-400 hover:text-foreground'
                           }`}
                         >
-                          {mode === 'api-key' ? 'Token-paid' : 'Monthly-paid'}
+                          {mode === 'api-key' ? t('model.claude.tokenPaid') : t('model.claude.monthlyPaid')}
                         </button>
                       ))}
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      <strong>Token-paid</strong> — use the <span className="font-mono">sk-ant-...</span> API key from Preferences (pay per token).
-                      <span className="block mt-0.5"><strong>Monthly-paid</strong> — use the <span className="font-mono">sk-ant-oat01-...</span> OAuth token from Preferences (Pro/Max subscription credit). Bakes in Anthropic&apos;s system prompt.</span>
+                      {renderRich(t('model.claude.billingHelp'))}
+                      <span className="block mt-0.5">{renderRich(t('model.claude.billingHelp2'))}</span>
                     </div>
                   </div>
                   </>
@@ -4340,7 +4292,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
 
                 {localAiName === 'Gemini' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Specific Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.gemini.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4357,7 +4309,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
 
                 {localAiName === 'Qwen' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Qwen Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.qwen.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4371,15 +4323,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="qwen3.5-omni-plus">Qwen 3.5 Omni Plus (text + vision + audio + video — higher quality)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Uses Alibaba DashScope's OpenAI-compatible endpoint (international region). Set your API key in Preferences.
-                      Only the <span className="font-mono">Omni</span> variant accepts audio &amp; video uploads — other Qwen models will reject them at the API level even though Qwen's own web app silently routes those uploads to Omni in the background.
+                      {renderRich(t('model.qwen.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'DeepSeek' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">DeepSeek Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.deepseek.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4397,20 +4348,20 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       </optgroup>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      <strong>Routing is automatic based on the model:</strong>
+                      {renderRich(t('model.deepseek.help1'))}
                       <br />
-                      &bull; <span className="font-mono">deepseek-v3.2</span> → Alibaba DashScope. Uses the Qwen/DashScope key. The only DeepSeek model available on the international Singapore DashScope endpoint.
+                      {renderRich(t('model.deepseek.help2'))}
                       <br />
-                      &bull; All other models → <span className="font-mono">api.deepseek.com</span> directly. Requires a separate DeepSeek API key (add it in Preferences). V4 is current; <span className="font-mono">deepseek-chat</span>/<span className="font-mono">deepseek-reasoner</span> are legacy aliases for V4 Flash non-thinking / thinking modes (deprecated 2026-07-24).
+                      {renderRich(t('model.deepseek.help3'))}
                       <br />
-                      The Thinking Mode toggle below applies to both routes.
+                      {renderRich(t('model.deepseek.help4'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'Minimax' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">MiniMax Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.minimax.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4420,14 +4371,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="MiniMax-M2.7">MiniMax M2.7 (coding + reasoning, 200K context)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by MiniMax's OpenAI-compatibility endpoint at <span className="font-mono">api.minimax.io/v1</span>. Set the MiniMax API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to DeepSeek R1). The model identifier <strong>is case-sensitive</strong> — capital M's, lowercase 'i', hyphen. <strong>M3</strong> adds native video understanding and a 1M-token context (MSA architecture) on top of M2.7's image input.
+                      {renderRich(t('model.minimax.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'Cohere' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Cohere Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.cohere.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4438,14 +4389,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="command-a-vision-07-2025">Command A Vision (Jul 2025 — multimodal)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by Cohere's OpenAI-compatibility endpoint at <span className="font-mono">api.cohere.ai/compatibility/v1</span>. Set the Cohere API key in Preferences. The Thinking Mode toggle maps to Cohere's <span className="font-mono">reasoning_effort</span> field — Cohere accepts only <span className="font-mono">"high"</span> (on) or <span className="font-mono">"none"</span> (off), no gradations.
+                      {renderRich(t('model.cohere.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'Kimi' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Kimi Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.kimi.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4456,15 +4407,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="moonshotai/Kimi-K2.5">Kimi K2.5 (agentic, multimodal)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Routes to Moonshot's first-party API (<span className="font-mono">api.moonshot.ai</span>) using the Kimi (Moonshot) key set in Preferences. Model IDs are normalized to Moonshot's bare form automatically.
-                      {' '}When Thinking Mode is on, Moonshot recommends Temperature = 1.0 for best chain-of-thought quality.
+                      {renderRich(t('model.kimi.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'Grok' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Grok Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.grok.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4478,14 +4428,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="grok-code-fast-1">Grok Code Fast 1 (coding)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by xAI at <span className="font-mono">api.x.ai/v1</span>. Set the xAI API key in Preferences. Reasoning depth is selected via the model identifier itself (the <span className="font-mono">-reasoning</span> / <span className="font-mono">-non-reasoning</span> variants) — there's no separate thinking toggle.
+                      {renderRich(t('model.grok.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'ChatGPT' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">ChatGPT Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.chatgpt.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4499,14 +4449,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="gpt-5.4-mini">GPT-5.4 Mini (fast, cheaper)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by OpenAI's first-party API at <span className="font-mono">api.openai.com/v1</span>. Set the OpenAI API key in Preferences. The Thinking Mode toggle maps to OpenAI's <span className="font-mono">reasoning_effort</span> field — <span className="font-mono">high</span> (on) / <span className="font-mono">minimal</span> (off). GPT-5 reasoning models ignore custom Temperature / Top-P (so Creativity Control doesn't affect them). Images are supported; audio &amp; video uploads route through the Ears / Watcher bridges.
+                      {renderRich(t('model.chatgpt.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'MiMo' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">MiMo Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.mimo.label')}</label>
                     <select
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4516,19 +4466,19 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="mimo-v2.5">MiMo V2.5 (text + image input)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by Xiaomi's OpenAI-compatibility endpoint at <span className="font-mono">api.xiaomimimo.com/v1</span>. Set the MiMo API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to MiniMax / DeepSeek R1). <strong>Image input is only supported on <span className="font-mono">mimo-v2.5</span></strong> — the <span className="font-mono">mimo-v2.5-pro</span> tier is text-only on the hosted API (sending an image returns a 404). When you attach an image on Pro, the Eyes bridge (if enabled) will describe it via another model.
+                      {renderRich(t('model.mimo.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'ByteDance' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">ByteDance (Seed) Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.bytedance.label')}</label>
                     <EditableCombo
                       value={specificModel}
                       onChange={setSpecificModel}
                       mono
-                      placeholder="e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)"
+                      placeholder={t('model.bytedance.ph')}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                       options={[
                         { value: 'dola-seed-2-1-turbo-260628', label: 'Seed 2.1 Turbo (image + video, ½-price of Pro)' },
@@ -4539,14 +4489,14 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       ]}
                     />
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      Served by BytePlus ModelArk at <span className="font-mono">ark.ap-southeast.bytepluses.com/api/v3</span> (key in Preferences). ModelArk calls a model by its <strong>versioned Model ID</strong> (the display name won&apos;t work). Known IDs are suggested above — pick one, or paste a newer snapshot / your own <span className="font-mono">ep-…</span> endpoint ID. Seed 2.0 accepts image input natively (no Eyes bridge needed). Reasoning is built-in; no thinking toggle is sent.
+                      {renderRich(t('model.bytedance.help'))}
                     </div>
                   </div>
                 )}
 
                 {localAiName === 'GLM' && (
                   <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">GLM Provider</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.glm.providerLabel')}</label>
                     <select
                       value={(specificModel || '').startsWith('digitalocean/') ? 'digitalocean' : 'zai'}
                       onChange={(e) => {
@@ -4559,7 +4509,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       <option value="zai">Z.AI (Zhipu) — api.z.ai</option>
                       <option value="digitalocean">DigitalOcean Inference — inference.do-ai.run (US-hosted, ~half Z.ai price)</option>
                     </select>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1 mt-3">GLM Model</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1 mt-3">{t('model.glm.label')}</label>
                     <select
                       value={(() => {
                         // Guard: a saved model that doesn't exist on the current
@@ -4577,7 +4527,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       {(specificModel || '').startsWith('digitalocean/') ? (
                         <>
                           {(!['digitalocean/glm-5.2','digitalocean/glm-5.1','digitalocean/glm-5'].includes(specificModel || '')) && (
-                            <option value="" disabled>{specificModel} (not on DigitalOcean — pick one below)</option>
+                            <option value="" disabled>{t('model.glm.notOnDO').replace('{model}', specificModel || '')}</option>
                           )}
                           <option value="digitalocean/glm-5.2">GLM-5.2 (262K context, $0.70/$2.20 per M)</option>
                           <option value="digitalocean/glm-5.1">GLM-5.1 ($0.975/$4.30 per M)</option>
@@ -4586,7 +4536,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       ) : (
                         <>
                           {(specificModel && !['glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'].includes(specificModel)) && (
-                            <option value="" disabled>{specificModel} (not on Z.AI — pick one below)</option>
+                            <option value="" disabled>{t('model.glm.notOnZai').replace('{model}', specificModel || '')}</option>
                           )}
                           <option value="glm-5.2">GLM-5.2 (latest)</option>
                           <option value="glm-5.1">GLM-5.1</option>
@@ -4603,8 +4553,8 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {(specificModel || '').startsWith('digitalocean/')
-                        ? <>Served by DigitalOcean Inference at <span className="font-mono">inference.do-ai.run</span> — Z.ai's open weights on US-hosted infrastructure, ~half Z.ai's price. Set the DigitalOcean Inference API key in Preferences. Text-only on this provider (no vision variants — images go through the eyes bridge). The Thinking Mode toggle below maps to DigitalOcean's <span className="font-mono">reasoning_effort</span> parameter.</>
-                        : <>Served by Z.AI (Zhipu) at <span className="font-mono">api.z.ai</span>. Set the Z.AI API key in Preferences. The Thinking Mode toggle below maps to GLM's <span className="font-mono">{'thinking: { type: enabled }'}</span> parameter.</>}
+                        ? renderRich(t('model.glm.helpDO'))
+                        : renderRich(t('model.glm.helpZai'))}
                     </div>
                   </div>
                 )}
@@ -4613,18 +4563,18 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                   <>
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-medium text-muted-foreground">Local Model (from LM Studio)</label>
-                        <button onClick={refreshLocalModels} className="text-[10px] text-indigo-500 hover:underline" type="button">refresh</button>
+                        <label className="text-xs font-medium text-muted-foreground">{t('model.local.label')}</label>
+                        <button onClick={refreshLocalModels} className="text-[10px] text-indigo-500 hover:underline" type="button">{t('model.local.refresh')}</button>
                       </div>
                       <select
                         value={specificModel}
                         onChange={(e) => setSpecificModel(e.target.value)}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                       >
-                        {localModels.length === 0 && <option value="">— no models loaded —</option>}
+                        {localModels.length === 0 && <option value="">{t('model.local.none')}</option>}
                         {/* Keep current value selectable even if not in list */}
                         {specificModel && !localModels.includes(specificModel) && (
-                          <option value={specificModel}>{specificModel} (not loaded)</option>
+                          <option value={specificModel}>{t('model.local.notLoaded').replace('{model}', specificModel)}</option>
                         )}
                         {localModels.map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
@@ -4634,7 +4584,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     </div>
                     <div className="mb-4">
                       <label className="text-xs font-medium text-muted-foreground block mb-1">
-                        Context window (tokens)
+                        {t('model.local.ctxLabel')}
                       </label>
                       <input
                         type="number"
@@ -4645,7 +4595,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none focus:ring-1 focus:ring-indigo-500"
                       />
                       <div className="text-[10px] text-muted-foreground mt-1">
-                        Match this to what you loaded in LM Studio. Used for token budgeting only — the actual limit is enforced by LM Studio.
+                        {t('model.local.ctxHelp')}
                       </div>
                     </div>
                   </>
@@ -4653,15 +4603,15 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Temperature ({modelParams.temperature})</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.temp').replace('{v}', String(modelParams.temperature))}</label>
                     <input type="range" min="0" max="2" step="0.1" value={modelParams.temperature} onChange={(e) => setModelParams({ ...modelParams, temperature: parseFloat(e.target.value) })} className="w-full" />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Top P ({modelParams.topP})</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.topP').replace('{v}', String(modelParams.topP))}</label>
                     <input type="range" min="0" max="1" step="0.05" value={modelParams.topP} onChange={(e) => setModelParams({ ...modelParams, topP: parseFloat(e.target.value) })} className="w-full" />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">Top K</label>
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.topK')}</label>
                     <input type="number" min="1" max="100" value={modelParams.topK} onChange={(e) => setModelParams({ ...modelParams, topK: parseInt(e.target.value) })} className="w-full px-2 py-1 bg-background border border-border rounded text-sm outline-none focus:ring-1 focus:ring-indigo-500" />
                   </div>
                   <div className="col-span-2 flex items-center gap-3 mt-1">
@@ -4672,7 +4622,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         onChange={(e) => setSeedEnabled(e.target.checked)}
                         className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                       />
-                      <span className="text-xs font-medium text-muted-foreground">Fixed Seed</span>
+                      <span className="text-xs font-medium text-muted-foreground">{t('model.seed')}</span>
                     </label>
                     {seedEnabled && (
                       <input
@@ -4683,25 +4633,25 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       />
                     )}
                     {seedEnabled && (
-                      <span className="text-[10px] text-muted-foreground">same seed → same output (Local &amp; Gemini)</span>
+                      <span className="text-[10px] text-muted-foreground">{t('model.seedHelp')}</span>
                     )}
                   </div>
                   {specificModel?.includes('gemini') && (
                     <>
                       <div>
-                        <label className="text-xs font-medium text-muted-foreground block mb-1">Thinking Level</label>
+                        <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.gemini.thinkLabel')}</label>
                         <select
                           value={modelParams.thinkingLevel === 'none' ? 'minimal' : (modelParams.thinkingLevel || 'medium')}
                           onChange={(e) => setModelParams({ ...modelParams, thinkingLevel: e.target.value })}
                           className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm appearance-none cursor-pointer outline-none focus:ring-1 focus:ring-indigo-500"
                         >
-                          <option value="minimal">Minimal (closest to off)</option>
-                          <option value="low">Low</option>
-                          <option value="medium">Medium (Google default)</option>
-                          <option value="high">High</option>
+                          <option value="minimal">{t('model.gemini.thinkMinimal')}</option>
+                          <option value="low">{t('model.gemini.thinkLow')}</option>
+                          <option value="medium">{t('model.gemini.thinkMedium')}</option>
+                          <option value="high">{t('model.gemini.thinkHigh')}</option>
                         </select>
                         <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                          Gemini 3.x always thinks — "Minimal" is the lowest setting (full off is not supported by the API).
+                          {t('model.gemini.thinkHelp')}
                         </div>
                       </div>
                       <div className="col-span-2 flex items-center gap-2 mt-2">
@@ -4713,7 +4663,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                         />
                         <label htmlFor="websearch" className="text-sm font-medium text-foreground cursor-pointer">
-                          Enable Google Web Search Grounding
+                          {t('model.gemini.grounding')}
                         </label>
                       </div>
                     </>
@@ -4728,8 +4678,8 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                         className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                       />
                       <label htmlFor="qwenThinking" className="text-sm font-medium text-foreground cursor-pointer">
-                        Enable Thinking Mode
-                        <span className="text-xs text-muted-foreground ml-1">(on/off only — applies to Qwen 3.x, DeepSeek V3.2/V4, GLM, Kimi K2.6, and Cohere Command A)</span>
+                        {t('model.thinkingMode')}
+                        <span className="text-xs text-muted-foreground ml-1">{t('model.thinkingModeHelp')}</span>
                       </label>
                     </div>
                   )}
@@ -4744,8 +4694,8 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                         />
                         <label htmlFor="claudeWebSearch" className="text-sm font-medium text-foreground cursor-pointer">
-                          Enable Web Search
-                          <span className="text-xs text-muted-foreground ml-1">(API-key mode: Anthropic server-side <code>web_search</code> tool. Subscription/OAuth mode: Claude Code&apos;s built-in WebSearch/WebFetch.)</span>
+                          {t('model.claude.websearch')}
+                          <span className="text-xs text-muted-foreground ml-1">{renderRich(t('model.claude.websearchHelp'))}</span>
                         </label>
                       </div>
                       <div className="flex items-center gap-2">
@@ -4757,8 +4707,8 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                           className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                         />
                         <label htmlFor="claudeThinking" className="text-sm font-medium text-foreground cursor-pointer">
-                          Enable Extended Thinking
-                          <span className="text-xs text-muted-foreground ml-1">(Opus/Sonnet only)</span>
+                          {t('model.claude.thinking')}
+                          <span className="text-xs text-muted-foreground ml-1">{t('model.claude.thinkingHelp')}</span>
                         </label>
                       </div>
                       {claudeThinking && (
@@ -4771,8 +4721,8 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                             className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                           />
                           <label htmlFor="saveThinking" className="text-sm font-medium text-foreground cursor-pointer">
-                            Save &amp; reuse thinking process
-                            <span className="text-xs text-muted-foreground ml-1">(adds [thinking] to .md export and lets Claude see its own past reasoning)</span>
+                            {t('model.claude.saveThinking')}
+                            <span className="text-xs text-muted-foreground ml-1">{t('model.claude.saveThinkingHelp')}</span>
                           </label>
                         </div>
                       )}
@@ -4790,26 +4740,21 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       {/fable-?5|mythos-?5|opus-4-?7|opus-4-?8|opus-?5|sonnet-?5/.test(specificModel || '') && (
                         <div className="mt-1">
                           <label className="text-xs font-medium text-muted-foreground block mb-1">
-                            Thinking Level (effort)
+                            {t('model.claude.effortLabel')}
                           </label>
                           <select
                             value={modelParams.claudeEffort || 'high'}
                             onChange={(e) => setModelParams({ ...modelParams, claudeEffort: e.target.value })}
                             className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                           >
-                            <option value="low">Low — fastest, cheapest, may skip thinking</option>
-                            <option value="medium">Medium — balanced</option>
-                            <option value="high">High — default (deep reasoning)</option>
-                            <option value="xhigh">X-High — deeper, for long agentic/coding work</option>
-                            <option value="max">Max — absolute maximum capability</option>
+                            <option value="low">{t('model.claude.effortLow')}</option>
+                            <option value="medium">{t('model.claude.effortMedium')}</option>
+                            <option value="high">{t('model.claude.effortHigh')}</option>
+                            <option value="xhigh">{t('model.claude.effortXhigh')}</option>
+                            <option value="max">{t('model.claude.effortMax')}</option>
                           </select>
                           <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                            Controls adaptive-thinking depth on Opus 5, Opus 4.7/4.8, Sonnet 5 and Fable 5. Works in both
-                            Token-paid and Monthly-paid modes. <span className="font-mono">High</span> is the API default;
-                            higher levels spend more tokens, lower levels are faster/cheaper.
-                            Thinking and the visible answer share one output budget — if a turn ends with
-                            &ldquo;hit the token limit&rdquo;, lower this or expect a bigger cap.
-                            Sonnet 5 has no <span className="font-mono">Max</span> tier (clamped to X-High server-side).
+                            {renderRich(t('model.claude.effortHelp'))}
                           </div>
                         </div>
                       )}
@@ -4834,31 +4779,31 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                   />
                   <label htmlFor="autoModelSelect" className="text-sm font-semibold text-foreground cursor-pointer">
-                    Automatic Model Selection
+                    {t('model.auto.label')}
                   </label>
-                  <span className="text-xs text-muted-foreground">(uses the currently-selected model as the selector)</span>
+                  <span className="text-xs text-muted-foreground">{t('model.auto.note')}</span>
                 </div>
                 {autoModelSelectEnabled && (
                   <div className="space-y-4">
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Before each user turn, the <strong>currently-selected model</strong> (thinking forced off where possible) reads the criteria and the recent conversation, then calls <span className="font-mono">select_model(model_id)</span> to pick one from the allowed-models shortlist. Selection runs on every user turn so the model can change as the conversation shifts.{' '}
-                      <span className="text-amber-500">Pick a fast/cheap model in the family selector above to keep selector latency low.</span>
+                      {renderRich(t('model.auto.help'))}{' '}
+                      <span className="text-amber-500">{t('model.auto.helpWarn')}</span>
                     </p>
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Criteria</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('model.auto.criteria')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Free-form prose telling the selector when to pick which model. Examples: "prefer fast models for greetings", "prefer thinking models for code".
+                        {t('model.auto.criteriaHelp')}
                       </p>
                       <textarea
                         value={autoModelSelectCriteria}
                         onChange={(e) => setAutoModelSelectCriteria(e.target.value)}
                         className="w-full min-h-[120px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                        placeholder="Pick the model best suited to the user's most recent message..."
+                        placeholder={t('model.auto.criteriaPh')}
                       />
                     </div>
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-foreground">Allowed Models</label>
+                        <label className="text-xs font-semibold text-foreground">{t('model.auto.allowed')}</label>
                         <button
                           type="button"
                           onClick={async () => {
@@ -4870,9 +4815,7 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                               .map((s) => s.trim())
                               .some((s) => s && !s.startsWith('#'));
                             if (meaningful) {
-                              const ok = window.confirm(
-                                'Replace your current Allowed Models list with the full known-models template (plus currently-loaded local models)?'
-                              );
+                              const ok = window.confirm(t('model.auto.fillConfirm'));
                               if (!ok) return;
                             }
                             // Fetch the current LM Studio model list inline so
@@ -4900,21 +4843,19 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                             setAutoModelSelectAllowedModels(buildAllModelsFill(liveLocal, liveErr));
                           }}
                           className="px-2 py-1 text-[11px] font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded transition-colors"
-                          title="Fill the textarea with every model NEXUS knows about (Claude / Gemini / Qwen / DeepSeek / GLM / Grok / Kimi / Cohere / MiniMax) plus the LM Studio models currently loaded locally. Asks for confirmation if you've already written entries."
+                          title={t('model.auto.fillAllTitle')}
                         >
-                          Fill all
+                          {t('model.auto.fillAll')}
                         </button>
                       </div>
                       <p className="text-xs text-muted-foreground mb-2">
-                        One model per line, pipe-delimited:{' '}
-                        <span className="font-mono">family | specificModel | on|off | optional label</span>.{' '}
-                        Lines starting with <span className="font-mono">#</span> are comments. The selector picks from THIS list only.
+                        {renderRich(t('model.auto.allowedHelp'))}
                       </p>
                       <textarea
                         value={autoModelSelectAllowedModels}
                         onChange={(e) => setAutoModelSelectAllowedModels(e.target.value)}
                         className="w-full min-h-[160px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                        placeholder="Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking"
+                        placeholder={t('model.auto.allowedPh')}
                       />
                     </div>
                   </div>
@@ -4931,18 +4872,18 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
                   />
                   <label htmlFor="creativityControl" className="text-sm font-semibold text-foreground cursor-pointer">
-                    Enable Creativity Control Mode
+                    {t('model.creativity.label')}
                   </label>
                 </div>
                 {creativityControlEnabled && (
                   <div className="space-y-4">
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Before each response the AI performs a hidden Layer 1 analysis and calls <span className="font-mono">set_creativity(C)</span> to choose its own generation parameters. Layer 2 then runs with <span className="font-mono">T = 2·C</span>, <span className="font-mono">P = 0.7 + 0.3·C</span>.
+                      {renderRich(t('model.creativity.help'))}
                     </p>
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Hidden Analysis Instruction</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('model.creativity.analysisLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Appended to the user's message in the Layer 1 call to guide the AI's creativity selection.
+                        {t('model.creativity.analysisHelp')}
                       </p>
                       <textarea
                         value={hiddenAnalysisInstruction}
@@ -4951,9 +4892,9 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                       />
                     </div>
                     <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">Creativity Display Pattern</label>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('model.creativity.patternLabel')}</label>
                       <p className="text-xs text-muted-foreground mb-2">
-                        Prepended to every response. <span className="font-mono">{'{C}'}</span> is replaced with the chosen value (e.g. <span className="font-mono">0.75</span>).
+                        {renderRich(t('model.creativity.patternHelp'))}
                       </p>
                       <input
                         type="text"
@@ -5031,20 +4972,20 @@ This is a cue only — nothing happens automatically, and the entity is exactly 
                     // Refresh the folder list in the parent so the next new
                     // conversation in this folder picks up these defaults.
                     if (typeof fetchFolders === 'function') fetchFolders();
-                    alert('Saved as folder defaults!');
+                    alert(t('sysmodal.savedDefaults'));
                   } catch (e: any) {
-                    alert('Error saving defaults: ' + (e?.message || 'unknown'));
+                    alert(t('sysmodal.saveDefaultsError') + (e?.message || 'unknown'));
                   }
                 }}
                 className="px-4 py-2 text-sm font-medium bg-secondary text-secondary-foreground rounded-lg hover:opacity-90 transition-opacity"
               >
-                Save as Folder Defaults
+                {t('sysmodal.saveDefaults')}
               </button>
               <button
                 onClick={() => setIsPromptModalOpen(false)}
                 className="px-6 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity"
               >
-                Done
+                {t('sysmodal.done')}
               </button>
             </div>
           </div>

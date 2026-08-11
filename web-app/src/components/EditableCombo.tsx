@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
+import { useT } from '@/lib/i18n';
 
 export interface ComboOption {
   value: string;
@@ -36,6 +37,7 @@ export default function EditableCombo({
   className?: string;
   mono?: boolean;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [filterMode, setFilterMode] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -121,7 +123,7 @@ export default function EditableCombo({
         tabIndex={-1}
         onMouseDown={(e) => { e.preventDefault(); if (open) setOpen(false); else openMenu(false); }}
         className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-        aria-label="Show options"
+        aria-label={t('ask.showOptions')}
       >
         <ChevronDown size={16} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
       </button>

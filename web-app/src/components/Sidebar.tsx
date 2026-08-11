@@ -8,6 +8,7 @@ import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
 import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
+import { useT, Tx } from '@/lib/i18n';
 
 interface SidebarProps {
   conversations: any[];
@@ -54,6 +55,7 @@ export default function Sidebar({
   fetchFolders,
   fetchLogs
 }: SidebarProps) {
+  const t = useT();
   const activeFolder = folders.find(f => f.id === activeFolderId);
   const convoOrder = activeFolder?.settings?.convoOrder || [];
   
@@ -273,7 +275,7 @@ export default function Sidebar({
           const text = await file.text();
           const data = JSON.parse(text);
           if (!data || !Array.isArray(data.messages)) {
-            alert(`"${file.name}" is not a valid Nexus log JSON.`);
+            alert(`"${file.name}" ${t('sidebar.import.notNexusJson')}`);
             continue;
           }
           const convoId = uuidv4();
@@ -292,7 +294,7 @@ export default function Sidebar({
           });
           newIds.push(convoId);
         } catch (err: any) {
-          alert(`Failed to import "${file.name}": ${err.message}`);
+          alert(`${t('sidebar.import.failed')} "${file.name}": ${err.message}`);
         }
       }
       if (newIds.length === 0) return;
@@ -334,7 +336,7 @@ export default function Sidebar({
     if (!files || files.length === 0) return;
     if (!activeFolder) {
       console.warn('[md-import] Refused: no active folder selected. Open/select a Digital Identity first, then import.');
-      alert('Select a folder (Digital Identity) first, then import.');
+      alert(t('sidebar.import.noFolder'));
       return;
     }
 
@@ -415,9 +417,9 @@ export default function Sidebar({
               });
               if (r.ok) {
                 const d = await r.json();
-                const t = d.tokens || 0;
-                m.tokens = t;
-                m.textTokens = t;
+                const tok = d.tokens || 0;
+                m.tokens = tok;
+                m.textTokens = tok;
               }
             } catch {}
           }));
@@ -442,15 +444,15 @@ export default function Sidebar({
         } catch (err: any) {
           console.error(`[md-import] "${file.name}" threw during import:`, err);
           importErrors.push(`${file.name}: ${err?.message || err}`);
-          alert(`Failed to import "${file.name}": ${err?.message || err}`);
+          alert(`${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}`);
         }
       }
       if (newIds.length === 0) {
         console.warn(`[md-import] Nothing imported (${filesArray.length} file(s) tried).${importErrors.length ? ' Reasons:\n  - ' + importErrors.join('\n  - ') : ''}`);
         alert(
           importErrors.length
-            ? `Import added nothing.\n\n${importErrors.join('\n')}\n\nSee the browser console for full details.`
-            : 'Import added nothing — see the browser console for details.'
+            ? t('sidebar.import.nothingWithReasons').replace('{reasons}', importErrors.join('\n'))
+            : t('sidebar.import.nothing')
         );
         return;
       }
@@ -483,7 +485,7 @@ export default function Sidebar({
   };
 
   const createFolder = async () => {
-    const name = prompt('Enter new folder (AI Character) name:');
+    const name = prompt(t('sidebar.prompt.newFolder'));
     if (!name) return;
     await fetch('/api/folders', {
       method: 'POST',
@@ -497,7 +499,7 @@ export default function Sidebar({
   const handleRenameFolder = async () => {
     if (!activeFolder) return;
     const oldName = activeFolder.name;
-    const newName = prompt('Enter new folder name:', oldName);
+    const newName = prompt(t('sidebar.prompt.renameFolder'), oldName);
     if (!newName || newName === oldName) return;
     await fetch('/api/folders', {
       method: 'POST',
@@ -532,8 +534,8 @@ export default function Sidebar({
 
       <div className="px-4 pb-2 space-y-3 relative">
         <div className="flex items-center justify-between mb-2">
-          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">Digital Identities</label>
-          <button onClick={createFolder} className="text-muted-foreground hover:text-indigo-500 transition-colors" title="New Folder">
+          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">{t('sidebar.identities')}</label>
+          <button onClick={createFolder} className="text-muted-foreground hover:text-indigo-500 transition-colors" title={t('sidebar.newFolder')}>
             <FolderPlus size={16} />
           </button>
         </div>
@@ -560,7 +562,7 @@ export default function Sidebar({
                     onClick={handleRenameFolder}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <Edit2 size={14} /> Rename
+                    <Edit2 size={14} /> {t('sidebar.menu.rename')}
                   </button>
                   <button 
                     onClick={(e) => {
@@ -595,7 +597,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <Settings2 size={14} /> Folder Settings
+                    <Settings2 size={14} /> {t('sidebar.menu.folderSettings')}
                   </button>
                   <button 
                     onClick={(e) => {
@@ -604,7 +606,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <Upload size={14} /> Auto-Import .md
+                    <Upload size={14} /> {t('sidebar.menu.autoImportMd')}
                   </button>
                   <button 
                     onClick={(e) => {
@@ -613,7 +615,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <ArrowDown size={14} /> Sort Descending
+                    <ArrowDown size={14} /> {t('sidebar.menu.sortDesc')}
                   </button>
                   <button 
                     onClick={(e) => {
@@ -622,7 +624,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <ArrowUp size={14} /> Sort Ascending
+                    <ArrowUp size={14} /> {t('sidebar.menu.sortAsc')}
                   </button>
                   <button
                     onClick={(e) => {
@@ -632,7 +634,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <Hash size={14} /> Normalize Names (＃→_)
+                    <Hash size={14} /> {t('sidebar.menu.normalizeNames')}
                   </button>
                   <button
                     onClick={(e) => {
@@ -643,7 +645,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <History size={14} /> Backups
+                    <History size={14} /> {t('sidebar.menu.backups')}
                   </button>
                   <button 
                     onClick={(e) => {
@@ -653,7 +655,7 @@ export default function Sidebar({
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 flex items-center gap-2 text-red-500 hover:text-red-600 transition-colors"
                   >
-                    <Trash2 size={14} /> Delete
+                    <Trash2 size={14} /> {t('sidebar.menu.delete')}
                   </button>
                 </div>
               )}
@@ -670,19 +672,19 @@ export default function Sidebar({
           className="flex-1 flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2.5 rounded-lg shadow-md hover:shadow-lg transition-all font-medium text-sm"
         >
           <PlusCircle size={18} />
-          New Chat
+          {t('sidebar.newChat')}
         </motion.button>
         <button
           onClick={() => importJsonRef.current?.click()}
           className="px-2.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-[10px] font-bold tracking-wider"
-          title="Import JSON log(s)"
+          title={t('sidebar.import.json')}
         >
           JSON
         </button>
         <button
           onClick={() => importMdRef.current?.click()}
           className="px-2.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-[10px] font-bold tracking-wider"
-          title="Import Markdown log(s)"
+          title={t('sidebar.import.md')}
         >
           MD
         </button>
@@ -747,7 +749,7 @@ export default function Sidebar({
                 ) : (
                   <span className={`truncate text-sm ${convo.active === false ? 'opacity-40 italic' : ''}`}>
                     {convo.title}
-                    {convo.active === false && <span className="ml-1 text-[10px] uppercase tracking-wide">(inactive)</span>}
+                    {convo.active === false && <span className="ml-1 text-[10px] uppercase tracking-wide">{t('sidebar.inactive')}</span>}
                   </span>
                 )}
               </div>
@@ -775,7 +777,7 @@ export default function Sidebar({
                         }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <Pencil size={14} /> Rename
+                        <Pencil size={14} /> {t('sidebar.menu.rename')}
                       </button>
                       <button 
                         onClick={(e) => {
@@ -785,7 +787,7 @@ export default function Sidebar({
                         }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <Copy size={14} /> Clone
+                        <Copy size={14} /> {t('sidebar.menu.clone')}
                       </button>
                       {onToggleActive && (
                         <button
@@ -797,8 +799,8 @@ export default function Sidebar({
                           className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                         >
                           {convo.active === false
-                            ? <><Eye size={14} /> Mark active</>
-                            : <><EyeOff size={14} /> Mark inactive</>}
+                            ? <><Eye size={14} /> {t('sidebar.menu.markActive')}</>
+                            : <><EyeOff size={14} /> {t('sidebar.menu.markInactive')}</>}
                         </button>
                       )}
                       <button
@@ -809,7 +811,7 @@ export default function Sidebar({
                         }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-red-500/10 flex items-center gap-2 text-red-500 hover:text-red-600 transition-colors"
                       >
-                        <Trash2 size={14} /> Delete
+                        <Trash2 size={14} /> {t('sidebar.menu.delete')}
                       </button>
                     </div>
                   )}
@@ -831,13 +833,13 @@ export default function Sidebar({
               />
             ))}
             <div className="text-center pt-2 text-[11px] text-muted-foreground italic">
-              Loading conversations…
+              {t('sidebar.loading')}
             </div>
           </div>
         )}
         {filteredConvos.length === 0 && !conversationsLoading && (
           <div className="text-center mt-10 text-xs text-muted-foreground italic px-4">
-            No history in {activeFolder?.name || 'this folder'}.
+            {t('sidebar.noHistory').replace('{folder}', activeFolder?.name || t('sidebar.thisFolder'))}
           </div>
         )}
       </div>
@@ -876,23 +878,23 @@ export default function Sidebar({
       {deleteModalId && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="bg-card border border-border shadow-2xl rounded-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-bold mb-2 text-foreground">Delete Conversation?</h3>
-            <p className="text-sm text-muted-foreground mb-6 leading-relaxed">Are you sure you want to delete this conversation? This action cannot be undone.</p>
+            <h3 className="text-lg font-bold mb-2 text-foreground">{t('sidebar.deleteConvo.title')}</h3>
+            <p className="text-sm text-muted-foreground mb-6 leading-relaxed">{t('sidebar.deleteConvo.body')}</p>
             <div className="flex justify-end gap-3">
-              <button 
-                onClick={() => setDeleteModalId(null)} 
+              <button
+                onClick={() => setDeleteModalId(null)}
                 className="px-4 py-2 text-sm font-medium hover:bg-muted text-foreground rounded-lg transition-colors"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
-              <button 
+              <button
                 onClick={() => {
                   onDeleteChat(deleteModalId);
                   setDeleteModalId(null);
-                }} 
+                }}
                 className="px-4 py-2 text-sm font-medium bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors shadow-sm"
               >
-                Delete
+                {t('common.delete')}
               </button>
             </div>
           </div>
@@ -902,22 +904,22 @@ export default function Sidebar({
       {deleteFolderModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="bg-card border border-border shadow-2xl rounded-xl p-6 max-w-sm w-full mx-4">
-            <h3 className="text-lg font-bold mb-2 text-foreground">Delete Folder?</h3>
+            <h3 className="text-lg font-bold mb-2 text-foreground">{t('sidebar.deleteFolder.title')}</h3>
             <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-              Are you sure you want to delete the folder <strong>{deleteFolderModal}</strong> and ALL conversations inside it? This action cannot be undone.
+              {t('sidebar.deleteFolder.bodyBefore')}<strong>{deleteFolderModal}</strong>{t('sidebar.deleteFolder.bodyAfter')}
             </p>
             <div className="flex justify-end gap-3">
-              <button 
-                onClick={() => setDeleteFolderModal(null)} 
+              <button
+                onClick={() => setDeleteFolderModal(null)}
                 className="px-4 py-2 text-sm font-medium hover:bg-muted text-foreground rounded-lg transition-colors"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
-              <button 
-                onClick={handleDeleteFolder} 
+              <button
+                onClick={handleDeleteFolder}
                 className="px-4 py-2 text-sm font-medium bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors shadow-sm"
               >
-                Delete Folder
+                {t('sidebar.deleteFolder.confirm')}
               </button>
             </div>
           </div>
@@ -928,15 +930,15 @@ export default function Sidebar({
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="bg-card border border-border shadow-2xl rounded-xl p-6 max-w-lg w-full mx-4 flex flex-col max-h-[80vh]">
             <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-              <Settings2 size={20} className="text-indigo-500" /> Folder Settings
+              <Settings2 size={20} className="text-indigo-500" /> {t('folder.title')}
             </h3>
             
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-semibold text-foreground">CSS Theme (this folder)</label>
+                  <label className="text-sm font-semibold text-foreground">{t('folder.css.label')}</label>
                   <label className="cursor-pointer text-xs flex items-center gap-1 text-indigo-500 hover:text-indigo-400">
-                    <Upload size={14} /> Load File
+                    <Upload size={14} /> {t('folder.css.load')}
                     <input
                       type="file"
                       accept=".css"
@@ -955,17 +957,17 @@ export default function Sidebar({
                 <textarea
                   value={customCss}
                   onChange={(e) => setCustomCss(e.target.value)}
-                  placeholder={`Define this folder's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/themes/<folder>.css. Empty = plain Dark.`}
+                  placeholder={t('folder.css.placeholder')}
                   className="w-full h-48 p-3 bg-background border border-border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500/50 resize-none custom-scrollbar"
                 />
                 <p className="text-[10px] text-muted-foreground mt-1">
-                  This folder's theme is its <span className="font-mono">local_data/themes/&lt;folder&gt;.css</span> file. No file = Dark.
+                  <Tx k="folder.css.help" />
                 </p>
               </div>
               
               <div className="pt-4 border-t border-border mt-4">
                 <h4 className="text-sm font-semibold flex items-center gap-2 text-indigo-500 mb-4 block">
-                  <Mic size={16} /> Character TTS Voice
+                  <Mic size={16} /> {t('folder.voice.heading')}
                 </h4>
                 <VoiceSelector
                   value={folderVoice}
@@ -973,7 +975,7 @@ export default function Sidebar({
                 />
                 <div className="mt-3">
                   <label className="text-xs font-medium text-muted-foreground block mb-1">
-                    Voice Pitch ({folderVoicePitch >= 0 ? '+' : ''}{folderVoicePitch.toFixed(2)})
+                    {t('folder.voice.pitch')} ({folderVoicePitch >= 0 ? '+' : ''}{folderVoicePitch.toFixed(2)})
                   </label>
                   <input
                     type="range"
@@ -985,25 +987,25 @@ export default function Sidebar({
                     className="w-full"
                   />
                   <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-                    <span>Lower</span>
-                    <span>Default (0.00)</span>
-                    <span>Higher</span>
+                    <span>{t('folder.voice.lower')}</span>
+                    <span>{t('folder.voice.default')}</span>
+                    <span>{t('folder.voice.higher')}</span>
                   </div>
                 </div>
 
                 <div className="mt-4">
                   <label className="text-xs font-medium text-muted-foreground block mb-1">
-                    TTS Pronunciation Dictionary (JSON)
+                    {t('folder.dict.label')}
                   </label>
                   <textarea
                     value={ttsDict}
                     onChange={(e) => { setTtsDict(e.target.value); if (ttsDictError) setTtsDictError(null); }}
-                    placeholder={`Replace words right before TTS (literal, no spaces needed — good for CJK), e.g.:\n{\n  "GLM": "ジーエルエム",\n  "朔": "さく"\n}`}
+                    placeholder={t('folder.dict.placeholder')}
                     className="w-full h-32 p-3 bg-background border border-border rounded-lg font-mono text-xs focus:ring-2 focus:ring-indigo-500/50 resize-none custom-scrollbar"
                   />
                   {ttsDictError
                     ? <p className="text-[10px] text-red-500 mt-1">{ttsDictError}</p>
-                    : <p className="text-[10px] text-muted-foreground mt-1">Per-entity. Applied just before synthesis. Saved to <span className="font-mono">local_data/tts_dict/&lt;folder&gt;.json</span>. Empty = none.</p>}
+                    : <p className="text-[10px] text-muted-foreground mt-1"><Tx k="folder.dict.help" /></p>}
                 </div>
               </div>
 
@@ -1012,16 +1014,16 @@ export default function Sidebar({
                   policy, and identity-layer threshold. */}
               <div className="pt-4 border-t border-border mt-4">
                 <h4 className="text-sm font-semibold flex items-center gap-2 text-indigo-500 mb-4 block">
-                  <Settings2 size={16} /> Context Management
+                  <Settings2 size={16} /> {t('folder.context.heading')}
                 </h4>
                 <div className="space-y-4">
                   <div>
                     <div className="flex items-baseline justify-between mb-1">
                       <label className="text-xs font-medium text-muted-foreground">
-                        Maximal recommended context window size
+                        {t('folder.context.maxLabel')}
                       </label>
                       <span className="text-xs font-mono text-indigo-500">
-                        {(folderMaxRecommendedContext || 0).toLocaleString()} tokens
+                        {(folderMaxRecommendedContext || 0).toLocaleString()} {t('folder.context.tokens')}
                       </span>
                     </div>
                     {/* Slider moves in 10k steps from 10k to 200k. The bounds widen to
@@ -1041,7 +1043,7 @@ export default function Sidebar({
                       <span>{(Math.max(200000, folderMaxRecommendedContext || 200000) / 1000).toLocaleString()}k</span>
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-1">
-                      Drives the progress bar in the chat header and (if enabled below) auto-trimming of copied messages.
+                      {t('folder.context.help')}
                     </div>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer text-sm">
@@ -1051,20 +1053,17 @@ export default function Sidebar({
                       onChange={(e) => setFolderAutoTrim(e.target.checked)}
                       className="accent-indigo-500"
                     />
-                    <span>Remove old copied messages automatically</span>
+                    <span>{t('folder.context.autoTrim')}</span>
                   </label>
                   <div className="text-[10px] text-muted-foreground -mt-2 leading-relaxed">
-                    When the <strong>text</strong> context (system + messages, <em>excluding attachments</em>) exceeds the limit,
-                    copied messages (those before the <span className="font-mono">first-original</span> marker) are pruned from the
-                    top until the limit is satisfied. <strong>Original messages are never deleted</strong>,
-                    and <strong>attachment tokens never count toward the limit</strong>.
+                    <Tx k="folder.context.autoTrim.help" />
                   </div>
                 </div>
               </div>
 
               <div className="pt-4 border-t border-border mt-4">
                 <h4 className="text-sm font-semibold flex items-center gap-2 text-indigo-500 mb-4 block">
-                  <Mic size={16} /> Live Session Voice (Gemini)
+                  <Mic size={16} /> {t('folder.live.heading')}
                 </h4>
                 <select
                   value={liveVoiceMode === 'custom' ? '__custom__' : liveSessionVoice}
@@ -1075,35 +1074,35 @@ export default function Sidebar({
                   }}
                   className="w-full p-2 bg-background border border-border rounded-lg text-sm"
                 >
-                  <optgroup label="Feminine">
+                  <optgroup label={t('folder.live.feminine')}>
                     {['Aoede','Kore','Leda','Zephyr','Achernar','Autonoe','Callirhoe','Despina','Erinome','Gacrux','Laomedeia','Pulcherrima','Sulafat','Vindemiatrix'].map(v => <option key={v} value={v}>{v}</option>)}
                   </optgroup>
-                  <optgroup label="Masculine">
+                  <optgroup label={t('folder.live.masculine')}>
                     {['Puck','Charon','Fenrir','Orus','Achird','Algenib','Algieba','Alnilam','Enceladus','Iapetus','Rasalgethi','Sadachbia','Sadaltager','Schedar','Umbriel','Zubenelgenubi'].map(v => <option key={v} value={v}>{v}</option>)}
                   </optgroup>
-                  <option value="__custom__">Custom (type any voice name…)</option>
+                  <option value="__custom__">{t('folder.live.custom')}</option>
                 </select>
                 {liveVoiceMode === 'custom' && (
                   <input
                     type="text"
                     value={liveCustomVoice}
                     onChange={(e) => setLiveCustomVoice(e.target.value)}
-                    placeholder="Voice name (e.g. a new prebuilt name Google added)"
+                    placeholder={t('folder.live.customPlaceholder')}
                     className="mt-2 w-full p-2 bg-background border border-border rounded-lg text-sm"
                   />
                 )}
                 <div className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
-                  Used when starting a Live Session for this folder. Voice cloning isn't supported — to shape delivery (slower, calmer, accent, etc.), describe it in the system prompt.
+                  {t('folder.live.help')}
                 </div>
               </div>
             </div>
 
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-border shrink-0">
               <button 
-                onClick={() => setThemeModalOpen(false)} 
+                onClick={() => setThemeModalOpen(false)}
                 className="px-4 py-2 text-sm font-medium hover:bg-muted text-foreground rounded-lg transition-colors"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
               <button 
                 onClick={async () => {
@@ -1117,7 +1116,7 @@ export default function Sidebar({
                         const o = JSON.parse(dictText);
                         if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error();
                       } catch {
-                        setTtsDictError('Must be a JSON object like {"from": "to"}.');
+                        setTtsDictError(t('folder.dict.error'));
                         return;
                       }
                     }
@@ -1150,7 +1149,7 @@ export default function Sidebar({
                 }} 
                 className="px-6 py-2 text-sm font-medium bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors shadow-sm"
               >
-                Save Settings
+                {t('folder.saveSettings')}
               </button>
             </div>
           </div>
@@ -1167,15 +1166,15 @@ export default function Sidebar({
           >
             <div className="px-6 py-4 border-b border-border flex justify-between items-center bg-secondary/30">
               <h2 className="text-xl font-semibold flex items-center gap-2">
-                <History className="text-indigo-500" /> Auto-Backups
+                <History className="text-indigo-500" /> {t('backups.title')}
               </h2>
               <button onClick={() => setBackupsModalOpen(false)} className="text-muted-foreground hover:text-foreground p-1">✕</button>
             </div>
             <div className="p-6 overflow-y-auto custom-scrollbar flex-1">
               {fetchingBackups ? (
-                <div className="text-center text-muted-foreground py-8">Loading backups...</div>
+                <div className="text-center text-muted-foreground py-8">{t('backups.loading')}</div>
               ) : backups.length === 0 ? (
-                <div className="text-center text-muted-foreground py-8">No backups found for this folder.</div>
+                <div className="text-center text-muted-foreground py-8">{t('backups.none')}</div>
               ) : (
                 <div className="space-y-3">
                   {backups.map((b, i) => (
@@ -1183,15 +1182,15 @@ export default function Sidebar({
                       <div>
                         <div className="font-medium text-foreground">{b.title}</div>
                         <div className="text-xs text-muted-foreground flex gap-3 mt-1">
-                          <span>Date: {b.date}</span>
-                          <span>Saved: {new Date(b.timestamp).toLocaleString()}</span>
+                          <span>{t('backups.date')} {b.date}</span>
+                          <span>{t('backups.saved')} {new Date(b.timestamp).toLocaleString()}</span>
                         </div>
                       </div>
                       <button 
                         onClick={() => handleRestoreBackup(b.backupFile)}
                         className="px-3 py-1.5 bg-indigo-500/10 text-indigo-500 hover:bg-indigo-500 hover:text-white rounded-md text-sm font-medium transition-colors border border-indigo-500/20 hover:border-indigo-500"
                       >
-                        Restore Clone
+                        {t('backups.restore')}
                       </button>
                     </div>
                   ))}
