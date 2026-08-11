@@ -1785,7 +1785,7 @@ export default function SystemPromptUpdater({
           <div className="flex items-center gap-3">
             <Layers size={20} className="text-indigo-500" />
             <div>
-              <h2 className="text-lg font-bold leading-tight">System Prompt Updater</h2>
+              <h2 className="text-lg font-bold leading-tight">{t('spu.title')}</h2>
               <div className="text-[11px] text-muted-foreground font-mono leading-snug">
                 <div>
                   <span className="text-blue-500">Left:</span> {baseName}/{baseName}_{currentIndex}.md
@@ -1811,10 +1811,10 @@ export default function SystemPromptUpdater({
                 : 'text-muted-foreground'}`}
               title={t('spu.autosaveTitle')}
             >
-              {autoSaveState === 'saving' ? 'Saving…'
-                : autoSaveState === 'saved' ? 'All changes saved'
-                : autoSaveState === 'error' ? 'Save error'
-                : 'Auto-save on'}
+              {autoSaveState === 'saving' ? t('spu.saving')
+                : autoSaveState === 'saved' ? t('spu.allSaved')
+                : autoSaveState === 'error' ? t('spu.saveError')
+                : t('spu.autosaveOn')}
             </span>
             {running !== null && (
               <button
@@ -1822,7 +1822,7 @@ export default function SystemPromptUpdater({
                 className="px-3 py-1.5 bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 rounded-md text-sm font-medium flex items-center gap-1.5"
                 title={t('spu.stopTitle')}
               >
-                <Square size={14} /> Stop
+                <Square size={14} /> {t('spu.stop')}
               </button>
             )}
             <button
@@ -1869,7 +1869,7 @@ export default function SystemPromptUpdater({
                 onChange={(e) => setForceUpdaterModel(e.target.checked)}
                 className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
               />
-              <span className="font-medium">Use a dedicated updater model (ignore conversation model)</span>
+              <span className="font-medium">{t('spu.useDedicated')}</span>
             </label>
             <select
               value={updaterModelKey}
@@ -1884,8 +1884,8 @@ export default function SystemPromptUpdater({
             </select>
             <span className="text-[10px] text-muted-foreground">
               {forceUpdaterModel
-                ? <>Runs as <span className="font-mono">{effectiveAiName} / {effectiveSpecificModel}</span>.</>
-                : <>OFF — agent runs use <span className="font-mono">{aiName} / {specificModel}</span>.</>}
+                ? <>{t('spu.runsAs')} <span className="font-mono">{effectiveAiName} / {effectiveSpecificModel}</span>.</>
+                : <>{t('spu.runsOff')} <span className="font-mono">{aiName} / {specificModel}</span>.</>}
             </span>
           </div>
 
@@ -1899,14 +1899,14 @@ export default function SystemPromptUpdater({
                 disabled={agentTypes.length === 0 || busy}
                 className="px-2 py-1 bg-background border border-border rounded text-sm font-mono outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
               >
-                {agentTypes.length === 0 && <option value="">(no agent types found)</option>}
+                {agentTypes.length === 0 && <option value="">{t('spu.noAgentTypesOption')}</option>}
                 {agentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <span className="text-[10px] text-muted-foreground">
-                Folder under <span className="font-mono">local_data/system_prompt_agents/</span>. Saved per-folder.
+                {t('spu.agentFolderHint')}
               </span>
               <span className="ml-auto text-[10px] text-muted-foreground">
-                Deletion patterns: <span className="font-mono text-foreground">{deletionPatterns.length}</span>
+                {t('spu.deletionPatterns')} <span className="font-mono text-foreground">{deletionPatterns.length}</span>
               </span>
             </div>
             {/* Each action button below runs its own FIXED filename from this
@@ -1915,14 +1915,14 @@ export default function SystemPromptUpdater({
                 files were actually found, so a missing/misnamed file shows up
                 here instead of as a silently-disabled button. */}
             <div className="text-[10px] font-mono text-muted-foreground leading-snug">
-              <span className="text-indigo-500">Agent files in this folder:</span>{' '}
-              <span className={updateAgent ? '' : 'text-red-500'}>{AGENT_FILE_UPDATE}{updateAgent ? '' : ' (missing)'}</span>
+              <span className="text-indigo-500">{t('spu.agentFilesIn')}</span>{' '}
+              <span className={updateAgent ? '' : 'text-red-500'}>{AGENT_FILE_UPDATE}{updateAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
               {' · '}
-              <span className={reorganizeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REORGANIZE}{reorganizeAgent ? '' : ' (missing)'}</span>
+              <span className={reorganizeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REORGANIZE}{reorganizeAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
               {' · '}
-              <span className={redistributeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REDISTRIBUTE}{redistributeAgent ? '' : ' (missing)'}</span>
+              <span className={redistributeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REDISTRIBUTE}{redistributeAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
               {' · '}
-              <span className={genesisAgent ? '' : 'text-red-500'}>{AGENT_FILE_GENESIS}{genesisAgent ? '' : ' (missing)'}</span>
+              <span className={genesisAgent ? '' : 'text-red-500'}>{AGENT_FILE_GENESIS}{genesisAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
             </div>
           </div>
 
@@ -1965,7 +1965,7 @@ export default function SystemPromptUpdater({
                   onClick={handleGenesis}
                   disabled={busy || !genesisAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 hover:bg-emerald-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title={`Runs ${AGENT_FILE_GENESIS}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new identity.`}
+                  title={t('spu.genesisTitle').replace('{file}', AGENT_FILE_GENESIS)}
                 >
                   {running === 'genesis' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
                   {t('spu.genesisBtn')}
@@ -1974,7 +1974,7 @@ export default function SystemPromptUpdater({
                   onClick={handleRedistribute}
                   disabled={busy || !redistributeAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title={`Runs ${AGENT_FILE_REDISTRIBUTE}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first.`}
+                  title={t('spu.redistributeTitle').replace('{file}', AGENT_FILE_REDISTRIBUTE)}
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
                   {t('spu.redistributeBtn')}
@@ -1983,7 +1983,7 @@ export default function SystemPromptUpdater({
                   onClick={handleUpdateNoConvo}
                   disabled={busy || !reorganizeAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-slate-500/15 text-slate-600 dark:text-slate-300 hover:bg-slate-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title={`Runs ${AGENT_FILE_REORGANIZE}. Cleans up/re-files the EXISTING Layers 1-3, WITHOUT a conversation log — no new facts are added, only boundary enforcement and de-duplication.`}
+                  title={t('spu.reorganizeTitle').replace('{file}', AGENT_FILE_REORGANIZE)}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <FileX size={12} />}
                   {t('spu.reorganizeBtn')}
@@ -1992,7 +1992,7 @@ export default function SystemPromptUpdater({
                   onClick={handleUpdate}
                   disabled={busy || !updateAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title={`Runs ${AGENT_FILE_UPDATE}. Reconciles the new conversation log against Layers 1-3 and updates them in one pass (with continuation if the output is long).`}
+                  title={t('spu.updateTitle').replace('{file}', AGENT_FILE_UPDATE)}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
                   {t('spu.updateBtn')}
@@ -2021,11 +2021,10 @@ export default function SystemPromptUpdater({
                 <span className="text-[11px] leading-relaxed">
                   <span className="font-semibold">{t('spu.resumeLabel')}</span>
                   {' — '}
-                  the agent receives it as already-finished output and writes only what
-                  follows, instead of starting over.
+                  {t('spu.resumeDesc')}
                   {rightLooksTruncated
-                    ? <span className="text-amber-600 dark:text-amber-400"> Right side looks truncated (no Layer 3), so this was enabled automatically.</span>
-                    : <span className="text-muted-foreground"> Right side looks complete — leave this off for a normal re-run.</span>}
+                    ? <span className="text-amber-600 dark:text-amber-400"> {t('spu.resumeTruncated')}</span>
+                    : <span className="text-muted-foreground"> {t('spu.resumeComplete')}</span>}
                 </span>
               </label>
             )}
@@ -2035,7 +2034,7 @@ export default function SystemPromptUpdater({
               <div className="flex flex-col">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">{t('spu.currentLabel')}</span>
-                  <span className="text-[11px] font-mono text-foreground">{leftTokens.toLocaleString()} tokens</span>
+                  <span className="text-[11px] font-mono text-foreground">{leftTokens.toLocaleString()} {t('spu.tokens')}</span>
                 </div>
                 <textarea
                   value={leftText}
@@ -2049,10 +2048,10 @@ export default function SystemPromptUpdater({
               <div className="flex flex-col">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                    Updated{streamingUpdate && <span className="ml-1 text-indigo-500 normal-case animate-pulse">· streaming (read-only)…</span>}
+                    {t('spu.updatedLabel')}{streamingUpdate && <span className="ml-1 text-indigo-500 normal-case animate-pulse">· streaming (read-only)…</span>}
                   </span>
                   <span className={`text-[11px] font-mono ${rightTokens > leftTokens ? 'text-amber-500' : rightTokens < leftTokens ? 'text-emerald-500' : 'text-foreground'}`}>
-                    {rightTokens.toLocaleString()} tokens
+                    {rightTokens.toLocaleString()} {t('spu.tokens')}
                     {leftTokens > 0 && <span className="ml-1 opacity-70">({rightTokens > leftTokens ? '+' : ''}{(rightTokens - leftTokens).toLocaleString()})</span>}
                   </span>
                 </div>
@@ -2087,9 +2086,9 @@ export default function SystemPromptUpdater({
               <div className="mt-3">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] uppercase tracking-wider text-blue-600 dark:text-blue-400 font-semibold">
-                    Changelog (above Layer 1 — archived to changelogs/{folderName}/{title}.md · never in context)
+                    {t('spu.changelogLabel').replace('{folder}', folderName).replace('{title}', title)}
                   </span>
-                  <span className="text-[11px] font-mono text-muted-foreground">{changelogText.length.toLocaleString()} chars</span>
+                  <span className="text-[11px] font-mono text-muted-foreground">{changelogText.length.toLocaleString()} {t('spu.chars')}</span>
                 </div>
                 <textarea
                   readOnly
@@ -2139,7 +2138,7 @@ export default function SystemPromptUpdater({
                   <span className="text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-semibold">
                     Abbreviations / Deletions log (reference only — not saved to next conversation)
                   </span>
-                  <span className="text-[11px] font-mono text-muted-foreground">{updateLogs.length.toLocaleString()} chars</span>
+                  <span className="text-[11px] font-mono text-muted-foreground">{updateLogs.length.toLocaleString()} {t('spu.chars')}</span>
                 </div>
                 <textarea
                   readOnly
@@ -2155,8 +2154,8 @@ export default function SystemPromptUpdater({
           <div className="border border-emerald-500/40 rounded-lg p-3 bg-emerald-500/[0.04]">
             <div className="flex items-center justify-between mb-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs uppercase tracking-wider font-semibold text-emerald-500">Layer 4 · Summary</span>
-                <span className="text-sm font-medium">Conversation summary (this convo)</span>
+                <span className="text-xs uppercase tracking-wider font-semibold text-emerald-500">{t('spu.layer4Summary')}</span>
+                <span className="text-sm font-medium">{t('spu.convoSummary')}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <StatusBadge status={summaryStatus} />
@@ -2167,15 +2166,15 @@ export default function SystemPromptUpdater({
                   title={t('spu.writeSummaryTitle')}
                 >
                   {running === 'summary' ? <Loader2 size={12} className="animate-spin" /> : <PenLine size={12} />}
-                  Write Summary
+                  {t('spu.writeSummary')}
                 </button>
               </div>
             </div>
             <div className="flex items-center justify-between mb-1">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                Editable — auto-saves to summaries/{folderName}/{convoId}.md
+                {t('spu.summaryEditable').replace('{folder}', folderName).replace('{convo}', convoId)}
               </span>
-              <span className="text-[11px] font-mono text-foreground">{summaryTokens.toLocaleString()} tokens</span>
+              <span className="text-[11px] font-mono text-foreground">{summaryTokens.toLocaleString()} {t('spu.tokens')}</span>
             </div>
             <textarea
               value={summaryText}
@@ -2185,14 +2184,13 @@ export default function SystemPromptUpdater({
               placeholder={t('spu.summaryPh')}
             />
             <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-              This summary appears in the live Layer-4 summaries index for all conversations in this folder.
-              Inactive conversations are excluded from the index.
+              {t('spu.summaryNote')}
             </div>
 
             {/* Custom instructions for the summary writer */}
             <div className="mt-3 pt-3 border-t border-emerald-500/20">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1 block">
-                Custom instructions for the summary writer (per-folder)
+                {t('spu.summaryInstrLabel')}
               </label>
               <textarea
                 value={summaryInstructions}
@@ -2209,7 +2207,7 @@ export default function SystemPromptUpdater({
                   onChange={(e) => setForceMimoForSummary(e.target.checked)}
                   className="accent-emerald-500"
                 />
-                <span className="text-[11px] font-medium text-foreground">Always use MiMo V2.5 Pro as the summary writer</span>
+                <span className="text-[11px] font-medium text-foreground">{t('spu.forceMimo')}</span>
                 <span className="text-[10px] text-muted-foreground">
                   ({forceMimoForSummary ? 'mimo-v2.5-pro' : `${summaryAiName} / ${summarySpecificModel}`})
                 </span>
@@ -2219,7 +2217,7 @@ export default function SystemPromptUpdater({
             {/* Editable index hint */}
             <div className="mt-3 pt-3 border-t border-emerald-500/20">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1 block">
-                Index hint shown to the entity (per-folder)
+                {t('spu.indexHintLabel')}
               </label>
               <textarea
                 value={summaryIndexHint}
@@ -2231,7 +2229,7 @@ export default function SystemPromptUpdater({
               />
               <div className="flex items-center justify-between mt-1">
                 <span className="text-[10px] text-muted-foreground leading-relaxed">
-                  <code>{'{example}'}</code> is replaced with a real conversation title. Clear the field to show no hint.
+                  {t('spu.indexHintNote')}
                 </span>
                 <button
                   type="button"
@@ -2239,7 +2237,7 @@ export default function SystemPromptUpdater({
                   onBlur={persistHeaderFooter}
                   className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground shrink-0 ml-2"
                 >
-                  Reset to default
+                  {t('spu.resetDefault')}
                 </button>
               </div>
             </div>
@@ -2253,13 +2251,13 @@ export default function SystemPromptUpdater({
               was migrated into each entity's FOOTER.md. */}
           <div>
             <label className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-1 flex items-center gap-2">
-              <span>Layer 5 — FOOTER.md (written by the entity)</span>
+              <span>{t('spu.layer5Label')}</span>
               {entityFooter !== entityFooterSaved && (
-                <span className="normal-case tracking-normal font-normal text-amber-500">unsaved</span>
+                <span className="normal-case tracking-normal font-normal text-amber-500">{t('spu.unsaved')}</span>
               )}
               {entityFooterStatus && (
                 <span className={`normal-case tracking-normal font-normal ${entityFooterStatus === 'saved' ? 'text-emerald-500' : 'text-red-500'}`}>
-                  {entityFooterStatus}
+                  {entityFooterStatus && t(entityFooterStatus === 'saved' ? 'spu.footerSaved' : 'spu.footerSaveFailed'.replace('{e}', entityFooterStatus))}
                 </span>
               )}
             </label>
@@ -2269,17 +2267,12 @@ export default function SystemPromptUpdater({
               onBlur={persistEntityFooter}
               rows={4}
               placeholder={entityFooterExists
-                ? 'This entity has an empty FOOTER.md.'
-                : 'This entity has no FOOTER.md yet. Typing here creates one.'}
+                ? t('spu.footerPhEmpty')
+                : t('spu.footerPhNone')}
               className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-amber-500 resize-y"
             />
             <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
-              <span className="font-mono">workspaces/{folderName}/FOOTER.md</span> — injected as Layer 5 at send time,
-              never stored in the conversation, which is why the updater agent could not see it before. It can now, as
-              <strong> reference only</strong>: it is the one layer the entity writes about itself, so the agent is told
-              to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the entity&apos;s own
-              text — the previous version is backed up to{' '}
-              <span className="font-mono">backups/{folderName}/footers/</span>. Saves when you click away.
+              {t('spu.footerNote').replace('{folder}', folderName)}
             </p>
           </div>
         </div>
