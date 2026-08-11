@@ -123,6 +123,65 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
+    if (body?.action === 'addTimestamps') {
+      const { folder } = body;
+      if (typeof folder !== 'string' || !folder) {
+        return NextResponse.json({ error: 'folder (string) required' }, { status: 400 });
+      }
+      const summaries = await listSummaries(folder);
+      const logs = (await listLogs()).filter((l: any) => l.folderName === folder);
+      const folders = await listFolders();
+      const folderCfg = folders.find((f: any) => f.name === folder);
+      const convoOrder: string[] = Array.isArray(folderCfg?.settings?.convoOrder)
+        ? folderCfg!.settings.convoOrder
+        : [];
+      const byId = new Map<string, any>(logs.map((l: any) => [l.id, l]));
+      const seen = new Set<string>();
+      const ordered: Array<{ id: string; title: string }> = [];
+      for (const id of convoOrder) {
+        const l = byId.get(id);
+        if (!l) continue;
+        seen.add(id);
+        ordered.push({ id: l.id, title: l.title || 'Untitled' });
+      }
+      for (const l of logs) {
+        if (seen.has(l.id)) continue;
+        ordered.push({ id: l.id, title: l.title || 'Untitled' });
+      }
+
+      let updated = 0;
+      const fmtDate = (ts: number) => {
+        const d = new Date(ts), p = (n: number) => n.toString().padStart(2, '0');
+        return `[${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}]`;
+      };
+
+      for (const convo of ordered) {
+        const key = summaryKey(convo.title);
+        const existing = summaries[key];
+        if (!existing) continue;
+        if (/^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\]/.test(existing.trim())) continue;
+        // Read the log file to find the first message's timestamp
+        const logPath = `../local_data/logs/${folder}/${convo.id}.json`;
+        try {
+          const fs2 = await import('fs/promises');
+          const raw = await fs2.readFile(logPath, 'utf-8');
+          const logData = JSON.parse(raw);
+          const msgs: any[] = logData?.messages || [];
+          // Find first message with a timestamp
+          let firstTs: number | null = null;
+          for (const m of msgs) {
+            if (m.timestamp && m.timestamp > 0) { firstTs = m.timestamp; break; }
+          }
+          if (!firstTs) continue;
+          const tsLine = fmtDate(firstTs);
+          await writeSummary(folder, convo.title, tsLine + ' ' + existing);
+          updated++;
+        } catch { /* skip */ }
+      }
+
+      return NextResponse.json({ ok: true, updated, total: Object.keys(summaries).length });
+    }
+
     if (body?.action === 'replaceMany') {
       const { folder, entries } = body;
       if (typeof folder !== 'string' || !folder || !Array.isArray(entries)) {
@@ -145,8 +204,8 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
-    const path = await writeSummary(folder, title, content);
-    return NextResponse.json({ ok: true, path });
+    const savePath = await writeSummary(folder, title, content);
+    return NextResponse.json({ ok: true, path: savePath });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

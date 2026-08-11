@@ -1526,6 +1526,23 @@ export default function SystemPromptUpdater({
     }
   }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, folderName, title, resumeFromRight, rightText]);
 
+
+  // First-message timestamp for summary baking
+  const firstMessageTimestamp = useMemo(() => {
+    for (const m of originalMessages) {
+      if (m.timestamp && m.timestamp > 0) return m.timestamp;
+    }
+    return null;
+  }, [originalMessages]);
+
+  // Format as [YYYY-MM-DD HH:MM]
+  const firstMessageTsStr = useMemo(() => {
+    if (!firstMessageTimestamp) return '';
+    const d = new Date(firstMessageTimestamp);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `[${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}]`;
+  }, [firstMessageTimestamp]);
+
   // ── Run the summary writer (separate call, separate model) ───────────────
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
     const summaryAgentPrompt =
@@ -1599,7 +1616,8 @@ export default function SystemPromptUpdater({
         setStatusMessage(t('spu.st.summaryNoText'));
         return null;
       }
-      const newSummary = accum.trim();
+      const tsPrefix = firstMessageTsStr ? firstMessageTsStr + ' ' : '';
+      const newSummary = tsPrefix + accum.trim();
       setSummaryText(newSummary);
       setSummaryStatus({ state: 'done', thinkingChars, outputChars });
       setStatusMessage(controller.signal.aborted
@@ -1619,7 +1637,7 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter]);
+  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the

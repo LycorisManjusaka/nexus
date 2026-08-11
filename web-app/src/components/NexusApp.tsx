@@ -548,7 +548,6 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         onRenameChat={renameChat}
         onCloneChat={cloneChat}
         onToggleActive={toggleChatActive}
-        onNormalizeNames={normalizeFolderNames}
         onOpenSettings={() => setIsSettingsOpen(true)}
         folders={folders}
         setFolders={setFolders}

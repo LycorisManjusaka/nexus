@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusCircle, MessageSquare, Settings, Trash2, Folder, MoreVertical, Copy, Pencil, FolderPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Hash } from 'lucide-react';
+import { PlusCircle, MessageSquare, Settings, Trash2, Folder, MoreVertical, Copy, Pencil, FolderPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
 import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
@@ -24,7 +24,6 @@ interface SidebarProps {
   onRenameChat: (id: string, newTitle: string) => void;
   onCloneChat: (id: string) => void;
   onToggleActive?: (id: string) => void;
-  onNormalizeNames?: (folderName: string) => void;
   onOpenSettings: () => void;
 
   folders: any[];
@@ -46,7 +45,6 @@ export default function Sidebar({
   onRenameChat,
   onCloneChat,
   onToggleActive,
-  onNormalizeNames,
   onOpenSettings,
   folders,
   setFolders,
@@ -228,6 +226,32 @@ export default function Sidebar({
     }, 10);
     return () => document.removeEventListener('click', closeMenu);
   }, [menuOpenId]);
+
+
+  const handleAddTimestamps = async () => {
+    if (!activeFolder) return;
+    try {
+      const res = await fetch('/api/summaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'addTimestamps', folder: activeFolder.name }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert(t('sidebar.menu.addTimestampsDone').replace('{n}', data.updated).replace('{total}', data.total));
+        // Refresh summaries so hover previews pick up the new timestamps
+        const name = activeFolder.name;
+        fetch('/api/summaries?folder=' + encodeURIComponent(name) + '&mode=all')
+          .then(r => r.json())
+          .then(d => { if (d?.summaries) setFolderSummaries(d.summaries); })
+          .catch(() => {});
+      } else {
+        alert(t('sidebar.menu.addTimestampsError').replace('{e}', data.error || 'unknown'));
+      }
+    } catch (e: any) {
+      alert(t('sidebar.menu.addTimestampsError').replace('{e}', e?.message || ''));
+    }
+  };
 
   const handleSort = async (order: 'asc' | 'desc') => {
     if (!activeFolder) return;
@@ -627,14 +651,38 @@ export default function Sidebar({
                     <ArrowUp size={14} /> {t('sidebar.menu.sortAsc')}
                   </button>
                   <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!activeFolder) return;
+                      setFolderMenuOpen(false);
+                      try {
+                        const r = await fetch('/api/summaries', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ action: 'addTimestamps', folder: activeFolder.name }),
+                        });
+                        const d = await r.json();
+                        alert(d.ok
+                          ? t('sidebar.menu.addTimestampsDone').replace('{n}', String(d.updated || 0)).replace('{total}', String(d.total || 0))
+                          : (d.error || t('sidebar.menu.addTimestampsFailed')));
+                      } catch (e: any) {
+                        alert(t('sidebar.menu.addTimestampsFailed') + ': ' + (e?.message || ''));
+                      }
+                      fetchLogs();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Clock size={14} /> {t('sidebar.menu.addTimestamps')}
+                  </button>
+                  <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (activeFolder && onNormalizeNames) onNormalizeNames(activeFolder.name);
+                      handleAddTimestamps();
                       setFolderMenuOpen(false);
                     }}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <Hash size={14} /> {t('sidebar.menu.normalizeNames')}
+                    <Clock size={14} /> {t('sidebar.menu.addTimestamps')}
                   </button>
                   <button
                     onClick={(e) => {
