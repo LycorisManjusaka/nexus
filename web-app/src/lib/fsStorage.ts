@@ -274,7 +274,15 @@ async function resolvePathForAccess(folderName: string, relPath: string, opts?: 
 
 export async function listWorkspaceFiles(folderName: string): Promise<string[]> {
   const root = await ensureWorkspace(folderName);
+  const trustedRoot = await getTrustedJunctionRoot();
+  let realRoot: string;
+  try { realRoot = await fs.realpath(root); } catch { realRoot = root; }
+
   const out: string[] = [];
+  // Resolved-symlink dirs we've already walked — prevent double-visiting the
+  // same real directory through different symlink paths (and infinite loops).
+  const walkedReals = new Set<string>();
+
   async function walk(dir: string, prefix: string) {
     let entries: any[] = [];
     try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
@@ -282,10 +290,33 @@ export async function listWorkspaceFiles(folderName: string): Promise<string[]> 
       if (e.name.startsWith('.')) continue; // skip hidden + atomic-write tempfiles
       const full = path.join(dir, e.name);
       const rel = prefix ? `${prefix}/${e.name}` : e.name;
-      if (e.isDirectory()) await walk(full, rel);
-      else if (e.isFile()) out.push(rel);
+      if (e.isDirectory()) {
+        await walk(full, rel);
+      } else if (e.isSymbolicLink()) {
+        // POSIX symlinks return isDirectory()=false even when pointing at a
+        // directory. Resolve the target: if it's within the workspace or
+        // trusted-junction root, walk it transparently so nested junctions
+        // inside the workspace (e.g. common_workspace) appear as normal dirs.
+        try {
+          const realTarget = await fs.realpath(full);
+          if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) continue;
+          const st = await fs.stat(realTarget);
+          if (st.isDirectory()) {
+            if (walkedReals.has(realTarget)) continue;
+            walkedReals.add(realTarget);
+            await walk(realTarget, rel);
+          } else {
+            out.push(rel);
+          }
+        } catch {
+          // Broken symlink or permission denied — skip silently.
+        }
+      } else if (e.isFile()) {
+        out.push(rel);
+      }
     }
   }
+
   await walk(root, '');
   return out.sort();
 }
