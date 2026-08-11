@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, BarChart3, RefreshCw, Copy, Check, Loader2 } from 'lucide-react';
 import { fmtUSD } from '@/lib/modelPricing';
 import { compareConvoTitles } from '@/lib/convoSort';
+import { useT, renderRich } from '@/lib/i18n';
 
 // Rich billing-statistics window. Pulls the full priced dataset from /api/stats
 // once, then aggregates it locally into six report layouts. Every table is
@@ -40,13 +41,16 @@ type ReportType =
   | 'all-family-month'
   | 'family-entity';
 
-const REPORTS: { value: ReportType; label: string; desc: string }[] = [
-  { value: 'entity-convos', label: '① Entity · per conversation', desc: 'One entity — total cost of each of its conversations, plus a grand total. Includes messages with no timestamp.' },
-  { value: 'entity-months', label: '② Entity · per month', desc: 'One entity — cost per month over the chosen period. Timestamped messages only.' },
-  { value: 'all-entity-month', label: '③ All Nexus · Month × Entity', desc: '2D table: months down, entities across, with per-month and per-entity totals.' },
-  { value: 'family-months', label: '④ Model Family · per month', desc: 'One model family — cost per month over the chosen period.' },
-  { value: 'all-family-month', label: '⑤ All Families · Month × Family', desc: '2D table: months down, families across, with per-month and per-family totals.' },
-  { value: 'family-entity', label: '⑥ Entity × Family (period)', desc: '2D table over one period: which entity spent how much on which family, with totals.' },
+// Module scope can't call a hook, so the list carries KEYS and the labels
+// are resolved at render time — which is also what makes them re-render when
+// the language changes.
+const REPORTS: { value: ReportType; labelKey: string; descKey: string }[] = [
+  { value: 'entity-convos',    labelKey: 'stats.r1.label', descKey: 'stats.r1.desc' },
+  { value: 'entity-months',    labelKey: 'stats.r2.label', descKey: 'stats.r2.desc' },
+  { value: 'all-entity-month', labelKey: 'stats.r3.label', descKey: 'stats.r3.desc' },
+  { value: 'family-months',    labelKey: 'stats.r4.label', descKey: 'stats.r4.desc' },
+  { value: 'all-family-month', labelKey: 'stats.r5.label', descKey: 'stats.r5.desc' },
+  { value: 'family-entity',    labelKey: 'stats.r6.label', descKey: 'stats.r6.desc' },
 ];
 
 // ── Date / month-bucket helpers ─────────────────────────────────────────────
@@ -119,6 +123,8 @@ function gridToMarkdown(g: Grid): string {
 }
 
 export default function StatsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
+  const TOTAL = t('stats.total');
   const [data, setData] = useState<StatsPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +151,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       if (j.minTs) setStartDate((s) => s || toDateInput(j.minTs));
       if (j.maxTs) setEndDate((s) => s || toDateInput(j.maxTs));
     } catch (e: any) {
-      setError(e?.message || 'Failed to load statistics');
+      setError(e?.message || t('stats.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -190,10 +196,10 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         e.usd += r.usd; byConvo.set(r.convoId, e);
       }
       const rows = Array.from(byConvo.values()).sort((a, b) => compareConvoTitles(a.title, b.title));
-      grid = [['Conversation', 'Cost (USD)']];
+      grid = [[t('stats.col.conversation'), t('stats.col.cost')]];
       for (const row of rows) grid.push([row.title, cellNum(row.usd)]);
       const total = rows.reduce((s, r) => s + r.usd, 0);
-      grid.push(['TOTAL', fmtNum(total)]);
+      grid.push([TOTAL, fmtNum(total)]);
     }
 
     else if (report === 'entity-months') {
@@ -205,10 +211,10 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       ) : [];
       const byBucket = new Map<number, number>();
       for (const r of used) { const b = bucketOf(r.ts as number, firstDay); byBucket.set(b.key, (byBucket.get(b.key) || 0) + r.usd); }
-      grid = [['Month', 'Cost (USD)']];
+      grid = [[t('stats.col.month'), t('stats.col.cost')]];
       for (const b of buckets) grid.push([b.label, cellNum(byBucket.get(b.key) || 0)]);
       const total = used.reduce((s, r) => s + r.usd, 0);
-      grid.push(['TOTAL', fmtNum(total)]);
+      grid.push([TOTAL, fmtNum(total)]);
     }
 
     else if (report === 'family-months') {
@@ -220,10 +226,10 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       );
       const byBucket = new Map<number, number>();
       for (const r of used) { const b = bucketOf(r.ts as number, firstDay); byBucket.set(b.key, (byBucket.get(b.key) || 0) + r.usd); }
-      grid = [['Month', `${family} — Cost (USD)`]];
+      grid = [[t('stats.col.month'), t('stats.col.familyCost').replace('{family}', family)]];
       for (const b of buckets) grid.push([b.label, cellNum(byBucket.get(b.key) || 0)]);
       const total = used.reduce((s, r) => s + r.usd, 0);
-      grid.push(['TOTAL', fmtNum(total)]);
+      grid.push([TOTAL, fmtNum(total)]);
     }
 
     else if (report === 'all-entity-month' || report === 'all-family-month') {
@@ -243,7 +249,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         const c = byFamily ? r.family : r.entity;
         cell.set(key(bk, c), (cell.get(key(bk, c)) || 0) + r.usd);
       }
-      grid = [['Month', ...cols, 'TOTAL']];
+      grid = [[t('stats.col.month'), ...cols, TOTAL]];
       const colTotals = new Array(cols.length).fill(0);
       let grand = 0;
       for (const b of buckets) {
@@ -258,7 +264,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         grand += rowTotal;
         grid.push(row);
       }
-      grid.push(['TOTAL', ...colTotals.map((v) => fmtNum(v)), fmtNum(grand)]);
+      grid.push([TOTAL, ...colTotals.map((v) => fmtNum(v)), fmtNum(grand)]);
     }
 
     else if (report === 'family-entity') {
@@ -268,7 +274,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       const cell = new Map<string, number>();
       const key = (e: string, c: string) => `${e}||${c}`;
       for (const r of used) cell.set(key(r.entity, r.family), (cell.get(key(r.entity, r.family)) || 0) + r.usd);
-      grid = [['Entity', ...cols, 'TOTAL']];
+      grid = [[t('stats.col.entity'), ...cols, TOTAL]];
       const colTotals = new Array(cols.length).fill(0);
       let grand = 0;
       for (const e of rowEntities) {
@@ -283,8 +289,8 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         grand += rowTotal;
         grid.push(row);
       }
-      grid.push(['TOTAL', ...colTotals.map((v) => fmtNum(v)), fmtNum(grand)]);
-      note = 'Columns are model families; a Claude row is split into OAuth vs API by each conversation\'s billing mode.';
+      grid.push([TOTAL, ...colTotals.map((v) => fmtNum(v)), fmtNum(grand)]);
+      note = t('stats.note.familyEntity');
     }
 
     const me = measuredEstimated(used);
@@ -301,7 +307,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       setTimeout(() => setCopied(''), 1500);
     } catch {
       // Fallback: no clipboard permission — surface the text so it can be copied manually.
-      window.prompt('Copy the table:', text);
+      window.prompt(t('stats.copyPrompt'), text);
     }
   }
 
@@ -326,11 +332,11 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: 'var(--border, #3f3f46)' }}>
           <div className="flex items-center gap-2 font-semibold">
-            <BarChart3 size={18} /> Statistics · Billing
+            <BarChart3 size={18} /> {t('stats.title')}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={load} disabled={loading} className="flex items-center gap-1 rounded px-2 py-1 text-xs opacity-80 hover:opacity-100 disabled:opacity-40" title="Re-scan all logs">
-              {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Refresh
+            <button onClick={load} disabled={loading} className="flex items-center gap-1 rounded px-2 py-1 text-xs opacity-80 hover:opacity-100 disabled:opacity-40" title={t('stats.rescan')}>
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} {t('stats.refresh')}
             </button>
             <button onClick={onClose} className="p-1 opacity-70 hover:opacity-100"><X size={18} /></button>
           </div>
@@ -340,15 +346,15 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
         <div className="border-b px-4 py-3" style={{ borderColor: 'var(--border, #3f3f46)' }}>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-xs">
-              <span className="opacity-70">Report</span>
+              <span className="opacity-70">{t('stats.report')}</span>
               <select value={report} onChange={(e) => setReport(e.target.value as ReportType)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
-                {REPORTS.map((r) => <option key={r.value} value={r.value} style={inputStyle}>{r.label}</option>)}
+                {REPORTS.map((r) => <option key={r.value} value={r.value} style={inputStyle}>{t(r.labelKey)}</option>)}
               </select>
             </label>
 
             {needs.entity && (
               <label className="flex flex-col gap-1 text-xs">
-                <span className="opacity-70">Entity</span>
+                <span className="opacity-70">{t('stats.entity')}</span>
                 <select value={entity} onChange={(e) => setEntity(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
                   {(data?.entities || []).map((e) => <option key={e} value={e} style={inputStyle}>{e}</option>)}
                 </select>
@@ -357,7 +363,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
 
             {needs.family && (
               <label className="flex flex-col gap-1 text-xs">
-                <span className="opacity-70">Model Family</span>
+                <span className="opacity-70">{t('stats.family')}</span>
                 <select value={family} onChange={(e) => setFamily(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle}>
                   {(data?.families || []).map((f) => <option key={f} value={f} style={inputStyle}>{f}</option>)}
                 </select>
@@ -367,11 +373,11 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
             {needs.period && (
               <>
                 <label className="flex flex-col gap-1 text-xs">
-                  <span className="opacity-70">From</span>
+                  <span className="opacity-70">{t('stats.from')}</span>
                   <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle} />
                 </label>
                 <label className="flex flex-col gap-1 text-xs">
-                  <span className="opacity-70">To</span>
+                  <span className="opacity-70">{t('stats.to')}</span>
                   <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="rounded border px-2 py-1.5 text-sm" style={inputStyle} />
                 </label>
               </>
@@ -379,42 +385,45 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
 
             {needs.firstDay && (
               <label className="flex flex-col gap-1 text-xs">
-                <span className="opacity-70" title="Billing cycle start day of month (1 = calendar months)">Month starts on</span>
+                <span className="opacity-70" title={t('stats.monthStartsHint')}>{t('stats.monthStarts')}</span>
                 <input type="number" min={1} max={28} value={firstDay} onChange={(e) => setFirstDay(Math.min(28, Math.max(1, Number(e.target.value) || 1)))} className="w-20 rounded border px-2 py-1.5 text-sm" style={inputStyle} />
               </label>
             )}
 
             <button onClick={calculate} disabled={!data || loading} className="rounded bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40">
-              Calculate
+              {t('stats.calculate')}
             </button>
           </div>
-          <p className="mt-2 text-xs opacity-60">{REPORTS.find((r) => r.value === report)?.desc}</p>
+          <p className="mt-2 text-xs opacity-60">{t(REPORTS.find((r) => r.value === report)?.descKey || '')}</p>
         </div>
 
         {/* Output */}
         <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
           {error && <div className="rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>}
-          {loading && !data && <div className="flex items-center gap-2 text-sm opacity-70"><Loader2 size={16} className="animate-spin" /> Scanning all conversation logs…</div>}
+          {loading && !data && <div className="flex items-center gap-2 text-sm opacity-70"><Loader2 size={16} className="animate-spin" /> {t('stats.scanning')}</div>}
 
           {!result && data && !loading && (
             <div className="text-sm opacity-60">
-              Loaded {data.records.length.toLocaleString()} priced replies across {data.entities.length} entities
-              {data.skippedInactive ? ` · ${data.skippedInactive} inactive conversation(s) ignored` : ''}.
-              Choose a report and press <span className="font-medium">Calculate</span>.
+              {t('stats.loaded')
+                .replace('{n}', data.records.length.toLocaleString())
+                .replace('{entities}', String(data.entities.length))
+                .replace('{skipped}', data.skippedInactive
+                  ? t('stats.skippedInactive').replace('{n}', String(data.skippedInactive))
+                  : '')}
             </div>
           )}
 
           {result && (
             <>
               <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-                <span className="rounded bg-emerald-600/15 px-2 py-1 font-medium text-emerald-500">Total {fmtUSD(result.total)}</span>
-                <span className="opacity-70">measured {fmtUSD(result.measured)} · estimated {fmtUSD(result.estimated)}
-                  {result.total > 0 ? ` (${Math.round((result.estimated / result.total) * 100)}% estimated)` : ''}</span>
+                <span className="rounded bg-emerald-600/15 px-2 py-1 font-medium text-emerald-500">{t('stats.totalBadge').replace('{v}', fmtUSD(result.total))}</span>
+                <span className="opacity-70">{t('stats.measured').replace('{m}', fmtUSD(result.measured)).replace('{e}', fmtUSD(result.estimated))}
+                  {result.total > 0 ? t('stats.estimatedPct').replace('{pct}', String(Math.round((result.estimated / result.total) * 100))) : ''}</span>
                 <div className="ml-auto flex items-center gap-2">
-                  <button onClick={() => copy('tsv')} className="flex items-center gap-1 rounded border px-2 py-1 hover:opacity-100" style={inputStyle} title="Copy tab-separated (paste into a spreadsheet)">
+                  <button onClick={() => copy('tsv')} className="flex items-center gap-1 rounded border px-2 py-1 hover:opacity-100" style={inputStyle} title={t('stats.copyTsv')}>
                     {copied === 'tsv' ? <Check size={13} /> : <Copy size={13} />} TSV
                   </button>
-                  <button onClick={() => copy('md')} className="flex items-center gap-1 rounded border px-2 py-1 hover:opacity-100" style={inputStyle} title="Copy as a Markdown table">
+                  <button onClick={() => copy('md')} className="flex items-center gap-1 rounded border px-2 py-1 hover:opacity-100" style={inputStyle} title={t('stats.copyMd')}>
                     {copied === 'md' ? <Check size={13} /> : <Copy size={13} />} Markdown
                   </button>
                 </div>
@@ -431,7 +440,7 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
                   </thead>
                   <tbody>
                     {result.grid.slice(1).map((row, ri) => {
-                      const isTotal = row[0] === 'TOTAL';
+                      const isTotal = row[0] === TOTAL;
                       return (
                         <tr key={ri} className={isTotal ? 'font-semibold' : ''} style={isTotal ? { borderTop: '2px solid var(--border, #3f3f46)' } : undefined}>
                           {row.map((c, ci) => (
@@ -446,17 +455,13 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
 
               {result.unpricedModels.length > 0 && (
                 <p className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500/90">
-                  {result.unpricedModels.length} model{result.unpricedModels.length > 1 ? 's' : ''} in this report {result.unpricedModels.length > 1 ? 'have' : 'has'} no price row and count as $0 —
-                  add {result.unpricedModels.length > 1 ? 'them' : 'it'} to <code>src/lib/modelPricing.json</code> to include:{' '}
+                  {renderRich(t('stats.unpriced').replace('{n}', String(result.unpricedModels.length)))}
                   <span className="font-mono">{result.unpricedModels.join(', ')}</span>
                 </p>
               )}
               <p className="mt-3 text-xs opacity-55 leading-relaxed">
                 {result.note && <>{result.note}<br /></>}
-                Figures are the best-estimate hybrid: real usage where recorded, otherwise input reconstructed from the system prompt + preceding
-                messages and priced at each model's rate (estimates lean high — they ignore historical prompt-cache discounts and context-trimming).
-                Only original (non-copied) assistant replies count. Local models are free and excluded. OAuth Claude is priced like the Claude API
-                (notional subscription value). Prices come from <code>src/lib/modelPricing.json</code>.
+                {renderRich(t('stats.footnote'))}
               </p>
             </>
           )}

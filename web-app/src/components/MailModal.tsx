@@ -6,6 +6,7 @@ import {
   MailOpen, Archive, AlertTriangle, Check, Reply, FolderOpen,
 } from 'lucide-react';
 import EditableCombo from './EditableCombo';
+import { useT } from '@/lib/i18n';
 
 // ── Mail Manager ────────────────────────────────────────────────────────────
 // Human-facing window over local_data/letters/. Opens from the ✉️ header button.
@@ -53,6 +54,7 @@ export default function MailModal({
   onClose: () => void;
   onUnreadChange?: (n: number) => void;
 }) {
+  const t = useT();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [letters, setLetters] = useState<Letter[]>([]);
@@ -86,17 +88,17 @@ export default function MailModal({
     try {
       const res = await fetch('/api/letters');
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'could not load the letters');
+      if (!res.ok) throw new Error(data?.error || t('mail.loadFailed'));
       setLetters(data.letters || []);
       setNames(data.names || []);
       setIdentities(data.identities || []);
       onUnreadChange?.(data.unread || 0);
     } catch (e: any) {
-      setError(e?.message || 'could not load the letters');
+      setError(e?.message || t('mail.loadFailed'));
     } finally {
       setLoading(false);
     }
-  }, [onUnreadChange]);
+  }, [onUnreadChange, t]);
 
   useEffect(() => { if (open) load(); }, [open, load]);
 
@@ -123,18 +125,18 @@ export default function MailModal({
         const res = await fetch(`/api/letters?id=${encodeURIComponent(selectedId)}`);
         const data = await res.json();
         if (cancelled) return;
-        if (!res.ok) throw new Error(data?.error || 'could not open the letter');
+        if (!res.ok) throw new Error(data?.error || t('mail.openFailed'));
         setDetail(data.letter);
         setDraftTitle(data.letter.title || '');
         setDraftText(data.letter.body || '');
         setDirty(false);
         setConfirmDelete(false);
       } catch (e: any) {
-        if (!cancelled) setError(e?.message || 'could not open the letter');
+        if (!cancelled) setError(e?.message || t('mail.openFailed'));
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedId]);
+  }, [selectedId, t]);
 
   const act = async (payload: Record<string, unknown>) => {
     setBusy(true);
@@ -146,10 +148,10 @@ export default function MailModal({
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'the operation failed');
+      if (!res.ok) throw new Error(data?.error || t('mail.opFailed'));
       return data;
     } catch (e: any) {
-      setError(e?.message || 'the operation failed');
+      setError(e?.message || t('mail.opFailed'));
       return null;
     } finally {
       setBusy(false);
@@ -241,9 +243,9 @@ export default function MailModal({
   if (!open) return null;
 
   const stateChip = (l: Letter) => {
-    if (l.archived) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-500/20 text-zinc-400">archived</span>;
-    if (l.read) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">read</span>;
-    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/25 text-amber-400">unread</span>;
+    if (l.archived) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-500/20 text-zinc-400">{t('mail.chip.archived')}</span>;
+    if (l.read) return <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">{t('mail.chip.read')}</span>;
+    return <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/25 text-amber-400">{t('mail.chip.unread')}</span>;
   };
 
   return (
@@ -255,22 +257,22 @@ export default function MailModal({
         {/* ── header ─────────────────────────────────────────────────────── */}
         <div className="flex items-center gap-3 border-b border-border px-5 py-3">
           <Mail className="h-5 w-5 text-amber-500" />
-          <h2 className="text-base font-semibold text-foreground">Mail Manager</h2>
+          <h2 className="text-base font-semibold text-foreground">{t('mail.title')}</h2>
           <span className="text-xs text-muted-foreground">
-            {letters.length} letter{letters.length === 1 ? '' : 's'}
+            {t('mail.count').replace('{n}', String(letters.length))}
             {letters.some((l) => !l.read && !l.archived) &&
-              ` · ${letters.filter((l) => !l.read && !l.archived).length} unread`}
+              t('mail.unreadSuffix').replace('{n}', String(letters.filter((l) => !l.read && !l.archived).length))}
           </span>
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={() => { setComposing(true); setSelectedId(null); }}
               className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-500 hover:bg-amber-500/25"
             >
-              <PenLine className="h-3.5 w-3.5" /> Write
+              <PenLine className="h-3.5 w-3.5" /> {t('mail.write')}
             </button>
             <button
               onClick={() => act({ action: 'regenerate' }).then(() => load())}
-              title="Rewrite local_data/letters/_status.md from what is on disk"
+              title={t('mail.regenTitle')}
               className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -287,11 +289,9 @@ export default function MailModal({
         {undeliverable > 0 && (
           <div className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-5 py-2 text-xs text-amber-500">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              {undeliverable} unread letter{undeliverable === 1 ? '' : 's'} addressed to a name with no Digital Identity folder.
-              Nobody will be told about {undeliverable === 1 ? 'it' : 'them'} — read {undeliverable === 1 ? 'it' : 'them'} here,
-              or create a folder with that exact name to hand {undeliverable === 1 ? 'it' : 'them'} over.
-            </span>
+            {/* One sentence, one key: Japanese has no plural, so the English
+                it/them branching could not survive translation. */}
+            <span>{t('mail.undeliverable').replace('{n}', String(undeliverable))}</span>
           </div>
         )}
 
@@ -307,7 +307,7 @@ export default function MailModal({
                     stateFilter === s ? 'bg-amber-500/20 text-amber-500' : 'text-muted-foreground hover:bg-muted'
                   }`}
                 >
-                  {s}
+                  {t(`mail.filter.${s}`)}
                 </button>
               ))}
               <select
@@ -315,24 +315,24 @@ export default function MailModal({
                 onChange={(e) => setWho(e.target.value)}
                 className="ml-auto max-w-[9rem] rounded-md border border-border bg-background px-2 py-1 text-xs outline-none"
               >
-                <option value="">everyone</option>
+                <option value="">{t('mail.everyone')}</option>
                 {names.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Filter by title or name…"
+              placeholder={t('mail.filterPlaceholder')}
               className="border-b border-border bg-background px-3 py-2 text-xs outline-none"
             />
             <div className="min-h-0 flex-1 overflow-y-auto">
               {loading && letters.length === 0 && (
                 <div className="flex items-center justify-center gap-2 p-6 text-xs text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" /> Reading the mailboxes…
+                  <Loader2 className="h-4 w-4 animate-spin" /> {t('mail.reading')}
                 </div>
               )}
               {!loading && filtered.length === 0 && (
-                <div className="p-6 text-center text-xs text-muted-foreground">No letters match.</div>
+                <div className="p-6 text-center text-xs text-muted-foreground">{t('mail.noMatch')}</div>
               )}
               {filtered.map((l) => (
                 <button
@@ -344,7 +344,7 @@ export default function MailModal({
                 >
                   <div className="flex items-center gap-2">
                     <span className={`truncate text-sm ${!l.read && !l.archived ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
-                      {l.title || '(no title)'}
+                      {l.title || t('mail.noTitle')}
                     </span>
                     <span className="ml-auto shrink-0">{stateChip(l)}</span>
                   </div>
@@ -352,7 +352,7 @@ export default function MailModal({
                     <span className="truncate">{l.from}</span>
                     <span>→</span>
                     <span className={`truncate ${identitySet.has(l.to) ? '' : 'text-amber-500'}`}>
-                      {l.to}{identitySet.has(l.to) ? '' : ' (no folder)'}
+                      {l.to}{identitySet.has(l.to) ? '' : t('mail.noFolder')}
                     </span>
                     <span className="ml-auto shrink-0 font-mono">{when(l.sent)}</span>
                   </div>
@@ -365,22 +365,19 @@ export default function MailModal({
           <div className="flex min-w-0 flex-1 flex-col">
             {composing ? (
               <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-                <p className="text-xs leading-relaxed text-muted-foreground">
-                  Writes a letter exactly as an entity would — same store, same rules. Any name is accepted, whether or not it
-                  has a folder; pick one from the list or type a new one.
-                </p>
+                <p className="text-xs leading-relaxed text-muted-foreground">{t('mail.compose.hint')}</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground">From</label>
-                    <EditableCombo value={cFrom} onChange={setCFrom} options={nameOptions} placeholder="sender" />
+                    <label className="mb-1 block text-xs font-semibold text-foreground">{t('mail.from')}</label>
+                    <EditableCombo value={cFrom} onChange={setCFrom} options={nameOptions} placeholder={t('mail.senderPlaceholder')} />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-semibold text-foreground">To</label>
-                    <EditableCombo value={cTo} onChange={setCTo} options={nameOptions} placeholder="recipient" />
+                    <label className="mb-1 block text-xs font-semibold text-foreground">{t('mail.to')}</label>
+                    <EditableCombo value={cTo} onChange={setCTo} options={nameOptions} placeholder={t('mail.recipientPlaceholder')} />
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-semibold text-foreground">Title</label>
+                  <label className="mb-1 block text-xs font-semibold text-foreground">{t('mail.titleField')}</label>
                   <input
                     value={cTitle}
                     onChange={(e) => setCTitle(e.target.value)}
@@ -388,7 +385,7 @@ export default function MailModal({
                   />
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <label className="mb-1 block text-xs font-semibold text-foreground">Letter</label>
+                  <label className="mb-1 block text-xs font-semibold text-foreground">{t('mail.letterField')}</label>
                   <textarea
                     value={cText}
                     onChange={(e) => setCText(e.target.value)}
@@ -401,16 +398,16 @@ export default function MailModal({
                     disabled={busy || !cFrom.trim() || !cTo.trim() || !cTitle.trim() || !cText.trim()}
                     className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-black disabled:opacity-40"
                   >
-                    <Send className="h-4 w-4" /> Deliver
+                    <Send className="h-4 w-4" /> {t('mail.deliver')}
                   </button>
                   <button onClick={() => setComposing(false)} className="rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-muted">
-                    Cancel
+                    {t('mail.cancel')}
                   </button>
                 </div>
               </div>
             ) : !detail ? (
               <div className="flex flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
-                Select a letter to read, edit, or change its flags.
+                {t('mail.selectHint')}
               </div>
             ) : (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -423,7 +420,7 @@ export default function MailModal({
                   <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
                     <span>{detail.from}</span><span>→</span>
                     <span className={identitySet.has(detail.to) ? '' : 'text-amber-500'}>
-                      {detail.to}{identitySet.has(detail.to) ? '' : ' (no folder — nobody is notified)'}
+                      {detail.to}{identitySet.has(detail.to) ? '' : t('mail.noFolderNotified')}
                     </span>
                     <span className="font-mono">{when(detail.sent)}</span>
                     <span className="font-mono opacity-60">{detail.id}</span>
@@ -433,10 +430,10 @@ export default function MailModal({
                 <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
                   <button
                     onClick={() => startReply(detail)}
-                    title={`Write back as ${detail.to}, to ${detail.from}`}
+                    title={t('mail.replyTitle').replace('{to}', detail.to).replace('{from}', detail.from)}
                     className="flex items-center gap-1.5 rounded-md bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-500 hover:bg-amber-500/25"
                   >
-                    <Reply className="h-3.5 w-3.5" /> Reply
+                    <Reply className="h-3.5 w-3.5" /> {t('mail.reply')}
                   </button>
                   <button
                     onClick={() => setFlag(detail, { read: !detail.read })}
@@ -444,7 +441,7 @@ export default function MailModal({
                       detail.read ? 'bg-emerald-500/20 text-emerald-400' : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
-                    <MailOpen className="h-3.5 w-3.5" /> {detail.read ? 'Read' : 'Mark read'}
+                    <MailOpen className="h-3.5 w-3.5" /> {detail.read ? t('mail.isRead') : t('mail.markRead')}
                   </button>
                   <button
                     onClick={() => setFlag(detail, { archived: !detail.archived })}
@@ -452,32 +449,32 @@ export default function MailModal({
                       detail.archived ? 'bg-zinc-500/25 text-zinc-300' : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
-                    <Archive className="h-3.5 w-3.5" /> {detail.archived ? 'Archived' : 'Archive'}
+                    <Archive className="h-3.5 w-3.5" /> {detail.archived ? t('mail.isArchived') : t('mail.archive')}
                   </button>
                   <button
                     onClick={reveal}
                     disabled={busy}
-                    title="Open the folder with this letter's file selected — its .read / .archived sidecars are next to it"
+                    title={t('mail.showFileTitle')}
                     className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-40"
                   >
-                    <FolderOpen className="h-3.5 w-3.5" /> Show file
+                    <FolderOpen className="h-3.5 w-3.5" /> {t('mail.showFile')}
                   </button>
-                  {detail.readAt && <span className="text-[11px] text-muted-foreground">opened {when(detail.readAt)}</span>}
+                  {detail.readAt && <span className="text-[11px] text-muted-foreground">{t('mail.opened').replace('{when}', when(detail.readAt))}</span>}
 
                   <div className="ml-auto flex items-center gap-2">
-                    {saved && <span className="flex items-center gap-1 text-[11px] text-emerald-400"><Check className="h-3 w-3" /> saved</span>}
+                    {saved && <span className="flex items-center gap-1 text-[11px] text-emerald-400"><Check className="h-3 w-3" /> {t('mail.saved')}</span>}
                     <button
                       onClick={save}
                       disabled={!dirty || busy}
                       className="flex items-center gap-1.5 rounded-md bg-amber-500/15 px-2.5 py-1 text-xs font-semibold text-amber-500 disabled:opacity-40"
                     >
-                      <Save className="h-3.5 w-3.5" /> Save
+                      <Save className="h-3.5 w-3.5" /> {t('mail.save')}
                     </button>
                     {confirmDelete ? (
                       <>
-                        <span className="text-[11px] text-red-400">Delete permanently?</span>
-                        <button onClick={remove} className="rounded-md bg-red-500 px-2.5 py-1 text-xs font-semibold text-white">Yes</button>
-                        <button onClick={() => setConfirmDelete(false)} className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted">No</button>
+                        <span className="text-[11px] text-red-400">{t('mail.deleteConfirm')}</span>
+                        <button onClick={remove} className="rounded-md bg-red-500 px-2.5 py-1 text-xs font-semibold text-white">{t('mail.yes')}</button>
+                        <button onClick={() => setConfirmDelete(false)} className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted">{t('mail.no')}</button>
                       </>
                     ) : (
                       <button

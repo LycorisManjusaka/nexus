@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Square, AlertCircle } from 'lucide-react';
+import { useT, renderRich } from '@/lib/i18n';
 
 // Voice selection moved to per-folder settings (Sidebar → Folder Settings →
 // Live Session Voice). The voiceName prop is passed in by ChatArea from the
@@ -29,6 +30,7 @@ export default function LiveSession({
   open, onClose, onCommit, systemPrompt, seedMessages, voiceName, aiVoice,
   audioOutDevice1, audioOutDevice2,
 }: LiveSessionProps) {
+  const t = useT();
   const [phase, setPhase] = useState<'config' | 'starting' | 'live' | 'stopping'>('config');
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
@@ -251,7 +253,7 @@ export default function LiveSession({
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        throw new Error(err.error || `start failed: ${r.status}`);
+        throw new Error(err.error || t('live.startFailed').replace('{status}', String(r.status)));
       }
       const es = new EventSource('/api/live/stream');
       esRef.current = es;
@@ -264,7 +266,7 @@ export default function LiveSession({
         if (data.type === 'closed') {
           // If we're still in 'starting' phase, this is an early close — show error and bail
           if (phase === 'starting') {
-            setError(prev => prev || 'Gemini Live closed the connection before setup completed.');
+            setError(prev => prev || t('live.closedEarly'));
             setPhase('config');
           }
         }
@@ -274,7 +276,7 @@ export default function LiveSession({
         }
         if (data.type === 'usage') setTokens(data.tokens);
         if (data.type === 'limit_reached') {
-          setError(`Context limit ${data.limit} reached at ${data.tokens} tokens. Stopping.`);
+          setError(t('live.limitReached').replace('{limit}', String(data.limit)).replace('{tokens}', String(data.tokens)));
           handleStop();
         }
         if (data.type === 'no_audio_warning') {
@@ -294,13 +296,14 @@ export default function LiveSession({
 
   const handleSendText = async () => {
     if (!textInput.trim()) return;
-    const t = textInput.trim();
+    // Renamed from `t`: the translation hook now owns that name in this scope.
+    const txt = textInput.trim();
     setTextInput('');
     try {
       await fetch('/api/live/input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: t }),
+        body: JSON.stringify({ text: txt }),
       });
     } catch (e: any) { setError(e.message); }
   };
@@ -319,12 +322,12 @@ export default function LiveSession({
         stopOk = true;
         messages = Array.isArray(data.messages) ? data.messages : [];
         images = Array.isArray(data.images) ? data.images : [];
-        if (data.mergeError) setError(`Stopped, but merging the transcript failed: ${data.mergeError}`);
+        if (data.mergeError) setError(t('live.mergeFailed').replace('{error}', String(data.mergeError)));
       } else {
-        setError(data.error || `Stop request failed: ${r.status}`);
+        setError(data.error || t('live.stopFailed').replace('{status}', String(r.status)));
       }
     } catch (e: any) {
-      setError(`Stop request errored: ${e.message}`);
+      setError(t('live.stopErrored').replace('{error}', e.message));
     }
 
     // Always tear down audio resources
@@ -343,12 +346,7 @@ export default function LiveSession({
         onCommit(messages, images);
       } else {
         // Surface a warning to the user instead of silently dismissing.
-        setError(
-          'Session stopped, but nothing was captured to copy into the conversation. ' +
-          'Check the Next.js dev terminal for [live] log lines to see why ' +
-          '(transcripts may be empty if outputAudioTranscription wasn\'t enabled, ' +
-          'or kohai.txt wasn\'t tailed).'
-        );
+        setError(t('live.nothingCaptured'));
         // Stay in config phase so the user sees the error before deciding to close.
         setPhase('config');
         return;
@@ -382,10 +380,7 @@ export default function LiveSession({
       setDiscoveredModels(list);
       if (list.length > 0 && !model) setModel(list[0].id);
       if (list.length === 0) {
-        setDiscoveryError(
-          'No models with bidiGenerateContent capability are available on your API key. ' +
-          'You may need to enable Live API access in Google AI Studio, or your tier doesn\'t include it yet.'
-        );
+        setDiscoveryError(t('live.noModelsHelp'));
       }
     } catch (e: any) {
       setDiscoveryError(e.message);
@@ -405,8 +400,8 @@ export default function LiveSession({
         <div className="px-6 py-4 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Radio size={18} className={phase === 'live' ? 'text-red-500 animate-pulse' : 'text-muted-foreground'} />
-            <h3 className="font-semibold text-lg">Live Session</h3>
-            {phase === 'live' && <span className="text-xs text-muted-foreground">· {tokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens</span>}
+            <h3 className="font-semibold text-lg">{t('live.title')}</h3>
+            {phase === 'live' && <span className="text-xs text-muted-foreground">{t('live.tokens').replace('{used}', tokens.toLocaleString()).replace('{limit}', contextLimit.toLocaleString())}</span>}
           </div>
           {phase === 'config' && <button onClick={onClose} className="text-muted-foreground hover:text-foreground">×</button>}
         </div>
@@ -421,8 +416,8 @@ export default function LiveSession({
           <div className="p-6 space-y-4 overflow-y-auto">
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-muted-foreground">Live Model (discovered from your API key)</label>
-                <button onClick={discoverModels} className="text-[10px] text-indigo-500 hover:underline" type="button">refresh</button>
+                <label className="text-xs text-muted-foreground">{t('live.model')}</label>
+                <button onClick={discoverModels} className="text-[10px] text-indigo-500 hover:underline" type="button">{t('live.refresh')}</button>
               </div>
               <select
                 value={model}
@@ -430,7 +425,7 @@ export default function LiveSession({
                 disabled={discoveredModels.length === 0}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm disabled:opacity-50"
               >
-                {discoveredModels.length === 0 && <option value="">— no Live-capable models found —</option>}
+                {discoveredModels.length === 0 && <option value="">{t('live.noModels')}</option>}
                 {discoveredModels.map(m => (
                   <option key={`${m.version}/${m.id}`} value={m.id}>
                     {m.id} ({m.version}{m.displayName ? ` — ${m.displayName}` : ''})
@@ -442,26 +437,26 @@ export default function LiveSession({
               )}
             </div>
             <div className="text-xs text-muted-foreground bg-muted/30 px-3 py-2 rounded">
-              Voice: <span className="font-mono text-foreground">{voiceName}</span>
-              <span className="ml-2 opacity-70">(set per-folder in Sidebar → ⚙ Folder Settings → Live Session Voice)</span>
+              {t('live.voice')} <span className="font-mono text-foreground">{voiceName}</span>
+              <span className="ml-2 opacity-70">{t('live.voiceHint')}</span>
             </div>
             <div>
-              <label className="text-xs text-muted-foreground block mb-1">Context limit (tokens)</label>
+              <label className="text-xs text-muted-foreground block mb-1">{t('live.contextLimit')}</label>
               <input type="number" min={1000} step={1000} value={contextLimit} onChange={(e) => setContextLimit(parseInt(e.target.value) || 20000)}
                 className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-              <div className="text-[10px] text-muted-foreground mt-1">Session auto-stops when this is exceeded.</div>
+              <div className="text-[10px] text-muted-foreground mt-1">{t('live.contextHint')}</div>
             </div>
             <div>
-              <label className="text-xs text-muted-foreground block mb-1">VRChat screenshots folder (optional)</label>
-              <input type="text" value={vrchatPath} onChange={(e) => setVrchatPath(e.target.value)} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono" placeholder="leave empty to disable" />
+              <label className="text-xs text-muted-foreground block mb-1">{t('live.vrchatFolder')}</label>
+              <input type="text" value={vrchatPath} onChange={(e) => setVrchatPath(e.target.value)} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono" placeholder={t('live.vrchatPlaceholder')} />
             </div>
             <div className="text-xs text-muted-foreground bg-muted/30 px-3 py-2 rounded">
-              Seed: <span className="font-mono">{seedMessages.length}</span> original messages from the current conversation will be used as context. Speech transcripts from <span className="font-mono">kohai.txt</span> and <span className="font-mono">ear_log.txt</span> will be tailed in real time.
+              {renderRich(t('live.seed').replace('{n}', String(seedMessages.length)))}
             </div>
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={onClose} className="px-4 py-2 text-sm border border-border rounded-lg">Cancel</button>
+              <button onClick={onClose} className="px-4 py-2 text-sm border border-border rounded-lg">{t('live.cancel')}</button>
               <button onClick={handleStart} className="px-4 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2">
-                <Radio size={14} /> Start Live Session
+                <Radio size={14} /> {t('live.start')}
               </button>
             </div>
           </div>
@@ -472,17 +467,18 @@ export default function LiveSession({
             <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
               {transcript.length === 0 ? (
                 <div className="text-sm text-muted-foreground text-center py-8">
-                  {phase === 'starting' ? 'Connecting to Gemini Live…' : 'Waiting for input. Speak, drop a screenshot in VRChat, or type below.'}
+                  {phase === 'starting' ? t('live.connecting') : t('live.waiting')}
                 </div>
               ) : (
-                transcript.map((t, i) => (
+                // `line`, not `t` — the translation hook owns that name here now.
+                transcript.map((line, i) => (
                   <div key={i} className={`text-sm px-3 py-1.5 rounded-lg ${
-                    t.role === 'assistant' ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300' :
-                    t.role === 'human' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' :
+                    line.role === 'assistant' ? 'bg-indigo-500/10 text-indigo-700 dark:text-indigo-300' :
+                    line.role === 'human' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300' :
                     'bg-muted'
                   }`}>
-                    <span className="text-[10px] uppercase tracking-wider mr-2 opacity-60">{t.role}</span>
-                    {t.text}
+                    <span className="text-[10px] uppercase tracking-wider mr-2 opacity-60">{line.role}</span>
+                    {line.text}
                   </div>
                 ))
               )}
@@ -492,12 +488,12 @@ export default function LiveSession({
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(); } }}
-                placeholder="Type to inject text into the session…"
+                placeholder={t('live.inputPlaceholder')}
                 className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm"
                 disabled={phase !== 'live'}
               />
               <button onClick={handleStop} className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2 text-sm">
-                <Square size={14} /> Stop
+                <Square size={14} /> {t('live.stop')}
               </button>
             </div>
           </>

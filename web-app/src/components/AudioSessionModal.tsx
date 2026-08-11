@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { X, Play, Square, RefreshCw, Plus, Trash2, Save, ChevronDown, ChevronRight, Loader2, Monitor, LayoutGrid, Speaker } from 'lucide-react';
+import { useT, renderRich } from '@/lib/i18n';
 
 // Control panel for the local helper processes that make up an audio session:
 // the voice changer or logger, the ear logger, and the speech-recognition
@@ -35,6 +36,7 @@ const BLANK = {
 };
 
 export default function AudioSessionModal({ onClose }: any) {
+  const t = useT();
   const [host, setHost] = useState('');
   const [services, setServices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,7 +67,7 @@ export default function AudioSessionModal({ onClose }: any) {
       });
       const d = await r.json();
       setMics(d.mics || []);
-      if (!d.mics?.length && !quiet) setLog([`✗ ${d.error || 'No microphones returned.'}`]);
+      if (!d.mics?.length && !quiet) setLog([`✗ ${d.error || t('audio.noMics')}`]);
     } catch (e: any) {
       if (!quiet) setLog([`✗ ${e.message}`]);
     }
@@ -147,7 +149,7 @@ export default function AudioSessionModal({ onClose }: any) {
       if (d.results) setLog(d.results.map((x: any) => `${x.ok ? '✓' : '✗'} ${x.label}: ${x.message}`));
       if (d.error) setLog([`✗ ${d.error}`]);
       if (body.action === 'start' || body.action === 'startAll') {
-        setLog(prev => [...prev, 'Watching for start-up… each service reports in its own console window.']);
+        setLog(prev => [...prev, t('audio.watching')]);
         watchStatuses(60);
       }
       // After a whole session start, place the windows once the consoles have
@@ -162,7 +164,7 @@ export default function AudioSessionModal({ onClose }: any) {
             }).then(x => x.json());
             if (rr.services) applyServices(rr.services);
             const placed = (rr.results || []).filter((x: any) => x.ok).length;
-            setLog(prev => [...prev, `Arranged ${placed} window${placed === 1 ? '' : 's'} on monitor ${monitorIndex + 1}.`]);
+            setLog(prev => [...prev, t('audio.arranged').replace('{n}', String(placed)).replace('{m}', String(monitorIndex + 1))]);
           } catch { /* the button is still there */ }
         }, 8000);
       }
@@ -191,9 +193,9 @@ export default function AudioSessionModal({ onClose }: any) {
 
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
           <div>
-            <h2 className="text-lg font-bold">Audio Session</h2>
+            <h2 className="text-lg font-bold">{t('audio.title')}</h2>
             <p className="text-[10px] text-muted-foreground">
-              {runningCount} of {services.length} running · settings for this machine
+              {t('audio.subtitle').replace('{running}', String(runningCount)).replace('{total}', String(services.length))}
               {host && <span className="font-mono"> ({host})</span>}
             </p>
           </div>
@@ -210,7 +212,7 @@ export default function AudioSessionModal({ onClose }: any) {
             className="px-3 py-2 text-sm font-semibold rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
           >
             {busy === 'startAll' ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
-            Run Audio Session
+            {t('audio.run')}
           </button>
           <button
             onClick={() => act({ action: 'stopAll' }, 'stopAll')}
@@ -218,16 +220,16 @@ export default function AudioSessionModal({ onClose }: any) {
             className="px-3 py-2 text-sm font-semibold rounded-lg bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
           >
             {busy === 'stopAll' ? <Loader2 size={15} className="animate-spin" /> : <Square size={15} />}
-            Stop Audio Session
+            {t('audio.stop')}
           </button>
           <span className="text-[10px] text-muted-foreground">
-            acts on the {enabledCount} checked service{enabledCount === 1 ? '' : 's'}
+            {t('audio.actsOn').replace('{n}', String(enabledCount))}
           </span>
           <button
             onClick={refresh}
             disabled={!!busy}
             className="ml-auto p-2 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40"
-            title="Re-check status"
+            title={t('audio.recheck')}
           >
             <RefreshCw size={15} />
           </button>
@@ -243,13 +245,13 @@ export default function AudioSessionModal({ onClose }: any) {
             onChange={e => setMonitorIndex(Number(e.target.value))}
             className="px-2 py-1 bg-background border border-border rounded text-xs outline-none focus:ring-1 focus:ring-indigo-500 max-w-[22rem]"
           >
-            {monitors.length === 0 && <option value={0}>— no monitors detected —</option>}
+            {monitors.length === 0 && <option value={0}>{t('audio.noMonitors')}</option>}
             {monitors.map((m: any) => (
               <option key={m.index} value={m.index}>
                 {m.index + 1}. {m.width}×{m.height}
-                {m.height > m.width ? ' (portrait)' : ''}
-                {m.primary ? ' · primary' : ''}
-                {` · at ${m.x},${m.y}`}
+                {m.height > m.width ? t('audio.portrait') : ''}
+                {m.primary ? t('audio.primary') : ''}
+                {t('audio.at').replace('{x}', String(m.x)).replace('{y}', String(m.y))}
               </option>
             ))}
           </select>
@@ -257,15 +259,15 @@ export default function AudioSessionModal({ onClose }: any) {
             onClick={() => act({ action: 'arrange', monitorIndex }, 'arrange')}
             disabled={!!busy || runningCount === 0}
             className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 transition-colors"
-            title="Stack the console windows of running services down this monitor"
+            title={t('audio.arrangeTitle')}
           >
             {busy === 'arrange' ? <Loader2 size={13} className="animate-spin" /> : <LayoutGrid size={13} />}
-            Arrange windows
+            {t('audio.arrange')}
           </button>
           <span className="text-[10px] text-muted-foreground">
             {runningCount > 0
-              ? `splits into ${runningCount} horizontal band${runningCount === 1 ? '' : 's'}`
-              : 'start services first'}
+              ? t('audio.bands').replace('{n}', String(runningCount))
+              : t('audio.startFirst')}
           </span>
         </div>
 
@@ -275,7 +277,7 @@ export default function AudioSessionModal({ onClose }: any) {
             old one. */}
         <div className="px-6 py-2 border-b border-border flex items-center gap-2 shrink-0 flex-wrap bg-muted/10">
           <Speaker size={14} className="text-muted-foreground shrink-0" />
-          <span className="text-[11px] font-medium shrink-0">Change to output device</span>
+          <span className="text-[11px] font-medium shrink-0">{t('audio.outputLabel')}</span>
           <select
             value={outputDeviceId}
             onChange={e => {
@@ -287,7 +289,7 @@ export default function AudioSessionModal({ onClose }: any) {
             }}
             className="px-2 py-1 bg-background border border-border rounded text-xs outline-none focus:ring-1 focus:ring-indigo-500 max-w-[24rem] flex-1 min-w-[12rem]"
           >
-            <option value="">— don&apos;t change the output device —</option>
+            <option value="">{t('audio.noOutputChange')}</option>
             {outputDevices.map((d: any) => (
               <option key={d.id} value={d.id}>{d.name}</option>
             ))}
@@ -296,20 +298,18 @@ export default function AudioSessionModal({ onClose }: any) {
             onClick={() => act({ action: 'setOutputDevice', deviceId: outputDeviceId, applyNow: true }, 'output')}
             disabled={!!busy || !outputDeviceId}
             className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-muted hover:bg-muted/70 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shrink-0"
-            title="Switch to this device now, without starting the session"
+            title={t('audio.applyNowTitle')}
           >
             {busy === 'output' ? <Loader2 size={13} className="animate-spin" /> : null}
-            Apply now
+            {t('audio.applyNow')}
           </button>
         </div>
 
         <div className="p-6 space-y-3 overflow-y-auto">
-          {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+          {loading && <div className="text-sm text-muted-foreground">{t('audio.loading')}</div>}
 
           {!loading && services.length === 0 && (
-            <div className="text-sm text-muted-foreground">
-              No services configured for this machine yet. Use <span className="font-semibold">Add service</span> below.
-            </div>
+            <div className="text-sm text-muted-foreground">{renderRich(t('audio.noServices'))}</div>
           )}
 
           {services.map((s, idx) => (
@@ -320,7 +320,7 @@ export default function AudioSessionModal({ onClose }: any) {
                   checked={s.enabled !== false}
                   onChange={e => patch(idx, { enabled: e.target.checked })}
                   className="w-4 h-4 accent-indigo-500 shrink-0"
-                  title="Include when running/stopping the whole session"
+                  title={t('audio.includeTitle')}
                 />
                 <button
                   onClick={() => setExpanded(expanded === s.id ? null : s.id)}
@@ -333,7 +333,7 @@ export default function AudioSessionModal({ onClose }: any) {
 
                 {!s.pathExists && s.path && (
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-semibold shrink-0">
-                    path missing
+                    {t('audio.pathMissing')}
                   </span>
                 )}
                 <span
@@ -344,7 +344,7 @@ export default function AudioSessionModal({ onClose }: any) {
                   }`}
                   title={s.pid ? `pid ${s.pid}` : undefined}
                 >
-                  {s.running ? 'running' : 'stopped'}
+                  {s.running ? t('audio.running') : t('audio.stopped')}
                 </span>
 
                 <button
@@ -356,16 +356,16 @@ export default function AudioSessionModal({ onClose }: any) {
                       : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25'
                   }`}
                 >
-                  {busy === s.id ? '…' : s.running ? 'Stop' : 'Start'}
+                  {busy === s.id ? '…' : s.running ? t('audio.stopBtn') : t('audio.startBtn')}
                 </button>
               </div>
 
               {expanded === s.id && (
                 <div className="px-3 pb-3 pt-1 space-y-2 border-t border-border/60">
                   <div className="grid grid-cols-2 gap-2">
-                    <Field label="Label" value={s.label} onChange={v => patch(idx, { label: v })} />
+                    <Field label={t('audio.f.label')} value={s.label} onChange={v => patch(idx, { label: v })} />
                     <div>
-                      <FieldLabel>Type</FieldLabel>
+                      <FieldLabel>{t('audio.f.type')}</FieldLabel>
                       <select
                         value={s.kind}
                         onChange={e => patch(idx, { kind: e.target.value })}
@@ -377,15 +377,15 @@ export default function AudioSessionModal({ onClose }: any) {
                       </select>
                     </div>
                   </div>
-                  <Field label="Path" mono value={s.path} onChange={v => patch(idx, { path: v })} />
+                  <Field label={t('audio.f.path')} mono value={s.path} onChange={v => patch(idx, { path: v })} />
                   <Field
-                    label="Arguments"
+                    label={t('audio.f.args')}
                     mono
                     value={joinArgs(s.args)}
                     onChange={v => patch(idx, { args: splitArgs(v) })}
-                    hint={'space-separated; use "quotes" for a value containing spaces'}
+                    hint={t('audio.f.argsHint')}
                   />
-                  <Field label="Working directory (blank = folder of Path)" mono value={s.cwd || ''} onChange={v => patch(idx, { cwd: v })} />
+                  <Field label={t('audio.f.cwd')} mono value={s.cwd || ''} onChange={v => patch(idx, { cwd: v })} />
 
                   {/* Microphone BY NAME. Saving the index is unsafe — plugging
                       in any audio device renumbers the list, and the saved
@@ -397,16 +397,16 @@ export default function AudioSessionModal({ onClose }: any) {
                       would just be a lie. */}
                   {(takesMic(s) || s.micName) && (
                     <div>
-                      <FieldLabel>Microphone (resolved to --mic index at launch)</FieldLabel>
+                      <FieldLabel>{t('audio.mic.label')}</FieldLabel>
                       <div className="flex gap-1.5">
                         <select
                           value={s.micName || ''}
                           onChange={e => patch(idx, { micName: e.target.value })}
                           className="flex-1 px-2 py-1.5 bg-background border border-border rounded text-xs outline-none focus:ring-1 focus:ring-indigo-500"
                         >
-                          <option value="">— don&apos;t manage the microphone —</option>
+                          <option value="">{t('audio.mic.none')}</option>
                           {s.micName && !mics.some((m: any) => m.name === s.micName) && (
-                            <option value={s.micName}>{s.micName} (not connected)</option>
+                            <option value={s.micName}>{t('audio.mic.notConnected').replace('{name}', s.micName)}</option>
                           )}
                           {mics.map((m: any) => (
                             <option key={m.index} value={m.name}>{m.index} : {m.name}</option>
@@ -416,24 +416,19 @@ export default function AudioSessionModal({ onClose }: any) {
                           onClick={() => loadMics(s.path)}
                           disabled={micsLoading}
                           className="px-2 py-1 text-[10px] font-semibold bg-muted rounded hover:bg-muted/70 disabled:opacity-40 shrink-0"
-                          title="Re-read the device list from recognize.exe"
+                          title={t('audio.mic.refreshTitle')}
                         >
-                          {micsLoading ? '…' : 'Refresh mics'}
+                          {micsLoading ? '…' : t('audio.mic.refresh')}
                         </button>
                       </div>
                       {s.micName && (
-                        <p className="text-[9px] text-muted-foreground mt-0.5">
-                          The <code>--mic</code> value in Arguments is overwritten at launch with this device&apos;s current index.
-                        </p>
+                        <p className="text-[9px] text-muted-foreground mt-0.5">{renderRich(t('audio.mic.note'))}</p>
                       )}
                     </div>
                   )}
 
                   {!takesMic(s) && !s.micName && (
-                    <p className="text-[9px] text-muted-foreground">
-                      No microphone setting here — <code>--mic</code> belongs to <code>recognize.exe</code>.
-                      This tool chooses its own devices from its folder&apos;s <code>device_settings.json</code>.
-                    </p>
+                    <p className="text-[9px] text-muted-foreground">{renderRich(t('audio.mic.na'))}</p>
                   )}
 
                   <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -444,36 +439,36 @@ export default function AudioSessionModal({ onClose }: any) {
                       className="w-3.5 h-3.5 accent-indigo-500"
                     />
                     <span className="text-[11px]">
-                      Show console window
-                      <span className="text-muted-foreground"> — mic levels, logs and startup errors stay visible</span>
+                      {t('audio.console')}
+                      <span className="text-muted-foreground">{t('audio.consoleHint')}</span>
                     </span>
                   </label>
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <FieldLabel>Detect by</FieldLabel>
+                      <FieldLabel>{t('audio.detectBy')}</FieldLabel>
                       <select
                         value={s.probe?.type || 'tcp'}
                         onChange={e => patch(idx, { probe: { ...s.probe, type: e.target.value } })}
                         className="w-full px-2 py-1.5 bg-background border border-border rounded text-xs outline-none focus:ring-1 focus:ring-indigo-500"
                       >
-                        <option value="tcp">listening port</option>
-                        <option value="process">command line</option>
+                        <option value="tcp">{t('audio.detect.tcp')}</option>
+                        <option value="process">{t('audio.detect.process')}</option>
                       </select>
                     </div>
                     {(s.probe?.type || 'tcp') === 'tcp' ? (
                       <Field
-                        label="Port"
+                        label={t('audio.f.port')}
                         value={String(s.probe?.port ?? '')}
                         onChange={v => patch(idx, { probe: { ...s.probe, port: Number(v) || 0 } })}
                       />
                     ) : (
                       <Field
-                        label="Command-line contains"
+                        label={t('audio.f.match')}
                         mono
                         value={s.probe?.match || ''}
                         onChange={v => patch(idx, { probe: { ...s.probe, match: v } })}
-                        hint="must be unique per instance"
+                        hint={t('audio.f.matchHint')}
                       />
                     )}
                   </div>
@@ -482,7 +477,7 @@ export default function AudioSessionModal({ onClose }: any) {
                     onClick={() => { setServices(prev => prev.filter((_, i) => i !== idx)); setDirty(true); }}
                     className="text-[11px] text-red-500 hover:text-red-400 flex items-center gap-1"
                   >
-                    <Trash2 size={12} /> Remove this service
+                    <Trash2 size={12} /> {t('audio.remove')}
                   </button>
                 </div>
               )}
@@ -492,13 +487,13 @@ export default function AudioSessionModal({ onClose }: any) {
           <button
             onClick={() => {
               const id = `svc_${Date.now().toString(36)}`;
-              setServices(prev => [...prev, { ...BLANK, id, label: 'New service' }]);
+              setServices(prev => [...prev, { ...BLANK, id, label: t('audio.newService') }]);
               setExpanded(id);
               setDirty(true);
             }}
             className="text-xs text-indigo-500 hover:text-indigo-400 flex items-center gap-1"
           >
-            <Plus size={14} /> Add service
+            <Plus size={14} /> {t('audio.add')}
           </button>
 
           {log.length > 0 && (
@@ -517,18 +512,18 @@ export default function AudioSessionModal({ onClose }: any) {
 
         <div className="px-6 py-4 border-t border-border bg-secondary/30 flex justify-between items-center gap-3 shrink-0">
           <span className="text-[10px] text-muted-foreground">
-            {dirty ? 'Unsaved changes to the service list.' : 'Service list saved.'}
+            {dirty ? t('audio.dirty') : t('audio.clean')}
           </span>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-4 py-2 text-sm font-medium rounded-lg hover:bg-muted transition-colors">
-              Close
+              {t('common.close')}
             </button>
             <button
               onClick={save}
               disabled={!!busy || !dirty}
               className="px-4 py-2 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
             >
-              <Save size={16} /> Save list
+              <Save size={16} /> {t('audio.saveList')}
             </button>
           </div>
         </div>
