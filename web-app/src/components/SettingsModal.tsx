@@ -38,6 +38,14 @@ const SIMPLE_PROVIDERS: { id: string; ph: string; help?: boolean }[] = [
 ];
 
 export default function SettingsModal({ onClose, globalSettings, setGlobalSettings }: any) {
+  // Counter the User Identity editor watches to run its own save. We bump it
+  // whenever the modal's "Save Changes" button is pressed and the User
+  // Identity tab is active — otherwise the editor's per-tab save button looks
+  // like it does nothing, because the modal Save Changes closes the window
+  // without persisting the identity list.
+  const userIdentitySaveTrigger = React.useRef(0);
+  const [activeTab, setActiveTabState] = React.useState<'keys'|'audio'|'identity'|'other'>('keys');
+  const setActiveTab = (tab: 'keys'|'audio'|'identity'|'other') => setActiveTabState(tab);
   const t = useT();
   // claudeAuthMode + claudeOAuthToken are OPT-IN additions for using your
   // Claude Pro/Max subscription billing instead of pay-per-token API billing.
@@ -184,6 +192,11 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
         body: JSON.stringify({ paths: enginePaths })
       }),
     ]);
+    // The User Identity editor is the one tab with its own validation — name
+    // uniqueness, the "Anonymous" lock, fallback consistency — so it persists
+    // itself rather than being part of this Promise.all. Bump the trigger so
+    // it runs now, before the modal closes.
+    userIdentitySaveTrigger.current += 1;
     onClose();
   };
 
@@ -450,7 +463,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
               <Users size={16} /> {t('useridentity.heading')}
             </h3>
-            <UserIdentityEditor />
+            <UserIdentityEditor saveTrigger={userIdentitySaveTrigger} />
           </div>
           )}
 

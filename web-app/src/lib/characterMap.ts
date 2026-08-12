@@ -110,10 +110,15 @@ export function normalizeRule(raw: any): IdentityRule {
   if (!character && raw.charId !== undefined && raw.charId !== null) {
     character = legacyCharIdToName(engine, String(raw.charId)) || undefined;
   }
-  if (!character) return out; // engine alone is not a usable voice
-
+  // Engine without a character IS a usable signal: it means "this identity has
+  // a voice, on THIS engine, and the character needs to be re-picked in the UI
+  // because the speaker catalog isn't available right now." Dropping engine here
+  // makes the editor show "no voice" for a rule the user deliberately configured
+  // — that's actively misleading, not just incomplete. The engine is preserved;
+  // the character is left at whatever was resolved (possibly undefined), and the
+  // UI shows the engine dropdown ready with the character picker empty.
   out.engine = engine;
-  out.character = character;
+  if (character) out.character = character;
 
   const style: string | undefined = raw.defaultStyle || raw.styleName || undefined;
   // A legacy numeric styleId is deliberately NOT translated: style order shifts

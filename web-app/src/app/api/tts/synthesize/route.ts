@@ -92,7 +92,25 @@ function resolveByName(list: any[], idx: number, name?: string): any {
   return list[idx];
 }
 
-async function synthesizeSegment(text: string, engine: number, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = [], meta?: SynthMeta, char_name?: string, style_name?: string): Promise<ArrayBuffer | null> {
+// TTS engine name → legacy numeric engine id. The new identity system stores
+// engines by name (voicevox/coeiroink/aivisspeech), matching the voice-changer
+// rewrite, but this route's synthesis backends still dispatch on a numeric id.
+// A name that isn't in this map silently degrades: the `else` branch at the
+// bottom throws `Invalid engine` with a clear message.
+const ENGINE_NAME_TO_NUM: Record<string, number> = { voicevox: 0, coeiroink: 1, aivisspeech: 2 };
+
+async function synthesizeSegment(text: string, engine: number | string, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = [], meta?: SynthMeta, char_name?: string, style_name?: string): Promise<ArrayBuffer | null> {
+    // Resolve engine names to numeric ids so the three `if (engine === N)` branches
+    // below still discriminate correctly. The caller (MessageBubble → TTS context)
+    // passes whatever the identity system hands it, which is now always a name.
+    if (typeof engine === 'string') {
+      const resolved = ENGINE_NAME_TO_NUM[engine.toLowerCase()];
+      if (resolved === undefined) {
+        throw new Error(`Invalid engine: "${engine}". Expected voicevox, coeiroink, or aivisspeech.`);
+      }
+      engine = resolved;
+    }
+
     // Per-entity pronunciation dictionary (local_data/tts_dict/<folder>.json):
     // literal CJK-friendly substring replacement, applied FIRST so an entity can
     // override any reading (names, jargon) before the generic passes below.

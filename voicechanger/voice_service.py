@@ -1,9 +1,9 @@
 import asyncio
 import websockets
-import time
 import re
-import json
 from pathlib import Path
+
+import nexus_identity
 
 # ==========================================
 # voice_service.py
@@ -17,12 +17,20 @@ from pathlib import Path
 #   • Does NOT change the voice: no TTS synthesis, no audio devices, no
 #     clipboard, no character/engine switching commands, no quirks.
 #   • Appends the recognized text to kohai.txt in the SAME format as
-#     voice_changer.py's log_to_kohai(), so NEXUS's VRChat merge picks it up
-#     unchanged (a "[engine-char-style]" header on an empty file, then
-#     "[HH:MM:SS] text" lines).
+#     voice_changer.py and ear_service.py:
+#
+#         [HH:MM:SS] (Name)        text
+#         [HH:MM:SS] (Name|Style)  text
+#
+# There is no state header any more. There used to be one — "[VOICE|engine|char|
+# style]", and before that a numeric "[0-2-0]" — because the speaker was a pair
+# of slot indices inside the voice changer's own settings file, and a reader had
+# to be told which. Now the speaker is a name in Nexus's user_identity.json, so
+# every line can simply say who said it. That also means kohai.txt and
+# ear_log.txt are the same format, and merging them is a single regex.
 #
 # Use this when you only want the user's speech transcribed into kohai.txt
-# (e.g. NEXUS VRChat mode) without running the full voice changer.
+# (e.g. NEXUS Audio Session) without running the full voice changer.
 # ==========================================
 
 
@@ -33,17 +41,6 @@ class Config:
     DATA_DIR = PROGRAM_DIR.parent / "local_data" / "voicechanger"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     KOHAI_TXT_PATH = DATA_DIR / "kohai.txt"
-    CHARA_SETTINGS_FILE = DATA_DIR / "chara_settings.json"
-    # Cached speaker catalogs — voice_service.py never loads a live engine (no
-    # TTS synthesis here), so unlike voice_changer.py it has no in-memory
-    # speaker list to resolve a numeric char/style index into a real name.
-    # Both files are written by voice_changer.py (_load_voicevox_speakers() /
-    # _load_coeiroink_speakers()); if voice_changer.py has never run on this
-    # machine, these caches simply won't exist yet and resolution falls back
-    # to an empty name (see get_header() below).
-    VOICEVOX_SPEAKERS_FILE = DATA_DIR / "speakers.json"
-    COEIROINK_SPEAKERS_FILE = DATA_DIR / "coeiroink_speakers.json"
-    ENGINES = ["voicevox", "coeiroink"]
 
 
 class VoiceService:
@@ -52,87 +49,17 @@ class VoiceService:
         # voice_changer.py / ear_service.py drop so they never reach kohai.txt.
         self.noise_hallucinations = {"ごめん", "ありがとうございました", "ご視野", "ご視野の", "ん"}
 
-    # ------------------------------------------------------------------
-    # Header "[VOICE|engine|charName|styleName]" — same format
-    # voice_changer.py writes (NEXUS's vrchatLogs.ts parses this exact
-    # pattern; a numeric "[0-2-0]"-style header never matches it and silently
-    # leaves the speaker on the fallback identity forever). We read the
-    # current engine/char/style index from chara_settings.json, then resolve
-    # that index into a real name via the speaker catalogs voice_changer.py
-    # caches to disk — never a numeric slot index, since a TTS engine's
-    # speaker-list order shifts whenever a new voice is installed.
-    # ------------------------------------------------------------------
-    def _load_speaker_catalog(self, engine):
-        path = Config.VOICEVOX_SPEAKERS_FILE if engine == "voicevox" else Config.COEIROINK_SPEAKERS_FILE
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-
-    def get_header(self):
-        engine = "voicevox"
-        char_name = ""
-        style_name = ""
-        try:
-            with open(Config.CHARA_SETTINGS_FILE, "r", encoding="utf-8") as f:
-                settings = json.load(f)
-            engine = settings.get("current_engine", "voicevox")
-            if engine not in Config.ENGINES:
-                engine = "voicevox"
-            engine_settings = settings.get(engine, {})
-            char_idx = engine_settings.get("current_character", 0)
-            style_idx = engine_settings.get("character_styles", {}).get(str(char_idx), 0)
-
-            catalog = self._load_speaker_catalog(engine)
-            if catalog and 0 <= char_idx < len(catalog):
-                char_data = catalog[char_idx]
-                if engine == "voicevox":
-                    char_name = char_data.get("name", "") or ""
-                    styles = char_data.get("styles", [])
-                    if 0 <= style_idx < len(styles):
-                        style_name = styles[style_idx].get("name", "") or ""
-                else:
-                    char_name = char_data.get("speakerName", "") or ""
-                    styles = char_data.get("styles", [])
-                    if 0 <= style_idx < len(styles):
-                        style_name = styles[style_idx].get("styleName", "") or ""
-        except Exception:
-            pass
-        return f"[VOICE|{engine}|{char_name}|{style_name}]"
-
-    # ------------------------------------------------------------------
-    # Same write logic / format as voice_changer.py's log_to_kohai().
-    # ------------------------------------------------------------------
     def log_to_kohai(self, text):
         if not text or not text.strip():
             return
         try:
-            is_empty = (
-                not Config.KOHAI_TXT_PATH.exists()
-                or Config.KOHAI_TXT_PATH.stat().st_size == 0
-            )
-            content = ""
-            clean_text = text.strip()
-            is_header = re.match(r"^\[VOICE\|[^|]*\|[^|]*\|[^|]*\]$", clean_text) is not None
-
-            # On an empty file, prepend the current voice-state header (unless the
-            # incoming line already IS a header).
-            if is_empty and not is_header:
-                content += self.get_header() + "\n"
-
-            # State-header lines get no timestamp; everything else does.
-            if is_header:
-                content += clean_text + "\n"
-                log_print = clean_text
-            else:
-                timestamp = time.strftime("%H:%M:%S")
-                content += f"[{timestamp}] {clean_text}\n"
-                log_print = f"[{timestamp}] {clean_text}"
-
+            # The speaker is resolved per line, not once at startup: the human
+            # can switch identity mid-session from any Nexus window, and the
+            # next line must already say the new name.
+            line = nexus_identity.transcript_line(text.strip())
             with open(Config.KOHAI_TXT_PATH, "a", encoding="utf-8") as f:
-                f.write(content)
-            print(f"   [Kohai Log] Appended: {log_print}")
+                f.write(line)
+            print(f"   [Kohai Log] Appended: {line.rstrip()}")
         except Exception as e:
             print(f"   [Kohai Log Error] {e}")
 
@@ -161,10 +88,12 @@ class VoiceService:
             print(f"[Voice Service] エラー発生: {e}")
 
     async def start(self):
+        ident, style, is_override = nexus_identity.resolve()
         print("=========================================")
         print("  Voice Service (kohai logger / no changer)")
         print(f"  Port: {Config.PORT}")
         print(f"  Log File: {Config.KOHAI_TXT_PATH.absolute()}")
+        print(f"  Identity: {ident.name}" + (f" ({style})" if style else ""))
         print("=========================================")
         print("『ゆーかねすぴれこ』を起動し、送信先を ws://127.0.0.1:13000 に設定してください。")
 

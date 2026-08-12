@@ -8,31 +8,46 @@ import hashlib
 import pyperclip
 import asyncio
 import websockets
-import time  # <-- 新規追加: タイムスタンプ用
 from pathlib import Path
+
+import nexus_identity
 
 # ==========================================
 # 設定・定数クラス
+#
+# Who is speaking is NOT decided here any more. It lives in Nexus's
+# local_data/user_identity.json (see nexus_identity.py), which this process
+# re-reads on every utterance — so switching identity in any Nexus window, or by
+# voice here, takes effect everywhere at once with no state of our own to keep
+# in sync. chara_settings.json is gone.
 # ==========================================
 class Config:
-    VOICEVOX_URL = "http://127.0.0.1:50021"
-    COEIROINK_URL = "http://127.0.0.1:50032"
-    ENGINES = ["voicevox", "coeiroink"]
+    # Every engine Nexus can name in character_map.json. AivisSpeech speaks the
+    # VOICEVOX HTTP API, so it shares that code path entirely.
+    ENGINE_URLS = {
+        "voicevox": "http://127.0.0.1:50021",
+        "coeiroink": "http://127.0.0.1:50032",
+        "aivisspeech": "http://127.0.0.1:10101",
+    }
+    # Engines whose speaker catalog and synthesis calls follow VOICEVOX's shape
+    # ({"name", "styles":[{"name","id"}]}, /audio_query + /synthesis).
+    VOICEVOX_LIKE = {"voicevox", "aivisspeech"}
 
     # PROGRAM_DIR = this file's own location (git-tracked, unchanging code +
     # notification .wav assets). DATA_DIR = local_data/voicechanger (gitignored
-    # per-machine state: character selection, device settings, quirks, cached
-    # speaker catalog, live transcripts). Anchored off __file__ rather than a
-    # bare relative path so these resolve correctly no matter what cwd the
-    # process was launched with.
+    # per-machine state: device settings, quirks, cached speaker catalogs, live
+    # transcripts). Anchored off __file__ rather than a bare relative path so
+    # these resolve correctly no matter what cwd the process was launched with.
     PROGRAM_DIR = Path(__file__).resolve().parent
     DATA_DIR = PROGRAM_DIR.parent / "local_data" / "voicechanger"
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     DEVICE_SETTINGS_FILE = DATA_DIR / 'device_settings.json'
-    VOICEVOX_SPEAKERS_FILE = DATA_DIR / 'speakers.json'
-    COEIROINK_SPEAKERS_FILE = DATA_DIR / 'coeiroink_speakers.json'
-    CHARA_SETTINGS_FILE = DATA_DIR / 'chara_settings.json'
+    SPEAKER_CACHE_FILES = {
+        "voicevox": DATA_DIR / 'speakers.json',
+        "coeiroink": DATA_DIR / 'coeiroink_speakers.json',
+        "aivisspeech": DATA_DIR / 'aivisspeech_speakers.json',
+    }
     QUIRKS_FILE = DATA_DIR / 'quirks.json'
     AUDIO_FOLDER = DATA_DIR / 'audio'
 
@@ -48,9 +63,23 @@ class Config:
     }
 
 # ==========================================
-# キャラクター特有の言い回し管理 (アップデート版)
+# キャラクター特有の言い回し管理
 # ==========================================
 class QuirksManager:
+    """Per-speaker text rewrites (「私」→「わし」 and friends).
+
+    Keys are tried in order of how specific they are:
+
+        "おじいちゃん"        the Nexus identity — survives everything
+        "voicevox_春日部つむぎ"  engine + character name
+        "voicevox_15"          legacy engine + slot index
+
+    The legacy index key is only a reader concession: it points at whatever
+    character sits in that slot today, which is exactly the instability the rest
+    of this rewrite removes. Renaming the key to the identity is a one-line edit
+    in quirks.json and makes it permanent.
+    """
+
     def __init__(self):
         self.file_path = Config.QUIRKS_FILE
         self.quirks = self._load()
@@ -77,17 +106,21 @@ class QuirksManager:
             with open(self.file_path, 'w', encoding='utf-8') as f:
                 json.dump(default, f, ensure_ascii=False, indent=2)
             return default
-            
+
         with open(self.file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    def apply(self, text, engine, char_idx):
-        key = f"{engine}_{char_idx}"
-        if key not in self.quirks:
+    def apply(self, text, keys):
+        rules = None
+        for key in keys:
+            if key and key in self.quirks:
+                rules = self.quirks[key]
+                break
+        if not rules:
             return text
-        
-        for pattern, repl in self.quirks[key].items():
-            if pattern.startswith("//"): 
+
+        for pattern, repl in rules.items():
+            if pattern.startswith("//"):
                 continue
             try:
                 text = re.sub(pattern, repl, text)
@@ -128,9 +161,9 @@ class AudioManager:
 
     def setup_devices(self):
         try:
-            with open(Config.DEVICE_SETTINGS_FILE, 'r') as f:
+            with open(Config.DEVICE_SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError):
             settings = {
                 "mic_keyword": "steam streaming microphone",
                 "voice_speaker_keyword": "usb pnp sound device",
@@ -213,166 +246,148 @@ class AudioManager:
 # ==========================================
 # 音声合成エンジン管理クラス
 # ==========================================
+class VoiceTarget:
+    """A fully resolved "speak this as" — the engine's own objects, looked up by
+    name at the moment of synthesis and thrown away afterwards."""
+
+    def __init__(self, identity, engine, char_data, style_data):
+        self.identity = identity
+        self.engine = engine
+        self.char_data = char_data
+        self.style_data = style_data
+
+    @property
+    def char_name(self):
+        return self.char_data.get("name") or self.char_data.get("speakerName") or ""
+
+    @property
+    def style_name(self):
+        if not self.style_data:
+            return ""
+        return self.style_data.get("name") or self.style_data.get("styleName") or ""
+
+
 class EngineManager:
+    """Speaker catalogs, and synthesis for whoever is currently selected.
+
+    It holds no notion of "the current character": that question is answered by
+    nexus_identity.resolve() every time it is asked. The only state here is the
+    catalog of what each engine can say, which is a property of the engines.
+    """
+
     def __init__(self, audio_manager):
         self.audio_manager = audio_manager
-        self.speakers_data = {"voicevox": [], "coeiroink": []}
-        
+        self.speakers_data = {name: [] for name in Config.ENGINE_URLS}
+
         Config.AUDIO_FOLDER.mkdir(exist_ok=True)
-        self._load_settings()
-        self._load_voicevox_speakers()
-        self._load_coeiroink_speakers()
+        for engine in Config.ENGINE_URLS:
+            self.load_speakers(engine)
 
-    def _get_default_settings(self):
-        return {
-            "current_engine": "voicevox",
-            "voicevox": {"current_character": 1, "character_styles": {"1": 0}},
-            "coeiroink": {"current_character": 0, "character_styles": {"0": 0}}
-        }
-
-    def _load_settings(self):
+    # ── Catalogs ──────────────────────────────────────────────────────────────
+    def load_speakers(self, engine):
+        """Live fetch, cached to disk. The cache is what lets a name still
+        resolve when the engine isn't running — and what lets other processes
+        (Nexus, voice_service.py) resolve the same names without an engine."""
+        url = Config.ENGINE_URLS.get(engine)
+        cache = Config.SPEAKER_CACHE_FILES.get(engine)
+        if not url or not cache:
+            return
+        path = "/speakers" if engine in Config.VOICEVOX_LIKE else "/v1/speakers"
         try:
-            with open(Config.CHARA_SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if "voicevox" in data and "current_character" not in data["voicevox"]:
-                    print("Updating chara_settings.json to the new format...")
-                    new_data = self._get_default_settings()
-                    new_data["current_engine"] = data.get("current_engine", "voicevox")
-                    for eng in ["voicevox", "coeiroink"]:
-                        if eng in data:
-                            old_c = data[eng].get("character_index", 0)
-                            old_s = data[eng].get("style_index", 0)
-                            new_data[eng]["current_character"] = old_c
-                            new_data[eng]["character_styles"][str(old_c)] = old_s
-                    self.settings = new_data
-                    self.save_settings()
-                else:
-                    self.settings = data
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.settings = self._get_default_settings()
-            self.save_settings()
-
-    def save_settings(self):
-        with open(Config.CHARA_SETTINGS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.settings, f, ensure_ascii=False, indent=2)
-
-    @property
-    def current_engine(self): return self.settings["current_engine"]
-    
-    @current_engine.setter
-    def current_engine(self, val): self.settings["current_engine"] = val
-
-    @property
-    def char_idx(self): return self.settings[self.current_engine]["current_character"]
-    
-    @char_idx.setter
-    def char_idx(self, val): 
-        self.settings[self.current_engine]["current_character"] = val
-        if str(val) not in self.settings[self.current_engine]["character_styles"]:
-            self.settings[self.current_engine]["character_styles"][str(val)] = 0
-
-    @property
-    def style_idx(self): 
-        return self.settings[self.current_engine]["character_styles"].get(str(self.char_idx), 0)
-    
-    @style_idx.setter
-    def style_idx(self, val): 
-        self.settings[self.current_engine]["character_styles"][str(self.char_idx)] = val
-
-    def _load_voicevox_speakers(self):
-        try:
-            response = requests.get(f"{Config.VOICEVOX_URL}/speakers", timeout=5)
+            response = requests.get(f"{url}{path}", timeout=5)
             if response.status_code == 200:
-                self.speakers_data["voicevox"] = response.json()
-                with open(Config.VOICEVOX_SPEAKERS_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(self.speakers_data["voicevox"], f, ensure_ascii=False, indent=2)
+                self.speakers_data[engine] = response.json()
+                with open(cache, 'w', encoding='utf-8') as f:
+                    json.dump(self.speakers_data[engine], f, ensure_ascii=False, indent=2)
+                return
         except requests.exceptions.RequestException:
-            try:
-                with open(Config.VOICEVOX_SPEAKERS_FILE, 'r', encoding='utf-8') as f:
-                    self.speakers_data["voicevox"] = json.load(f)
-            except Exception: pass
-
-    def _load_coeiroink_speakers(self):
-        # Mirrors _load_voicevox_speakers()'s live-fetch-then-cache-to-disk
-        # pattern. Previously this only lived in memory for the lifetime of
-        # this process, so nothing else (e.g. voice_service.py, which never
-        # loads a live engine) could resolve a coeiroink char/style index into
-        # a real name.
+            pass
         try:
-            response = requests.get(f"{Config.COEIROINK_URL}/v1/speakers")
-            if response.status_code == 200:
-                self.speakers_data["coeiroink"] = response.json()
-                with open(Config.COEIROINK_SPEAKERS_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(self.speakers_data["coeiroink"], f, ensure_ascii=False, indent=2)
-        except requests.exceptions.RequestException:
-            try:
-                with open(Config.COEIROINK_SPEAKERS_FILE, 'r', encoding='utf-8') as f:
-                    self.speakers_data["coeiroink"] = json.load(f)
-            except Exception: pass
+            with open(cache, 'r', encoding='utf-8') as f:
+                self.speakers_data[engine] = json.load(f)
+        except Exception:
+            pass
 
-    def get_character_info(self):
-        data = self.speakers_data[self.current_engine]
-        if not data or self.char_idx >= len(data): return None, None
-        
-        char_data = data[self.char_idx]
-        if self.current_engine == "voicevox":
-            return char_data["name"], char_data["styles"][self.style_idx]["name"] if self.style_idx < len(char_data["styles"]) else None
-        else:
-            return char_data["speakerName"], char_data["styles"][self.style_idx]["styleName"] if self.style_idx < len(char_data["styles"]) else None
+    def find_character(self, engine, character_name):
+        for c in self.speakers_data.get(engine) or []:
+            if (c.get("name") or c.get("speakerName")) == character_name:
+                return c
+        return None
 
-    def switch_engine(self, engine_index):
-        if engine_index is not None and 0 <= engine_index < len(Config.ENGINES):
-            new_engine = Config.ENGINES[engine_index]
-            if not self.speakers_data[new_engine]: return f"エンジンが利用できません"
-            self.current_engine = new_engine
-            self.save_settings()
-            return f"エンジン変更成功"
-        return "無効なエンジン番号です"
+    def styles_for(self, char_data):
+        """Style NAMES for a catalog entry, in the engine's own order — which is
+        the order 「〇番目のスタイル」 counts through."""
+        out = []
+        for s in (char_data or {}).get("styles") or []:
+            name = s.get("name") or s.get("styleName")
+            if name:
+                out.append(name)
+        return out
 
-    def switch_character_style(self, c_idx=None, s_idx=None):
-        data = self.speakers_data[self.current_engine]
-        if not data: return "キャラクターが読み込まれていません"
+    # ── Resolution ────────────────────────────────────────────────────────────
+    def resolve_target(self):
+        """The currently selected identity, turned into engine objects.
 
-        if c_idx is not None:
-            if 0 <= c_idx < len(data):
-                self.char_idx = c_idx
-            else: return "キャラクター番号が範囲外です"
+        Returns (VoiceTarget|None, reason). `reason` explains a None so the
+        caller can say something useful instead of failing silently — an
+        identity with no voice is normal, an unreachable engine is not.
+        """
+        identity, style, _is_override = nexus_identity.resolve()
+        if not identity.has_voice:
+            return None, f"「{identity.name}」に声は設定されていません"
 
-        if s_idx is not None:
-            styles = data[self.char_idx].get("styles", [])
-            if 0 <= s_idx < len(styles):
-                self.style_idx = s_idx
-            else: return "スタイル番号が範囲外です"
+        catalog = self.speakers_data.get(identity.engine)
+        if not catalog:
+            return None, f"エンジン「{identity.engine}」が利用できません"
 
-        char_name, style_name = self.get_character_info()
-        if char_name and style_name:
-            self.save_settings()
-            return f"{char_name}の{style_name}に変更成功"
-        return "認識に失敗しました"
+        char_data = self.find_character(identity.engine, identity.character)
+        if not char_data:
+            return None, f"「{identity.character}」が{identity.engine}に見つかりません"
 
-    def generate_hashed_filename(self, text, identifier):
-        return hashlib.sha256(f"{text}_{self.current_engine}_{identifier}".encode('utf-8')).hexdigest()[:16]
+        styles = char_data.get("styles") or []
+        style_data = None
+        if style:
+            style_data = next(
+                (s for s in styles if (s.get("name") or s.get("styleName")) == style), None
+            )
+        # A named style that the engine no longer has falls through to the
+        # engine's own first style rather than refusing to speak: the identity is
+        # still right, only the flavour is stale.
+        if style_data is None and styles:
+            style_data = styles[0]
 
-    def synthesize_speech(self, text):
+        return VoiceTarget(identity, identity.engine, char_data, style_data), None
+
+    # ── Synthesis ─────────────────────────────────────────────────────────────
+    def generate_hashed_filename(self, text, engine, identifier):
+        return hashlib.sha256(f"{text}_{engine}_{identifier}".encode('utf-8')).hexdigest()[:16]
+
+    def synthesize_speech(self, text, target=None):
         cleaned_text = self.audio_manager.clean_text(text)
-        if not cleaned_text.strip(): return None
+        if not cleaned_text.strip():
+            return None
 
-        if self.current_engine == "coeiroink":
-            return self._synthesize_coeiroink(cleaned_text)
-        elif self.current_engine == "voicevox":
-            return self._synthesize_voicevox(cleaned_text)
+        if target is None:
+            target, reason = self.resolve_target()
+            if target is None:
+                print(f"   [Voice] {reason}")
+                return None
 
-    def _synthesize_coeiroink(self, text):
-        data = self.speakers_data["coeiroink"]
-        if not data: return None
+        if target.engine in Config.VOICEVOX_LIKE:
+            return self._synthesize_voicevox_like(cleaned_text, target)
+        if target.engine == "coeiroink":
+            return self._synthesize_coeiroink(cleaned_text, target)
+        return None
+
+    def _synthesize_coeiroink(self, text, target):
         try:
-            char_data = data[self.char_idx]
-            style_id = char_data["styles"][self.style_idx]["styleId"]
-            speaker_uuid = char_data["speakerUuid"]
-            output_path = Config.AUDIO_FOLDER / f"{self.generate_hashed_filename(text, f'uuid_{speaker_uuid}_style_{style_id}')}.wav"
-            
+            style_id = target.style_data["styleId"]
+            speaker_uuid = target.char_data["speakerUuid"]
+            name = self.generate_hashed_filename(text, target.engine, f"uuid_{speaker_uuid}_style_{style_id}")
+            output_path = Config.AUDIO_FOLDER / f"{name}.wav"
+
             if output_path.exists(): return str(output_path)
-            
+
             self.audio_manager.play_notification("synthesizing")
             payload = {
                 "speakerUuid": speaker_uuid, "styleId": style_id, "text": text,
@@ -380,31 +395,33 @@ class EngineManager:
                 "intonationScale": 1.0, "prePhonemeLength": 0.1, "postPhonemeLength": 0.1,
                 "outputSamplingRate": 24000,
             }
-            res = requests.post(f"{Config.COEIROINK_URL}/v1/synthesis", json=payload, timeout=20)
+            res = requests.post(f"{Config.ENGINE_URLS['coeiroink']}/v1/synthesis", json=payload, timeout=20)
             if res.status_code == 200:
                 output_path.write_bytes(res.content)
                 return str(output_path)
-        except Exception: pass
+        except Exception as e:
+            print(f"   [Voice] coeiroink 合成失敗: {e}")
         return None
 
-    def _synthesize_voicevox(self, text):
-        data = self.speakers_data["voicevox"]
-        if not data: return None
+    def _synthesize_voicevox_like(self, text, target):
+        url = Config.ENGINE_URLS[target.engine]
         try:
-            speaker_id = data[self.char_idx]["styles"][self.style_idx]["id"]
-            output_path = Config.AUDIO_FOLDER / f"{self.generate_hashed_filename(text, speaker_id)}.wav"
-            
+            speaker_id = target.style_data["id"]
+            name = self.generate_hashed_filename(text, target.engine, speaker_id)
+            output_path = Config.AUDIO_FOLDER / f"{name}.wav"
+
             if output_path.exists(): return str(output_path)
-            
+
             self.audio_manager.play_notification("synthesizing")
-            query_res = requests.post(f"{Config.VOICEVOX_URL}/audio_query", params={"text": text, "speaker": speaker_id})
+            query_res = requests.post(f"{url}/audio_query", params={"text": text, "speaker": speaker_id})
             if query_res.status_code != 200: return None
-            
-            synth_res = requests.post(f"{Config.VOICEVOX_URL}/synthesis", params={"speaker": speaker_id}, json=query_res.json())
+
+            synth_res = requests.post(f"{url}/synthesis", params={"speaker": speaker_id}, json=query_res.json())
             if synth_res.status_code == 200:
                 output_path.write_bytes(synth_res.content)
                 return str(output_path)
-        except Exception: pass
+        except Exception as e:
+            print(f"   [Voice] {target.engine} 合成失敗: {e}")
         return None
 
 # ==========================================
@@ -418,55 +435,82 @@ class VoiceChangerApp:
         self.audio.setup_devices()
         self.noise_hallucinations = {"ごめん", "ありがとうございました", "ご視野", "ご視野の"}
 
-
-    def _build_voice_header(self):
-        # NEXUS's kohai.txt reader (vrchatLogs.ts) resolves speaker identity by
-        # NAME, not by numeric slot index — a TTS engine's speaker-list index
-        # for a given character shifts whenever a new voice is installed
-        # (confirmed on Coeiroink and AivisSpeech), so only names survive that.
-        # current_engine is already a name string ("voicevox"/"coeiroink");
-        # get_character_info() already resolves char_idx/style_idx into real
-        # name strings via the loaded speaker catalog.
-        char_name, style_name = self.engine.get_character_info()
-        return f"[VOICE|{self.engine.current_engine}|{char_name or ''}|{style_name or ''}]"
-
     def log_to_kohai(self, text):
+        """One line, "[HH:MM:SS] (Name|Style) text" — the same shape
+        ear_service.py writes, so Nexus merges both transcripts with one regex.
+
+        There is no state header any more: the speaker's name is on every line.
+        """
         if not text or not text.strip(): return
         try:
-            is_empty = not Config.KOHAI_TXT_PATH.exists() or Config.KOHAI_TXT_PATH.stat().st_size == 0
-            content = ""
-
-            if is_empty:
-                header = self._build_voice_header()
-                if text.strip() != header:
-                    content += header + "\n"
-
-            # --- NEW LOGIC: タイムスタンプ付与 ---
-            timestamp = time.strftime('%H:%M:%S')
-            clean_text = text.strip()
-
-            # テキストが [VOICE|engine|char|style] のような状態ヘッダーの場合はタイムスタンプを付けない
-            if re.match(r'^\[VOICE\|[^|]*\|[^|]*\|[^|]*\]$', clean_text):
-                content += clean_text + "\n"
-                log_print = clean_text
-            else:
-                content += f"[{timestamp}] {clean_text}\n"
-                log_print = f"[{timestamp}] {clean_text}"
-
+            line = nexus_identity.transcript_line(text.strip())
             with open(Config.KOHAI_TXT_PATH, 'a', encoding='utf-8') as f:
-                f.write(content)
-            print(f"   [Kohai Log] Appended: {log_print}")
+                f.write(line)
+            print(f"   [Kohai Log] Appended: {line.rstrip()}")
         except Exception as e:
             print(f"   [Kohai Log Error] {e}")
 
     def japanese_text_to_number(self, text):
-        num_map = {"ゼロ":0, "一":1, "二":2, "三":3, "四":4, "五":5, "六":6, "七":7, "八":8, "九":9, "十":10, 
-                   "十一":11, "十二":12, "十三":13, "十四":14, "十五":15, "十六":16, "十七":17, "十八":18, "十九":19, 
+        num_map = {"ゼロ":0, "一":1, "二":2, "三":3, "四":4, "五":5, "六":6, "七":7, "八":8, "九":9, "十":10,
+                   "十一":11, "十二":12, "十三":13, "十四":14, "十五":15, "十六":16, "十七":17, "十八":18, "十九":19,
                    "二十":20, "二十一":21, "二十二":22, "二十三":23, "二十四":24, "二十五":25, "二十六":26, "二十九":29}
-        for kanji, num in num_map.items():
-            if kanji in text: return num
+        # Longest first: "十五" must not match on "十".
+        for kanji in sorted(num_map, key=len, reverse=True):
+            if kanji in text: return num_map[kanji]
         try: return int(re.findall(r'\d+', text)[0])
         except (ValueError, IndexError): return None
+
+    # ── Spoken switching ──────────────────────────────────────────────────────
+    #
+    # The commands survive the move to names, because the reason they took a
+    # NUMBER has not changed: speech recognition cannot reliably hear a Japanese
+    # character name, but it can always hear a number. What changed is what the
+    # number counts:
+    #
+    #   「〇番目の人格に切り替えてください」  → position in character_map.json's
+    #                                          identity list (Nexus's own order)
+    #   「〇番目のスタイルに切り替えてください」→ position in the CURRENT identity's
+    #                                          character styles
+    #
+    # The number is resolved the moment it is heard and only the resulting NAME
+    # is written to user_identity.json — so a renumbered engine can no longer
+    # repoint a saved selection at a stranger.
+    def handle_switch_command(self, text):
+        """Returns a spoken reply, or None when this wasn't a switch command."""
+        num_pat = r"([0-9０-９一二三四五六七八九十ゼロ]+)"
+
+        identity_match = re.search(num_pat + r"\s*番目の(?:人格|アイデンティティ)", text)
+        if identity_match:
+            n = self.japanese_text_to_number(identity_match.group(1))
+            if n is None:
+                return "コマンドの番号を認識できませんでした"
+            target = nexus_identity.switch_identity_by_index(n)
+            if target is None:
+                return f"{n}番目の人格はありません"
+            return f"{target.name}に切り替えました"
+
+        style_match = re.search(num_pat + r"\s*番目のスタイル", text)
+        if style_match:
+            n = self.japanese_text_to_number(style_match.group(1))
+            if n is None:
+                return "コマンドの番号を認識できませんでした"
+            target, reason = self.engine.resolve_target()
+            if target is None:
+                return reason
+            styles = self.engine.styles_for(target.char_data)
+            chosen = nexus_identity.switch_style_by_index(n, styles)
+            if chosen is None:
+                return f"{n}番目のスタイルはありません"
+            return f"{chosen}に切り替えました"
+
+        # The old 「〇番目のエンジン」/「〇番目のキャラ」 commands are gone: an engine
+        # and a character are now properties OF an identity, chosen once in
+        # Nexus, so there is nothing left for them to switch independently.
+        # Saying so is more use than ignoring it.
+        if re.search(num_pat + r"\s*番目の(?:エンジン|キャラ)", text):
+            return "エンジンとキャラクターは人格に含まれます。人格番号で切り替えてください"
+
+        return None
 
     async def handle_websocket(self, websocket):
         print(f"Connection established from {websocket.remote_address}")
@@ -478,32 +522,22 @@ class VoiceChangerApp:
 
                 # コマンド処理
                 if "に切り替えて" in text:
-                    eng_match = re.search(r"([0-9一二三四五六七八九十ゼロ]+)番目のエンジン", text)
-                    char_match = re.search(r"([0-9一二三四五六七八九十ゼロ]+)番目のキャラ", text)
-                    style_match = re.search(r"([0-9一二三四五六七八九十ゼロ]+)番目のスタイル", text)
-                    res_msg = ""
-                    
-                    if eng_match:
-                        res_msg = self.engine.switch_engine(self.japanese_text_to_number(eng_match.group(1)))
-                    elif char_match or style_match:
-                        c_num = self.japanese_text_to_number(char_match.group(1)) if char_match else None
-                        s_num = self.japanese_text_to_number(style_match.group(1)) if style_match else None
-                        if c_num is not None or s_num is not None:
-                            res_msg = self.engine.switch_character_style(c_num, s_num)
-                        else: res_msg = "コマンドの番号を認識できませんでした"
-
+                    res_msg = self.handle_switch_command(text)
                     if res_msg:
                         print(f"   [Command Result] {res_msg}")
-                        self.log_to_kohai(self._build_voice_header())
-                        
+                        # Spoken back on the notification device only: the
+                        # confirmation is for the human at the keyboard, not for
+                        # whoever is listening in VRChat. Synthesized in the NEW
+                        # voice, which is itself the clearest confirmation that
+                        # the switch took.
                         out_path = self.engine.synthesize_speech(res_msg)
                         if out_path: self.audio.play_audio(out_path, [self.audio.output_device_2])
                         continue
 
-                # --- 新規追加: ハルシネーション（幻覚）の完全無視フィルター ---
+                # --- ハルシネーション（幻覚）の完全無視フィルター ---
                 # 末尾の句読点や空白を消して純粋なテキストにする
                 clean_text = re.sub(r'[。！？\s]+$', '', text)
-                
+
                 # リストと完全に一致した場合のみ、以降の処理をすべてスキップ（無視）する
                 if clean_text in self.noise_hallucinations:
                     print(f"   [System] ゴミ認識を完全に無視しました: '{text}'")
@@ -512,21 +546,44 @@ class VoiceChangerApp:
                 # 通常のテキスト処理
                 text = text.replace("疑問", "？").replace("ぎまん", "？").replace("ぎもん", "？").replace("ギモン", "？")
                 if text.endswith("疑"): text = text[:-1] + "？"
-                
-                text = self.quirks.apply(text, self.engine.current_engine, self.engine.char_idx)
+
+                # Resolved once per utterance — the human may have switched
+                # identity in a Nexus window since the last line.
+                target, reason = self.engine.resolve_target()
+                if target is None:
+                    print(f"   [Voice] {reason}")
+
+                quirk_keys = []
+                if target:
+                    quirk_keys = [target.identity.name, f"{target.engine}_{target.char_name}"]
+                    legacy_idx = next(
+                        (i for i, c in enumerate(self.engine.speakers_data.get(target.engine) or [])
+                         if (c.get("name") or c.get("speakerName")) == target.char_name),
+                        None,
+                    )
+                    if legacy_idx is not None:
+                        quirk_keys.append(f"{target.engine}_{legacy_idx}")
+                else:
+                    identity, _style, _ovr = nexus_identity.resolve()
+                    quirk_keys = [identity.name]
+                text = self.quirks.apply(text, quirk_keys)
 
                 pyperclip.copy(text)
 
-                out_path = self.engine.synthesize_speech(text)
-                if out_path:
-                    # Synthesize and play first; play_audio is synchronous and
-                    # blocks until the buffer is fully drained. Only write to
-                    # kohai.txt AFTER playback completes, so any consumer (Nexus
-                    # Live Session) tailing the file sees the line at the moment
-                    # the audio truly finished — preventing the AI from
-                    # responding before the user's voice has been spoken.
-                    self.audio.play_audio(out_path, [self.audio.output_device_1, self.audio.output_device_2])
+                if target:
+                    out_path = self.engine.synthesize_speech(text, target)
+                    if out_path:
+                        # Synthesize and play first; play_audio is synchronous and
+                        # blocks until the buffer is fully drained. Only write to
+                        # kohai.txt AFTER playback completes, so any consumer (Nexus
+                        # Live Session) tailing the file sees the line at the moment
+                        # the audio truly finished — preventing the AI from
+                        # responding before the user's voice has been spoken.
+                        self.audio.play_audio(out_path, [self.audio.output_device_1, self.audio.output_device_2])
 
+                # Logged whether or not it was spoken: an identity with no voice
+                # is still an identity, and its words still belong in the
+                # transcript.
                 self.log_to_kohai(text)
 
         except websockets.exceptions.ConnectionClosed:
@@ -535,6 +592,15 @@ class VoiceChangerApp:
             print(f"Error in websocket handler: {e}")
 
     async def start(self):
+        identity, style, _ovr = nexus_identity.resolve()
+        print("=========================================")
+        print("  Voice Changer")
+        print(f"  Identity: {identity.name}" + (f" ({style})" if style else ""))
+        if identity.has_voice:
+            print(f"  Voice:    {identity.engine} / {identity.character}")
+        else:
+            print("  Voice:    (none — text will be logged, not spoken)")
+        print("=========================================")
         async with websockets.serve(self.handle_websocket, "127.0.0.1", 13000):
             print("Python WebSocket server started on ws://127.0.0.1:13000")
             print("Please start 'recognize.exe' from the launcher now.")

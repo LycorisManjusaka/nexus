@@ -11,7 +11,7 @@ interface Rule extends IdentityVoiceValue {
 
 const ANONYMOUS = 'Anonymous';
 
-export default function UserIdentityEditor() {
+export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { current: number } }) {
   const t = useT();
   const [rules, setRules] = useState<Rule[]>([]);
   const [fallback, setFallback] = useState('Anonymous');
@@ -75,6 +75,18 @@ export default function UserIdentityEditor() {
 
   const addRule = () => setRules(prev => [...prev, { name: '' }]);
   const removeRule = (i: number) => setRules(prev => prev.filter((_, idx) => idx !== i));
+
+  // External save trigger (e.g. the modal-level "Save Changes" button) — when
+  // the parent's counter increments, we run our own save. We track the last
+  // value we saw so re-renders don't loop the effect.
+  const lastTriggerRef = React.useRef<number>(-1);
+  useEffect(() => {
+    if (!saveTrigger) return;
+    if (saveTrigger.current === lastTriggerRef.current) return;
+    lastTriggerRef.current = saveTrigger.current;
+    void save();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveTrigger?.current]);
 
   const save = async () => {
     setStatus(null);

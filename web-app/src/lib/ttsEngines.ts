@@ -38,6 +38,21 @@ export const ENGINES: Record<number, EngineDef> = {
   2: { key: 'aivisspeech', name: 'AivisSpeech', base: process.env.NEXUS_AIVISSPEECH_URL || 'http://127.0.0.1:10101', health: '/speakers' },
 };
 
+/** Engine name → numeric id, so callers with the new name-based identity system
+ *  can still look up engine configs keyed by number. */
+const ENGINE_NAME_TO_NUM: Record<string, number> = {};
+for (const [num, def] of Object.entries(ENGINES)) {
+  ENGINE_NAME_TO_NUM[def.key] = Number(num);
+}
+
+/** Accept an engine reference in either form (number or name string) and return
+ *  the numeric id. Returns -1 for unrecognised names, leaving the caller to
+ *  decide whether that's an error. */
+export function resolveEngineNum(engine: number | string): number {
+  if (typeof engine === 'number') return engine;
+  return ENGINE_NAME_TO_NUM[engine.toLowerCase()] ?? -1;
+}
+
 export type EnginePaths = Partial<Record<string, string>>;
 
 /**
@@ -77,8 +92,9 @@ export async function saveEnginePaths(paths: EnginePaths): Promise<void> {
 }
 
 /** Cheap liveness probe. Short timeout: this runs before every synthesis. */
-export async function isEngineUp(engine: number): Promise<boolean> {
-  const def = ENGINES[engine];
+export async function isEngineUp(engine: number | string): Promise<boolean> {
+  const num = resolveEngineNum(engine);
+  const def = ENGINES[num];
   if (!def) return false;
   try {
     const res = await fetch(`${def.base}${def.health}`, {
@@ -185,26 +201,27 @@ async function launchAndWait(engine: number, rawPath: string): Promise<EnsureRes
  * `ok: false` with a message — the caller then proceeds and lets the normal
  * synthesis error surface, so behaviour with no configuration is unchanged.
  */
-export async function ensureEngineRunning(engine: number): Promise<EnsureResult> {
-  const def = ENGINES[engine];
+export async function ensureEngineRunning(engine: number | string): Promise<EnsureResult> {
+  const num = resolveEngineNum(engine);
+  const def = ENGINES[num];
   if (!def) return { ok: false, wasRunning: false, launched: false, error: `unknown engine ${engine}` };
 
   // Recently verified — skip the probe entirely (streaming hot path).
-  const until = state.healthyUntil.get(engine) || 0;
+  const until = state.healthyUntil.get(num) || 0;
   if (Date.now() < until) return { ok: true, wasRunning: true, launched: false };
 
-  if (await isEngineUp(engine)) {
-    state.healthyUntil.set(engine, Date.now() + HEALTH_CACHE_MS);
-    state.failedUntil.delete(engine);
+  if (await isEngineUp(num)) {
+    state.healthyUntil.set(num, Date.now() + HEALTH_CACHE_MS);
+    state.failedUntil.delete(num);
     return { ok: true, wasRunning: true, launched: false };
   }
 
   // A launch for this engine is already underway — join it rather than
   // starting a second copy.
-  const pending = state.inFlight.get(engine);
+  const pending = state.inFlight.get(num);
   if (pending) return pending;
 
-  const cooling = state.failedUntil.get(engine);
+  const cooling = state.failedUntil.get(num);
   if (cooling && Date.now() < Number(cooling.split('|')[0])) {
     return { ok: false, wasRunning: false, launched: false, error: cooling.split('|').slice(1).join('|') };
   }
@@ -217,22 +234,22 @@ export async function ensureEngineRunning(engine: number): Promise<EnsureResult>
   }
 
   const p = (async () => {
-    const res = await launchAndWait(engine, exePath);
+    const res = await launchAndWait(num, exePath);
     if (res.ok) {
-      state.healthyUntil.set(engine, Date.now() + HEALTH_CACHE_MS);
-      state.failedUntil.delete(engine);
+      state.healthyUntil.set(num, Date.now() + HEALTH_CACHE_MS);
+      state.failedUntil.delete(num);
     } else {
-      state.failedUntil.set(engine, `${Date.now() + FAILURE_COOLDOWN_MS}|${res.error || 'launch failed'}`);
+      state.failedUntil.set(num, `${Date.now() + FAILURE_COOLDOWN_MS}|${res.error || 'launch failed'}`);
       console.error(`[tts-engine] ${res.error}`);
     }
     return res;
   })();
 
-  state.inFlight.set(engine, p);
+  state.inFlight.set(num, p);
   try {
     return await p;
   } finally {
-    state.inFlight.delete(engine);
+    state.inFlight.delete(num);
   }
 }
 

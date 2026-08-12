@@ -1,13 +1,8 @@
 {
-  "_comment": "Maps the active TTS character (from voicechanger/chara_settings.json) to a display name. Used everywhere Nexus needs the user's identity (Live Session prefixes, message author labels, etc.). Edit this file to add new characters or adjust names without touching code.",
-  "engines": {
-    "voicevox": "0",
-    "coeiroink": "1",
-    "aivisspeech": "2"
-  },
+  "_comment": "Human identities Nexus can attribute a message to. `name` is the only required field; engine/character/defaultStyle are the OPTIONAL voice a voice changer should speak this identity in, stored by name (never by slot index — engines renumber their speaker lists when voices are installed). Edit via Preferences → User Identity, or by hand.",
   "rules": [
-    { "engine": "0", "charId": "1", "name": "Anonymous" }
+    { "name": "Anonymous" }
   ],
   "fallback": "Anonymous",
-  "humanLabel": "Another"
+  "humanLabel": "Human"
 }

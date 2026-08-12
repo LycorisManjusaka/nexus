@@ -4,6 +4,8 @@ import time
 import re
 from pathlib import Path
 
+import nexus_identity
+
 # ==========================================
 # 設定・定数クラス
 # ==========================================

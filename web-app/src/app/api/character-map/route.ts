@@ -68,10 +68,16 @@ export async function POST(req: Request) {
     const cleanRules: IdentityRule[] = rules.map(r => {
       const out: IdentityRule = { name: String(r.name).trim() };
       const engine = r.engine ? String(r.engine).trim() : '';
-      const character = r.character ? String(r.character).trim() : '';
-      if (engine && character) {
+      // Preserve the engine even when the character hasn't been picked yet.
+      // An identity with an engine but no character is a valid intermediate
+      // state: "this person has a Coeiroink voice but I haven't selected which
+      // character yet." The UI shows the engine dropdown and the character
+      // picker empty, and the next save (after picking a character) completes
+      // the pair. Dropping engine here would silently erase the choice.
+      if (engine) {
         out.engine = engine;
-        out.character = character;
+        const character = r.character ? String(r.character).trim() : '';
+        if (character) out.character = character;
         const defaultStyle = r.defaultStyle ? String(r.defaultStyle).trim() : '';
         if (defaultStyle) out.defaultStyle = defaultStyle;
       }

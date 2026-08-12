@@ -28,17 +28,27 @@ export async function GET() {
   try {
     const map = readCharacterMap();
     const active = resolveUserIdentity(map);
-    const characters = map.rules.map((r) => ({
-      name: r.name,
-      voice: r.engine && r.character
+    const characters = map.rules.map((r) => {
+      // An identity with an engine but no resolved character is a real case:
+      // the engine's speaker catalog hasn't been cached yet (engine has never
+      // been run on this machine). The voice IS on that engine — we just don't
+      // know which character yet. Passing engine alone lets the TTS route use
+      // the engine's first available character; without this, the identity
+      // silently falls back to a completely different engine, which is actively
+      // wrong. A character-less voice config carries no char_name/style_name,
+      // so synthesizeSegment resolves them at char_idx 0 / style_idx 0.
+      const voice = r.engine
         ? {
             engine: r.engine,
-            char_name: r.character,
-            style_name: r.name === active.name ? active.style : r.defaultStyle,
+            char_name: r.character || undefined,
+            style_name: r.name === active.name
+              ? active.style
+              : r.defaultStyle,
             speed: 1.0,
           }
-        : null,
-    }));
+        : null;
+      return { name: r.name, voice };
+    });
     return NextResponse.json({ characters });
   } catch (e: any) {
     return NextResponse.json({ error: e.message, characters: [] }, { status: 500 });
