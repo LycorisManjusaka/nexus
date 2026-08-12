@@ -5,24 +5,19 @@ import { charaSettingsPath } from './voicechangerPaths';
 const CHAR_MAP_PATH = path.resolve(process.cwd(), '..', 'local_data', 'character_map.json');
 
 interface CharMap {
-  // `engine`/`charName` are optional: a name-only rule is valid (e.g.
-  // registered purely as a letters recipient or display name with no TTS
-  // voice behind it). Only `name` is required. Anything that needs an actual
-  // voice must check for both being present rather than assuming they always
-  // are. `engine` is the engine's own NAME string ("voicevox" / "coeiroink" /
-  // "aivisspeech" / any future engine) — never a numeric index, and
-  // `charName` is the character's real name as reported by that engine's own
-  // speaker list — never a numeric slot. Indices into a TTS engine's speaker
-  // list shift whenever a new voice is installed (confirmed on Coeiroink and
-  // AivisSpeech; Voicevox happens to be stable but is not guaranteed to stay
-  // that way), so nothing here may be identified by index — only by the
-  // engine's own stable name strings.
-  rules: { engine?: string; charName?: string; name: string }[];
+  engines?: Record<string, string>;
+  rules: {
+    engine?: string;
+    charId?: string;
+    charName?: string;
+    name: string;
+  }[];
   fallback: string;
   humanLabel: string;
 }
 
 const DEFAULT_MAP: CharMap = {
+  engines: { voicevox: '0', coeiroink: '1', aivisspeech: '2' },
   rules: [],
   fallback: 'Anonymous',
   humanLabel: '人',
@@ -40,6 +35,7 @@ function readJson<T>(p: string, fallback: T): T {
 /**
  * Resolves the currently active user/character from the voicechanger's
  * chara_settings.json, mapped through local_data/character_map.json.
+ * Supports both new name-based rules (charName) and legacy numeric rules (charId).
  *
  * Returns { name, humanLabel }:
  *   - name:        what to use for the user's prefix (e.g. "つよ")
@@ -58,27 +54,79 @@ export function resolveCurrentChara(): { name: string; humanLabel: string } {
 
   const engineName = settings.current_engine;
   const engineSection = settings[engineName];
-  const charName = engineSection?.current_character_name;
-  if (!engineSection || !charName) {
+  if (!engineSection) {
     return { name: fallback, humanLabel };
   }
 
-  const rule = charMap.rules.find(r => r.engine === engineName && r.charName === charName);
-  return { name: rule?.name || fallback, humanLabel };
+  const enginesMap: Record<string, string> = charMap.engines || { voicevox: '0', coeiroink: '1', aivisspeech: '2' };
+  const engineNum = enginesMap[engineName];
+
+  // 1. Try name-based matching if current_character_name is set
+  const charName = engineSection.current_character_name;
+  if (charName) {
+    const nameRule = charMap.rules.find(r => 
+      (r.engine === engineName || r.engine === engineNum) && 
+      (r.charName === charName || r.name === charName)
+    );
+    if (nameRule?.name) {
+      return { name: nameRule.name, humanLabel };
+    }
+  }
+
+  // 2. Fall back to numeric ID matching if current_character is set
+  const currentCharId = engineSection.current_character !== undefined && engineSection.current_character !== null
+    ? String(engineSection.current_character)
+    : null;
+
+  if (currentCharId !== null) {
+    const idRule = charMap.rules.find(r => 
+      (r.engine === engineName || r.engine === engineNum) && 
+      r.charId === currentCharId
+    );
+    if (idRule?.name) {
+      return { name: idRule.name, humanLabel };
+    }
+  }
+
+  return { name: fallback, humanLabel };
 }
 
 /**
  * Maps a raw (engineName, charName) pair — as found in voicechanger's
  * kohai.txt "[VOICE|engine|char|style]" header lines — to a display name,
- * using local_data/character_map.json. Falls back to the map's `fallback`
- * when no rule matches. This is the shared lookup so VRChat speaker labeling
- * stays in sync with the same file that drives Live Session / message author
- * labels, instead of a separate hardcoded table.
+ * using local_data/character_map.json.
  */
 export function resolveCharaByName(engineName: string, charName: string): string {
   const charMap = readJson<CharMap>(CHAR_MAP_PATH, DEFAULT_MAP);
+  const enginesMap = charMap.engines || { voicevox: '0', coeiroink: '1', aivisspeech: '2' };
+  const engineNum = enginesMap[engineName];
+
   const rule = charMap.rules.find(
-    (r) => r.engine === engineName && r.charName === charName
+    (r) => (r.engine === engineName || r.engine === engineNum) &&
+           (r.charName === charName || r.charId === charName || r.name === charName)
+  );
+  return rule?.name || charMap.fallback || 'Anonymous';
+}
+
+/**
+ * Maps a raw (engineNum, charId) pair — as found in legacy voicechanger logs —
+ * to a display name.
+ */
+export function resolveCharaByIds(engineNum: string, charId: string): string {
+  const charMap = readJson<CharMap>(CHAR_MAP_PATH, DEFAULT_MAP);
+  const enginesMap = charMap.engines || { voicevox: '0', coeiroink: '1', aivisspeech: '2' };
+
+  let engineName = engineNum;
+  for (const [name, num] of Object.entries(enginesMap)) {
+    if (num === String(engineNum)) {
+      engineName = name;
+      break;
+    }
+  }
+
+  const rule = charMap.rules.find(
+    (r) => (r.engine === String(engineNum) || r.engine === engineName) &&
+           (r.charId === String(charId) || r.charName === String(charId))
   );
   return rule?.name || charMap.fallback || 'Anonymous';
 }
