@@ -23,6 +23,7 @@ export async function GET() {
       return NextResponse.json({ characters: [] });
     }
     const map = JSON.parse(fs.readFileSync(CHAR_MAP_PATH, 'utf-8'));
+    const engines: Record<string, string> = map.engines || {};
 
     let settings: any = {};
     if (fs.existsSync(charaSettingsPath())) {
@@ -30,34 +31,59 @@ export async function GET() {
     }
 
     const characters = (map.rules || []).map((r: any) => {
-      // `engine`/`charName` are optional on a rule (a name-only entry is
-      // valid — e.g. registered purely as a letters recipient or display
-      // name). Without both, there is no TTS voice to resolve. Return
-      // voice: null so callers (MessageBubble's tag lookup) correctly fall
-      // back to the default voice rather than speaking as someone else.
-      if (!r.engine || !r.charName) {
-        return { name: r.name, voice: null };
+      // New-format rule: engine name string + charName
+      if (r.engine && r.charName) {
+        let style_name: string | undefined = r.styleName;
+        if (!style_name && settings?.[r.engine]?.character_styles) {
+          const s = settings[r.engine].character_styles[r.charName];
+          if (typeof s === 'string' && s) style_name = s;
+        }
+        return {
+          name: r.name,
+          voice: {
+            engine: r.engine,
+            char_name: r.charName,
+            style_name,
+            speed: 1.0,
+          },
+        };
       }
-      // A rule-configured style (set via Preferences → User Identity) is the
-      // identity's own intended style and takes priority; otherwise fall back
-      // to whatever the voicechanger's live runtime state currently has on
-      // record for that character name. Leaving style_name undefined here is
-      // deliberate when neither source has one — synthesis falls through to
-      // the engine's own default style rather than a silently-assumed one.
-      let style_name: string | undefined = r.styleName;
-      if (!style_name && settings?.[r.engine]?.character_styles) {
-        const s = settings[r.engine].character_styles[r.charName];
-        if (typeof s === 'string' && s) style_name = s;
+
+      // Old-format rule: numeric engine string + charId
+      if (r.engine !== undefined && r.charId !== undefined) {
+        // Reverse-lookup engine name from engines map
+        let engineName: string | null = null;
+        for (const [key, val] of Object.entries(engines)) {
+          if (val === r.engine) { engineName = key; break; }
+        }
+        if (!engineName) return { name: r.name, voice: null };
+
+        // We can't resolve charId to a character name without the live
+        // speaker list, so style_name can only come from r.styleName or
+        // the numeric character_styles lookup.
+        let style_name: string | undefined = r.styleName;
+        if (!style_name && settings?.[engineName]?.character_styles) {
+          const s = settings[engineName].character_styles[String(r.charId)];
+          if (typeof s === 'string' && s) style_name = s;
+          // Also try numeric style index
+          if (!style_name && typeof s === 'number') {
+            // Can't resolve numeric style index to name without live speaker list.
+            // Leave undefined — synthesis will use engine default.
+          }
+        }
+        return {
+          name: r.name,
+          voice: {
+            engine: engineName,
+            char_id: r.charId,
+            style_name,
+            speed: 1.0,
+          },
+        };
       }
-      return {
-        name: r.name,
-        voice: {
-          engine: r.engine,
-          char_name: r.charName,
-          style_name,
-          speed: 1.0,
-        },
-      };
+
+      // Name-only rule (no voice)
+      return { name: r.name, voice: null };
     });
 
     return NextResponse.json({ characters });

@@ -14,11 +14,6 @@ export async function POST(req: Request) {
 
     // Voice switching writes into local_data/voicechanger (the data half of the
     // voicechanger integration). It may not exist yet on a fresh machine.
-    // Previously we no-op'd there, which made "Active Character" silently
-    // unchangeable — it always reverted to the fallback. Instead, CREATE the
-    // directory so the chara_settings.json written below persists. That single
-    // file is all the web-app needs to read the selection back; the full
-    // Python service isn't required just to choose a character.
     try {
       ensureVoicechangerDataDir();
     } catch (e: any) {
@@ -37,18 +32,40 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Character "${name}" not found in character_map.json` }, { status: 404 });
     }
 
-    // `engine`/`charName` are optional on a rule — a name-only entry is valid
-    // for display/letters purposes, but there is no TTS voice to switch to.
-    // Refuse this specific action (voice-changer character switch), not the
-    // rule itself: the name still resolves everywhere that doesn't need a
-    // voice. `engine` is already the engine's own name string here — no
-    // reverse lookup through a numeric map needed.
-    if (!rule.engine || !rule.charName) {
+    // `engine`/`charName` (new format) or `engine`/`charId` (old numeric
+    // format) — at least one of these pairs must exist for a voice switch.
+    // A name-only rule (neither charName NOR charId) is valid for display/
+    // letters but can't drive a voice-changer selection.
+    const hasNewFmt = rule.engine && rule.charName;
+    const hasOldFmt = rule.engine !== undefined && rule.charId !== undefined;
+
+    if (!hasNewFmt && !hasOldFmt) {
       return NextResponse.json({
         error: `"${name}" has no engine/character set in character_map.json — it has a display name but no TTS voice to switch to.`,
       }, { status: 400 });
     }
-    const engineName: string = rule.engine;
+
+    // Resolve engine name. New-format rules carry the name directly
+    // ("voicevox" / "coeiroink" / "aivisspeech"); old-format rules carry a
+    // numeric string ("0" / "1" / "2") that we reverse-lookup through the
+    // engines map.
+    const engines: Record<string, string> = map.engines || {};
+    let engineName: string;
+    if (hasNewFmt) {
+      engineName = rule.engine;
+    } else {
+      // Reverse lookup: "1" → "coeiroink"
+      let found: string | null = null;
+      for (const [key, val] of Object.entries(engines)) {
+        if (val === rule.engine) { found = key; break; }
+      }
+      if (!found) {
+        return NextResponse.json({
+          error: `Engine "${rule.engine}" (from "${name}") has no entry in character_map.json engines map`,
+        }, { status: 500 });
+      }
+      engineName = found;
+    }
 
     // Read existing chara_settings.json or initialize
     let settings: any = {};
@@ -58,20 +75,28 @@ export async function POST(req: Request) {
 
     settings.current_engine = engineName;
     if (!settings[engineName] || typeof settings[engineName] !== 'object') {
-      settings[engineName] = { current_character_name: null, character_styles: {} };
+      settings[engineName] = {};
     }
     if (!settings[engineName].character_styles) settings[engineName].character_styles = {};
-    settings[engineName].current_character_name = rule.charName;
-    // If this identity has a style configured (Preferences → User Identity),
-    // apply it every time the identity is selected — the pairing of voice +
-    // style is what the user configured for this person, not a one-time
-    // default. Otherwise leave whatever style is already on record for this
-    // character alone (per-character last-used style, or nothing — resolved
-    // to the engine's own default at synthesis time) rather than inventing
-    // one; an unset style must never be silently written as though it were a
-    // deliberate choice.
-    if (rule.styleName) {
-      settings[engineName].character_styles[rule.charName] = rule.styleName;
+
+    if (hasNewFmt) {
+      // New format: write name-based fields
+      settings[engineName].current_character_name = rule.charName;
+      if (rule.styleName) {
+        settings[engineName].character_styles[rule.charName] = rule.styleName;
+      }
+    } else {
+      // Old format: write numeric fields (Python voice_changer.py still
+      // reads current_character, not current_character_name). Also write
+      // the name-based field as null so readers know it was deliberately
+      // cleared — prevents a stale name from a previous selection from
+      // being treated as current.
+      settings[engineName].current_character = parseInt(String(rule.charId), 10);
+      settings[engineName].current_character_name = null;
+      // Apply style as a numeric index if present
+      if (rule.styleId !== undefined) {
+        settings[engineName].character_styles[String(rule.charId)] = parseInt(String(rule.styleId), 10);
+      }
     }
 
     fs.writeFileSync(charaSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
@@ -80,7 +105,9 @@ export async function POST(req: Request) {
       ok: true,
       name,
       engine: engineName,
-      charName: rule.charName,
+      ...(hasNewFmt
+        ? { charName: rule.charName }
+        : { charId: rule.charId }),
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
