@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Trash2, Lock } from 'lucide-react';
-import { useT, Tx } from '@/lib/i18n';
+import { useT } from '@/lib/i18n';
 import IdentityVoicePicker, { IdentityVoiceValue } from './IdentityVoicePicker';
 
 interface Rule extends IdentityVoiceValue {
@@ -11,7 +11,7 @@ interface Rule extends IdentityVoiceValue {
 
 const ANONYMOUS = 'Anonymous';
 
-export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { current: number } }) {
+export default function UserIdentityEditor() {
   const t = useT();
   const [rules, setRules] = useState<Rule[]>([]);
   const [fallback, setFallback] = useState('Anonymous');
@@ -20,8 +20,8 @@ export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { cu
   const [speakers, setSpeakers] = useState<{ voicevox: any[]; coeiroink: any[]; aivisspeech: any[] }>({ voicevox: [], coeiroink: [], aivisspeech: [] });
   const [starting, setStarting] = useState(false);
   const [startMsg, setStartMsg] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadSpeakers = useCallback(async () => {
     const data = await fetch('/api/tts/speakers').then(r => r.json());
@@ -69,55 +69,102 @@ export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { cu
     }
   }, [loadSpeakers, t]);
 
-  const updateRule = (i: number, patch: Partial<Rule>) => {
-    setRules(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r));
-  };
+  // ─── Auto-save ────────────────────────────────────────────────────────
+  // Every state-mutating setter (updateRule, addRule, removeRule, setFallback,
+  // setHumanLabel) calls queueSave(). queueSave() schedules a debounced POST
+  // to /api/character-map; the in-flight timer is the single point of
+  // cancellation. Three rules:
+  //
+  //   • latest write wins — successive edits before the debounce fires
+  //     collapse into one POST, so the file never sees an intermediate state.
+  //   • live errors surface immediately and stay visible (no fade-out).
+  //     success messages fade out after 1.5 s so they don't pile up.
+  //   • on modal close (or Save Changes), the pending debounce is cancelled
+  //     and the latest state is flushed synchronously. No partial save, no
+  //     "did it actually go through?" mystery.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestStateRef = useRef<{ rules: Rule[]; fallback: string; humanLabel: string } | null>(null);
 
-  const addRule = () => setRules(prev => [...prev, { name: '' }]);
-  const removeRule = (i: number) => setRules(prev => prev.filter((_, idx) => idx !== i));
+  const flashStatus = useCallback((s: { ok: boolean; text: string } | null) => {
+    if (statusTimerRef.current) { clearTimeout(statusTimerRef.current); statusTimerRef.current = null; }
+    setStatus(s);
+    if (s?.ok) {
+      statusTimerRef.current = setTimeout(() => {
+        setStatus(prev => (prev === s ? null : prev));
+      }, 1500);
+    }
+  }, []);
 
-  // External save trigger (e.g. the modal-level "Save Changes" button) — when
-  // the parent's counter increments, we run our own save. We track the last
-  // value we saw so re-renders don't loop the effect.
-  const lastTriggerRef = React.useRef<number>(-1);
-  useEffect(() => {
-    if (!saveTrigger) return;
-    if (saveTrigger.current === lastTriggerRef.current) return;
-    lastTriggerRef.current = saveTrigger.current;
-    void save();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveTrigger?.current]);
-
-  const save = async () => {
-    setStatus(null);
-    const trimmed = rules.map(r => ({ ...r, name: r.name.trim() }));
+  const flushSave = useCallback(async () => {
+    if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
+    const state = latestStateRef.current;
+    if (!state) return;
+    latestStateRef.current = null;
+    const trimmed = state.rules.map(r => ({ ...r, name: r.name.trim() }));
     if (trimmed.some(r => !r.name)) {
-      setStatus({ ok: false, text: t('useridentity.err.emptyName') });
+      flashStatus({ ok: false, text: t('useridentity.err.emptyName') });
       return;
     }
     const seen = new Set<string>();
     for (const r of trimmed) {
-      if (seen.has(r.name)) { setStatus({ ok: false, text: t('useridentity.err.duplicate').replace('{name}', r.name) }); return; }
+      if (seen.has(r.name)) {
+        flashStatus({ ok: false, text: t('useridentity.err.duplicate').replace('{name}', r.name) });
+        return;
+      }
       seen.add(r.name);
     }
-    setSaving(true);
     try {
       const res = await fetch('/api/character-map', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rules: trimmed, fallback, humanLabel }),
+        body: JSON.stringify({ rules: trimmed, fallback: state.fallback, humanLabel: state.humanLabel }),
       }).then(r => r.json());
       if (res.error) {
-        setStatus({ ok: false, text: res.error });
+        flashStatus({ ok: false, text: res.error });
       } else {
-        setRules(res.map.rules || trimmed);
-        setStatus({ ok: true, text: t('useridentity.saved') });
+        flashStatus({ ok: true, text: t('useridentity.saved') });
       }
     } catch (e: any) {
-      setStatus({ ok: false, text: e?.message || t('useridentity.err.saveFailed') });
-    } finally {
-      setSaving(false);
+      flashStatus({ ok: false, text: e?.message || t('useridentity.err.saveFailed') });
     }
+  }, [flashStatus, t]);
+
+  const queueSave = useCallback((next: { rules: Rule[]; fallback: string; humanLabel: string }) => {
+    latestStateRef.current = next;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => { void flushSave(); }, 300);
+  }, [flushSave]);
+
+  // Flush any pending debounced save when the editor unmounts (modal closes
+  // from anywhere — Cancel, X, backdrop click, parent save-trigger).
+  useEffect(() => () => { void flushSave(); }, [flushSave]);
+
+  const updateRule = (i: number, patch: Partial<Rule>) => {
+    const next = rules.map((r, idx) => idx === i ? { ...r, ...patch } : r);
+    setRules(next);
+    queueSave({ rules: next, fallback, humanLabel });
+  };
+
+  const addRule = () => {
+    const next = [...rules, { name: '' }];
+    setRules(next);
+    queueSave({ rules: next, fallback, humanLabel });
+  };
+
+  const removeRule = (i: number) => {
+    const next = rules.filter((_, idx) => idx !== i);
+    setRules(next);
+    queueSave({ rules: next, fallback, humanLabel });
+  };
+
+  const onFallbackChange = (v: string) => {
+    setFallback(v);
+    queueSave({ rules, fallback: v, humanLabel });
+  };
+
+  const onHumanLabelChange = (v: string) => {
+    setHumanLabel(v);
+    queueSave({ rules, fallback, humanLabel });
   };
 
   if (loading) return <div className="text-xs text-muted-foreground">{t('voice.loading')}</div>;
@@ -125,7 +172,7 @@ export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { cu
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        <Tx k="useridentity.intro" />
+        {t('useridentity.intro')}
       </p>
 
       <div className="space-y-3">
@@ -185,7 +232,7 @@ export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { cu
         </label>
         <select
           value={fallback}
-          onChange={e => setFallback(e.target.value)}
+          onChange={e => onFallbackChange(e.target.value)}
           className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none"
         >
           {rules.filter(r => r.name.trim()).map((r, i) => (
@@ -193,7 +240,7 @@ export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { cu
           ))}
         </select>
         <p className="text-[10px] text-muted-foreground mt-1">
-          <Tx k="useridentity.fallback.help" />
+          {t('useridentity.fallback.help')}
         </p>
       </div>
 
@@ -204,26 +251,17 @@ export default function UserIdentityEditor({ saveTrigger }: { saveTrigger?: { cu
         <input
           type="text"
           value={humanLabel}
-          onChange={e => setHumanLabel(e.target.value)}
+          onChange={e => onHumanLabelChange(e.target.value)}
           className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none"
         />
         <p className="text-[10px] text-muted-foreground mt-1">
-          <Tx k="useridentity.others.help" />
+          {t('useridentity.others.help')}
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <button
-          onClick={save}
-          disabled={saving}
-          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-        >
-          {saving ? t('useridentity.saving') : t('useridentity.save')}
-        </button>
-        {status && (
-          <span className={`text-xs ${status.ok ? 'text-emerald-500' : 'text-red-500'}`}>{status.text}</span>
-        )}
-      </div>
+      {status && (
+        <p className={`text-xs ${status.ok ? 'text-emerald-500' : 'text-red-500'}`} role="status">{status.text}</p>
+      )}
     </div>
   );
 }

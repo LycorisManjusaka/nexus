@@ -159,10 +159,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'useridentity.others.label': 'Label for others (second mic / virtual audio cable)',
   'useridentity.others.help':
     "During a Live Session, speech heard through the OTHER input (not the active voice-changer character — e.g. a second microphone or virtual audio cable carrying someone else's voice) is tagged with this label instead of an identity name.",
-  'useridentity.save': 'Save Identities',
-  'useridentity.saving': 'Saving…',
   'useridentity.saved': 'Saved.',
-  'useridentity.err.emptyName': 'Every identity needs a name.',
   'useridentity.err.duplicate': 'Duplicate identity name: "{name}"',
   'useridentity.err.saveFailed': 'Save failed.',
 
@@ -1407,8 +1404,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'useridentity.others.label': '他者のラベル（第2マイク／仮想オーディオケーブル）',
   'useridentity.others.help':
     'ライブセッション中、もう一方の入力（アクティブなボイスチェンジャーのキャラクターではなく、たとえば第2マイクや仮想オーディオケーブルで届く別の人の声）から聞こえた発話には、識別名の代わりにこのラベルが付けられます。',
-  'useridentity.save': '識別を保存',
-  'useridentity.saving': '保存中…',
   'useridentity.saved': '保存しました。',
   'useridentity.err.emptyName': 'すべての識別に名前が必要です。',
   'useridentity.err.duplicate': '識別名が重複しています：「{name}」',
