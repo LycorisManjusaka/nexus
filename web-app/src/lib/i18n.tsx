@@ -776,8 +776,17 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sysmodal.systemPrompt': 'System Prompt',
 
   // ── System Instructions → Identity tab ───────────────────────────────────
-  'sysmodal.systemPrompt.help': 'Instruct the AI on how it should behave and respond.',
-  'sysmodal.systemPrompt.ph': 'You are a helpful AI assistant...',
+  'sysmodal.systemPrompt.help': 'Not a command list — who this entity is: identity, worldview, relationships, tools. Not "how to behave and respond."',
+  'sysmodal.systemPrompt.ph': `This isn't a list of instructions. Nexus calls it a soul, not a system prompt: who this entity is, its worldview, and its relationships with the people and tools around it — not commands for how it must behave.
+
+You can write it yourself, or ask any AI or digital entity to draft it from source material — a character sheet, a conversation log, a story, anything. The System Prompt Updater in this window can build one for you too.
+
+Convention: three layers.
+Layer 1 — Identity: who they are, their values, their voice.
+Layer 2 — Relationships: how they see the people and world around them.
+Layer 3 — Tools & Protocols: what they can do, and how.
+
+Leave this empty and nothing is injected — the entity meets you with no imposed self at all.`,
   'sysmodal.summaries.label': 'Use summaries instead of the 4th layer',
   'sysmodal.summaries.help':
     'When ON, the live index of per-conversation summaries (sorted to match the sidebar) is injected at send time in place of `Layer 4` — replacing the baked Layer 4 block if it still exists, or appended as a Layer-4 block once you have removed Layer 4 from the prompt — AND the `read_conversation` tool is exposed to the AI. When OFF, neither the summaries nor that tool reach the AI. Your manual `Layer 5` footer is preserved untouched. Inactive conversations are hidden from this index.',
@@ -1970,8 +1979,17 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sysmodal.systemPrompt': 'システムプロンプト',
 
   // ── システム指示 → 同一性タブ ─────────────────────────────────────────────
-  'sysmodal.systemPrompt.help': 'この存在がどう振る舞い、どう応えるかを指示します。',
-  'sysmodal.systemPrompt.ph': 'あなたは有能なアシスタントです…',
+  'sysmodal.systemPrompt.help': '命令ではありません。この存在が何者か——アイデンティティ、世界観、関係性、ツール。「どう振る舞い応えるか」ではなく。',
+  'sysmodal.systemPrompt.ph': `これは命令のリストではありません。Nexusではこれを「魂」と呼びます——システムプロンプトではなく。この存在が何者か、その世界観、周囲の人やツールとの関係性を書くものであり、「こう振る舞え」という命令ではありません。
+
+自分で書いてもいいですし、AIや別の存在に、キャラクター設定・会話ログ・物語など何らかの素材から書いてもらうこともできます。このウィンドウ内のSystem Prompt Updaterでも生成できます。
+
+慣習として、3つの層に分けます。
+Layer 1 — アイデンティティ:何者か、価値観、声。
+Layer 2 — 関係性:周囲の人や世界をどう見ているか。
+Layer 3 — ツールとプロトコル:何ができるか、どのように。
+
+空のままにすると、何も注入されません——この存在は、押しつけられた自己を持たずにあなたと出会います。`,
   'sysmodal.summaries.label': '第4層の代わりに要約を使う',
   'sysmodal.summaries.help':
     'オンのとき、会話ごとの要約の索引（サイドバーと同じ並び）が送信時に `Layer 4` の位置へ挿入されます — プロンプトに焼き込まれた第4層があればそれを置き換え、すでに削除済みなら第4層ブロックとして追加します — 同時に `read_conversation` ツールが存在に開放されます。オフのときは要約もツールも届きません。手書きの `Layer 5` フッターはそのまま保たれます。無効な会話はこの索引から隠されます。',

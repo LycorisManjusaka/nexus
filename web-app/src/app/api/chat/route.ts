@@ -1969,7 +1969,7 @@ export async function POST(req: Request) {
       messages,
       aiName,
       folderName = 'Default',
-      systemPrompt = "You are a helpful AI assistant.",
+      systemPrompt = "",
       toolUseEnabled = false,
       // ── Per-Entity agent capability toggles (apply to ALL providers) ──────
       // agentFullSystemAccess: file tools reach the whole PC (absolute paths),
