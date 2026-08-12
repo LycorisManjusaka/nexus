@@ -37,27 +37,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: `Character "${name}" not found in character_map.json` }, { status: 404 });
     }
 
-    // `engine`/`charId` are optional on a rule — a name-only entry is valid for
-    // display/letters purposes, but there is no TTS voice to switch to. Refuse
-    // this specific action (voice-changer character switch), not the rule
-    // itself: the name still resolves everywhere that doesn't need a voice.
-    if (rule.engine === undefined || rule.engine === null || rule.charId === undefined || rule.charId === null) {
+    // `engine`/`charName` are optional on a rule — a name-only entry is valid
+    // for display/letters purposes, but there is no TTS voice to switch to.
+    // Refuse this specific action (voice-changer character switch), not the
+    // rule itself: the name still resolves everywhere that doesn't need a
+    // voice. `engine` is already the engine's own name string here — no
+    // reverse lookup through a numeric map needed.
+    if (!rule.engine || !rule.charName) {
       return NextResponse.json({
-        error: `"${name}" has no engine/charId set in character_map.json — it has a display name but no TTS voice to switch to.`,
+        error: `"${name}" has no engine/character set in character_map.json — it has a display name but no TTS voice to switch to.`,
       }, { status: 400 });
     }
-
-    // Reverse-lookup engine number → engine key (e.g., "0" → "voicevox")
-    const engines: Record<string, string> = map.engines || {};
-    let engineName: string | null = null;
-    for (const [key, val] of Object.entries(engines)) {
-      if (val === rule.engine) { engineName = key; break; }
-    }
-    if (!engineName) {
-      return NextResponse.json({
-        error: `Engine number "${rule.engine}" has no entry in character_map.json engines map`,
-      }, { status: 500 });
-    }
+    const engineName: string = rule.engine;
 
     // Read existing chara_settings.json or initialize
     let settings: any = {};
@@ -67,23 +58,20 @@ export async function POST(req: Request) {
 
     settings.current_engine = engineName;
     if (!settings[engineName] || typeof settings[engineName] !== 'object') {
-      settings[engineName] = { current_character: 0, character_styles: {} };
+      settings[engineName] = { current_character_name: null, character_styles: {} };
     }
     if (!settings[engineName].character_styles) settings[engineName].character_styles = {};
-    settings[engineName].current_character = parseInt(String(rule.charId), 10);
+    settings[engineName].current_character_name = rule.charName;
     // If this identity has a style configured (Preferences → User Identity),
     // apply it every time the identity is selected — the pairing of voice +
     // style is what the user configured for this person, not a one-time
-    // default. Otherwise fall back to the old behavior: only seed 0 if the
-    // character has no style entry yet, so a manual runtime tweak for
-    // identities that never had a configured style isn't clobbered.
-    const styleNum = rule.style !== undefined && rule.style !== null && rule.style !== ''
-      ? parseInt(String(rule.style), 10)
-      : NaN;
-    if (Number.isFinite(styleNum)) {
-      settings[engineName].character_styles[String(rule.charId)] = styleNum;
-    } else if (!(String(rule.charId) in settings[engineName].character_styles)) {
-      settings[engineName].character_styles[String(rule.charId)] = 0;
+    // default. Otherwise leave whatever style is already on record for this
+    // character alone (per-character last-used style, or nothing — resolved
+    // to the engine's own default at synthesis time) rather than inventing
+    // one; an unset style must never be silently written as though it were a
+    // deliberate choice.
+    if (rule.styleName) {
+      settings[engineName].character_styles[rule.charName] = rule.styleName;
     }
 
     fs.writeFileSync(charaSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
@@ -92,7 +80,7 @@ export async function POST(req: Request) {
       ok: true,
       name,
       engine: engineName,
-      charId: rule.charId,
+      charName: rule.charName,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

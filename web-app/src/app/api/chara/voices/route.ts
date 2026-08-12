@@ -29,45 +29,32 @@ export async function GET() {
       try { settings = JSON.parse(fs.readFileSync(charaSettingsPath(), 'utf-8')); } catch {}
     }
 
-    // engine number → engine key (e.g., "0" → "voicevox")
-    const engineByNum: Record<string, string> = {};
-    for (const [key, num] of Object.entries(map.engines || {})) {
-      engineByNum[num as string] = key;
-    }
-
     const characters = (map.rules || []).map((r: any) => {
-      // `engine`/`charId` are optional on a rule (a name-only entry is valid —
-      // e.g. registered purely as a letters recipient or display name). Without
-      // both, there is no TTS voice to resolve: previously this fell through to
-      // parseInt(undefined) === NaN, and `NaN || 0` downstream silently picked
-      // engine 0 / character 0 — the wrong voice, not "no voice". Return
-      // voice: null instead so callers (MessageBubble's tag lookup) correctly
-      // fall back to the default voice rather than speaking as someone else.
-      if (r.engine === undefined || r.engine === null || r.charId === undefined || r.charId === null) {
+      // `engine`/`charName` are optional on a rule (a name-only entry is
+      // valid — e.g. registered purely as a letters recipient or display
+      // name). Without both, there is no TTS voice to resolve. Return
+      // voice: null so callers (MessageBubble's tag lookup) correctly fall
+      // back to the default voice rather than speaking as someone else.
+      if (!r.engine || !r.charName) {
         return { name: r.name, voice: null };
       }
-      const engineKey = engineByNum[r.engine];
-      let style_idx = 0;
       // A rule-configured style (set via Preferences → User Identity) is the
       // identity's own intended style and takes priority; otherwise fall back
-      // to whatever the voicechanger's live runtime state currently has for
-      // that charId (old behavior, preserved for rules saved before this
-      // field existed).
-      const styleNum = r.style !== undefined && r.style !== null && r.style !== ''
-        ? parseInt(String(r.style), 10)
-        : NaN;
-      if (Number.isFinite(styleNum)) {
-        style_idx = styleNum;
-      } else if (engineKey && settings?.[engineKey]?.character_styles) {
-        const s = settings[engineKey].character_styles[String(r.charId)];
-        if (typeof s === 'number') style_idx = s;
+      // to whatever the voicechanger's live runtime state currently has on
+      // record for that character name. Leaving style_name undefined here is
+      // deliberate when neither source has one — synthesis falls through to
+      // the engine's own default style rather than a silently-assumed one.
+      let style_name: string | undefined = r.styleName;
+      if (!style_name && settings?.[r.engine]?.character_styles) {
+        const s = settings[r.engine].character_styles[r.charName];
+        if (typeof s === 'string' && s) style_name = s;
       }
       return {
         name: r.name,
         voice: {
-          engine: parseInt(String(r.engine), 10),
-          char_idx: parseInt(String(r.charId), 10),
-          style_idx,
+          engine: r.engine,
+          char_name: r.charName,
+          style_name,
           speed: 1.0,
         },
       };

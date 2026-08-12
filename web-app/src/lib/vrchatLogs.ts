@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { kohaiPath, earLogPath, speakersJsonPath, VOICECHANGER_DATA_DIR } from './voicechangerPaths';
-import { resolveCharaByIds, getCharaFallback } from './charaResolver';
+import { kohaiPath, earLogPath, VOICECHANGER_DATA_DIR } from './voicechangerPaths';
+import { resolveCharaByName, getCharaFallback } from './charaResolver';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Noise-word filter.
@@ -73,21 +73,9 @@ function footerLikeStamp(d = new Date()): string {
     `${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
 }
 
-function getStyleName(engine: string, charId: string, styleId: string): string {
-  try {
-    if (engine === '0' && fs.existsSync(speakersJsonPath())) {
-      const data = JSON.parse(fs.readFileSync(speakersJsonPath(), 'utf-8'));
-      if (data[parseInt(charId)]?.styles?.[parseInt(styleId)]) {
-        return data[parseInt(charId)].styles[parseInt(styleId)].name;
-      }
-    }
-  } catch (e) { /* fall through */ }
-  return styleId;
-}
-
 export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
   const consume = opts?.consume ?? false;
-  const linesData: { time: string; speaker: string; styleId: string | null; styleName: string | null; text: string }[] = [];
+  const linesData: { time: string; speaker: string; text: string }[] = [];
 
   const kohaiFile = kohaiPath();
   const earFile = earLogPath();
@@ -99,43 +87,43 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
       const content = fs.readFileSync(earFile, 'utf-8');
       content.split('\n').forEach((line) => {
         const m = line.trim().match(/^\[(\d{2}:\d{2}:\d{2})\]\s*\((.*?)\)\s*(.*)/);
-        if (m) linesData.push({ time: m[1], speaker: m[2], styleId: null, styleName: null, text: m[3] });
+        if (m) linesData.push({ time: m[1], speaker: m[2], text: m[3] });
       });
     } catch (e) { /* ignore */ }
   }
 
-  // 2. Parse kohai.txt — voice-state header lines "[engine-char-style]" set the
-  //    current speaker; "[HH:MM:SS] text" lines are the user's utterances.
+  // 2. Parse kohai.txt — voice-state header lines "[VOICE|engine|char|style]"
+  //    set the current speaker; "[HH:MM:SS] text" lines are the user's
+  //    utterances. Engine and character are the engine's own NAME strings,
+  //    never numeric indices — a TTS engine's speaker-list slot for a given
+  //    character shifts whenever a new voice is installed (Coeiroink and
+  //    AivisSpeech both do this), so only names are stable enough to persist.
   if (fs.existsSync(kohaiFile)) {
     try {
       const content = fs.readFileSync(kohaiFile, 'utf-8');
-      // Speaker/style default to the character_map.json fallback, not a
-      // hardcoded name, so a kohai.txt with no leading header still labels
+      // Speaker defaults to the character_map.json fallback, not a hardcoded
+      // name, so a kohai.txt with no leading header still labels
       // consistently with the rest of the app.
       let currentSpeaker = getCharaFallback();
-      let currentStyleId = '0';
-      let currentStyleName = 'ノーマル';
 
       content.split('\n').forEach((raw) => {
         const line = raw.trim();
         if (!line) return;
 
-        const headerMatch = line.match(/^\[(\d+)-(\d+)-(\d+)\]$/);
+        const headerMatch = line.match(/^\[VOICE\|([^|]*)\|([^|]*)\|([^|]*)\]$/);
         if (headerMatch) {
           const engine = headerMatch[1];
-          const charId = headerMatch[2];
-          currentStyleId = headerMatch[3];
-          currentStyleName = getStyleName(engine, charId, currentStyleId);
+          const charName = headerMatch[2];
 
           // Single source of truth: local_data/character_map.json (editable
           // without touching code), instead of an out-of-sync hardcoded table.
-          currentSpeaker = resolveCharaByIds(engine, charId);
+          currentSpeaker = charName ? resolveCharaByName(engine, charName) : getCharaFallback();
           return;
         }
 
         const timeMatch = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)/);
         if (timeMatch) {
-          linesData.push({ time: timeMatch[1], speaker: currentSpeaker, styleId: currentStyleId, styleName: currentStyleName, text: timeMatch[2] });
+          linesData.push({ time: timeMatch[1], speaker: currentSpeaker, text: timeMatch[2] });
         }
       });
     } catch (e) { /* ignore */ }
