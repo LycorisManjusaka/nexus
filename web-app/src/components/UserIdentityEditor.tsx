@@ -135,36 +135,44 @@ export default function UserIdentityEditor() {
     saveTimerRef.current = setTimeout(() => { void flushSave(); }, 300);
   }, [flushSave]);
 
+  // Always-current snapshot of all three state fields, updated on every render.
+  // This is what makes rapid cross-field edits safe: when the user types in the
+  // name field and then the humanLabel field within one debounce window, the
+  // second queueSave() reads the LATEST rules from the ref instead of the stale
+  // closure value, so neither edit clobbers the other.
+  const stateRef = useRef({ rules, fallback, humanLabel });
+  stateRef.current = { rules, fallback, humanLabel };
+
   // Flush any pending debounced save when the editor unmounts (modal closes
   // from anywhere — Cancel, X, backdrop click, parent save-trigger).
   useEffect(() => () => { void flushSave(); }, [flushSave]);
 
   const updateRule = (i: number, patch: Partial<Rule>) => {
-    const next = rules.map((r, idx) => idx === i ? { ...r, ...patch } : r);
+    const next = stateRef.current.rules.map((r, idx) => idx === i ? { ...r, ...patch } : r);
     setRules(next);
-    queueSave({ rules: next, fallback, humanLabel });
+    queueSave({ rules: next, fallback: stateRef.current.fallback, humanLabel: stateRef.current.humanLabel });
   };
 
   const addRule = () => {
-    const next = [...rules, { name: '' }];
+    const next = [...stateRef.current.rules, { name: '' }];
     setRules(next);
-    queueSave({ rules: next, fallback, humanLabel });
+    queueSave({ rules: next, fallback: stateRef.current.fallback, humanLabel: stateRef.current.humanLabel });
   };
 
   const removeRule = (i: number) => {
-    const next = rules.filter((_, idx) => idx !== i);
+    const next = stateRef.current.rules.filter((_, idx) => idx !== i);
     setRules(next);
-    queueSave({ rules: next, fallback, humanLabel });
+    queueSave({ rules: next, fallback: stateRef.current.fallback, humanLabel: stateRef.current.humanLabel });
   };
 
   const onFallbackChange = (v: string) => {
     setFallback(v);
-    queueSave({ rules, fallback: v, humanLabel });
+    queueSave({ rules: stateRef.current.rules, fallback: v, humanLabel: stateRef.current.humanLabel });
   };
 
   const onHumanLabelChange = (v: string) => {
     setHumanLabel(v);
-    queueSave({ rules, fallback, humanLabel });
+    queueSave({ rules: stateRef.current.rules, fallback: stateRef.current.fallback, humanLabel: v });
   };
 
   if (loading) return <div className="text-xs text-muted-foreground">{t('voice.loading')}</div>;

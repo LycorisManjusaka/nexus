@@ -45,7 +45,8 @@ class EarService:
                 # processed_msg が None の場合は何もせず次のメッセージを待つ
                 if processed_msg:
                     timestamp = time.strftime('%H:%M:%S')
-                    log_line = f"[{timestamp}] (人) {processed_msg}\n"
+                    label = nexus_identity.load_map_meta().get('humanLabel', '人')
+                    log_line = f"[{timestamp}] ({label}) {processed_msg}\n"
                     
                     with open(Config.LOG_FILE, 'a', encoding='utf-8') as f:
                         f.write(log_line)
