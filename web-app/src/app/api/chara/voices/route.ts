@@ -1,91 +1,44 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { charaSettingsPath } from '@/lib/voicechangerPaths';
-
-const CHAR_MAP_PATH = path.resolve(process.cwd(), '..', 'local_data', 'character_map.json');
+import { readCharacterMap } from '@/lib/characterMap';
+import { resolveUserIdentity } from '@/lib/userIdentity';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Returns ready-to-use TTS voice configs for every character in
- * character_map.json. Style index is pulled from chara_settings.json's
- * per-engine `character_styles` map when available, falling back to 0.
+ * Ready-to-use TTS voice configs for every identity in character_map.json.
  *
- * Used by MessageBubble's "Read Aloud" feature so [name] tags inside a user
- * message can be matched against character_map.json (in addition to the
- * existing folder-name match), letting user characters speak in their own
- * voice without a dedicated dummy folder.
+ * Used by MessageBubble's "Read Aloud" so a `[name]` tag inside a message can be
+ * matched against character_map.json (in addition to the folder-name match),
+ * letting a user identity speak in its own voice without a dummy folder.
+ *
+ * The voice is entirely name-based now — engine name, character name, style
+ * name — which is exactly what /api/tts/synthesize already accepts. There is no
+ * longer a second file to consult: an identity's default style lives on the
+ * identity itself, so chara_settings.json's per-engine `character_styles` map
+ * has nothing left to add.
+ *
+ * The one live piece is the style override in user_identity.json: it belongs to
+ * whichever identity is selected right now, so it is applied to that identity
+ * only. Everyone else speaks in their own default style.
+ *
+ * `voice: null` means "this identity has no voice", which is a normal state, not
+ * an error — the caller simply doesn't speak that tag.
  */
 export async function GET() {
   try {
-    if (!fs.existsSync(CHAR_MAP_PATH)) {
-      return NextResponse.json({ characters: [] });
-    }
-    const map = JSON.parse(fs.readFileSync(CHAR_MAP_PATH, 'utf-8'));
-    const engines: Record<string, string> = map.engines || {};
-
-    let settings: any = {};
-    if (fs.existsSync(charaSettingsPath())) {
-      try { settings = JSON.parse(fs.readFileSync(charaSettingsPath(), 'utf-8')); } catch {}
-    }
-
-    const characters = (map.rules || []).map((r: any) => {
-      // New-format rule: engine name string + charName
-      if (r.engine && r.charName) {
-        let style_name: string | undefined = r.styleName;
-        if (!style_name && settings?.[r.engine]?.character_styles) {
-          const s = settings[r.engine].character_styles[r.charName];
-          if (typeof s === 'string' && s) style_name = s;
-        }
-        return {
-          name: r.name,
-          voice: {
+    const map = readCharacterMap();
+    const active = resolveUserIdentity(map);
+    const characters = map.rules.map((r) => ({
+      name: r.name,
+      voice: r.engine && r.character
+        ? {
             engine: r.engine,
-            char_name: r.charName,
-            style_name,
+            char_name: r.character,
+            style_name: r.name === active.name ? active.style : r.defaultStyle,
             speed: 1.0,
-          },
-        };
-      }
-
-      // Old-format rule: numeric engine string + charId
-      if (r.engine !== undefined && r.charId !== undefined) {
-        // Reverse-lookup engine name from engines map
-        let engineName: string | null = null;
-        for (const [key, val] of Object.entries(engines)) {
-          if (val === r.engine) { engineName = key; break; }
-        }
-        if (!engineName) return { name: r.name, voice: null };
-
-        // We can't resolve charId to a character name without the live
-        // speaker list, so style_name can only come from r.styleName or
-        // the numeric character_styles lookup.
-        let style_name: string | undefined = r.styleName;
-        if (!style_name && settings?.[engineName]?.character_styles) {
-          const s = settings[engineName].character_styles[String(r.charId)];
-          if (typeof s === 'string' && s) style_name = s;
-          // Also try numeric style index
-          if (!style_name && typeof s === 'number') {
-            // Can't resolve numeric style index to name without live speaker list.
-            // Leave undefined — synthesis will use engine default.
           }
-        }
-        return {
-          name: r.name,
-          voice: {
-            engine: engineName,
-            char_id: r.charId,
-            style_name,
-            speed: 1.0,
-          },
-        };
-      }
-
-      // Name-only rule (no voice)
-      return { name: r.name, voice: null };
-    });
-
+        : null,
+    }));
     return NextResponse.json({ characters });
   } catch (e: any) {
     return NextResponse.json({ error: e.message, characters: [] }, { status: 500 });

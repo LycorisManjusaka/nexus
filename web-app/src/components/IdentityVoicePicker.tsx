@@ -13,16 +13,18 @@ import { useT } from '@/lib/i18n';
 // owned by the parent (one identity editor, potentially several rows
 // targeting the same engine) rather than duplicated per row.
 //
-// Style is left unset until the human explicitly picks one in the style
-// dropdown below — selecting a character never silently writes the engine's
-// first/default style as though it had been chosen. Synthesis (and the
-// voice-changer's own runtime) falls through to the engine's own default
-// style when none is saved here.
+// The style picked here is the identity's DEFAULT style — what it speaks in
+// when nothing else is chosen. A different style can be picked per session in
+// the conversation window (that pick lives in user_identity.json and never
+// touches this map). It is left unset until explicitly picked: selecting a
+// character never silently writes the engine's first style as though it had
+// been chosen. Synthesis (and the voice changer's own runtime) falls through to
+// the engine's own default when none is saved here.
 
 export interface IdentityVoiceValue {
   engine?: string; // engine's own NAME string: "voicevox" | "coeiroink" | "aivisspeech" | future engines
-  charName?: string;
-  styleName?: string;
+  character?: string;
+  defaultStyle?: string;
 }
 
 interface Props {
@@ -49,13 +51,13 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
   const engineLabel = engineKey === 'aivisspeech' ? t('voice.engine.aivis') : (ENGINE_LABEL_KEY[engineKey] || engineKey);
 
   const currentEngineData = engineKey === 'voicevox' ? speakers.voicevox : engineKey === 'aivisspeech' ? speakers.aivisspeech : speakers.coeiroink;
-  const resolvedCharIdx = value.charName
-    ? (currentEngineData || []).findIndex((c: any) => (c.name || c.speakerName) === value.charName)
+  const resolvedCharIdx = value.character
+    ? (currentEngineData || []).findIndex((c: any) => (c.name || c.speakerName) === value.character)
     : -1;
   const currentChar = resolvedCharIdx >= 0 ? currentEngineData?.[resolvedCharIdx] : undefined;
   const styles = currentChar?.styles || [];
-  const resolvedStyleIdx = value.styleName
-    ? styles.findIndex((s: any) => (s.name || s.styleName) === value.styleName)
+  const resolvedStyleIdx = value.defaultStyle
+    ? styles.findIndex((s: any) => (s.name || s.styleName) === value.defaultStyle)
     : -1;
 
   const toggleHasVoice = (on: boolean) => {
@@ -64,7 +66,7 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
     // ({ ...r, ...patch }), so an empty object here would leave the
     // previously-set `engine` untouched and the checkbox would appear to
     // snap back on.
-    if (!on) { onChange({ engine: undefined, charName: undefined, styleName: undefined }); return; }
+    if (!on) { onChange({ engine: undefined, character: undefined, defaultStyle: undefined }); return; }
     onChange({ engine: 'voicevox' });
   };
 
@@ -125,8 +127,8 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
                   // style. Style stays unset until the dropdown below is used.
                   onChange({
                     engine: engineKey,
-                    charName: c?.name || c?.speakerName,
-                    styleName: undefined,
+                    character: c?.name || c?.speakerName,
+                    defaultStyle: undefined,
                   });
                 }}
                 className="w-full px-2 py-1 bg-background border border-border rounded text-xs outline-none"
@@ -145,8 +147,8 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
                     const s = styles[i];
                     onChange({
                       engine: engineKey,
-                      charName: currentChar?.name || currentChar?.speakerName,
-                      styleName: s?.name || s?.styleName,
+                      character: currentChar?.name || currentChar?.speakerName,
+                      defaultStyle: s?.name || s?.styleName,
                     });
                   }}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-xs outline-none"

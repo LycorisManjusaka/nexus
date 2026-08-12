@@ -53,8 +53,15 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     }
     setClearing(null);
   };
-  // Characters from local_data/character_map.json, for the speaker dropdown.
-  const [charaList, setCharaList] = useState<{ name: string; engine: string; charId: string }[]>([]);
+  // Identities from local_data/character_map.json, for the speaker dropdown.
+  const [charaList, setCharaList] = useState<
+    { name: string; engine?: string; character?: string; defaultStyle?: string; hasVoice?: boolean }[]
+  >([]);
+  // Speaking styles the CURRENT identity's character offers, asked of the engine
+  // live. Only fetched while the Audio Session is on — off it, nothing is spoken,
+  // so a style would be a control with no effect.
+  const [styleList, setStyleList] = useState<string[]>([]);
+  const [activeStyle, setActiveStyle] = useState<string>('');
   const [attachments, setAttachments] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -76,16 +83,16 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   }, [text]);
 
   React.useEffect(() => {
-    // User name comes from the active TTS character (voicechanger/chara_settings.json
-    // resolved through local_data/character_map.json). Refresh on mount, every 30s
-    // (catches changes made by voice_changer.py externally), and immediately when
-    // The selector below dispatches an nx-chara-changed event after a pick, so
-    // any other mounted copy of this component resyncs immediately rather than
-    // waiting for its next poll. (Preferences used to host a duplicate of this
-    // dropdown and fire the same event; that control has been removed.)
+    // Who is speaking comes from local_data/user_identity.json (resolved against
+    // character_map.json) — one file, read by every window and by the voice
+    // changer, which is what makes a pick here show up everywhere. Refresh on
+    // mount, every 30s (catches a switch spoken into voice_changer.py), and
+    // immediately on nx-chara-changed, which the selector below dispatches after
+    // a pick so any other mounted copy resyncs without waiting for its poll.
     const fetchName = () => {
       fetch('/api/chara/current').then(r => r.json()).then(data => {
         if (data?.name) setUserName(data.name);
+        setActiveStyle(typeof data?.style === 'string' ? data.style : '');
       }).catch(() => {});
     };
     fetchName();
@@ -106,6 +113,24 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       window.removeEventListener('nx-chara-changed', onCharaChanged as EventListener);
     };
   }, []);
+
+  // The style dropdown's contents. Asked of the running engine (falling back to
+  // its cached catalog) rather than remembered, because the whole reason indices
+  // were abandoned is that this list changes underneath us. Re-fetched whenever
+  // the identity changes, since styles belong to one specific character.
+  React.useEffect(() => {
+    if (!vrchatMode) { setStyleList([]); return; }
+    let cancelled = false;
+    fetch('/api/chara/styles')
+      .then(r => r.json())
+      .then(d => {
+        if (cancelled) return;
+        setStyleList(Array.isArray(d?.styles) ? d.styles : []);
+        if (typeof d?.style === 'string') setActiveStyle(d.style);
+      })
+      .catch(() => { if (!cancelled) setStyleList([]); });
+    return () => { cancelled = true; };
+  }, [vrchatMode, userName]);
 
   // ── Draft autosave / restore ──────────────────────────────────────────────
   // Persist the in-progress message so a page reload (or crash) doesn't lose it.
@@ -172,12 +197,14 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     };
   }, []);
 
-  // Switch the active speaker — SAME logic as Preferences → User Identity:
-  // writes voicechanger/chara_settings.json via /api/chara/select, then tells
-  // the rest of the app to refresh (so this label + Preferences stay in sync).
+  // Switch the active speaker: writes local_data/user_identity.json via
+  // /api/chara/select, then tells the rest of the app to refresh so every open
+  // conversation window shows the same name. Switching identity drops any style
+  // override (the server does that) — a style belongs to one character.
   const handleCharaSelect = async (newName: string) => {
     if (!newName) return;
     setUserName(newName); // optimistic
+    setActiveStyle('');
     try {
       await fetch('/api/chara/select', {
         method: 'POST',
@@ -185,6 +212,21 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         body: JSON.stringify({ name: newName }),
       });
       window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: newName } }));
+    } catch { /* the 30s poll will reconcile if this fails */ }
+  };
+
+  // Switch the speaking style for this session only. Sent as an explicit `style`
+  // key (empty string clears the override), so the server can tell "no style
+  // wanted" from "style not mentioned" — omitting the key means "leave it".
+  const handleStyleSelect = async (newStyle: string) => {
+    setActiveStyle(newStyle); // optimistic
+    try {
+      await fetch('/api/chara/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style: newStyle || null }),
+      });
+      window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: userName } }));
     } catch { /* the 30s poll will reconcile if this fails */ }
   };
 
@@ -613,26 +655,50 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           onChange={handleFileChange} 
         />
         <div className="flex-1 flex flex-col">
-          <select
-            value={userName}
-            onChange={(e) => handleCharaSelect(e.target.value)}
-            title={t('input.speakerTitle')}
-            className="px-2 pt-2 text-xs text-muted-foreground bg-transparent outline-none font-medium cursor-pointer hover:text-foreground"
-          >
-            {/* The native option list ignores Tailwind utilities and falls back
-                to the OS default (white-on-white under dark themes). Force the
-                theme colors explicitly via CSS variables so it's always legible. */}
-            {charaList.length === 0 && (
-              <option value="" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{t('input.noCharacters')}</option>
+          <div className="flex items-center gap-1">
+            <select
+              value={userName}
+              onChange={(e) => handleCharaSelect(e.target.value)}
+              title={t('input.speakerTitle')}
+              className="px-2 pt-2 text-xs text-muted-foreground bg-transparent outline-none font-medium cursor-pointer hover:text-foreground"
+            >
+              {/* The native option list ignores Tailwind utilities and falls back
+                  to the OS default (white-on-white under dark themes). Force the
+                  theme colors explicitly via CSS variables so it's always legible. */}
+              {charaList.length === 0 && (
+                <option value="" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{t('input.noCharacters')}</option>
+              )}
+              {/* Keep the current name visible even if it's not in the map. */}
+              {userName && !charaList.some(c => c.name === userName) && (
+                <option value={userName} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{userName}</option>
+              )}
+              {charaList.map(c => (
+                <option key={c.name} value={c.name} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{c.name}</option>
+              ))}
+            </select>
+            {/* Style is only offered while the Audio Session is on: off it,
+                nothing is spoken, so the control would have no effect. An
+                identity with no voice has no styles either, and the dropdown
+                simply isn't rendered. */}
+            {vrchatMode && styleList.length > 0 && (
+              <select
+                value={activeStyle}
+                onChange={(e) => handleStyleSelect(e.target.value)}
+                title={t('input.styleTitle')}
+                className="px-2 pt-2 text-xs text-muted-foreground bg-transparent outline-none cursor-pointer hover:text-foreground"
+              >
+                <option value="" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{t('input.styleDefault')}</option>
+                {/* Keep an in-effect style visible even if the engine no longer
+                    lists it (renamed character, engine down and cache stale). */}
+                {activeStyle && !styleList.includes(activeStyle) && (
+                  <option value={activeStyle} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{activeStyle}</option>
+                )}
+                {styleList.map(s => (
+                  <option key={s} value={s} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{s}</option>
+                ))}
+              </select>
             )}
-            {/* Keep the current name visible even if it's not in the map. */}
-            {userName && !charaList.some(c => c.name === userName) && (
-              <option value={userName} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{userName}</option>
-            )}
-            {charaList.map(c => (
-              <option key={c.name} value={c.name} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{c.name}</option>
-            ))}
-          </select>
+          </div>
           <textarea
             ref={textareaRef}
             value={text}

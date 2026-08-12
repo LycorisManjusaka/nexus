@@ -1,113 +1,67 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import { charaSettingsPath, VOICECHANGER_DATA_DIR, ensureVoicechangerDataDir } from '@/lib/voicechangerPaths';
+import { readCharacterMap, findIdentity } from '@/lib/characterMap';
+import { writeUserIdentitySelection, readUserIdentitySelection, resolveUserIdentity } from '@/lib/userIdentity';
 
-const CHAR_MAP_PATH = path.resolve(process.cwd(), '..', 'local_data', 'character_map.json');
+export const dynamic = 'force-dynamic';
 
+/**
+ * Selects the identity (and optionally the speaking style) that is "me" right
+ * now, by writing local_data/user_identity.json.
+ *
+ * Body: { name?: string, style?: string | null }
+ *   - name   — an identity from character_map.json. Omit to keep the current
+ *              one and change only the style.
+ *   - style  — a style NAME for this session. null/"" clears the override, so
+ *              the identity's own defaultStyle applies again.
+ *
+ * Switching identity clears any style override: a style belongs to one specific
+ * character, so carrying it across would name a style the new character has
+ * never heard of.
+ *
+ * An identity with no voice at all is selectable — that is the point of the
+ * voice being optional. It simply won't be spoken.
+ *
+ * This is the ONLY writer of the selection. The voice changer re-reads the same
+ * file on every utterance, so a pick made in any conversation window takes
+ * effect everywhere at once, including in the spoken voice.
+ */
 export async function POST(req: Request) {
   try {
-    const { name } = await req.json();
-    if (typeof name !== 'string' || !name.trim()) {
-      return NextResponse.json({ error: 'name is required' }, { status: 400 });
-    }
+    const body = await req.json().catch(() => ({} as any));
+    const map = readCharacterMap();
 
-    // Voice switching writes into local_data/voicechanger (the data half of the
-    // voicechanger integration). It may not exist yet on a fresh machine.
-    try {
-      ensureVoicechangerDataDir();
-    } catch (e: any) {
-      return NextResponse.json(
-        { error: `Could not create voicechanger data directory at "${VOICECHANGER_DATA_DIR}": ${e.message}` },
-        { status: 500 },
-      );
-    }
+    const current = readUserIdentitySelection();
+    const requestedName: string | undefined =
+      typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : undefined;
+    const identityName = requestedName || current?.identity || map.fallback;
 
-    if (!fs.existsSync(CHAR_MAP_PATH)) {
-      return NextResponse.json({ error: 'character_map.json not found' }, { status: 500 });
-    }
-    const map = JSON.parse(fs.readFileSync(CHAR_MAP_PATH, 'utf-8'));
-    const rule = (map.rules || []).find((r: any) => r.name === name);
+    const rule = findIdentity(map, identityName);
     if (!rule) {
-      return NextResponse.json({ error: `Character "${name}" not found in character_map.json` }, { status: 404 });
+      return NextResponse.json({ error: `Unknown identity: "${identityName}"` }, { status: 404 });
     }
 
-    // `engine`/`charName` (new format) or `engine`/`charId` (old numeric
-    // format) — at least one of these pairs must exist for a voice switch.
-    // A name-only rule (neither charName NOR charId) is valid for display/
-    // letters but can't drive a voice-changer selection.
-    const hasNewFmt = rule.engine && rule.charName;
-    const hasOldFmt = rule.engine !== undefined && rule.charId !== undefined;
-
-    if (!hasNewFmt && !hasOldFmt) {
-      return NextResponse.json({
-        error: `"${name}" has no engine/character set in character_map.json — it has a display name but no TTS voice to switch to.`,
-      }, { status: 400 });
+    const identityChanged = !current || current.identity !== rule.name;
+    let style: string | undefined;
+    if (body && Object.prototype.hasOwnProperty.call(body, 'style')) {
+      style = typeof body.style === 'string' && body.style.trim() ? body.style.trim() : undefined;
+    } else if (!identityChanged) {
+      style = current?.style;
     }
+    // An explicit pick that merely names the identity's own default is stored as
+    // "no override" — absent already means exactly that.
+    if (style && style === rule.defaultStyle) style = undefined;
 
-    // Resolve engine name. New-format rules carry the name directly
-    // ("voicevox" / "coeiroink" / "aivisspeech"); old-format rules carry a
-    // numeric string ("0" / "1" / "2") that we reverse-lookup through the
-    // engines map.
-    const engines: Record<string, string> = map.engines || {};
-    let engineName: string;
-    if (hasNewFmt) {
-      engineName = rule.engine;
-    } else {
-      // Reverse lookup: "1" → "coeiroink"
-      let found: string | null = null;
-      for (const [key, val] of Object.entries(engines)) {
-        if (val === rule.engine) { found = key; break; }
-      }
-      if (!found) {
-        return NextResponse.json({
-          error: `Engine "${rule.engine}" (from "${name}") has no entry in character_map.json engines map`,
-        }, { status: 500 });
-      }
-      engineName = found;
-    }
+    writeUserIdentitySelection({ identity: rule.name, style });
 
-    // Read existing chara_settings.json or initialize
-    let settings: any = {};
-    if (fs.existsSync(charaSettingsPath())) {
-      try { settings = JSON.parse(fs.readFileSync(charaSettingsPath(), 'utf-8')); } catch { settings = {}; }
-    }
-
-    settings.current_engine = engineName;
-    if (!settings[engineName] || typeof settings[engineName] !== 'object') {
-      settings[engineName] = {};
-    }
-    if (!settings[engineName].character_styles) settings[engineName].character_styles = {};
-
-    if (hasNewFmt) {
-      // New format: write name-based fields
-      settings[engineName].current_character_name = rule.charName;
-      if (rule.styleName) {
-        settings[engineName].character_styles[rule.charName] = rule.styleName;
-      }
-    } else {
-      // Old format: write numeric fields (Python voice_changer.py still
-      // reads current_character, not current_character_name). Also write
-      // the name-based field as null so readers know it was deliberately
-      // cleared — prevents a stale name from a previous selection from
-      // being treated as current.
-      settings[engineName].current_character = parseInt(String(rule.charId), 10);
-      settings[engineName].current_character_name = null;
-      // Apply style as a numeric index if present
-      if (rule.styleId !== undefined) {
-        settings[engineName].character_styles[String(rule.charId)] = parseInt(String(rule.styleId), 10);
-      }
-    }
-
-    fs.writeFileSync(charaSettingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
-
+    const resolved = resolveUserIdentity(map);
     return NextResponse.json({
       ok: true,
-      name,
-      engine: engineName,
-      ...(hasNewFmt
-        ? { charName: rule.charName }
-        : { charId: rule.charId }),
+      name: resolved.name,
+      style: resolved.style,
+      styleIsOverride: resolved.styleIsOverride,
+      engine: rule.engine,
+      character: rule.character,
+      defaultStyle: rule.defaultStyle,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { kohaiPath, earLogPath, VOICECHANGER_DATA_DIR } from './voicechangerPaths';
-import { resolveCharaByName, getCharaFallback } from './charaResolver';
+import { resolveCharaByName, getCharaFallback, resolveCurrentChara } from './charaResolver';
+import { displaySpeaker } from './userIdentity';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Noise-word filter.
@@ -81,49 +82,68 @@ export function mergeVrchatLogs(opts?: { consume?: boolean }): string {
   const earFile = earLogPath();
   const noise = loadNoiseWords();
 
-  // 1. Parse ear_log.txt — "[HH:MM:SS] (speaker) text"
+  // Both transcripts now use ONE line format:
+  //
+  //     [HH:MM:SS] (Speaker) text
+  //
+  // where Speaker is a display name straight out of character_map.json, plus an
+  // optional "|Style" suffix when the speaker was voiced in something other
+  // than their default style. That is all the reader needs — no engine, no
+  // character, no slot index, and therefore nothing to resolve or to go stale.
+  // ear_log.txt already looked like this; kohai.txt now matches it, so the two
+  // parse identically.
+  const LINE_RE = /^\[(\d{2}:\d{2}:\d{2})\]\s*\((.*?)\)\s*(.*)/;
+
   if (fs.existsSync(earFile)) {
     try {
       const content = fs.readFileSync(earFile, 'utf-8');
       content.split('\n').forEach((line) => {
-        const m = line.trim().match(/^\[(\d{2}:\d{2}:\d{2})\]\s*\((.*?)\)\s*(.*)/);
-        if (m) linesData.push({ time: m[1], speaker: m[2], text: m[3] });
+        const m = line.trim().match(LINE_RE);
+        if (m) linesData.push({ time: m[1], speaker: displaySpeaker(m[2]), text: m[3] });
       });
     } catch (e) { /* ignore */ }
   }
 
-  // 2. Parse kohai.txt — voice-state header lines "[VOICE|engine|char|style]"
-  //    set the current speaker; "[HH:MM:SS] text" lines are the user's
-  //    utterances. Engine and character are the engine's own NAME strings,
-  //    never numeric indices — a TTS engine's speaker-list slot for a given
-  //    character shifts whenever a new voice is installed (Coeiroink and
-  //    AivisSpeech both do this), so only names are stable enough to persist.
   if (fs.existsSync(kohaiFile)) {
     try {
       const content = fs.readFileSync(kohaiFile, 'utf-8');
-      // Speaker defaults to the character_map.json fallback, not a hardcoded
-      // name, so a kohai.txt with no leading header still labels
-      // consistently with the rest of the app.
-      let currentSpeaker = getCharaFallback();
+
+      // ── Legacy tolerance ────────────────────────────────────────────────
+      // A kohai.txt written by an older voice changer carries a standalone
+      // state header ("[VOICE|engine|char|style]", or the even older numeric
+      // "[0-2-0]") followed by untagged "[HH:MM:SS] text" lines. Such a file
+      // may still be sitting on disk, or arriving from a machine that has not
+      // been updated yet. Untagged lines are attributed to whoever is selected
+      // NOW, which is the same answer the header was trying to give.
+      let legacySpeaker = resolveCurrentChara().name || getCharaFallback();
 
       content.split('\n').forEach((raw) => {
         const line = raw.trim();
         if (!line) return;
 
-        const headerMatch = line.match(/^\[VOICE\|([^|]*)\|([^|]*)\|([^|]*)\]$/);
-        if (headerMatch) {
-          const engine = headerMatch[1];
-          const charName = headerMatch[2];
-
-          // Single source of truth: local_data/character_map.json (editable
-          // without touching code), instead of an out-of-sync hardcoded table.
-          currentSpeaker = charName ? resolveCharaByName(engine, charName) : getCharaFallback();
+        const tagged = line.match(LINE_RE);
+        if (tagged) {
+          linesData.push({ time: tagged[1], speaker: displaySpeaker(tagged[2]), text: tagged[3] });
           return;
         }
 
-        const timeMatch = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)/);
-        if (timeMatch) {
-          linesData.push({ time: timeMatch[1], speaker: currentSpeaker, text: timeMatch[2] });
+        const voiceHeader = line.match(/^\[VOICE\|([^|]*)\|([^|]*)\|([^|]*)\]$/);
+        if (voiceHeader) {
+          const engine = voiceHeader[1];
+          const charName = voiceHeader[2];
+          legacySpeaker = charName ? resolveCharaByName(engine, charName) : getCharaFallback();
+          return;
+        }
+
+        // Oldest header shape: three numbers, "[engine-char-style]". Nothing
+        // here can be resolved into a name any more (that is precisely why
+        // indices were removed), so it only marks "speaker unknown" and the
+        // current selection stands.
+        if (/^\[\d+-\d+-\d+\]$/.test(line)) return;
+
+        const untimed = line.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)/);
+        if (untimed) {
+          linesData.push({ time: untimed[1], speaker: legacySpeaker, text: untimed[2] });
         }
       });
     } catch (e) { /* ignore */ }

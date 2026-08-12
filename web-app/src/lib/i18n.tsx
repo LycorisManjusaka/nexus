@@ -727,8 +727,11 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'input.placeholder': 'Send a message... (Shift+Enter for newline)',
   'input.stop': 'Stop Generating',
   'input.speakerTitle':
-    'Active speaker — same as Preferences → User Identity (writes chara_settings.json)',
+    'Who is speaking — shared by every open conversation, and by the voice changer',
   'input.noCharacters': '— no characters —',
+  'input.styleTitle':
+    'Speaking style for this session. Switching identity clears it.',
+  'input.styleDefault': '— default style —',
   'input.clearKohai':
     'Clear kohai.txt — discard your own pending recognized speech (backed up first)',
   'input.clearEar':
@@ -1954,8 +1957,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'input.placeholder': 'メッセージを送る…（Shift+Enter で改行）',
   'input.stop': '生成を止める',
   'input.speakerTitle':
-    '現在の話者 — 環境設定 → ユーザー識別と同じ（chara_settings.json に書き込みます）',
+    '現在の話者 — 開いているすべての会話とボイスチェンジャーで共有されます',
   'input.noCharacters': '— キャラクターがありません —',
+  'input.styleTitle':
+    'このセッションの話し方（スタイル）。人格を切り替えると解除されます。',
+  'input.styleDefault': '— 既定のスタイル —',
   'input.clearKohai':
     'kohai.txt を消去 — 自分の未送信の認識音声を破棄します（先に控えを取ります）',
   'input.clearEar':

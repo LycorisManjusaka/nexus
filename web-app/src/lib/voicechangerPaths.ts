@@ -11,8 +11,8 @@ import path from 'path';
  *   - PROGRAM  (`voicechanger/`, git-tracked): the .py/.bat launchers and the
  *     notification .wav assets. Unchanging unless the code itself changes.
  *   - DATA     (`local_data/voicechanger/`, gitignored): everything read or
- *     written at runtime — chara_settings.json (currently-selected voice
- *     character), device_settings.json, quirks.json, speakers.json (cached
+ *     written at runtime — device_settings.json (which output devices to speak
+ *     through), quirks.json, speakers.json (cached
  *     Voicevox speaker catalog), gairaigo.txt (pronunciation dictionary),
  *     kohai.txt (the user's live speech transcript — Python writes, we tail),
  *     ear_log.txt (other people's live speech transcript, "ears"), and their
@@ -50,7 +50,12 @@ const DEFAULT_DATA_DIR = path.resolve(process.cwd(), '..', 'local_data', 'voicec
 
 export const VOICECHANGER_DATA_DIR = process.env.NEXUS_VOICECHANGER_DATA_DIR || DEFAULT_DATA_DIR;
 
-export const charaSettingsPath = () => path.join(VOICECHANGER_DATA_DIR, 'chara_settings.json');
+// NOTE: there is deliberately no chara_settings.json helper any more. Which
+// identity is speaking is a NEXUS concept, not a voice-changer one — it now
+// lives in local_data/user_identity.json (see lib/userIdentity.ts) and is read
+// BY the voice changer rather than owned by it. That is what makes the voice
+// changer optional: an identity with no voice still has a name.
+export const deviceSettingsPath = () => path.join(VOICECHANGER_DATA_DIR, 'device_settings.json');
 export const speakersJsonPath = () => path.join(VOICECHANGER_DATA_DIR, 'speakers.json');
 // Coeiroink's speaker catalog, cached to disk by voice_changer.py's
 // _load_coeiroink_speakers() the same way speakers.json caches Voicevox's.
