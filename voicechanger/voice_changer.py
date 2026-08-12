@@ -31,6 +31,7 @@ class Config:
 
     DEVICE_SETTINGS_FILE = DATA_DIR / 'device_settings.json'
     VOICEVOX_SPEAKERS_FILE = DATA_DIR / 'speakers.json'
+    COEIROINK_SPEAKERS_FILE = DATA_DIR / 'coeiroink_speakers.json'
     CHARA_SETTINGS_FILE = DATA_DIR / 'chara_settings.json'
     QUIRKS_FILE = DATA_DIR / 'quirks.json'
     AUDIO_FOLDER = DATA_DIR / 'audio'
@@ -292,11 +293,22 @@ class EngineManager:
             except Exception: pass
 
     def _load_coeiroink_speakers(self):
+        # Mirrors _load_voicevox_speakers()'s live-fetch-then-cache-to-disk
+        # pattern. Previously this only lived in memory for the lifetime of
+        # this process, so nothing else (e.g. voice_service.py, which never
+        # loads a live engine) could resolve a coeiroink char/style index into
+        # a real name.
         try:
             response = requests.get(f"{Config.COEIROINK_URL}/v1/speakers")
             if response.status_code == 200:
                 self.speakers_data["coeiroink"] = response.json()
-        except requests.exceptions.RequestException: pass
+                with open(Config.COEIROINK_SPEAKERS_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(self.speakers_data["coeiroink"], f, ensure_ascii=False, indent=2)
+        except requests.exceptions.RequestException:
+            try:
+                with open(Config.COEIROINK_SPEAKERS_FILE, 'r', encoding='utf-8') as f:
+                    self.speakers_data["coeiroink"] = json.load(f)
+            except Exception: pass
 
     def get_character_info(self):
         data = self.speakers_data[self.current_engine]
@@ -407,15 +419,25 @@ class VoiceChangerApp:
         self.noise_hallucinations = {"ごめん", "ありがとうございました", "ご視野", "ご視野の"}
 
 
+    def _build_voice_header(self):
+        # NEXUS's kohai.txt reader (vrchatLogs.ts) resolves speaker identity by
+        # NAME, not by numeric slot index — a TTS engine's speaker-list index
+        # for a given character shifts whenever a new voice is installed
+        # (confirmed on Coeiroink and AivisSpeech), so only names survive that.
+        # current_engine is already a name string ("voicevox"/"coeiroink");
+        # get_character_info() already resolves char_idx/style_idx into real
+        # name strings via the loaded speaker catalog.
+        char_name, style_name = self.engine.get_character_info()
+        return f"[VOICE|{self.engine.current_engine}|{char_name or ''}|{style_name or ''}]"
+
     def log_to_kohai(self, text):
         if not text or not text.strip(): return
         try:
             is_empty = not Config.KOHAI_TXT_PATH.exists() or Config.KOHAI_TXT_PATH.stat().st_size == 0
             content = ""
-            
+
             if is_empty:
-                engine_idx = Config.ENGINES.index(self.engine.current_engine) if self.engine.current_engine in Config.ENGINES else 0
-                header = f"[{engine_idx}-{self.engine.char_idx}-{self.engine.style_idx}]"
+                header = self._build_voice_header()
                 if text.strip() != header:
                     content += header + "\n"
 
@@ -423,8 +445,8 @@ class VoiceChangerApp:
             timestamp = time.strftime('%H:%M:%S')
             clean_text = text.strip()
 
-            # テキストが [1-1-0] のような状態ヘッダーの場合はタイムスタンプを付けない
-            if re.match(r'^\[\d+-\d+-\d+\]$', clean_text):
+            # テキストが [VOICE|engine|char|style] のような状態ヘッダーの場合はタイムスタンプを付けない
+            if re.match(r'^\[VOICE\|[^|]*\|[^|]*\|[^|]*\]$', clean_text):
                 content += clean_text + "\n"
                 log_print = clean_text
             else:
@@ -472,8 +494,7 @@ class VoiceChangerApp:
 
                     if res_msg:
                         print(f"   [Command Result] {res_msg}")
-                        engine_idx = Config.ENGINES.index(self.engine.current_engine) if self.engine.current_engine in Config.ENGINES else 0
-                        self.log_to_kohai(f"[{engine_idx}-{self.engine.char_idx}-{self.engine.style_idx}]")
+                        self.log_to_kohai(self._build_voice_header())
                         
                         out_path = self.engine.synthesize_speech(res_msg)
                         if out_path: self.audio.play_audio(out_path, [self.audio.output_device_2])

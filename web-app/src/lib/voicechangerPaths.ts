@@ -52,6 +52,9 @@ export const VOICECHANGER_DATA_DIR = process.env.NEXUS_VOICECHANGER_DATA_DIR || 
 
 export const charaSettingsPath = () => path.join(VOICECHANGER_DATA_DIR, 'chara_settings.json');
 export const speakersJsonPath = () => path.join(VOICECHANGER_DATA_DIR, 'speakers.json');
+// Coeiroink's speaker catalog, cached to disk by voice_changer.py's
+// _load_coeiroink_speakers() the same way speakers.json caches Voicevox's.
+export const coeiroinkSpeakersJsonPath = () => path.join(VOICECHANGER_DATA_DIR, 'coeiroink_speakers.json');
 export const kohaiPath = () => path.join(VOICECHANGER_DATA_DIR, 'kohai.txt');
 export const earLogPath = () => path.join(VOICECHANGER_DATA_DIR, 'ear_log.txt');
 

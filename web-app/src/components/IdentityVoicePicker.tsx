@@ -59,7 +59,12 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
     : -1;
 
   const toggleHasVoice = (on: boolean) => {
-    if (!on) { onChange({}); return; }
+    // Explicitly overwrite every voice field to undefined — the parent's
+    // updateRule() shallow-merges the patch onto the existing rule
+    // ({ ...r, ...patch }), so an empty object here would leave the
+    // previously-set `engine` untouched and the checkbox would appear to
+    // snap back on.
+    if (!on) { onChange({ engine: undefined, charName: undefined, styleName: undefined }); return; }
     onChange({ engine: 'voicevox' });
   };
 

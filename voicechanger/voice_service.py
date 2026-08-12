@@ -34,6 +34,15 @@ class Config:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     KOHAI_TXT_PATH = DATA_DIR / "kohai.txt"
     CHARA_SETTINGS_FILE = DATA_DIR / "chara_settings.json"
+    # Cached speaker catalogs — voice_service.py never loads a live engine (no
+    # TTS synthesis here), so unlike voice_changer.py it has no in-memory
+    # speaker list to resolve a numeric char/style index into a real name.
+    # Both files are written by voice_changer.py (_load_voicevox_speakers() /
+    # _load_coeiroink_speakers()); if voice_changer.py has never run on this
+    # machine, these caches simply won't exist yet and resolution falls back
+    # to an empty name (see get_header() below).
+    VOICEVOX_SPEAKERS_FILE = DATA_DIR / "speakers.json"
+    COEIROINK_SPEAKERS_FILE = DATA_DIR / "coeiroink_speakers.json"
     ENGINES = ["voicevox", "coeiroink"]
 
 
@@ -44,23 +53,53 @@ class VoiceService:
         self.noise_hallucinations = {"ごめん", "ありがとうございました", "ご視野", "ご視野の", "ん"}
 
     # ------------------------------------------------------------------
-    # Header "[engine_idx-char_idx-style_idx]" — identical to the one
-    # voice_changer.py writes. We read it straight from chara_settings.json
-    # (without loading speakers or synthesizing anything) so the speaker still
-    # resolves correctly through NEXUS's character_map.json.
+    # Header "[VOICE|engine|charName|styleName]" — same format
+    # voice_changer.py writes (NEXUS's vrchatLogs.ts parses this exact
+    # pattern; a numeric "[0-2-0]"-style header never matches it and silently
+    # leaves the speaker on the fallback identity forever). We read the
+    # current engine/char/style index from chara_settings.json, then resolve
+    # that index into a real name via the speaker catalogs voice_changer.py
+    # caches to disk — never a numeric slot index, since a TTS engine's
+    # speaker-list order shifts whenever a new voice is installed.
     # ------------------------------------------------------------------
+    def _load_speaker_catalog(self, engine):
+        path = Config.VOICEVOX_SPEAKERS_FILE if engine == "voicevox" else Config.COEIROINK_SPEAKERS_FILE
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
     def get_header(self):
+        engine = "voicevox"
+        char_name = ""
+        style_name = ""
         try:
             with open(Config.CHARA_SETTINGS_FILE, "r", encoding="utf-8") as f:
                 settings = json.load(f)
             engine = settings.get("current_engine", "voicevox")
-            engine_idx = Config.ENGINES.index(engine) if engine in Config.ENGINES else 0
-            char_idx = settings[engine]["current_character"]
-            style_idx = settings[engine]["character_styles"].get(str(char_idx), 0)
-            return f"[{engine_idx}-{char_idx}-{style_idx}]"
+            if engine not in Config.ENGINES:
+                engine = "voicevox"
+            engine_settings = settings.get(engine, {})
+            char_idx = engine_settings.get("current_character", 0)
+            style_idx = engine_settings.get("character_styles", {}).get(str(char_idx), 0)
+
+            catalog = self._load_speaker_catalog(engine)
+            if catalog and 0 <= char_idx < len(catalog):
+                char_data = catalog[char_idx]
+                if engine == "voicevox":
+                    char_name = char_data.get("name", "") or ""
+                    styles = char_data.get("styles", [])
+                    if 0 <= style_idx < len(styles):
+                        style_name = styles[style_idx].get("name", "") or ""
+                else:
+                    char_name = char_data.get("speakerName", "") or ""
+                    styles = char_data.get("styles", [])
+                    if 0 <= style_idx < len(styles):
+                        style_name = styles[style_idx].get("styleName", "") or ""
         except Exception:
-            # Fallback mirrors voice_changer.py's default (voicevox / char 1 / style 0).
-            return "[0-1-0]"
+            pass
+        return f"[VOICE|{engine}|{char_name}|{style_name}]"
 
     # ------------------------------------------------------------------
     # Same write logic / format as voice_changer.py's log_to_kohai().
@@ -75,7 +114,7 @@ class VoiceService:
             )
             content = ""
             clean_text = text.strip()
-            is_header = re.match(r"^\[\d+-\d+-\d+\]$", clean_text) is not None
+            is_header = re.match(r"^\[VOICE\|[^|]*\|[^|]*\|[^|]*\]$", clean_text) is not None
 
             # On an empty file, prepend the current voice-state header (unless the
             # incoming line already IS a header).
