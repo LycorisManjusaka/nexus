@@ -48,7 +48,17 @@ export async function GET() {
       }
       const engineKey = engineByNum[r.engine];
       let style_idx = 0;
-      if (engineKey && settings?.[engineKey]?.character_styles) {
+      // A rule-configured style (set via Preferences → User Identity) is the
+      // identity's own intended style and takes priority; otherwise fall back
+      // to whatever the voicechanger's live runtime state currently has for
+      // that charId (old behavior, preserved for rules saved before this
+      // field existed).
+      const styleNum = r.style !== undefined && r.style !== null && r.style !== ''
+        ? parseInt(String(r.style), 10)
+        : NaN;
+      if (Number.isFinite(styleNum)) {
+        style_idx = styleNum;
+      } else if (engineKey && settings?.[engineKey]?.character_styles) {
         const s = settings[engineKey].character_styles[String(r.charId)];
         if (typeof s === 'number') style_idx = s;
       }

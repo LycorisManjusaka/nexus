@@ -71,8 +71,18 @@ export async function POST(req: Request) {
     }
     if (!settings[engineName].character_styles) settings[engineName].character_styles = {};
     settings[engineName].current_character = parseInt(String(rule.charId), 10);
-    // Make sure the character has a style entry; default 0 if new.
-    if (!(String(rule.charId) in settings[engineName].character_styles)) {
+    // If this identity has a style configured (Preferences → User Identity),
+    // apply it every time the identity is selected — the pairing of voice +
+    // style is what the user configured for this person, not a one-time
+    // default. Otherwise fall back to the old behavior: only seed 0 if the
+    // character has no style entry yet, so a manual runtime tweak for
+    // identities that never had a configured style isn't clobbered.
+    const styleNum = rule.style !== undefined && rule.style !== null && rule.style !== ''
+      ? parseInt(String(rule.style), 10)
+      : NaN;
+    if (Number.isFinite(styleNum)) {
+      settings[engineName].character_styles[String(rule.charId)] = styleNum;
+    } else if (!(String(rule.charId) in settings[engineName].character_styles)) {
       settings[engineName].character_styles[String(rule.charId)] = 0;
     }
 

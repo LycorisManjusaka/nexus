@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, KeyRound, Volume2, SlidersHorizontal } from 'lucide-react';
+import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
+import UserIdentityEditor from './UserIdentityEditor';
 import { useT, Tx } from '@/lib/i18n';
 
 // Preferences is split into tabs because the three groups have nothing to do
@@ -10,9 +11,10 @@ import { useT, Tx } from '@/lib/i18n';
 // new tab by extending this list and adding a matching `{tab === '...' && (…)}`
 // block in the body. Labels come from i18n under `settings.tab.<id>`.
 const TABS = [
-  { id: 'keys',   icon: KeyRound },
-  { id: 'vrchat', icon: Volume2 },
-  { id: 'other',  icon: SlidersHorizontal },
+  { id: 'keys',     icon: KeyRound },
+  { id: 'vrchat',   icon: Volume2 },
+  { id: 'identity', icon: Users },
+  { id: 'other',    icon: SlidersHorizontal },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -440,6 +442,15 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
             {/* ── Add further VRChat / audio-routing settings below this line ── */}
 
+          </div>
+          )}
+
+          {tab === 'identity' && (
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
+              <Users size={16} /> {t('useridentity.heading')}
+            </h3>
+            <UserIdentityEditor />
           </div>
           )}
 

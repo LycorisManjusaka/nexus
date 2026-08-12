@@ -177,7 +177,7 @@ export default function Sidebar({
   // so each AI entity / persona can have its own token budget, auto-trim
   // policy, and identity-layer compression threshold (since longer-lived
   // characters often want bigger windows than throwaway conversations).
-  const [folderMaxRecommendedContext, setFolderMaxRecommendedContext] = useState<number>(60000);
+  const [folderMaxRecommendedContext, setFolderMaxRecommendedContext] = useState<number>(80000);
   const [folderAutoTrim, setFolderAutoTrim] = useState<boolean>(true);
   const [folderMaxTokensPerLayer, setFolderMaxTokensPerLayer] = useState<number>(8000);
   const [liveSessionVoice, setLiveSessionVoice] = useState('Aoede');
@@ -602,7 +602,7 @@ export default function Sidebar({
                       // defaults the old global Preferences screen used —
                       // folders that pre-date this move just see those
                       // defaults until the user touches the inputs.
-                      setFolderMaxRecommendedContext(activeFolder.settings?.maxRecommendedContext ?? 60000);
+                      setFolderMaxRecommendedContext(activeFolder.settings?.maxRecommendedContext ?? 80000);
                       setFolderAutoTrim(activeFolder.settings?.autoTrimCopiedMessages !== false);
                       setFolderMaxTokensPerLayer(activeFolder.settings?.maxTokensPerLayer ?? 8000);
                       // Live Session voice — known prebuilt names use preset mode; anything else is custom
@@ -1083,7 +1083,7 @@ export default function Sidebar({
                       max={Math.max(200000, folderMaxRecommendedContext || 200000)}
                       step={10000}
                       value={folderMaxRecommendedContext}
-                      onChange={(e) => setFolderMaxRecommendedContext(parseInt(e.target.value) || 60000)}
+                      onChange={(e) => setFolderMaxRecommendedContext(parseInt(e.target.value) || 80000)}
                       className="w-full accent-indigo-500 cursor-pointer"
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground font-mono">

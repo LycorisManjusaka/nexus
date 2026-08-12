@@ -1294,7 +1294,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (activeFolderSettings.autoTrimCopiedMessages === false) return;
     if (!firstOriginalMessageId) return;
     if (loading) return; // never trim mid-stream
-    const max = activeFolderSettings.maxRecommendedContext || 60000;
+    const max = activeFolderSettings.maxRecommendedContext || 80000;
     // Text-only total: system + copied + original (attachments excluded).
     const textTotal = tokenBreakdown.total - tokenBreakdown.attach;
     if (textTotal <= max) return;
@@ -1831,7 +1831,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // {percent} is replaced with the value (e.g. "42%").
     if (showFatigueToEntity && fatigueInstruction.trim()) {
       const fatigueFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-      const fatigueMax = fatigueFolderSettings.maxRecommendedContext || 60000;
+      const fatigueMax = fatigueFolderSettings.maxRecommendedContext || 80000;
       const fatiguePct = Math.round((tokenBreakdown.original / Math.max(1, fatigueMax - tokenBreakdown.sys)) * 100);
       effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${fatiguePct}%`)}`.trim();
     }
@@ -2851,7 +2851,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           {(() => {
             // Per-folder max context (was global, moved into Folder Settings).
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || 60000;
+            const max = activeFolderSettings.maxRecommendedContext || 80000;
             const { sys, copied, original, attach, total } = tokenBreakdown;
             // The indicator (bar, total/limit number, red ring) reflects the
             // FULL current context window — toggling an attachment's eye icon
@@ -2903,7 +2903,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               A gauge must report a QUANTITY, never a CONDITION. */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || 60000;
+            const max = activeFolderSettings.maxRecommendedContext || 80000;
             // Denominator is the room left after the FIXED, non-conversational
             // overhead — the "Sys" bucket = system prompt + attachment/tool
             // instructions (the indigo bar segment). Guarded against ≤0.
@@ -2930,7 +2930,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               (Case 004: a gauge reports a quantity, never a condition). */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || 60000;
+            const max = activeFolderSettings.maxRecommendedContext || 80000;
             const denom = Math.max(1, max - tokenBreakdown.sys);
             const elapsed = Math.round((tokenBreakdown.original / denom) * 100);
             if (elapsed < 100) return null;

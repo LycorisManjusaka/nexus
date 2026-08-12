@@ -44,6 +44,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.title': 'Preferences',
   'settings.tab.keys': 'API Keys',
   'settings.tab.vrchat': 'VRChat & Audio',
+  'settings.tab.identity': 'User Identity',
   'settings.tab.other': 'Other',
   'settings.cancel': 'Cancel',
   'settings.saveChanges': 'Save Changes',
@@ -137,6 +138,32 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.engines.msg.done': 'done',
   'settings.engines.msg.failed': 'failed',
   'settings.engines.msg.requestFailed': 'request failed',
+
+  // ── Preferences → User Identity ──────────────────────────────────────────
+  // Full editor for local_data/character_map.json — who "you" (and whoever
+  // else speaks through a shared voice-changer setup) can be identified as.
+  'useridentity.heading': 'User Identity',
+  'useridentity.intro':
+    'Edit `character_map.json` — the identities Nexus can recognize as "you" (or whoever is speaking) from the active voice-changer character. Each identity is a name, with an optional voice attached. A name with no voice still works everywhere except switching the active TTS character.',
+  'useridentity.hasVoice': 'Has a voice',
+  'useridentity.pickCharacter': 'Pick a character…',
+  'useridentity.namePh': 'Identity name',
+  'useridentity.remove': 'Remove this identity',
+  'useridentity.anonymousProtected': '"Anonymous" is core to Nexus and cannot be removed.',
+  'useridentity.anonymousNote': 'Core identity — always present, cannot be removed. Its name is fixed; its voice can still be changed.',
+  'useridentity.add': 'Add Identity',
+  'useridentity.fallback.label': 'Default fallback identity',
+  'useridentity.fallback.help':
+    'Used when no active voice-changer character matches any identity below — e.g. nothing selected yet, or a character not listed here.',
+  'useridentity.others.label': 'Label for others (second mic / virtual audio cable)',
+  'useridentity.others.help':
+    "During a Live Session, speech heard through the OTHER input (not the active voice-changer character — e.g. a second microphone or virtual audio cable carrying someone else's voice) is tagged with this label instead of an identity name.",
+  'useridentity.save': 'Save Identities',
+  'useridentity.saving': 'Saving…',
+  'useridentity.saved': 'Saved.',
+  'useridentity.err.emptyName': 'Every identity needs a name.',
+  'useridentity.err.duplicate': 'Duplicate identity name: "{name}"',
+  'useridentity.err.saveFailed': 'Save failed.',
 
   // ── Preferences → Other ──────────────────────────────────────────────────
   'settings.other.heading': 'Other',
@@ -1263,6 +1290,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.title': '設定',
   'settings.tab.keys': 'APIキー',
   'settings.tab.vrchat': 'VRChat・音声',
+  'settings.tab.identity': 'ユーザーの識別',
   'settings.tab.other': 'その他',
   'settings.cancel': 'キャンセル',
   'settings.saveChanges': '変更を保存',
@@ -1356,6 +1384,30 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.engines.msg.done': '完了',
   'settings.engines.msg.failed': '失敗',
   'settings.engines.msg.requestFailed': 'リクエストに失敗しました',
+
+  // ── Preferences → User Identity ──────────────────────────────────────────
+  'useridentity.heading': 'ユーザーの識別',
+  'useridentity.intro':
+    '`character_map.json` を編集します — ボイスチェンジャーで選ばれているキャラクターから、Nexus が「あなた」（または話している人）として認識できる識別情報の一覧です。各識別は名前と、任意で紐づく声から成ります。声のない名前も、TTSのキャラクターを切り替える用途以外ではすべて機能します。',
+  'useridentity.hasVoice': '声を持たせる',
+  'useridentity.pickCharacter': 'キャラクターを選択…',
+  'useridentity.namePh': '識別名',
+  'useridentity.remove': 'この識別を削除',
+  'useridentity.anonymousProtected': '「Anonymous」は Nexus の中核であり、削除できません。',
+  'useridentity.anonymousNote': '中核となる識別 — 常に存在し、削除できません。名前は固定ですが、声は変更できます。',
+  'useridentity.add': '識別を追加',
+  'useridentity.fallback.label': '既定のフォールバック識別',
+  'useridentity.fallback.help':
+    '現在アクティブなボイスチェンジャーのキャラクターが下の識別のどれとも一致しない場合（まだ何も選ばれていない、またはここに載っていないキャラクターの場合など）に使われます。',
+  'useridentity.others.label': '他者のラベル（第2マイク／仮想オーディオケーブル）',
+  'useridentity.others.help':
+    'ライブセッション中、もう一方の入力（アクティブなボイスチェンジャーのキャラクターではなく、たとえば第2マイクや仮想オーディオケーブルで届く別の人の声）から聞こえた発話には、識別名の代わりにこのラベルが付けられます。',
+  'useridentity.save': '識別を保存',
+  'useridentity.saving': '保存中…',
+  'useridentity.saved': '保存しました。',
+  'useridentity.err.emptyName': 'すべての識別に名前が必要です。',
+  'useridentity.err.duplicate': '識別名が重複しています：「{name}」',
+  'useridentity.err.saveFailed': '保存に失敗しました。',
 
   // ── Preferences → Other ──────────────────────────────────────────────────
   'settings.other.heading': 'その他',
