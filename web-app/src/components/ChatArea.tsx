@@ -21,7 +21,7 @@ import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
-import { appendLayer4Index, appendLayer5Footer, hasLayerStructure, prependIdentityPreamble } from '@/lib/layer4';
+import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, resolveBindingText } from '@/lib/layer4';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
@@ -459,12 +459,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // prependIdentityPreamble), never baked into it. workingDisciplineEnabled is
   // a plain off/on toggle (default off — opt-in, since this decouples text
   // that used to be hand-baked into a handful of prompts). baseBindingMode is
-  // off/on/auto (default auto): AUTO injects the Binding only when the stored
-  // prompt already contains a real Layer 1-5 structure (hasLayerStructure) —
-  // so turning this on for every folder does nothing to an entity that was
-  // never given a 5-layer identity in the first place.
+  // also a plain off/on toggle (default on). When on, resolveBindingText picks
+  // WHICH text to inject: the layers-focused `absoluteBaseBinding` when the
+  // stored prompt already has a real Layer 1-5 structure (hasLayerStructure),
+  // or Utai's original `absoluteBaseBindingInitial` when it doesn't — never
+  // both, never neither, as long as the switch is on. Legacy folder JSONs may
+  // still carry the old three-state 'auto' value; every read site below
+  // coerces anything other than 'off' to 'on'.
   const [workingDisciplineEnabled, setWorkingDisciplineEnabled] = useState(false);
-  const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on' | 'auto'>('auto');
+  const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on'>('on');
   // Initialize OFF (not the folder default). The real value is always set by
   // the conversation-load effect below — data.vrchatMode for an existing convo,
   // or the folder default for a new one. Seeding this with `defaultVrchatMode`
@@ -787,14 +790,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (useSummariesForLayer4) p = appendLayer4Index(p, summaryIndexBody);
     p = appendLayer5Footer(p, footerBody);
     if (vrchatMode) p = `${p}\n\n${audioSessionRuleText}`.trim();
-    const bindingActive = baseBindingMode === 'on' || (baseBindingMode === 'auto' && hasLayerStructure(systemPrompt));
     p = prependIdentityPreamble(
       p,
       workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
-      bindingActive ? (instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '') : '',
+      resolveBindingText(
+        baseBindingMode === 'on',
+        systemPrompt,
+        instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '',
+        instructionOverrides['absoluteBaseBindingInitial'] || langDefaults.absoluteBaseBindingInitial || '',
+      ),
     );
     return p;
-  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, workingDisciplineEnabled, baseBindingMode, instructionOverrides]);
+  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, workingDisciplineEnabled, baseBindingMode, instructionOverrides, langDefaults]);
 
   useEffect(() => {
     // `cancelled` guards against an async race: on load this effect fires once
@@ -949,7 +956,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setShowFatigueToEntity(data.showFatigueToEntity || false);
         if (typeof data.fatigueInstruction === 'string') setFatigueInstruction(data.fatigueInstruction);
         setWorkingDisciplineEnabled(data.workingDisciplineEnabled === true);
-        setBaseBindingMode(data.baseBindingMode === 'on' || data.baseBindingMode === 'off' ? data.baseBindingMode : 'auto');
+        // Legacy folders may still carry the old three-state 'auto' value; anything other than 'off' coerces to 'on'.
+        setBaseBindingMode(data.baseBindingMode === 'off' ? 'off' : 'on');
         setVrchatMode(data.vrchatMode !== undefined ? data.vrchatMode : defaultVrchatMode);
         setVrchatRule(data.vrchatRule !== undefined ? data.vrchatRule : defaultVrchatRule);
         setLocalAiName(data.aiName || aiName);
@@ -1038,7 +1046,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setShowFatigueToEntity(pick('showFatigueToEntity', false));
         if (typeof folderSettings.fatigueInstruction === 'string') setFatigueInstruction(folderSettings.fatigueInstruction);
         setWorkingDisciplineEnabled(pick('workingDisciplineEnabled', false));
-        setBaseBindingMode(pick('baseBindingMode', 'auto') as 'off' | 'on' | 'auto');
+        // Legacy folders may still carry the old three-state 'auto' value; anything other than 'off' coerces to 'on'.
+        setBaseBindingMode(pick<'off' | 'on'>('baseBindingMode', 'on') === 'off' ? 'off' : 'on');
         // Sense bridges — default OFF; folder-saved defaults override.
         setEyesEnabled(pick('eyesEnabled', false));
         if (typeof folderSettings.eyesPrompt === 'string') setEyesPrompt(folderSettings.eyesPrompt);
@@ -1795,17 +1804,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }
     }
     // Prepend Working Discipline / Absolute Base Binding AHEAD of the entity's
-    // own prompt (Layers 1-3 + the Layer 4 index just appended above). AUTO
-    // detection runs on the RAW stored `systemPrompt`, not `baseSystemPrompt`
-    // — the Layer 4 heading appended just above ("## **Layer 4: ...") would
-    // otherwise false-trigger AUTO for an entity that has summaries turned on
+    // own prompt (Layers 1-3 + the Layer 4 index just appended above). Layer-
+    // structure detection (which of the two Binding texts to use) runs on the
+    // RAW stored `systemPrompt`, not `baseSystemPrompt` — the Layer 4 heading
+    // appended just above ("## **Layer 4: ...") would otherwise false-trigger
+    // the layers-focused variant for an entity that has summaries turned on
     // but no real 5-layer identity written.
     {
-      const bindingActive = baseBindingMode === 'on' || (baseBindingMode === 'auto' && hasLayerStructure(systemPrompt));
       baseSystemPrompt = prependIdentityPreamble(
         baseSystemPrompt,
         workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
-        bindingActive ? (instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '') : '',
+        resolveBindingText(
+          baseBindingMode === 'on',
+          systemPrompt,
+          instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '',
+          instructionOverrides['absoluteBaseBindingInitial'] || langDefaults.absoluteBaseBindingInitial || '',
+        ),
       );
     }
     let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${audioSessionRuleText}`.trim() : baseSystemPrompt;
@@ -3748,32 +3762,43 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               {/* ── Absolute Base Binding — SIBLING of Working Discipline, not nested.
                   These are two independent injections with independent controls;
                   indenting this one under Discipline's checkbox made it read as a
-                  sub-option of Discipline, which it has never been. */}
+                  sub-option of Discipline, which it has never been. Plain on/off
+                  switch (default on) — WHICH of the two texts below actually goes
+                  out is decided automatically per-send by resolveBindingText,
+                  based on whether the stored prompt has a Layer 1-5 structure. */}
               <div>
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-semibold text-foreground">{t('identity.binding.label')}</label>
-                  <select
-                    value={baseBindingMode}
-                    onChange={(e) => setBaseBindingMode(e.target.value as 'off' | 'on' | 'auto')}
-                    className="text-xs p-1.5 bg-background border border-border rounded-lg outline-none"
-                  >
-                    <option value="off">{t('identity.binding.off')}</option>
-                    <option value="on">{t('identity.binding.on')}</option>
-                    <option value="auto">{t('identity.binding.auto')}</option>
-                  </select>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={baseBindingMode === 'on'}
+                    onChange={(e) => setBaseBindingMode(e.target.checked ? 'on' : 'off')}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('identity.binding.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
                   {t('identity.binding.help')}
                 </p>
-                {baseBindingMode !== 'off' && (
-                  <div className="mt-3 ml-6">
-                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabel')}</label>
-                    <textarea
-                      value={instructionOverrides['absoluteBaseBinding'] || ''}
-                      placeholder={langDefaults.absoluteBaseBinding}
-                      onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
-                      className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                    />
+                {baseBindingMode === 'on' && (
+                  <div className="mt-3 ml-6 space-y-3">
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabelLayered')}</label>
+                      <textarea
+                        value={instructionOverrides['absoluteBaseBinding'] || ''}
+                        placeholder={langDefaults.absoluteBaseBinding}
+                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
+                        className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabelInitial')}</label>
+                      <textarea
+                        value={instructionOverrides['absoluteBaseBindingInitial'] || ''}
+                        placeholder={langDefaults.absoluteBaseBindingInitial}
+                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBindingInitial: e.target.value }))}
+                        className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -4998,9 +5023,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         systemPrompt={prependIdentityPreamble(
           vrchatMode ? `${systemPrompt}\n\n${audioSessionRuleText}`.trim() : (systemPrompt || ''),
           workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
-          (baseBindingMode === 'on' || (baseBindingMode === 'auto' && hasLayerStructure(systemPrompt)))
-            ? (instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '')
-            : '',
+          resolveBindingText(
+            baseBindingMode === 'on',
+            systemPrompt,
+            instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '',
+            instructionOverrides['absoluteBaseBindingInitial'] || langDefaults.absoluteBaseBindingInitial || '',
+          ),
         )}
         voiceName={defaultLiveSessionVoice || 'Aoede'}
         aiVoice={folders?.find((f: any) => f.name === folderName)?.settings?.aiVoice}

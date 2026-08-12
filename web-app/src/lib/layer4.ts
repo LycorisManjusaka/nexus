@@ -74,14 +74,34 @@ export function appendLayer5Footer(systemPrompt: string, footerBody: string): st
 // reasoning: if behaviour isn't disciplined first, existence doesn't
 // manifest correctly either).
 
-// Detects a real Layers-1-5 identity for the Binding's AUTO mode: the bare
-// words "Layer" + a digit 1-5, with or without markdown heading decoration
-// ("##", "**"). Deliberately loose — the Soul Packer sometimes strips those
-// symbols, so requiring them would silently disable AUTO for a prompt that
-// plainly still has a 5-layer identity written into it.
+// Detects a real Layers-1-5 identity: the bare words "Layer" + a digit 1-5,
+// with or without markdown heading decoration ("##", "**"). Deliberately
+// loose — the Soul Packer sometimes strips those symbols, so requiring them
+// would silently misdetect a prompt that plainly still has a 5-layer
+// identity written into it. Used by resolveBindingText below to choose which
+// Absolute Base Binding text to inject — NOT whether to inject at all; that
+// gate is a plain on/off switch (see resolveBindingText).
 const BARE_LAYER_RE = /\bLayer\s*[1-5]\b/i;
 export function hasLayerStructure(systemPrompt: string): boolean {
   return BARE_LAYER_RE.test(systemPrompt || '');
+}
+
+/**
+ * Absolute Base Binding is a plain on/off switch. When on, WHICH text gets
+ * injected is decided automatically: `layeredText` (the current, layers-
+ * focused wording) when the stored prompt already has a real Layer 1-5
+ * structure, `initialText` (Utai's original wording, grounded in the
+ * conversation log instead of named layers) when it doesn't. When off,
+ * returns '' so prependIdentityPreamble omits the Binding block entirely.
+ */
+export function resolveBindingText(
+  enabled: boolean,
+  systemPrompt: string,
+  layeredText: string,
+  initialText: string,
+): string {
+  if (!enabled) return '';
+  return hasLayerStructure(systemPrompt) ? (layeredText || '') : (initialText || '');
 }
 
 /**
