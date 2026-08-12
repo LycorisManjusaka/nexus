@@ -154,9 +154,20 @@ class AudioManager:
         if not keyword: return None, None
         keyword_lower = keyword.lower().strip()
         for index, name, input_channels, output_channels in device_list:
-            if keyword_lower in name.lower():
-                if (is_output and output_channels > 0) or (not is_output and input_channels > 0):
-                    return index, name
+            if not ((is_output and output_channels > 0) or (not is_output and input_channels > 0)):
+                continue
+            name_lower = name.lower()
+            # Three match strategies, lowest index wins (MME endpoints have
+            # lower indices than WASAPI and actually work for playback):
+            #   1. exact match
+            #   2. keyword is substring of device name (settings.py's cropped strings)
+            #   3. device name is a prefix of keyword (PyAudio MME truncates
+            #      device names to 31 chars, so Nexus's full label is longer
+            #      than the truncated name — the truncated name is still a prefix)
+            if (keyword_lower == name_lower
+                    or keyword_lower in name_lower
+                    or (name_lower in keyword_lower and len(name_lower) >= 10)):
+                return index, name
         return None, None
 
     def setup_devices(self):

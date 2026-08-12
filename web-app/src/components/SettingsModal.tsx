@@ -176,7 +176,25 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     }
   };
 
+  // Mirror Primary/Secondary output device picks into
+  // local_data/voicechanger/device_settings.json so voice_changer.py finds
+  // the right speakers without a separate configuration step. Called on every
+  // dropdown change (immediate) AND from saveKeys (failsafe).
+  const mirrorDeviceSettings = (newDevice1Id?: string, newDevice2Id?: string) => {
+    const d1 = devices.find(d => d.deviceId === (newDevice1Id ?? globalSettings.device1Id));
+    const d2 = devices.find(d => d.deviceId === (newDevice2Id ?? globalSettings.device2Id));
+    fetch('/api/device-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        voiceSpeakerKeyword: d1?.label ?? '',
+        notificationSpeakerKeyword: d2?.label ?? '',
+      }),
+    }).catch(() => {}); // best-effort, never block the UI
+  };
+
   const saveKeys = async () => {
+    mirrorDeviceSettings();
     // Engine paths save alongside the keys so "Save Changes" means one thing.
     await Promise.all([
       fetch('/api/keys', {
@@ -340,7 +358,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.device1')}</label>
               <select
                 value={globalSettings.device1Id || ''}
-                onChange={e => setGlobalSettings({...globalSettings, device1Id: e.target.value})}
+                onChange={e => { const v = e.target.value; setGlobalSettings({...globalSettings, device1Id: v}); mirrorDeviceSettings(v, undefined); }}
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               >
                 <option value="">{t('settings.audio.device.system')}</option>
@@ -353,7 +371,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.device2')}</label>
               <select
                 value={globalSettings.device2Id || ''}
-                onChange={e => setGlobalSettings({...globalSettings, device2Id: e.target.value})}
+                onChange={e => { const v = e.target.value; setGlobalSettings({...globalSettings, device2Id: v}); mirrorDeviceSettings(undefined, v); }}
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               >
                 <option value="">{t('settings.audio.device.none')}</option>
