@@ -207,9 +207,10 @@ export function assembleLayers(layers: Layer[]): string {
 // For execution we only need the system-prompt definition; the user message is
 // composed dynamically with the entity's actual data.
 
-// List subdirectories of AGENTS_DIR — each one is a selectable "agent type"
-// in the System Prompt Updater (e.g. "Entities", "Technical"). Loose files
-// at the AGENTS_DIR root are ignored; only directories count.
+// List subdirectories of AGENTS_DIR. Each one is a UI-language code ("en",
+// "ja") holding one complete set of agent files; the System Prompt Updater
+// picks the folder matching the current interface language rather than asking.
+// Loose files at the AGENTS_DIR root are ignored; only directories count.
 export async function listAgentTypes(): Promise<string[]> {
   const root = await resolveAgentsRoot();
   try {
@@ -227,8 +228,8 @@ export async function listAgentTypes(): Promise<string[]> {
 // The new single-call updater uses ONE agent file per type that updates all of
 // Layers 1-3 in a single pass (replacing the old standard + dynamic-compression
 // pair). Prefer the canonical filename; otherwise fall back to the first
-// non-summary, non-underscore .md file in the type folder so a type can name
-// its agent freely (e.g. an English/Technical variant).
+// non-summary, non-underscore .md file in the language folder, so a language
+// set can name its agent freely.
 const MAIN_AGENT_NAME = 'Boundary_Enforced_Abstract_Identity_Schema.md';
 export async function readMainAgent(type: string): Promise<string | null> {
   if (!type) return null;
@@ -335,9 +336,9 @@ export function extractAgentSystemPrompt(agentFile: string): string {
 //   - "/regex/flags"        → JS regex (e.g. /^\s*##\s*Defense.*$/gmi)
 // Comments (lines starting with `#`) and blank lines are ignored.
 
-// Deletion patterns are now stored per-agent-type (alongside the agent files)
-// rather than in `system_prompts/_deletion_patterns.txt`. Different agent types
-// (e.g. Entities vs. Technical) have different finalization-time cleanup needs.
+// Deletion patterns are stored per-language folder (alongside the agent files)
+// rather than in `system_prompts/_deletion_patterns.txt`, because each language
+// set uses its own processing labels — （維持） in ja, [preserved] in en.
 export async function readDeletionPatterns(type: string): Promise<string[]> {
   if (!type) return [];
   try {

@@ -1,0 +1,11 @@
+# Processing labels stripped from the finished document at finalize time.
+# `[inferred]` is deliberately NOT listed — it must stay visible.
+[new]
+[preserved]
+[updated]
+[compressed]
+[moved]
+[merged]
+[removed]
+# Slash / comma combinations the agents sometimes emit, e.g. [preserved/updated].
+/\s*\[(?:new|preserved|updated|compressed|moved|merged|removed)(?:\s*[\/,]\s*(?:new|preserved|updated|compressed|moved|merged|removed))+\]/g

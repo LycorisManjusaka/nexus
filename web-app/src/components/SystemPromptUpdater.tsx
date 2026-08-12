@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle } from 'lucide-react';
 import { diff_match_patch, DIFF_DELETE, DIFF_INSERT } from 'diff-match-patch';
 import { DEFAULT_SUMMARY_INDEX_HINT } from '@/lib/summaryHint';
-import { useT, Tx } from '@/lib/i18n';
+import { useT, useLanguage, Tx } from '@/lib/i18n';
 
 // One shared diff engine. We do NOT diff the raw text directly: on a large
 // prompt, character-level diff_main blows past its time cap and bails out to a
@@ -455,10 +455,13 @@ export default function SystemPromptUpdater({
   // the updater agent as the source's Layer 4 (reference-only — never rewritten).
   const [summaryIndexBody, setSummaryIndexBody] = useState('');
 
-  // Agent-type ComboBox (subfolder under local_data/system_prompt_agents/).
-  const [agentTypes, setAgentTypes] = useState<string[]>([]);
-  const [selectedAgentType, setSelectedAgentType] = useState<string>('');
-  const userPickedTypeRef = useRef(false);
+  // Which agent folder the four canonical files come from. This used to be a
+  // per-entity "agent type" ComboBox (Entity / Technical) — a split that only
+  // ever encoded one person's habit of writing technical prompts in English and
+  // entity prompts in Japanese. It is now simply the UI language: the agents
+  // live in `system_prompt_agents/<lang>/`, one complete set per language, and
+  // the folder follows Preferences → Other → Language with nothing to pick.
+  const agentFolder = useLanguage(); // 'en' | 'ja'
 
   // Updater model override, independent of the conversation's own model.
   // Persisted PER ENTITY (folder settings).
@@ -504,10 +507,9 @@ export default function SystemPromptUpdater({
       setLoading(true);
       setStatusMessage(t('spu.st.loading'));
       try {
-        const [curRes, nextRes, typesRes] = await Promise.all([
+        const [curRes, nextRes] = await Promise.all([
           fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`).then((r) => r.json()),
           fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex + 1}`).then((r) => r.json()),
-          fetch('/api/system-prompt-agents').then((r) => r.json()),
         ]);
         const leftRaw = (curRes?.contents || '').replace(/\s+$/, '');
         const nextRaw = (nextRes?.contents || '').replace(/\s+$/, '');
@@ -530,13 +532,6 @@ export default function SystemPromptUpdater({
         setRedistributeReport(null);
         lastSavedLeftRef.current = leftRaw;
         lastSavedRightRef.current = nextRaw;
-
-        const types: string[] = Array.isArray(typesRes?.types) ? typesRes.types : [];
-        setAgentTypes(types);
-        const remembered = folder?.settings?.systemPromptAgentType as string | undefined;
-        const initialType = (remembered && types.includes(remembered)) ? remembered : (types[0] || '');
-        userPickedTypeRef.current = false;
-        setSelectedAgentType(initialType);
 
         const hydratedHeader = folder?.settings?.systemPromptHeader ?? '';
         const hydratedFocus = folder?.settings?.systemPromptFocusPoint ?? '';
@@ -584,13 +579,7 @@ export default function SystemPromptUpdater({
           forceUpdaterModel: hydratedForceUpdater, updaterModelKey: hydratedUpdaterKey,
           forceMimoForSummary: hydratedForceMimo,
         });
-        setStatusMessage(
-          nextRaw
-            ? t('spu.st.loadedDraft')
-            : (types.length === 0
-                ? t('spu.st.noAgentTypes')
-                : '')
-        );
+        setStatusMessage(nextRaw ? t('spu.st.loadedDraft') : '');
       } catch (e: any) {
         setStatusMessage(t('spu.st.loadFailed').replace('{e}', e.message));
       } finally {
@@ -601,9 +590,9 @@ export default function SystemPromptUpdater({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, baseName, currentIndex]);
 
-  // ── Load agents + deletion patterns when the selected type changes ──────
+  // ── Load agents + deletion patterns for the current language folder ──────
   useEffect(() => {
-    if (!open || !selectedAgentType) {
+    if (!open) {
       setAgents(null);
       setDeletionPatterns([]);
       return;
@@ -612,17 +601,17 @@ export default function SystemPromptUpdater({
     (async () => {
       try {
         const [agentRes, delRes] = await Promise.all([
-          fetch(`/api/system-prompt-agents?type=${encodeURIComponent(selectedAgentType)}`).then((r) => r.json()),
-          fetch(`/api/system-prompt-deletions?type=${encodeURIComponent(selectedAgentType)}`).then((r) => r.json()),
+          fetch(`/api/system-prompt-agents?type=${encodeURIComponent(agentFolder)}`).then((r) => r.json()),
+          fetch(`/api/system-prompt-deletions?type=${encodeURIComponent(agentFolder)}`).then((r) => r.json()),
         ]);
         if (cancelled) return;
         const files: Array<{ name: string; systemPrompt: string }> = Array.isArray(agentRes?.files) ? agentRes.files : [];
         setAgents({ files, summary: agentRes?.summary ?? null });
         setDeletionPatterns(delRes?.patterns || []);
-
-        if (userPickedTypeRef.current && folder) {
-          userPickedTypeRef.current = false;
-          try { await saveFolderSettings(folderName, { systemPromptAgentType: selectedAgentType }); } catch {}
+        // An entirely empty language folder is worth saying out loud once —
+        // otherwise all four buttons are just silently disabled.
+        if (files.length === 0) {
+          setStatusMessage(t('spu.st.noAgentFolder').replace('{lang}', agentFolder));
         }
       } catch (e: any) {
         if (!cancelled) setStatusMessage(`Agent load failed: ${e.message}`);
@@ -630,7 +619,7 @@ export default function SystemPromptUpdater({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, selectedAgentType]);
+  }, [open, agentFolder]);
 
   // ── Load the archived changelog for display (read-only; never in context) ──
   useEffect(() => {
@@ -911,9 +900,7 @@ export default function SystemPromptUpdater({
     const agent = getAgentFile(agentFilename);
     if (!agent) {
       setStatusMessage(
-        selectedAgentType
-          ? t('spu.st.noAgentFile').replace('{file}', agentFilename).replace('{type}', selectedAgentType)
-          : t('spu.st.noTypeSelected')
+        t('spu.st.noAgentFile').replace('{file}', agentFilename).replace('{lang}', agentFolder)
       );
       return null;
     }
@@ -1119,7 +1106,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
+  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
 
   // ── Run the Layers 1-4 redistribution ────────────────────────────────────
   // A third mode, separate from both update paths above. The agent sees the
@@ -1143,9 +1130,7 @@ export default function SystemPromptUpdater({
     const agent = getAgentFile(AGENT_FILE_REDISTRIBUTE);
     if (!agent) {
       setStatusMessage(
-        selectedAgentType
-          ? t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_REDISTRIBUTE).replace('{type}', selectedAgentType)
-          : t('spu.st.noTypeSelected')
+        t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_REDISTRIBUTE).replace('{lang}', agentFolder)
       );
       return false;
     }
@@ -1365,7 +1350,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, selectedAgentType, streamChat, summaryIndexBody, title]);
+  }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title]);
 
   // ── Run the genesis (first-time) construction ────────────────────────────
   // A fourth mode, distinct from all three above: it assumes NO prior Layers
@@ -1380,9 +1365,7 @@ export default function SystemPromptUpdater({
     const agent = getAgentFile(AGENT_FILE_GENESIS);
     if (!agent) {
       setStatusMessage(
-        selectedAgentType
-          ? t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_GENESIS).replace('{type}', selectedAgentType)
-          : t('spu.st.noTypeSelected')
+        t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_GENESIS).replace('{lang}', agentFolder)
       );
       return null;
     }
@@ -1524,7 +1507,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, selectedAgentType, streamChat, folderName, title, resumeFromRight, rightText]);
+  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, folderName, title, resumeFromRight, rightText]);
 
 
   // First-message timestamp for summary baking
@@ -1907,19 +1890,13 @@ export default function SystemPromptUpdater({
             </span>
           </div>
 
-          {/* Agent-type selector */}
+          {/* Agent folder — follows the UI language; nothing to pick */}
           <div className="flex flex-col gap-1.5 px-3 py-2 border border-border rounded bg-muted/10">
             <div className="flex items-center gap-2 text-sm">
-              <span className="font-medium">{t('spu.agentType')}</span>
-              <select
-                value={selectedAgentType}
-                onChange={(e) => { userPickedTypeRef.current = true; setSelectedAgentType(e.target.value); }}
-                disabled={agentTypes.length === 0 || busy}
-                className="px-2 py-1 bg-background border border-border rounded text-sm font-mono outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-              >
-                {agentTypes.length === 0 && <option value="">{t('spu.noAgentTypesOption')}</option>}
-                {agentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+              <span className="font-medium">{t('spu.agentFolder')}</span>
+              <span className="px-2 py-1 bg-background border border-border rounded text-sm font-mono">
+                {agentFolder}
+              </span>
               <span className="text-[10px] text-muted-foreground">
                 {t('spu.agentFolderHint')}
               </span>
