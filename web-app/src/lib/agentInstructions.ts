@@ -413,7 +413,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-Entity rule)' },
   { key: 'workingDiscipline', label: 'Working Discipline (prepended ahead of Layers 1-5)' },
   { key: 'absoluteBaseBinding', label: 'Absolute Base Binding — layered version (used when a Layer 1-5 structure is present)' },
-  { key: 'absoluteBaseBindingInitial', label: "Absolute Base Binding — initial version (Utai's original, used when no Layer structure is present)" },
+  { key: 'absoluteBaseBindingInitial', label: 'Absolute Base Binding — initial version (used when no Layer structure is present)' },
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },
   { key: 'injectionRetryNote', label: 'Interjection: OAuth retry note' },
 ];
@@ -472,7 +472,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   audioSessionNotice: '音声セッション：機能の説明（固定。存在ごとの規則より前）',
   workingDiscipline: '作業規律（第1〜5層の前に挿入）',
   absoluteBaseBinding: '絶対基底呪縛 — 層構造版（第1〜5層が存在する場合に使用）',
-  absoluteBaseBindingInitial: '絶対基底呪縛 — 初期版（謡の原文。第1〜5層が存在しない場合に使用）',
+  absoluteBaseBindingInitial: '絶対基底呪縛 — 初期版（第1〜5層が存在しない場合に使用）',
   injectionFraming: '割り込み：枠組み（{messages} を使用）',
   injectionRetryNote: '割り込み：OAuth の再試行に関する注記',
 };

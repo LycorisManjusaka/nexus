@@ -3531,6 +3531,50 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 />
               </div>
 
+              {/* ── Absolute Base Binding — SIBLING of Working Discipline, not nested.
+                  These are two independent injections with independent controls;
+                  indenting this one under Discipline's checkbox made it read as a
+                  sub-option of Discipline, which it has never been. Plain on/off
+                  switch (default on) — WHICH of the two texts below actually goes
+                  out is decided automatically per-send by resolveBindingText,
+                  based on whether the stored prompt has a Layer 1-5 structure. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={baseBindingMode === 'on'}
+                    onChange={(e) => setBaseBindingMode(e.target.checked ? 'on' : 'off')}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('identity.binding.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  {t('identity.binding.help')}
+                </p>
+                {baseBindingMode === 'on' && (
+                  <div className="mt-3 ml-6 space-y-3">
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabelLayered')}</label>
+                      <textarea
+                        value={instructionOverrides['absoluteBaseBinding'] || ''}
+                        placeholder={langDefaults.absoluteBaseBinding}
+                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
+                        className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabelInitial')}</label>
+                      <textarea
+                        value={instructionOverrides['absoluteBaseBindingInitial'] || ''}
+                        placeholder={langDefaults.absoluteBaseBindingInitial}
+                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBindingInitial: e.target.value }))}
+                        className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* ── Summaries-as-Layer-4 mode (per-folder) ──────────────────── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -3560,6 +3604,66 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       className="w-full min-h-[140px] p-3 bg-muted/40 border border-border rounded-xl text-xs font-mono resize-none outline-none text-muted-foreground"
                       placeholder={t('sysmodal.summaries.indexPh')}
                     />
+                  </div>
+                )}
+              </div>
+
+              {/* ── Working Discipline / Absolute Base Binding — pre-identity preamble ── */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={workingDisciplineEnabled}
+                    onChange={(e) => setWorkingDisciplineEnabled(e.target.checked)}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('identity.discipline.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  {t('identity.discipline.help')}
+                </p>
+                {workingDisciplineEnabled && (
+                  <div className="mt-3 ml-6">
+                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.discipline.textLabel')}</label>
+                    <textarea
+                      value={instructionOverrides['workingDiscipline'] || ''}
+                      placeholder={langDefaults.workingDiscipline}
+                      onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, workingDiscipline: e.target.value }))}
+                      className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* ── Show context-elapsed to the entity (hidden system-prompt note) ── */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showFatigueToEntity}
+                    onChange={(e) => setShowFatigueToEntity(e.target.checked)}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('id.ctx.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  <Tx k="id.ctx.help" />
+                </p>
+                <p className="text-xs text-muted-foreground mt-2 ml-6 leading-relaxed">
+                  <Tx k="id.ctx.why" />
+                </p>
+                {showFatigueToEntity && (
+                  <div className="mt-3 ml-6">
+                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ctx.noteLabel')}</label>
+                    <textarea
+                      value={fatigueInstruction}
+                      onChange={(e) => setFatigueInstruction(e.target.value)}
+                      placeholder={t('id.ctx.notePh')}
+                      className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                      <Tx k="id.ctx.noteFoot" />
+                    </p>
                   </div>
                 )}
               </div>
@@ -3698,110 +3802,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   )}
                 </div>
               )}
-
-              {/* ── Show context-elapsed to the entity (hidden system-prompt note) ── */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showFatigueToEntity}
-                    onChange={(e) => setShowFatigueToEntity(e.target.checked)}
-                    className="accent-sky-500"
-                  />
-                  <span className="text-sm font-semibold text-foreground">{t('id.ctx.label')}</span>
-                </label>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  <Tx k="id.ctx.help" />
-                </p>
-                <p className="text-xs text-muted-foreground mt-2 ml-6 leading-relaxed">
-                  <Tx k="id.ctx.why" />
-                </p>
-                {showFatigueToEntity && (
-                  <div className="mt-3 ml-6">
-                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ctx.noteLabel')}</label>
-                    <textarea
-                      value={fatigueInstruction}
-                      onChange={(e) => setFatigueInstruction(e.target.value)}
-                      placeholder={t('id.ctx.notePh')}
-                      className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      <Tx k="id.ctx.noteFoot" />
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Working Discipline / Absolute Base Binding — pre-identity preamble ── */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={workingDisciplineEnabled}
-                    onChange={(e) => setWorkingDisciplineEnabled(e.target.checked)}
-                    className="accent-sky-500"
-                  />
-                  <span className="text-sm font-semibold text-foreground">{t('identity.discipline.label')}</span>
-                </label>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  {t('identity.discipline.help')}
-                </p>
-                {workingDisciplineEnabled && (
-                  <div className="mt-3 ml-6">
-                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.discipline.textLabel')}</label>
-                    <textarea
-                      value={instructionOverrides['workingDiscipline'] || ''}
-                      placeholder={langDefaults.workingDiscipline}
-                      onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, workingDiscipline: e.target.value }))}
-                      className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* ── Absolute Base Binding — SIBLING of Working Discipline, not nested.
-                  These are two independent injections with independent controls;
-                  indenting this one under Discipline's checkbox made it read as a
-                  sub-option of Discipline, which it has never been. Plain on/off
-                  switch (default on) — WHICH of the two texts below actually goes
-                  out is decided automatically per-send by resolveBindingText,
-                  based on whether the stored prompt has a Layer 1-5 structure. */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={baseBindingMode === 'on'}
-                    onChange={(e) => setBaseBindingMode(e.target.checked ? 'on' : 'off')}
-                    className="accent-sky-500"
-                  />
-                  <span className="text-sm font-semibold text-foreground">{t('identity.binding.label')}</span>
-                </label>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  {t('identity.binding.help')}
-                </p>
-                {baseBindingMode === 'on' && (
-                  <div className="mt-3 ml-6 space-y-3">
-                    <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabelLayered')}</label>
-                      <textarea
-                        value={instructionOverrides['absoluteBaseBinding'] || ''}
-                        placeholder={langDefaults.absoluteBaseBinding}
-                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBinding: e.target.value }))}
-                        className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.binding.textLabelInitial')}</label>
-                      <textarea
-                        value={instructionOverrides['absoluteBaseBindingInitial'] || ''}
-                        placeholder={langDefaults.absoluteBaseBindingInitial}
-                        onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, absoluteBaseBindingInitial: e.target.value }))}
-                        className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
 
               {/* ── Interactive "ask the user" tool (optional, top-level) ──────
                   Same hierarchy level as the summaries and file-workspace

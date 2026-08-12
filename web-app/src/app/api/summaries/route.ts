@@ -160,16 +160,41 @@ export async function POST(req: Request) {
         const existing = summaries[key];
         if (!existing) continue;
         if (/^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\]/.test(existing.trim())) continue;
-        // Read the log file to find the first message's timestamp
+        // Read the log file to find the first ORIGINAL message's timestamp.
+        // Mirrors ChatArea.tsx's isMessageOriginal(): a conversation cloned via
+        // "Go to Next" / SPU carries pre-clone history forward as copied
+        // context, marked by firstOriginalMessageId (and, before that marker
+        // lands, firstOriginalIsNext). Timestamping from the literal first
+        // message in the log would date the summary to the copied carry-over
+        // instead of when this conversation's own content actually started.
         const logPath = `../local_data/logs/${folder}/${convo.id}.json`;
         try {
           const fs2 = await import('fs/promises');
           const raw = await fs2.readFile(logPath, 'utf-8');
           const logData = JSON.parse(raw);
           const msgs: any[] = logData?.messages || [];
-          // Find first message with a timestamp
+          const markerId: string | null = logData?.firstOriginalMessageId || null;
+          const markerPending: boolean = logData?.firstOriginalIsNext === true;
+
+          let originalMsgs: any[];
+          if (markerPending && !markerId) {
+            // Marker is pending on the next message added — everything
+            // currently in the log is copied carry-over, nothing original yet.
+            originalMsgs = [];
+          } else if (!markerId) {
+            // No marker at all — never went through the clone workflow, so
+            // every message is original (safest default).
+            originalMsgs = msgs;
+          } else {
+            const markerIdx = msgs.findIndex((m: any) => m.id === markerId);
+            // Marker id not found in the log (e.g. that message was deleted)
+            // falls back to treating everything as original, same as the client.
+            originalMsgs = markerIdx >= 0 ? msgs.slice(markerIdx) : msgs;
+          }
+
+          // Find first ORIGINAL message with a timestamp
           let firstTs: number | null = null;
-          for (const m of msgs) {
+          for (const m of originalMsgs) {
             if (m.timestamp && m.timestamp > 0) { firstTs = m.timestamp; break; }
           }
           if (!firstTs) continue;
