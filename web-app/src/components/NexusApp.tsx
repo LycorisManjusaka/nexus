@@ -239,6 +239,18 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
       aiName: activeFolder.settings?.aiName || 'Claude',
       specificModel: activeFolder.settings?.specificModel
     }, ...conversations]);
+
+    // Pin to top of the sidebar ordering. Without this, `orderFolderConversations`
+    // keeps every previously-ordered conversation ahead of the new one (it has
+    // no index in convoOrder), so a freshly created chat lands at the BOTTOM.
+    const existingOrder: string[] = activeFolder.settings?.convoOrder ||
+      conversations.filter(c => c.folderName === activeFolder.name).map(c => c.id);
+    const newOrder = [newId, ...existingOrder.filter(oid => oid !== newId)];
+    fetch('/api/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: activeFolder.name, settings: { ...activeFolder.settings, convoOrder: newOrder } }),
+    }).then(() => fetchFolders()).catch(() => {});
   };
 
   const deleteChat = async (id: string) => {
