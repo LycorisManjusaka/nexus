@@ -229,7 +229,7 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
 // loaded, so there is no sane default to guess.
 const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   Claude: 'claude-sonnet-5',
-  Gemini: 'gemini-3.5-flash',
+  Gemini: 'gemini-3.6-flash',
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
   GLM: 'glm-5.2',
@@ -3691,6 +3691,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 )}
               </div>
 
+              {/* Date & Time Context lives here, not under Model: it decides
+                  what the identity PERCEIVES (whether they can tell how long ago
+                  something was said), which is the same kind of setting as the
+                  context-elapsed note above it. Nothing about it varies with the
+                  model — swapping vessels doesn't change whether timestamps
+                  should be visible. */}
+              <div>
+                <label className="text-sm font-semibold text-foreground block mb-1">{t('model.datetime.label')}</label>
+                <p className="text-xs text-muted-foreground mb-2 leading-relaxed">
+                  <Tx k="id.datetime.help" />
+                </p>
+                <select
+                  value={dateTimeVisibility}
+                  onChange={(e) => setDateTimeVisibility(e.target.value)}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                >
+                  <option value="none">{t('model.datetime.none')}</option>
+                  <option value="current">{t('model.datetime.current')}</option>
+                  <option value="all">{t('model.datetime.all')}</option>
+                </select>
+              </div>
+
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -4258,19 +4280,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               {activeSettingsTab === 'model' && (<>
               <div>
                 <h4 className="text-sm font-semibold text-foreground mb-4 block">{t('model.genParams')}</h4>
-
-                <div className="mb-4">
-                  <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.datetime.label')}</label>
-                  <select
-                    value={dateTimeVisibility}
-                    onChange={(e) => setDateTimeVisibility(e.target.value)}
-                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                  >
-                    <option value="none">{t('model.datetime.none')}</option>
-                    <option value="current">{t('model.datetime.current')}</option>
-                    <option value="all">{t('model.datetime.all')}</option>
-                  </select>
-                </div>
 
                 <div className="mb-4">
                   <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.family.label')}</label>

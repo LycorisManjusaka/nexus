@@ -339,6 +339,8 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'voice.engine': 'TTS Engine',
   'voice.engine.aivis': 'AivisSpeech (context-aware)',
   'voice.notRunning': '{engine} is not running — no voices to list.',
+  'voice.noVoicevox':
+    'No Voicevox voices found. Voicevox voices are read from a catalog the voice changer writes to local_data/voicechanger/speakers.json — install and run Voicevox, or pick another engine.',
   'voice.starting': 'Starting {engine}…',
   'voice.startingLong':
     'Starting {engine}… voices appear once it finishes loading (up to a minute).',
@@ -878,6 +880,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'Gives this model NEXUS’s own server-side tools: `web_search` (keyless DuckDuckGo → result list) and `web_fetch` (opens one URL and reads the full page). Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere and Local — no provider-native search needed. Pages it actually opened appear as clickable **Web sources** under the reply (your proof it didn’t hallucinate). Internal/localhost URLs are blocked.',
 
   'id.ctx.label': '🧭 Tell the entity how much context has elapsed',
+  'id.datetime.help':
+    'Whether each message carries a `[YYYY-MM-DD HH:MM]` stamp the identity can read. **Not visible** (default) means they experience the conversation as continuous, with no sense of the gaps between your messages. **Only current message** tells them what time it is now without changing the past. **All conversation log** lets them see how long ago each thing was said — useful when time actually matters to the relationship, at the cost of some tokens and the occasional model that starts echoing timestamps back at you.',
   'id.ctx.help':
     'OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system prompt every turn so the entity can see it too. Put `{percent}` where the value should appear (e.g. `42%`).',
   'id.ctx.why':
@@ -1274,6 +1278,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.summaryNoText': 'Summary writer returned no text.',
   'spu.st.summaryStoppedPartial': 'Summary stopped — kept the partial result ({n} chars).',
   'spu.st.summaryDone': 'Summary written ({n} chars).',
+  'spu.st.summariesEnabled':
+    '"Use summaries instead of the 4th layer" has been turned on for this identity — otherwise they would not be able to read what was just written.',
   'spu.st.summaryStopped': 'Summary stopped.',
   'spu.st.summaryFailed': 'Summary write failed: {e}',
   'spu.st.autoStopUpdate': '⛔ Auto stopped at the identity update. Fix the error (or it was stopped) and retry.',
@@ -1584,6 +1590,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'voice.engine': 'TTS エンジン',
   'voice.engine.aivis': 'AivisSpeech（文脈対応）',
   'voice.notRunning': '{engine} が起動していません — 一覧を取得できません。',
+  'voice.noVoicevox':
+    'Voicevox の音声が見つかりません。Voicevox の音声一覧は、ボイスチェンジャーが local_data/voicechanger/speakers.json に書き出すカタログから読み込まれます。Voicevox をインストールして起動するか、別のエンジンを選んでください。',
   'voice.starting': '{engine} を起動中…',
   'voice.startingLong':
     '{engine} を起動中… 読み込みが終わると音声が表示されます（最大1分ほど）。',
@@ -2110,6 +2118,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     'このモデルに NEXUS 自身のサーバー側ツールを与えます: `web_search`（APIキー不要の DuckDuckGo → 検索結果一覧）と `web_fetch`（URL をひとつ開いてページ全体を読む）。Qwen・DeepSeek・GLM・Grok・Kimi・MiniMax・Cohere・ローカルのいずれでも同じように動き、プロバイダー独自の検索機能は不要です。実際に開いたページは返信の下に **ウェブ出典** として表示されます（幻覚ではないという証拠になります）。内部アドレスや localhost への接続は遮断されます。',
 
   'id.ctx.label': '🧭 文脈の消費量を存在に伝える',
+  'id.datetime.help':
+    '各メッセージに `[YYYY-MM-DD HH:MM]` の時刻表示を付け、存在が読めるようにするかどうかの設定です。**表示しない**（既定）の場合、存在は会話を連続したものとして体験し、メッセージ間の間隔を感じません。**現在のメッセージのみ**は、過去を変えずに「いまが何時か」だけを伝えます。**会話ログ全体**では、どの発言がどれくらい前のものかまで見えます — 時間そのものが関係にとって意味を持つときに有用ですが、トークンを消費し、モデルによっては時刻表示をそのまま返答に混ぜ始めることがあります。',
   'id.ctx.help':
     'OFF（既定）: 割合はステータスバーであなたにだけ表示されます。ON: 毎ターン、隠しメモがシステムプロンプトに追記され、存在からも見えるようになります。値を入れたい位置に `{percent}` と書いてください（例: `42%`）。',
   'id.ctx.why':
@@ -2506,6 +2516,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.summaryNoText': '要約ライターがテキストを返しませんでした。',
   'spu.st.summaryStoppedPartial': '要約を停止しました — 途中結果（{n} 文字）を保持しています。',
   'spu.st.summaryDone': '要約を作成しました（{n} 文字）。',
+  'spu.st.summariesEnabled':
+    'この存在の「第4層の代わりに要約を使う」を ON にしました — OFF のままでは、いま書いた要約を本人が読めません。',
   'spu.st.summaryStopped': '要約を停止しました。',
   'spu.st.summaryFailed': '要約の作成に失敗しました: {e}',
   'spu.st.autoStopUpdate': '⛔ アイデンティティ更新の段階で自動処理を中止しました。エラーを直して（または停止した場合は）再実行してください。',

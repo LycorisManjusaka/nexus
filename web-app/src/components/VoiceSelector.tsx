@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useT } from '@/lib/i18n';
+import { fetchJsonSafe } from '@/lib/fetchJson';
+
+type SpeakerCatalogs = { voicevox: any[]; coeiroink: any[]; aivisspeech: any[] };
+const NO_SPEAKERS: SpeakerCatalogs = { voicevox: [], coeiroink: [], aivisspeech: [] };
 
 interface VoiceSettings {
   engine: number;
@@ -26,17 +30,27 @@ interface VoiceSelectorProps {
 
 export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   const t = useT();
-  const [speakers, setSpeakers] = useState<{voicevox: any[], coeiroink: any[], aivisspeech: any[]}>({ voicevox: [], coeiroink: [], aivisspeech: [] });
+  const [speakers, setSpeakers] = useState<SpeakerCatalogs>(NO_SPEAKERS);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [startMsg, setStartMsg] = useState<string | null>(null);
 
   const ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
 
-  const loadSpeakers = React.useCallback(async () => {
-    const data = await fetch('/api/tts/speakers').then(r => r.json());
-    setSpeakers({ voicevox: data.voicevox || [], coeiroink: data.coeiroink || [], aivisspeech: data.aivisspeech || [] });
-    return data;
+  // Never rejects — see lib/fetchJson.ts. With no engine installed (or the
+  // route unreachable) this resolves to empty catalogs, which is exactly what
+  // the dropdowns below already handle: empty character list, "not running"
+  // notice, Start button. A throw here used to escape the .finally() below as an
+  // unhandled rejection.
+  const loadSpeakers = React.useCallback(async (): Promise<SpeakerCatalogs> => {
+    const data = await fetchJsonSafe<any>('/api/tts/speakers', NO_SPEAKERS);
+    const next: SpeakerCatalogs = {
+      voicevox: data.voicevox || [],
+      coeiroink: data.coeiroink || [],
+      aivisspeech: data.aivisspeech || [],
+    };
+    setSpeakers(next);
+    return next;
   }, []);
 
   useEffect(() => {
@@ -59,11 +73,11 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
     setStarting(true);
     setStartMsg(t('voice.starting').replace('{engine}', ENGINE_NAMES[eng]));
     try {
-      const r = await fetch('/api/tts/engines', {
+      const r = await fetchJsonSafe<any>('/api/tts/engines', null, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'start', engine: eng }),
-      }).then(res => res.json());
+      });
 
       if (!r?.ok) {
         setStartMsg(r?.message || t('voice.startFailed'));
@@ -128,6 +142,12 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
           <option value={1}>Coeiroink</option>
           <option value={2}>{t('voice.engine.aivis')}</option>
         </select>
+        {/* Voicevox's catalog is a file on disk, not a running process — there
+            is nothing to start from here, so say what's missing rather than
+            leaving an empty Character dropdown with no explanation. */}
+        {value.engine === 0 && currentEngineData.length === 0 && (
+          <p className="text-[10px] text-amber-500 mt-1">{t('voice.noVoicevox')}</p>
+        )}
         {/* Engines 1 and 2 serve their character list from the running process.
             Rather than the old "go start the app yourself, then reopen this
             panel", offer the launch right here. */}

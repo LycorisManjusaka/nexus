@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Trash2, Lock } from 'lucide-react';
 import { useT } from '@/lib/i18n';
+import { fetchJsonSafe } from '@/lib/fetchJson';
 import IdentityVoicePicker, { IdentityVoiceValue } from './IdentityVoicePicker';
 
 interface Rule extends IdentityVoiceValue {
@@ -11,35 +12,64 @@ interface Rule extends IdentityVoiceValue {
 
 const ANONYMOUS = 'Anonymous';
 
+type SpeakerCatalogs = { voicevox: any[]; coeiroink: any[]; aivisspeech: any[] };
+const NO_SPEAKERS: SpeakerCatalogs = { voicevox: [], coeiroink: [], aivisspeech: [] };
+
+// What this editor shows when the identity map can't be read at all. Not an
+// empty list: "Anonymous" is the one identity that must always exist, and the
+// GET route guarantees it too — matching that here means a failed load and a
+// fresh install look the same, which is what they are from the user's side.
+const NO_MAP = { rules: [{ name: ANONYMOUS }] as Rule[], fallback: ANONYMOUS, humanLabel: '' };
+
 export default function UserIdentityEditor() {
   const t = useT();
   const [rules, setRules] = useState<Rule[]>([]);
   const [fallback, setFallback] = useState('Anonymous');
   const [humanLabel, setHumanLabel] = useState('');
   const [loading, setLoading] = useState(true);
-  const [speakers, setSpeakers] = useState<{ voicevox: any[]; coeiroink: any[]; aivisspeech: any[] }>({ voicevox: [], coeiroink: [], aivisspeech: [] });
+  const [speakers, setSpeakers] = useState<SpeakerCatalogs>(NO_SPEAKERS);
   const [starting, setStarting] = useState(false);
   const [startMsg, setStartMsg] = useState<string | null>(null);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const loadSpeakers = useCallback(async () => {
-    const data = await fetch('/api/tts/speakers').then(r => r.json());
-    setSpeakers({ voicevox: data.voicevox || [], coeiroink: data.coeiroink || [], aivisspeech: data.aivisspeech || [] });
-    return data;
+  // Never rejects. A missing/unreachable speaker route means "no voices to
+  // choose from yet", which the picker already renders correctly (empty list +
+  // a Start button). It is not a reason to withhold the identity list.
+  const loadSpeakers = useCallback(async (): Promise<SpeakerCatalogs> => {
+    const data = await fetchJsonSafe<any>('/api/tts/speakers', NO_SPEAKERS);
+    const next: SpeakerCatalogs = {
+      voicevox: data.voicevox || [],
+      coeiroink: data.coeiroink || [],
+      aivisspeech: data.aivisspeech || [],
+    };
+    setSpeakers(next);
+    return next;
   }, []);
 
   useEffect(() => {
+    // The two loads are independent and BOTH are allowed to fail. Previously a
+    // single Promise.all with no catch meant either failure left `loading` true
+    // forever — the "Loading voices…" spinner that never resolves on a machine
+    // with no TTS engines installed. The identity editor does not need voices to
+    // work, so a voice failure must not be able to hide it.
+    let cancelled = false;
     (async () => {
-      const [map] = await Promise.all([
-        fetch('/api/character-map').then(r => r.json()),
-        loadSpeakers(),
-      ]);
-      setRules(map.rules || []);
-      setFallback(map.fallback || 'Anonymous');
-      setHumanLabel(map.humanLabel || '');
-      setLoading(false);
+      try {
+        const [map] = await Promise.all([
+          fetchJsonSafe<typeof NO_MAP>('/api/character-map', NO_MAP),
+          loadSpeakers(),
+        ]);
+        if (cancelled) return;
+        setRules(map.rules?.length ? map.rules : NO_MAP.rules);
+        setFallback(map.fallback || ANONYMOUS);
+        setHumanLabel(map.humanLabel || '');
+      } finally {
+        // Unconditional: whatever happened above, the panel renders.
+        if (!cancelled) setLoading(false);
+      }
     })();
+    return () => { cancelled = true; };
   }, [loadSpeakers]);
 
   const ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
@@ -47,11 +77,14 @@ export default function UserIdentityEditor() {
     setStarting(true);
     setStartMsg(t('voice.starting').replace('{engine}', ENGINE_NAMES[eng]));
     try {
-      const r = await fetch('/api/tts/engines', {
+      // fetchJsonSafe, not raw .json(): a route that answers with an HTML error
+      // page would otherwise surface as "Unexpected token '<'", which tells the
+      // user nothing. The plain "couldn't start" message is more honest.
+      const r = await fetchJsonSafe<any>('/api/tts/engines', null, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'start', engine: eng }),
-      }).then(res => res.json());
+      });
       if (!r?.ok) { setStartMsg(r?.message || t('voice.startFailed')); return; }
       setStartMsg(t('voice.startingLong').replace('{engine}', ENGINE_NAMES[eng]));
       const deadline = Date.now() + 95000;

@@ -470,7 +470,12 @@ export default function SystemPromptUpdater({
   // below. Only these four families produce usable soul-packer output — the
   // rest either lose Layer structure or paraphrase the identity away — so this
   // is a fixed list rather than the full model table.
-  const [forceUpdaterModel, setForceUpdaterModel] = useState<boolean>(true);
+  // Default OFF: an entity's own model writes its own soul unless you say
+  // otherwise. Overriding is a real choice with real consequences (a different
+  // vessel reads the conversation and rewrites the identity from it), so it
+  // should be something you switch ON deliberately, not something already on
+  // when you first open this window. Entities that saved a preference keep it.
+  const [forceUpdaterModel, setForceUpdaterModel] = useState<boolean>(false);
   const [updaterModelKey, setUpdaterModelKey] = useState<string>(DEFAULT_UPDATER_MODEL_KEY);
   const updaterModel = useMemo(
     () => UPDATER_MODELS.find(m => m.key === updaterModelKey) ?? DEFAULT_UPDATER_MODEL,
@@ -482,8 +487,12 @@ export default function SystemPromptUpdater({
   // undefined for every other model so the route keeps its usual 'auto'.
   const effectiveAuthMode = forceUpdaterModel ? updaterModel.authMode : undefined;
 
-  // Summary writer model override — MiMo V2.5 Pro. Unchanged.
-  const [forceMimoForSummary, setForceMimoForSummary] = useState<boolean>(true);
+  // Summary writer model override — MiMo V2.5 Pro. Default OFF for the same
+  // reason as above, plus one specific to a fresh install: MiMo needs its own
+  // API key, and a default-ON checkbox pointing at a provider the user has
+  // never configured fails at the moment they press "Write Summary", with an
+  // error about a model they never chose.
+  const [forceMimoForSummary, setForceMimoForSummary] = useState<boolean>(false);
   const summaryAiName = forceMimoForSummary ? 'MiMo' : effectiveAiName;
   const summarySpecificModel = forceMimoForSummary ? 'mimo-v2.5-pro' : effectiveSpecificModel;
   // When the summary inherits the updater's model it must inherit its auth path too.
@@ -537,23 +546,24 @@ export default function SystemPromptUpdater({
         const hydratedFocus = folder?.settings?.systemPromptFocusPoint ?? '';
         const hydratedSummaryInstr = folder?.settings?.summaryInstructions ?? '';
         const hydratedSummaryHint = folder?.settings?.summaryIndexHint ?? DEFAULT_SUMMARY_INDEX_HINT;
-        // `!== false` rather than `?? true`: an explicitly saved false must
-        // survive, while a folder that has never had the setting keeps the
-        // historical default of ON.
+        // `=== true` rather than `!== false`: a folder that has NEVER saved the
+        // setting now defaults to OFF (see the useState above). A folder that
+        // saved either value keeps exactly what it saved — this changes the
+        // default for new entities, never the choice of an existing one.
         // The override checkbox was once `forceGlmForUpdates`. Read the new key
         // when present, otherwise inherit the old one so an entity that had the
-        // override turned OFF stays off. The MODEL is not migrated: a folder
+        // override turned ON stays on. The MODEL is not migrated: a folder
         // with no `updaterModelKey` gets the current default (DeepSeek V4 Pro)
         // rather than being pinned to the GLM the old flag implied.
         const hydratedForceUpdater =
           folder?.settings?.forceUpdaterModel !== undefined
-            ? folder.settings.forceUpdaterModel !== false
-            : folder?.settings?.forceGlmForUpdates !== false;
+            ? folder.settings.forceUpdaterModel === true
+            : folder?.settings?.forceGlmForUpdates === true;
         const savedKey = folder?.settings?.updaterModelKey;
         const hydratedUpdaterKey = UPDATER_MODELS.some(m => m.key === savedKey)
           ? savedKey
           : DEFAULT_UPDATER_MODEL_KEY;
-        const hydratedForceMimo = folder?.settings?.forceMimoForSummary !== false;
+        const hydratedForceMimo = folder?.settings?.forceMimoForSummary === true;
         setHeader(hydratedHeader);
         setFocusPoint(hydratedFocus);
         setSummaryInstructions(hydratedSummaryInstr);
@@ -1527,6 +1537,24 @@ export default function SystemPromptUpdater({
   }, [firstMessageTimestamp]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
+  // Writing a summary and not reading it back is a dead end: the summary lands
+  // in local_data/summaries/, the next conversation's Layer 4 index is built
+  // from those files, and the identity sees NONE of it unless
+  // "Use summaries instead of the 4th layer" is on. That switch being off after
+  // a summary has been written is never what anyone wanted — it just looks like
+  // the identity has forgotten everything. So the first successful summary turns
+  // it on for this entity. Idempotent, and only ever ON: an entity that has it
+  // on stays on, and nothing here can turn it off.
+  const enableSummariesForLayer4 = useCallback(async () => {
+    if (folder?.settings?.useSummariesForLayer4 === true) return false;
+    try {
+      await saveFolderSettings(folderName, { useSummariesForLayer4: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [folder, folderName, saveFolderSettings]);
+
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
     const summaryAgentPrompt =
       agents?.summary?.systemPrompt ||
@@ -1603,9 +1631,16 @@ export default function SystemPromptUpdater({
       const newSummary = tsPrefix + accum.trim();
       setSummaryText(newSummary);
       setSummaryStatus({ state: 'done', thinkingChars, outputChars });
-      setStatusMessage(controller.signal.aborted
-        ? t('spu.st.summaryStoppedPartial').replace('{n}', String(newSummary.length))
-        : t('spu.st.summaryDone').replace('{n}', String(newSummary.length)));
+      // Even a stopped-partial summary is a summary on disk, so the switch is
+      // flipped for both outcomes. Reported in the status line rather than done
+      // silently — a setting that changes itself should say so.
+      const turnedOn = await enableSummariesForLayer4();
+      setStatusMessage(
+        (controller.signal.aborted
+          ? t('spu.st.summaryStoppedPartial').replace('{n}', String(newSummary.length))
+          : t('spu.st.summaryDone').replace('{n}', String(newSummary.length)))
+        + (turnedOn ? ' ' + t('spu.st.summariesEnabled') : '')
+      );
       return controller.signal.aborted ? null : newSummary;
     } catch (e: any) {
       if (e?.name === 'AbortError' || controller.signal.aborted) {
@@ -1620,7 +1655,7 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr]);
+  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the

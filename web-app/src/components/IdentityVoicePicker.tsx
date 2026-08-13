@@ -101,6 +101,15 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
             <option value="aivisspeech">{t('voice.engine.aivis')}</option>
           </select>
 
+          {/* Voicevox has no process to start from here — its catalog is a file
+              on disk written by the voice changer. With no file, the character
+              dropdown below simply doesn't render, which used to leave a blank
+              gap with no explanation. Say what's missing instead of offering a
+              Start button that wouldn't do anything for this engine. */}
+          {engineKey === 'voicevox' && currentEngineData.length === 0 && (
+            <p className="text-[10px] text-amber-500">{t('voice.noVoicevox')}</p>
+          )}
+
           {engineKey !== 'voicevox' && currentEngineData.length === 0 && (
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-[10px] text-amber-500 flex-1 min-w-[10rem]">
