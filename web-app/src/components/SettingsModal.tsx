@@ -22,19 +22,23 @@ type TabId = (typeof TABS)[number]['id'];
 // The single-field providers all render identically, so they're a list rather
 // than twelve copies of the same block. Anthropic stays hand-written below —
 // it has two fields and a long warning panel.
-const SIMPLE_PROVIDERS: { id: string; ph: string; help?: boolean }[] = [
-  { id: 'gemini',       ph: 'AIzaSy...' },
-  { id: 'qwen',         ph: 'sk-...',   help: true },
-  { id: 'deepseek',     ph: 'sk-...',   help: true },
-  { id: 'glm',          ph: '...',      help: true },
-  { id: 'digitalocean', ph: '...',      help: true },
-  { id: 'grok',         ph: 'xai-...',  help: true },
-  { id: 'kimi',         ph: '...',      help: true },
-  { id: 'cohere',       ph: '...',      help: true },
-  { id: 'minimax',      ph: '...',      help: true },
-  { id: 'openai',       ph: 'sk-...',   help: true },
-  { id: 'mimo',         ph: '...',      help: true },
-  { id: 'bytedance',    ph: '...',      help: true },
+// `url` is the provider's API-key console page, rendered as a clickable link
+// under each field. Two URLs arrived carrying fragments of Lizard-kun's own
+// account (a Grok team id, a DigitalOcean `?i=` param) — those were stripped
+// so the links work for any user, not just him.
+const SIMPLE_PROVIDERS: { id: string; ph: string; help?: boolean; url?: string }[] = [
+  { id: 'gemini',       ph: 'AIzaSy...', url: 'https://aistudio.google.com/api-keys' },
+  { id: 'qwen',         ph: 'sk-...',   help: true, url: 'https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=dashboard#/api-key' },
+  { id: 'deepseek',     ph: 'sk-...',   help: true, url: 'https://platform.deepseek.com/api_keys' },
+  { id: 'glm',          ph: '...',      help: true, url: 'https://z.ai/manage-apikey/apikey-list' },
+  { id: 'digitalocean', ph: '...',      help: true, url: 'https://cloud.digitalocean.com/account/api/tokens' },
+  { id: 'grok',         ph: 'xai-...',  help: true, url: 'https://console.x.ai/' },
+  { id: 'kimi',         ph: '...',      help: true, url: 'https://platform.kimi.ai/console/api-keys' },
+  { id: 'cohere',       ph: '...',      help: true, url: 'https://dashboard.cohere.com/api-keys' },
+  { id: 'minimax',      ph: '...',      help: true, url: 'https://platform.minimax.io/console/plan' },
+  { id: 'openai',       ph: 'sk-...',   help: true, url: 'https://platform.openai.com/settings/organization/api-keys' },
+  { id: 'mimo',         ph: '...',      help: true, url: 'https://platform.xiaomimimo.com/console/api-keys' },
+  { id: 'bytedance',    ph: '...',      help: true, url: 'https://console.byteplus.com/ark/region:ap-southeast-1/apiKey?apikey=%7B%7D' },
 ];
 
 export default function SettingsModal({ onClose, globalSettings, setGlobalSettings }: any) {
@@ -283,6 +287,14 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   onChange={e => setKeys({...keys, claude: e.target.value})}
                   className={inputCls}
                 />
+                <a
+                  href="https://platform.claude.com/settings/keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] text-indigo-500 hover:text-indigo-400 hover:underline mt-1 block break-all"
+                >
+                  platform.claude.com/settings/keys
+                </a>
                 <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                   <Tx k="settings.keys.claudeApi.help" />
                 </div>
@@ -322,6 +334,16 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   onChange={e => setKeys({ ...keys, [p.id]: e.target.value })}
                   className={inputCls}
                 />
+                {p.url && (
+                  <a
+                    href={p.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] text-indigo-500 hover:text-indigo-400 hover:underline mt-1 block break-all"
+                  >
+                    {p.url.replace(/^https?:\/\//, '')}
+                  </a>
+                )}
                 {p.help && (
                   <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                     <Tx k={`settings.keys.${p.id}.help`} />
@@ -329,6 +351,9 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 )}
               </div>
             ))}
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              <Tx k="settings.keys.linkNote" />
+            </p>
           </div>
           )}
 

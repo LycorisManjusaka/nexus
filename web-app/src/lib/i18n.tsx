@@ -58,6 +58,8 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.keys.heading': 'API Keys',
   'settings.keys.intro':
     'Keys are saved locally in the `local_data` folder and never sent anywhere except the official APIs.',
+  'settings.keys.linkNote':
+    'Each link opens that provider\'s API-key console. If it doesn\'t open, you need to register an account with the provider first.',
   'settings.keys.anthropic': 'Anthropic (Claude)',
   'settings.keys.claudeApi.label': 'Token-paid API Key (pay per token)',
   'settings.keys.claudeApi.help':
@@ -1320,6 +1322,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.keys.heading': 'APIキー',
   'settings.keys.intro':
     'キーはこのPC内の `local_data` フォルダに保存され、各社の公式API以外へは一切送信されません。',
+  'settings.keys.linkNote':
+    '各リンクは、そのプロバイダのAPIキー発行ページを開きます。開かない場合は、先にそのプロバイダでアカウント登録が必要です。',
   'settings.keys.anthropic': 'Anthropic（Claude）',
   'settings.keys.claudeApi.label': '従量課金APIキー（トークン単位で課金）',
   'settings.keys.claudeApi.help':
