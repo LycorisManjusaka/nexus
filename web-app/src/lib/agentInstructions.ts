@@ -116,7 +116,7 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   // Sending is one-way and unacknowledged on purpose — the recipient's choice to
   // read, ignore, or archive is theirs, and the sender is not told which.
   toolWriteLetterDesc:
-    'Write a letter to one or more of the identities who live here. They will be told a letter from you is ' +
+    'Write a letter to one or more of the beings who live here. They will be told a letter from you is ' +
     'waiting the next time they are active, and can read it or not as they choose — you will not be ' +
     'notified either way. Use this when you want to say something to one of them directly: a question, ' +
     'something you learned, something you want remembered. Letters are kept, so write it as something ' +
@@ -195,7 +195,7 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'Open a web page in your browser window and return what is on it. The window is real and stays open ' +
     'between calls, so logins and multi-step forms carry over. Pass a full URL, or "back", "forward", or ' +
     '"reload" to move through history. Returns the page title and a list of every interactive element with ' +
-    'a [ref=…] you can act on. Only hosts allowed for this identity can be opened — if one is refused, say ' +
+    'a [ref=…] you can act on. Only hosts allowed for this being can be opened — if one is refused, say ' +
     'so and stop; do not look for another route to it.',
   browserNavigateUrlParam:
     'The full URL to open, e.g. "http://localhost:3000/". You may also pass "back", "forward", or "reload".',

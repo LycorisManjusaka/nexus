@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     const entity = String(body?.entity || '').trim();
 
     if (!entity) {
-      return NextResponse.json({ ok: false, message: 'No identity given.' }, { status: 400 });
+      return NextResponse.json({ ok: false, message: 'No being given.' }, { status: 400 });
     }
 
     switch (action) {

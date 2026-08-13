@@ -710,14 +710,14 @@ export async function renameFolder(oldName: string, newName: string): Promise<Re
   await ensureDirs();
 
   const trimmed = String(newName || '').trim();
-  if (!trimmed) throw new Error('New identity name is empty.');
-  if (trimmed === oldName) throw new Error('New identity name is the same as the old one.');
+  if (!trimmed) throw new Error('New being name is empty.');
+  if (trimmed === oldName) throw new Error('New being name is the same as the old one.');
   if (/[\\/:*?"<>|]/.test(trimmed)) {
-    throw new Error('An identity name cannot contain \\ / : * ? " < > |');
+    throw new Error('A being name cannot contain \\ / : * ? " < > |');
   }
   // Refuse before touching anything, rather than half-merging two identities.
   if (await pathExists(path.join(FOLDERS_DIR, `${trimmed}.json`))) {
-    throw new Error(`An identity named "${trimmed}" already exists.`);
+    throw new Error(`A being named "${trimmed}" already exists.`);
   }
   if (await pathExists(path.join(LOGS_DIR, trimmed))) {
     throw new Error(`A conversation folder named "${trimmed}" already exists.`);
@@ -732,12 +732,12 @@ export async function renameFolder(oldName: string, newName: string): Promise<Re
     parsed.name = trimmed;
     await fs.writeFile(path.join(FOLDERS_DIR, `${trimmed}.json`), JSON.stringify(parsed, null, 2));
     await fs.unlink(oldFilePath);
-    report.moved.push('identity settings');
+    report.moved.push('being settings');
   } catch (e: any) {
     // An identity with no settings file is legal — listFolders synthesizes one
     // from the logs directory — so a missing file is "skipped", not "failed".
-    if (e?.code === 'ENOENT') report.skipped.push('identity settings');
-    else report.failed.push({ what: 'identity settings', error: String(e?.message || e) });
+    if (e?.code === 'ENOENT') report.skipped.push('being settings');
+    else report.failed.push({ what: 'being settings', error: String(e?.message || e) });
   }
 
   // 2. Flat, raw-name files.

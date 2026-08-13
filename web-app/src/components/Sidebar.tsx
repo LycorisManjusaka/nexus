@@ -367,7 +367,7 @@ export default function Sidebar({
     const files = e.target.files;
     if (!files || files.length === 0) return;
     if (!activeFolder) {
-      console.warn('[md-import] Refused: no active folder selected. Open/select a Digital Identity first, then import.');
+      console.warn('[md-import] Refused: no active folder selected. Open/select a Digital Being first, then import.');
       alert(t('sidebar.import.noFolder'));
       return;
     }

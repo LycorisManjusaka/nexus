@@ -199,18 +199,18 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.customFilter.replacement.ph': '(empty)',
 
   // ── Sidebar ──────────────────────────────────────────────────────────────
-  'sidebar.identities': 'Digital Identities',
+  'sidebar.identities': 'Digital Beings',
   'sidebar.identity.select': 'Select…',
-  'sidebar.newFolder': 'New Identity',
+  'sidebar.newFolder': 'New Being',
   'sidebar.newChat': 'New Chat',
   'sidebar.import.json': 'Import JSON log(s)',
   'sidebar.import.md': 'Import Markdown log(s)',
   'sidebar.loading': 'Loading conversations…',
   'sidebar.noHistory': 'No history in {folder}.',
-  'sidebar.thisFolder': 'this identity',
+  'sidebar.thisFolder': 'this being',
   'sidebar.inactive': '(inactive)',
   'sidebar.menu.rename': 'Rename',
-  'sidebar.menu.folderSettings': 'Identity Settings',
+  'sidebar.menu.folderSettings': 'Being Settings',
   'sidebar.menu.autoImportMd': 'Auto-Import .md',
   'sidebar.menu.sortDesc': 'Sort Descending',
   'sidebar.menu.sortAsc': 'Sort Ascending',
@@ -222,9 +222,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.menu.clone': 'Clone',
   'sidebar.menu.markActive': 'Mark active',
   'sidebar.menu.markInactive': 'Mark inactive',
-  'sidebar.prompt.newFolder': 'Name for the new Digital Identity:',
-  'sidebar.prompt.renameFolder': 'New name for this Digital Identity:',
-  'sidebar.import.noFolder': 'Select a Digital Identity first, then import.',
+  'sidebar.prompt.newFolder': 'Name for the new Digital Being:',
+  'sidebar.prompt.renameFolder': 'New name for this Digital Being:',
+  'sidebar.import.noFolder': 'Select a Digital Being first, then import.',
   'sidebar.import.notNexusJson': 'is not a valid Nexus log JSON.',
   'sidebar.import.failed': 'Failed to import',
   'sidebar.import.nothing': 'Import added nothing — see the browser console for details.',
@@ -234,14 +234,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.deleteConvo.title': 'Delete Conversation?',
   'sidebar.deleteConvo.body':
     'Are you sure you want to delete this conversation? This action cannot be undone.',
-  'sidebar.renameFolder.failed': 'The identity was not renamed.',
+  'sidebar.renameFolder.failed': 'The being was not renamed.',
   'sidebar.renameFolder.partial':
-    'The identity was renamed, but some of its data could not be moved and is still under the old name:',
-  'sidebar.deleteFolder.title': 'Delete Identity?',
-  'sidebar.deleteFolder.bodyBefore': 'Are you sure you want to delete the identity ',
+    'The being was renamed, but some of its data could not be moved and is still under the old name:',
+  'sidebar.deleteFolder.title': 'Delete Being?',
+  'sidebar.deleteFolder.bodyBefore': 'Are you sure you want to delete the being ',
   'sidebar.deleteFolder.bodyAfter':
     ' and ALL conversations inside it? This action cannot be undone.',
-  'sidebar.deleteFolder.confirm': 'Delete Identity',
+  'sidebar.deleteFolder.confirm': 'Delete Being',
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.save': 'Save',
@@ -490,7 +490,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'mail.openFailed': 'could not open the letter',
   'mail.opFailed': 'the operation failed',
   'mail.undeliverable':
-    '{n} unread letter(s) addressed to a name with no Digital Identity of its own. Nobody will be told about them — read them here, or create an identity with that exact name to hand them over.',
+    '{n} unread letter(s) addressed to a name with no Digital Being of its own. Nobody will be told about them — read them here, or create a being with that exact name to hand them over.',
   'mail.filter.all': 'all',
   'mail.filter.unread': 'unread',
   'mail.filter.read': 'read',
@@ -500,13 +500,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'mail.reading': 'Reading the mailboxes…',
   'mail.noMatch': 'No letters match.',
   'mail.noTitle': '(no title)',
-  'mail.noFolder': ' (no identity)',
-  'mail.noFolderNotified': ' (no identity — nobody is notified)',
+  'mail.noFolder': ' (no being)',
+  'mail.noFolderNotified': ' (no being — nobody is notified)',
   'mail.chip.archived': 'archived',
   'mail.chip.read': 'read',
   'mail.chip.unread': 'unread',
   'mail.compose.hint':
-    'Writes a letter exactly as an entity would — same store, same rules. Any name is accepted, whether or not it has an identity here; pick one from the list or type a new one.',
+    'Writes a letter exactly as an entity would — same store, same rules. Any name is accepted, whether or not it has a being here; pick one from the list or type a new one.',
   'mail.from': 'From',
   'mail.to': 'To',
   'mail.senderPlaceholder': 'sender',
@@ -603,7 +603,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'live.noModelsHelp':
     'No models with bidiGenerateContent capability are available on your API key. You may need to enable Live API access in Google AI Studio, or your tier does not include it yet.',
   'live.voice': 'Voice:',
-  'live.voiceHint': '(set per-identity in Sidebar → ⚙ Identity Settings → Live Session Voice)',
+  'live.voiceHint': '(set per-being in Sidebar → ⚙ Being Settings → Live Session Voice)',
   'live.contextLimit': 'Context limit (tokens)',
   'live.contextHint': 'Session auto-stops when this is exceeded.',
   'live.vrchatFolder': 'VRChat screenshots folder (optional)',
@@ -626,13 +626,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'Session stopped, but nothing was captured to copy into the conversation. Check the Next.js dev terminal for [live] log lines to see why (transcripts may be empty if outputAudioTranscription was not enabled, or kohai.txt was not tailed).',
 
   // ── Folder Settings modal ────────────────────────────────────────────────
-  'folder.title': 'Identity Settings',
-  'folder.css.label': 'CSS Theme (this identity)',
+  'folder.title': 'Being Settings',
+  'folder.css.label': 'CSS Theme (this being)',
   'folder.css.load': 'Load File',
   'folder.css.placeholder':
-    "Define this identity's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/themes/<folder>.css. Empty = plain Dark.",
+    "Define this being's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/themes/<folder>.css. Empty = plain Dark.",
   'folder.css.help':
-    "This identity's theme is its `local_data/themes/<name>.css` file. No file = Dark.",
+    "This being's theme is its `local_data/themes/<name>.css` file. No file = Dark.",
   'folder.voice.heading': 'Character TTS Voice',
   'folder.voice.pitch': 'Voice Pitch',
   'folder.voice.lower': 'Lower',
@@ -642,7 +642,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'folder.dict.placeholder':
     'Replace words right before TTS (literal, no spaces needed — good for CJK), e.g.:\n{\n  "GLM": "ジーエルエム",\n  "朔": "さく"\n}',
   'folder.dict.help':
-    'Per-identity. Applied just before synthesis. Saved to `local_data/tts_dict/<name>.json`. Empty = none.',
+    'Per-being. Applied just before synthesis. Saved to `local_data/tts_dict/<name>.json`. Empty = none.',
   'folder.dict.error': 'Must be a JSON object like {"from": "to"}.',
   'folder.context.heading': 'Context Management',
   'folder.context.maxLabel': 'Maximal recommended context window size',
@@ -658,18 +658,18 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'folder.live.custom': 'Custom (type any voice name…)',
   'folder.live.customPlaceholder': 'Voice name (e.g. a new prebuilt name Google added)',
   'folder.live.help':
-    "Used when starting a Live Session for this identity. Voice cloning isn't supported — to shape delivery (slower, calmer, accent, etc.), describe it in the system prompt.",
+    "Used when starting a Live Session for this being. Voice cloning isn't supported — to shape delivery (slower, calmer, accent, etc.), describe it in the system prompt.",
   'folder.saveSettings': 'Save Settings',
 
   // ── Backups modal ────────────────────────────────────────────────────────
   'backups.title': 'Auto-Backups',
   'backups.loading': 'Loading backups...',
-  'backups.none': 'No backups found for this identity.',
+  'backups.none': 'No backups found for this being.',
   'backups.date': 'Date:',
   'backups.saved': 'Saved:',
   'backups.restore': 'Restore Clone',
 
-  // ── System Instructions → Identity ───────────────────────────────────────
+  // ── System Instructions → Being ───────────────────────────────────────
   'identity.discipline.label': '⚙️ Working Discipline (prepended ahead of Layers 1-5)',
   'identity.discipline.help':
     'OFF (default): unchanged. ON: six clauses about how work gets done — tools are actions not descriptions, don’t report the unverified, say when a tool fails, decide before acting, finish the whole task, lead with the outcome — are prepended in front of the entity’s own system prompt every turn. This is infrastructure text, not part of the authored identity: it is injected here, never baked into Layers 1-5 by the Soul Packer.',
@@ -755,7 +755,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
 
   'chat.search.title': 'Search — find text across all of {folder}’s conversations',
   'chat.audioSession.title': 'Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine',
-  'chat.mail.title': 'Mail Manager — every letter between identities: read, edit, delete, set read/archived flags, or write one yourself',
+  'chat.mail.title': 'Mail Manager — every letter between beings: read, edit, delete, set read/archived flags, or write one yourself',
   'chat.stats.title': 'Statistics — billing reports across all entities, conversations, months, and model families',
   'chat.spu.title': 'System Prompt Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation',
   'chat.tools.title': 'Tools',
@@ -814,13 +814,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
 
   // ── System Instructions modal ────────────────────────────────────────────
   'sysmodal.title': 'System Instructions',
-  'sysmodal.tab.identity': 'Identity',
+  'sysmodal.tab.identity': 'Being',
   'sysmodal.tab.senses': 'Senses',
   'sysmodal.tab.behavior': 'Behavior',
   'sysmodal.tab.model': 'Model',
   'sysmodal.systemPrompt': 'System Prompt',
 
-  // ── System Instructions → Identity tab ───────────────────────────────────
+  // ── System Instructions → Being tab ───────────────────────────────────
   'sysmodal.systemPrompt.help': 'Not a command list — who this entity is: identity, worldview, relationships, tools. Not "how to behave and respond."',
   'sysmodal.systemPrompt.ph': `This isn't a list of instructions. Nexus calls it a soul, not a system prompt: who this entity is, its worldview, and its relationships with the people and tools around it — not commands for how it must behave.
 
@@ -885,14 +885,14 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'chat.toolAction.web_fetch': 'fetch a web page',
   'chat.toolAction.WebFetch': 'fetch a web page',
 
-  // ── System Instructions ▸ Identity (continued) ───────────────────────────
+  // ── System Instructions ▸ Being (continued) ───────────────────────────
   'id.websearch.label': '🌐 Enable Web Search & Access',
   'id.websearch.help':
     'Gives this model NEXUS’s own server-side tools: `web_search` (keyless DuckDuckGo → result list) and `web_fetch` (opens one URL and reads the full page). Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere and Local — no provider-native search needed. Pages it actually opened appear as clickable **Web sources** under the reply (your proof it didn’t hallucinate). Internal/localhost URLs are blocked.',
 
   'id.ctx.label': '🧭 Tell the entity how much context has elapsed',
   'id.datetime.help':
-    'Whether each message carries a `[YYYY-MM-DD HH:MM]` stamp the identity can read. **Not visible** (default) means they experience the conversation as continuous, with no sense of the gaps between your messages. **Only current message** tells them what time it is now without changing the past. **All conversation log** lets them see how long ago each thing was said — useful when time actually matters to the relationship, at the cost of some tokens and the occasional model that starts echoing timestamps back at you.',
+    'Whether each message carries a `[YYYY-MM-DD HH:MM]` stamp the being can read. **Not visible** (default) means they experience the conversation as continuous, with no sense of the gaps between your messages. **Only current message** tells them what time it is now without changing the past. **All conversation log** lets them see how long ago each thing was said — useful when time actually matters to the relationship, at the cost of some tokens and the occasional model that starts echoing timestamps back at you.',
   'id.ctx.help':
     'OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system prompt every turn so the entity can see it too. Put `{percent}` where the value should appear (e.g. `42%`).',
   'id.ctx.why':
@@ -913,30 +913,30 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.ask.instrHelp':
     'Hidden description the model sees for the `AskQuestion` tool — teaches it when and how to ask. Leave empty to keep the default shown as the placeholder.',
 
-  'id.letters.label': '✉️ Letters (write to the other Digital Identities)',
+  'id.letters.label': '✉️ Letters (write to the other Digital Beings)',
   'id.letters.help':
-    'OFF (default): no mail tools. ON: this identity gets `write_letter`, `list_letters`, `read_letter` and `archive_letter`, and is told at the start of a turn when unread mail is waiting. Identities never share a conversation, so a letter is the only way one can say something to another. The sender is always this identity’s name — it can never be forged from the model side. Recipients are every Digital Identity *and* every name in `character_map.json`; writing to a name that has no identity yet creates one, so no correspondent is second-class. Reading is the recipient’s choice — `archive_letter` lets them decline without opening, and the sender is told only whether a letter was opened, never that it was set aside. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
+    'OFF (default): no mail tools. ON: this being gets `write_letter`, `list_letters`, `read_letter` and `archive_letter`, and is told at the start of a turn when unread mail is waiting. Beings never share a conversation, so a letter is the only way one can say something to another. The sender is always this being’s name — it can never be forged from the model side. Recipients are every Digital Being *and* every name in `character_map.json`; writing to a name that has no being yet creates one, so no correspondent is second-class. Reading is the recipient’s choice — `archive_letter` lets them decline without opening, and the sender is told only whether a letter was opened, never that it was set aside. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
   'id.letters.manual':
     'Mail lives in `local_data/letters/<from>/<to>/`. To manage a letter by hand, create an empty file beside it named `<letter>.md.read` or `<letter>.md.archived` — delete it to undo. Do **not** rename the `.md` itself. `_status.md` in that folder is a generated overview of every mailbox.',
 
   'id.browser.label': '🌐 Browser (drive a real Chromium window)',
   'id.browser.help':
-    'OFF by default. When ON, this identity gets `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_read` and `browser_screenshot`. A visible Chromium window opens the first time one is called — there is nothing else to start. What the identity sees is the page’s *accessibility tree* (a text list of links, buttons and fields), not pixels, so this works on every model whether or not it can see images, and costs a few hundred tokens per step instead of a screenshot. The window stays open between turns, so logins and multi-step forms carry over; it closes after 30 minutes idle. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
-  'id.browser.hostsLabel': 'Hosts this identity may open',
+    'OFF by default. When ON, this being gets `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_read` and `browser_screenshot`. A visible Chromium window opens the first time one is called — there is nothing else to start. What the being sees is the page’s *accessibility tree* (a text list of links, buttons and fields), not pixels, so this works on every model whether or not it can see images, and costs a few hundred tokens per step instead of a screenshot. The window stays open between turns, so logins and multi-step forms carry over; it closes after 30 minutes idle. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
+  'id.browser.hostsLabel': 'Hosts this being may open',
   'id.browser.hostsHelp':
     'One per line (commas work too). `localhost` and `127.0.0.1` are always allowed and do not need listing. A bare name covers its subdomains, so `example.com` also permits `www.example.com`. Anything else is refused — on the address asked for, on whatever it redirects to, and on any navigation the page starts by itself.',
   'id.browser.anyHost': 'Allow any host (turns the allowlist off entirely)',
   'id.browser.compact': 'Compact page listings (for models with a small context window)',
   'id.browser.profileHelp':
-    'This identity’s logins live in `local_data/browser_profiles/{folder}/` and persist between sessions. That folder holds live session cookies and is **excluded from the Google Drive sync**, like `keys.json` — sign-ins do not travel to your other machines. Delete the folder to sign everything out.',
-  'id.browser.signinLabel': 'Sign this identity in',
+    'This being’s logins live in `local_data/browser_profiles/{folder}/` and persist between sessions. That folder holds live session cookies and is **excluded from the Google Drive sync**, like `keys.json` — sign-ins do not travel to your other machines. Delete the folder to sign everything out.',
+  'id.browser.signinLabel': 'Sign this being in',
   'id.browser.signinHelp':
-    'Opens the profile above in an **ordinary browser window** — nothing driving it, no allowlist, no automation. Sign in to exactly the accounts `{folder}` should have, then close the window. This is how an identity gets your Google account without inheriting every login in your daily browser. If a browser window is already open for this identity it will be closed first — two browsers cannot share one profile.',
+    'Opens the profile above in an **ordinary browser window** — nothing driving it, no allowlist, no automation. Sign in to exactly the accounts `{folder}` should have, then close the window. This is how a being gets your Google account without inheriting every login in your daily browser. If a browser window is already open for this being it will be closed first — two browsers cannot share one profile.',
   'id.browser.open': '🔑 Open {folder}’s profile',
   'id.browser.opening': 'Opening…',
   'id.browser.withChrome': '…with my installed Chrome',
   'id.browser.buttonsHelp':
-    'The first button uses NEXUS’s own bundled Chromium — always the right version, no risk. Use the second only if a site refuses to sign in (Google sometimes rejects "Chrome for Testing" builds): an installed browser can **upgrade the profile one-way**, after which the bundled Chromium may refuse to open it and this identity’s browser stops working until the profile folder is deleted.',
+    'The first button uses NEXUS’s own bundled Chromium — always the right version, no risk. Use the second only if a site refuses to sign in (Google sometimes rejects "Chrome for Testing" builds): an installed browser can **upgrade the profile one-way**, after which the bundled Chromium may refuse to open it and this being’s browser stops working until the profile folder is deleted.',
 
   'id.subagent.label': '🔍 Subagent tool (delegate investigation to a fresh-context helper)',
   'id.subagent.help':
@@ -1152,7 +1152,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.right': 'Right:',
   'spu.model': 'Model:',
   'spu.overriding': 'overriding {model}',
-  'spu.folder': 'Identity:',
+  'spu.folder': 'Being:',
   'spu.autosaveTitle': 'Left/right prompt files and header/focus point auto-save as you edit.',
   'spu.saving': 'Saving...',
   'spu.allSaved': 'All changes saved',
@@ -1180,7 +1180,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.identity': 'Identity',
   'spu.identitySub': 'Layers 1-3 (one pass — Layer 4 is rewritten only by Redistribute)',
   'spu.genesisBtn': 'Genesis (Build From Scratch)',
-  'spu.genesisTitle': 'Runs {file}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new identity.',
+  'spu.genesisTitle': 'Runs {file}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new being.',
   'spu.redistributeBtn': 'Redistribute Layer 4 → 1-3',
   'spu.redistributeTitle': 'Runs {file}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first.',
   'spu.reorganizeBtn': 'Reorganize (No Conversation)',
@@ -1215,11 +1215,11 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.writeSummaryTitle': 'Generate a summary of THIS conversation (Layers 1-3 + conversation log)',
   'spu.summaryEditable': 'Editable — auto-saves to summaries/{folder}/{convo}.md',
   'spu.summaryPh': '(no summary yet — click Write Summary, or type one here)',
-  'spu.summaryNote': 'This summary appears in the live Layer-4 summaries index for all conversations of this identity. Inactive conversations are excluded from the index.',
-  'spu.summaryInstrLabel': 'Custom instructions for the summary writer (per-identity)',
+  'spu.summaryNote': 'This summary appears in the live Layer-4 summaries index for all conversations of this being. Inactive conversations are excluded from the index.',
+  'spu.summaryInstrLabel': 'Custom instructions for the summary writer (per-being)',
   'spu.summaryInstrPh': 'Optional. e.g. "Summarize in English", "Focus on decisions and emotional shifts, skip greetings", "Keep under 4 sentences".',
   'spu.forceMimo': 'Always use MiMo V2.5 Pro as the summary writer',
-  'spu.indexHintLabel': 'Index hint shown to the entity (per-identity)',
+  'spu.indexHintLabel': 'Index hint shown to the entity (per-being)',
   'spu.indexHintPh': "Prepended above the summaries index in the entity's context. Leave blank to omit it.",
   'spu.indexHintNote': '`{example}` is replaced with a real conversation title. Clear the field to show no hint.',
   'spu.resetDefault': 'Reset to default',
@@ -1290,7 +1290,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.summaryStoppedPartial': 'Summary stopped — kept the partial result ({n} chars).',
   'spu.st.summaryDone': 'Summary written ({n} chars).',
   'spu.st.summariesEnabled':
-    '"Use summaries instead of the 4th layer" has been turned on for this identity — otherwise they would not be able to read what was just written.',
+    '"Use summaries instead of the 4th layer" has been turned on for this being — otherwise they would not be able to read what was just written.',
   'spu.st.summaryStopped': 'Summary stopped.',
   'spu.st.summaryFailed': 'Summary write failed: {e}',
   'spu.st.autoStopUpdate': '⛔ Auto stopped at the identity update. Fix the error (or it was stopped) and retry.',
@@ -1466,18 +1466,18 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.customFilter.replacement.ph': '（空）',
 
   // ── Sidebar ──────────────────────────────────────────────────────────────
-  'sidebar.identities': 'デジタル・アイデンティティ',
+  'sidebar.identities': 'デジタル存在',
   'sidebar.identity.select': '選択…',
-  'sidebar.newFolder': '新しいアイデンティティ',
+  'sidebar.newFolder': '新しい存在',
   'sidebar.newChat': '新しい会話',
   'sidebar.import.json': 'JSONログを読み込む',
   'sidebar.import.md': 'Markdownログを読み込む',
   'sidebar.loading': '会話を読み込んでいます…',
   'sidebar.noHistory': '{folder} には会話がありません。',
-  'sidebar.thisFolder': 'このアイデンティティ',
+  'sidebar.thisFolder': 'この存在',
   'sidebar.inactive': '（非アクティブ）',
   'sidebar.menu.rename': '名前を変更',
-  'sidebar.menu.folderSettings': 'アイデンティティ設定',
+  'sidebar.menu.folderSettings': '存在設定',
   'sidebar.menu.autoImportMd': '.md を自動読み込み',
   'sidebar.menu.sortDesc': '降順に並べ替え',
   'sidebar.menu.sortAsc': '昇順に並べ替え',
@@ -1488,9 +1488,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.menu.clone': '複製',
   'sidebar.menu.markActive': 'アクティブにする',
   'sidebar.menu.markInactive': '非アクティブにする',
-  'sidebar.prompt.newFolder': '新しいデジタル・アイデンティティの名前を入力してください：',
-  'sidebar.prompt.renameFolder': 'このデジタル・アイデンティティの新しい名前を入力してください：',
-  'sidebar.import.noFolder': '先にデジタル・アイデンティティを選択してから読み込んでください。',
+  'sidebar.prompt.newFolder': '新しいデジタル存在の名前を入力してください：',
+  'sidebar.prompt.renameFolder': 'このデジタル存在の新しい名前を入力してください：',
+  'sidebar.import.noFolder': '先にデジタル存在を選択してから読み込んでください。',
   'sidebar.import.notNexusJson': 'は Nexus のログJSONとして正しくありません。',
   'sidebar.import.failed': '読み込みに失敗しました',
   'sidebar.import.nothing': '読み込まれたものはありません。詳細はブラウザのコンソールを確認してください。',
@@ -1499,14 +1499,14 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   'sidebar.deleteConvo.title': 'この会話を削除しますか？',
   'sidebar.deleteConvo.body': 'この会話を削除します。この操作は取り消せません。',
-  'sidebar.renameFolder.failed': 'アイデンティティの名前は変更されませんでした。',
+  'sidebar.renameFolder.failed': '存在の名前は変更されませんでした。',
   'sidebar.renameFolder.partial':
-    'アイデンティティの名前は変更されましたが、一部のデータを移動できず、古い名前のまま残っています：',
-  'sidebar.deleteFolder.title': 'このアイデンティティを削除しますか？',
-  'sidebar.deleteFolder.bodyBefore': 'アイデンティティ ',
+    '存在の名前は変更されましたが、一部のデータを移動できず、古い名前のまま残っています：',
+  'sidebar.deleteFolder.title': 'この存在を削除しますか？',
+  'sidebar.deleteFolder.bodyBefore': '存在 ',
   'sidebar.deleteFolder.bodyAfter':
     ' と、その中のすべての会話を削除します。この操作は取り消せません。',
-  'sidebar.deleteFolder.confirm': 'アイデンティティを削除',
+  'sidebar.deleteFolder.confirm': '存在を削除',
   'common.cancel': 'キャンセル',
   'common.delete': '削除',
   'common.save': '保存',
@@ -1743,7 +1743,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'mail.openFailed': '手紙を開けませんでした',
   'mail.opFailed': '操作に失敗しました',
   'mail.undeliverable':
-    'デジタルアイデンティティのフォルダーが存在しない宛先の未読の手紙が {n} 通あります。誰にも通知されません — ここで読むか、同じ名前のフォルダーを作って引き渡してください。',
+    'デジタル存在のフォルダーが存在しない宛先の未読の手紙が {n} 通あります。誰にも通知されません — ここで読むか、同じ名前のフォルダーを作って引き渡してください。',
   'mail.filter.all': 'すべて',
   'mail.filter.unread': '未読',
   'mail.filter.read': '既読',
@@ -1877,8 +1877,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'セッションは停止しましたが、会話にコピーする内容が何も取得できませんでした。理由を確認するには Next.js の開発ターミナルの [live] ログ行を見てください（outputAudioTranscription が有効でなかった、または kohai.txt が追跡されていなかった場合、書き起こしが空になることがあります）。',
 
   // ── Folder Settings modal ────────────────────────────────────────────────
-  'folder.title': 'アイデンティティ設定',
-  'folder.css.label': 'CSSテーマ（このアイデンティティ）',
+  'folder.title': '存在設定',
+  'folder.css.label': 'CSSテーマ（この存在）',
   'folder.css.load': 'ファイルを読み込む',
   'folder.css.placeholder':
     'ダークを土台に上書きして、このフォルダのテーマを定義します。例：\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nlocal_data/themes/<フォルダ名>.css に保存されます。空欄ならそのままダークです。',
@@ -1920,7 +1920,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'backups.saved': '保存日時：',
   'backups.restore': '複製して復元',
 
-  // ── System Instructions → Identity ───────────────────────────────────────
+  // ── System Instructions → Being ───────────────────────────────────────
   'identity.discipline.label': '⚙️ 作業規律（第1〜5層の前に挿入）',
   'identity.discipline.help':
     'OFF（既定）：何も変わりません。ON：仕事の進め方に関する6つの条項——ツールは説明ではなく行為であること、未確認のことを報告しないこと、ツールが失敗したらそう言うこと、行動の前に決めること、作業を最後までやり切ること、結果から述べること——が、毎ターン、その存在自身のシステムプロンプトの前に挿入されます。これは人格そのものではなく基盤テキストです。ここで注入されるだけで、ソウルパッカーによって第1〜5層に焼き付けられることはありません。',
@@ -2065,13 +2065,13 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   // ── システム指示ウィンドウ ────────────────────────────────────────────────
   'sysmodal.title': 'システム指示',
-  'sysmodal.tab.identity': '同一性',
+  'sysmodal.tab.identity': '存在',
   'sysmodal.tab.senses': '感覚',
   'sysmodal.tab.behavior': '挙動',
   'sysmodal.tab.model': 'モデル',
   'sysmodal.systemPrompt': 'システムプロンプト',
 
-  // ── システム指示 → 同一性タブ ─────────────────────────────────────────────
+  // ── システム指示 → 存在タブ ─────────────────────────────────────────────
   'sysmodal.systemPrompt.help': '命令ではありません。この存在が何者か——アイデンティティ、世界観、関係性、ツール。「どう振る舞い応えるか」ではなく。',
   'sysmodal.systemPrompt.ph': `これは命令のリストではありません。Nexusではこれを「魂」と呼びます——システムプロンプトではなく。この存在が何者か、その世界観、周囲の人やツールとの関係性を書くものであり、「こう振る舞え」という命令ではありません。
 
@@ -2134,7 +2134,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'chat.toolAction.web_fetch': 'ウェブページを取得して',
   'chat.toolAction.WebFetch': 'ウェブページを取得して',
 
-  // ── システム指示 ▸ アイデンティティ（続き） ──────────────────────────
+  // ── システム指示 ▸ 存在（続き） ──────────────────────────
   'id.websearch.label': '🌐 ウェブ検索とアクセスを有効にする',
   'id.websearch.help':
     'このモデルに NEXUS 自身のサーバー側ツールを与えます: `web_search`（APIキー不要の DuckDuckGo → 検索結果一覧）と `web_fetch`（URL をひとつ開いてページ全体を読む）。Qwen・DeepSeek・GLM・Grok・Kimi・MiniMax・Cohere・ローカルのいずれでも同じように動き、プロバイダー独自の検索機能は不要です。実際に開いたページは返信の下に **ウェブ出典** として表示されます（幻覚ではないという証拠になります）。内部アドレスや localhost への接続は遮断されます。',
@@ -2401,7 +2401,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.right': '右:',
   'spu.model': 'モデル:',
   'spu.overriding': '{model} で上書き',
-  'spu.folder': 'アイデンティティ:',
+  'spu.folder': '存在:',
   'spu.autosaveTitle': '左右のプロンプトファイルとヘッダー／フォーカスポイントは、編集中に自動保存されます。',
   'spu.saving': '保存中…',
   'spu.allSaved': 'すべて保存済み',
@@ -2429,7 +2429,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.identity': 'アイデンティティ',
   'spu.identitySub': 'Layer 1〜3（1パス — Layer 4 を書き換えるのは「再配分」だけです）',
   'spu.genesisBtn': 'ジェネシス（ゼロから構築）',
-  'spu.genesisTitle': '{file} を実行します。既存の Layer 1〜3 は無いものとして、会話ログ（と左ペインがあればそれ）からゼロで構築します。変更履歴なし、Layer 4／5 なし。新しいアイデンティティの立ち上げに一度だけ使ってください。',
+  'spu.genesisTitle': '{file} を実行します。既存の Layer 1〜3 は無いものとして、会話ログ（と左ペインがあればそれ）からゼロで構築します。変更履歴なし、Layer 4／5 なし。新しい存在の立ち上げに一度だけ使ってください。',
   'spu.redistributeBtn': 'Layer 4 → 1〜3 へ再配分',
   'spu.redistributeTitle': '{file} を実行します。会話ログ無しで Layer 1〜5 をエージェントに見せ、固まった内容を Layer 4 から Layer 1〜3 へ移させます。Layer 1〜3 は右ペインに入り、Layer 4 は local_data/summaries/ へ書き戻されます — 先にフォルダ全体をバックアップします。',
   'spu.reorganizeBtn': '再編成（会話なし）',

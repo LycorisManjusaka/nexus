@@ -260,10 +260,10 @@ function checkUrl(raw: string, ctx: BrowserToolCtx): string | null {
   const list = allowlistFor(ctx);
   if (hostAllowed(u.hostname, list)) return null;
   return (
-    `Error: ${u.hostname} is not on this identity's allowed-hosts list.\n` +
+    `Error: ${u.hostname} is not on this being's allowed-hosts list.\n` +
     `Currently allowed: ${list.join(', ')}\n` +
     `Nexus blocked the request rather than opening it. Ask the machine's owner to add the host ` +
-    `in Identity settings if it is genuinely needed — do not try to route around this.`
+    `in Being settings if it is genuinely needed — do not try to route around this.`
   );
 }
 
@@ -529,7 +529,7 @@ export async function openProfileBrowser(
     profileDir: dir,
     closedAutomation: closed,
     message:
-      `Opened ${entity}'s profile in ${label}. Sign in to whatever accounts this identity should have, ` +
+      `Opened ${entity}'s profile in ${label}. Sign in to whatever accounts this being should have, ` +
       `then close the window — the logins stay in the profile.` +
       (closed ? ' The automation window was closed first, because two browsers cannot share one profile.' : '') +
       (kind === 'system'
