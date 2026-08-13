@@ -14,10 +14,12 @@ export async function POST(req: Request) {
   try {
     const data = await req.json();
     if (data.action === 'rename') {
-      await renameFolder(data.oldName, data.newName);
-    } else {
-      await saveFolder(data.name, data.settings);
+      // The report says what actually moved. A rename touches nine places on
+      // disk; "success: true" alone would hide a half-finished one.
+      const report = await renameFolder(data.oldName, data.newName);
+      return NextResponse.json({ success: report.failed.length === 0, report });
     }
+    await saveFolder(data.name, data.settings);
     return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

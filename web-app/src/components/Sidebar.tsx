@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusCircle, MessageSquare, Settings, Trash2, Folder, MoreVertical, Copy, Pencil, FolderPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock } from 'lucide-react';
+import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
 import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
 import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
+import { nextConversationTitle } from '@/lib/convoNaming';
 import { useT, Tx } from '@/lib/i18n';
 
 interface SidebarProps {
@@ -30,8 +31,11 @@ interface SidebarProps {
   setFolders?: React.Dispatch<React.SetStateAction<any[]>>;
   activeFolderId: string | null;
   setActiveFolderId: (id: string) => void;
-  fetchFolders: () => void;
-  fetchLogs: () => void;
+  // Both resolve when the refetch has landed in state. Declared this way so
+  // callers can await them (createFolder has to, or fetchLogs would wipe the
+  // conversation it just opened).
+  fetchFolders: () => void | Promise<void>;
+  fetchLogs: () => void | Promise<void>;
 }
 
 export default function Sidebar({
@@ -509,29 +513,62 @@ export default function Sidebar({
   };
 
   const createFolder = async () => {
-    const name = prompt(t('sidebar.prompt.newFolder'));
+    const name = prompt(t('sidebar.prompt.newFolder'))?.trim();
     if (!name) return;
     await fetch('/api/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, settings: { aiName: 'Claude' } })
     });
-    fetchFolders();
-    fetchLogs();
+    // Wait for both refreshes before opening the first conversation: fetchLogs
+    // replaces the whole conversation list, so an entry added ahead of it would
+    // be wiped out a moment later.
+    await Promise.all([fetchFolders(), fetchLogs()]);
+
+    // A folder's id is its filename stem, which is its name — see listFolders.
+    setActiveFolderId(name);
+
+    // A brand-new identity opens on its own first conversation rather than an
+    // empty pane. Same shape as New Chat: held in memory until the first
+    // message is sent, at which point it is written to disk.
+    if (setConversations) {
+      const newId = uuidv4();
+      setConversations(prev => [{
+        id: newId,
+        title: nextConversationTitle(name, prev.filter(c => c.folderName === name).map(c => c.title)),
+        updatedAt: Date.now(),
+        folderName: name,
+        aiName: 'Claude',
+      }, ...prev]);
+      onSelectConvo(newId);
+    }
   };
 
   const handleRenameFolder = async () => {
     if (!activeFolder) return;
     const oldName = activeFolder.name;
-    const newName = prompt(t('sidebar.prompt.renameFolder'), oldName);
+    const newName = prompt(t('sidebar.prompt.renameFolder'), oldName)?.trim();
     if (!newName || newName === oldName) return;
-    await fetch('/api/folders', {
+    const res = await fetch('/api/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'rename', oldName, newName })
     });
-    fetchFolders();
-    fetchLogs();
+    // A rename moves nine things on disk. If any of them didn't move, say so —
+    // a partly-renamed identity that looks fine in the sidebar is worse than
+    // one that told you what it left behind.
+    let result: any = null;
+    try { result = await res.json(); } catch {}
+    if (!res.ok) {
+      alert(`${t('sidebar.renameFolder.failed')}\n\n${result?.error || res.statusText}`);
+    } else if (result?.report?.failed?.length) {
+      alert(
+        `${t('sidebar.renameFolder.partial')}\n\n` +
+        result.report.failed.map((f: any) => `• ${f.what}: ${f.error}`).join('\n')
+      );
+    }
+    await Promise.all([fetchFolders(), fetchLogs()]);
+    if (res.ok) setActiveFolderId(newName);
     setFolderMenuOpen(false);
   };
 
@@ -560,7 +597,7 @@ export default function Sidebar({
         <div className="flex items-center justify-between mb-2">
           <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block">{t('sidebar.identities')}</label>
           <button onClick={createFolder} className="text-muted-foreground hover:text-indigo-500 transition-colors" title={t('sidebar.newFolder')}>
-            <FolderPlus size={16} />
+            <UserRoundPlus size={16} />
           </button>
         </div>
         

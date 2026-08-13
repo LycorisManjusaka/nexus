@@ -25,6 +25,7 @@ import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, resolve
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
+import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -276,10 +277,17 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
   }
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
+  // The `<identity>_<n>` name the sidebar gave this conversation at creation.
+  // Held in a ref, not read straight from the prop, because the load effect
+  // fires on mount and the prop can still be undefined then — the sidebar entry
+  // and the mount can land in different renders. The ref is current whenever
+  // the effect's fetch resolves, which is the only moment it is needed.
+  const plannedTitleRef = useRef<string | undefined>(plannedTitle);
+  plannedTitleRef.current = plannedTitle;
   const [loading, setLoading] = useState(false);
   // Non-fatal auto-save notice. A save that fails must never take the app down
   // with it, so problems surface here instead of throwing out of the effect.
@@ -870,6 +878,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         const r = await fetch(`/api/logs/${convoId}`, { signal: ac.signal });
         if (!r.ok || !r.body) {
+          // No log on disk — a conversation that was just created and has never
+          // been written. Everything else is already correct because ChatArea
+          // remounts per convoId, but the title is not: adopt the
+          // `<identity>_<n>` name the sidebar assigned, so the name on screen is
+          // the name that gets saved on the first message.
+          if (plannedTitleRef.current) setTitle(plannedTitleRef.current);
           setConvoIsLoading(false);
           return;
         }
@@ -907,8 +921,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setConvoIsLoading(false);
           return;
         }
-        // Other errors (network, 404 etc.) fall through to the "data === null"
-        // path below, which resets ChatArea to a clean empty conversation.
+        // Network/parse errors fall through to the "data === null" path below,
+        // which resets ChatArea to a clean empty conversation. A 404 does NOT
+        // arrive here — it is handled by the early return above.
       }
 
       // Only apply if this load wasn't aborted in between.
@@ -1003,7 +1018,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           (folderSettings[key] !== undefined ? folderSettings[key] : fallback) as T;
 
         setMessages([]);
-        setTitle('New Conversation');
+        // No log on disk yet — this is a conversation that has just been created
+        // and not written to. `plannedTitle` is the `<identity>_<n>` name the
+        // sidebar already assigned it; keep it instead of throwing it away, or
+        // the name the user was shown would silently differ from the saved one.
+        setTitle(plannedTitleRef.current || 'New Conversation');
         setSystemPrompt(defaultSystemPrompt);
         setToolUseEnabled(pick('toolUseEnabled', false));
         setAgentFullSystemAccess(pick('agentFullSystemAccess', false));
@@ -1462,8 +1481,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }).catch(() => {});
     }
 
-    // Generate title if first message
-    if (messages.length === 0 && text.trim()) {
+    // Generate title if first message — but never over a name the conversation
+    // was deliberately given. A `<identity>_<n>` title was assigned at creation
+    // and is the one the user sees in the sidebar and on disk; the first 30
+    // characters of the opening message are only a fallback for conversations
+    // that reached here without a name of their own.
+    if (messages.length === 0 && text.trim() && !isNumberedIdentityTitle(title, folderName)) {
       const newTitle = text.slice(0, 30) + (text.length > 30 ? '...' : '');
       setTitle(newTitle);
       setTimeout(onUpdateTitle, 500); // Trigger sidebar update

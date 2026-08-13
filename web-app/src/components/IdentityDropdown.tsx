@@ -2,7 +2,8 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Folder, ChevronDown, Check } from 'lucide-react';
+import { UserRound, ChevronDown, Check } from 'lucide-react';
+import { useT } from '@/lib/i18n';
 
 // Pull the `--var: value;` pairs out of an entity's theme CSS (the :root block,
 // or the whole string if there's no :root). Cheap string work — the CSS is
@@ -34,6 +35,7 @@ export default function IdentityDropdown({
   activeFolderId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -113,9 +115,9 @@ export default function IdentityDropdown({
         className="w-full pl-9 pr-8 py-2 bg-background border border-border rounded-lg text-sm text-left cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all relative truncate"
       >
         <span className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-muted-foreground">
-          <Folder size={16} />
+          <UserRound size={16} />
         </span>
-        {active?.name || 'Select…'}
+        {active?.name || t('sidebar.identity.select')}
         <ChevronDown
           size={16}
           className="absolute right-2 top-1/2 text-muted-foreground pointer-events-none"

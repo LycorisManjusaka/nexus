@@ -1,0 +1,60 @@
+/**
+ * Conversation titles inside one Digital Identity follow `<identity>_<number>`
+ * — "Cairn_1", "Cairn_2", … — so a conversation carries whose it is in its own
+ * name, on disk and in exports, without anyone having to look it up.
+ *
+ * Both places that create a conversation use this: the sidebar's "New Chat"
+ * button, and identity creation (which opens `<identity>_1` straight away so a
+ * brand-new identity is never staring at an empty pane).
+ */
+
+/** Escape a name so it can sit inside a RegExp literally. Identity names are
+ *  user-chosen and frequently CJK; a stray `(` or `+` must not become syntax. */
+function escapeForRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Next free `<identity>_<n>` title.
+ *
+ * Scans every existing title for the `<identity>_<number>` shape and returns
+ * max + 1. Titles that don't match — renamed, imported, or from an older
+ * naming scheme — are ignored rather than renumbered, so this never collides
+ * with a name the user chose by hand.
+ *
+ * With no matches at all the answer is `<identity>_1`.
+ */
+export function nextConversationTitle(identityName: string, existingTitles: (string | undefined | null)[]): string {
+  const re = new RegExp(`^${escapeForRegExp(identityName)}_(\\d+)$`);
+  let max = 0;
+  for (const raw of existingTitles) {
+    const m = re.exec((raw || '').trim());
+    if (!m) continue;
+    const n = parseInt(m[1], 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `${identityName}_${max + 1}`;
+}
+
+/**
+ * Is this title already the `<identity>_<number>` name we gave the conversation
+ * when it was created?
+ *
+ * Used to protect that name from the "first 30 characters of the opening
+ * message" auto-title. A deliberately assigned name outranks a guessed one; a
+ * conversation that arrived some other way still gets the guess.
+ */
+export function isNumberedIdentityTitle(title: string | undefined | null, identityName: string): boolean {
+  if (!identityName) return false;
+  return new RegExp(`^${escapeForRegExp(identityName)}_\\d+$`).test((title || '').trim());
+}
+
+/**
+ * Rename half of the same convention: if `title` belongs to `oldName`, hand
+ * back the same number under `newName`. Anything else comes back untouched —
+ * a hand-picked title survives an identity rename unchanged.
+ */
+export function retitleForRenamedIdentity(title: string, oldName: string, newName: string): string {
+  const m = new RegExp(`^${escapeForRegExp(oldName)}_(\\d+)$`).exec((title || '').trim());
+  return m ? `${newName}_${m[1]}` : title;
+}

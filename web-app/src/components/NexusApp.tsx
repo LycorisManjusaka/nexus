@@ -6,6 +6,7 @@ import ChatArea from '@/components/ChatArea';
 import SettingsModal from '@/components/SettingsModal';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
+import { nextConversationTitle } from '@/lib/convoNaming';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -224,10 +225,15 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const createNewChat = () => {
     if (!activeFolder) return;
     const newId = uuidv4();
+    // `<identity>_<n>` — n is one past the highest number already in use here.
+    const title = nextConversationTitle(
+      activeFolder.name,
+      conversations.filter(c => c.folderName === activeFolder.name).map(c => c.title)
+    );
     setCurrentConvoId(newId);
     setConversations([{
       id: newId,
-      title: 'New Conversation',
+      title,
       updatedAt: Date.now(),
       folderName: activeFolder.name,
       aiName: activeFolder.settings?.aiName || 'Claude',
@@ -456,13 +462,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     data.id = newId;
     data.title = buildCloneTitle(data.title || 'Untitled', data.folderName || 'Default');
 
-    // Treat the entire cloned history as carry-over context (every existing
-    // message is "copied"). The new firstOriginalIsNext flag is consumed by
-    // ChatArea.handleSend → the next user message becomes the marker. See
-    // cloneChatWithSystemPrompt for the longer rationale; both clone paths
-    // now share this behavior.
-    data.firstOriginalMessageId = null;
-    data.firstOriginalIsNext = true;
+    // A plain clone is a copy, not a fresh start: the first-original marker is
+    // carried over unchanged along with everything else. Only the System Prompt
+    // Updater's "go to next conversation" path (cloneChatWithSystemPrompt)
+    // re-arms the marker, because there the history really is carry-over.
 
     // Optimistic — insert the new entry at the top of the sidebar immediately.
     const optimistic = {
@@ -586,6 +589,11 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             globalSettings={globalSettings}
             folders={folders}
             onUpdateTitle={fetchLogs}
+            // The name this conversation was created with. It only matters
+            // before the first save: with no log on disk, ChatArea would
+            // otherwise fall back to "New Conversation" and the title the
+            // sidebar is showing would not be the one that gets written.
+            plannedTitle={conversations.find(c => c.id === currentConvoId)?.title}
             fetchFolders={fetchFolders}
             onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
           />

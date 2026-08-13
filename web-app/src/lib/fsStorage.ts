@@ -3,6 +3,7 @@ import { createReadStream } from 'fs';
 import { createHash } from 'crypto';
 import path from 'path';
 import { putDataUrl } from './attachmentStore';
+import { retitleForRenamedIdentity } from './convoNaming';
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const SETTINGS_DIR = path.join(DATA_DIR, 'settings');
@@ -568,29 +569,234 @@ export async function saveFolder(folderName: string, settings: any) {
   await fs.writeFile(filePath, JSON.stringify({ name: folderName, settings: rest }, null, 2));
 }
 
-export async function renameFolder(oldName: string, newName: string) {
+// ── Identity rename ─────────────────────────────────────────────────────────
+// An identity's name is its primary key on disk: it names a file or a directory
+// in nine separate places under local_data. This used to move three of them
+// (the folder JSON, the theme CSS, the logs directory) and silently orphan the
+// rest — the entity kept its conversations but lost its workspace, its system
+// prompt files, its summaries, its changelogs, its browser logins, its TTS
+// dictionary and its backups. Nothing failed loudly; the data was simply no
+// longer reachable under the new name.
+//
+// `letters/` is deliberately left alone. A mailbox is a correspondence between
+// two names, both of which appear in the path, and the sender's copy of every
+// letter lives under a *different* identity's tree. Rewriting that coherently
+// is a larger job than all of the above combined, and a half-done rename there
+// loses mail. The old name keeps its mailbox.
+
+/** What a rename actually did, so the caller can show it instead of guessing. */
+export interface RenameFolderReport {
+  moved: string[];
+  skipped: string[];
+  failed: { what: string; error: string }[];
+}
+
+/** Escape a name for literal use inside a RegExp (identity names are user-chosen). */
+function escapeForRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Mirrors `safeName` in browserTools.ts — that module pulls in Playwright, so
+ *  the rule is repeated here rather than imported into every API route. */
+function browserProfileName(entity: string): string {
+  return String(entity || 'Default').replace(/[\\/:*?"<>|]/g, '_').slice(0, 64) || 'Default';
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try { await fs.stat(p); return true; } catch { return false; }
+}
+
+/**
+ * Move one path if it's there. Never overwrites: an existing target is reported
+ * as a failure and left untouched, because the alternative is silently merging
+ * or destroying another identity's data.
+ */
+async function movePathIfPresent(
+  from: string,
+  to: string,
+  label: string,
+  report: RenameFolderReport
+): Promise<void> {
+  if (from === to) return;
+  if (!(await pathExists(from))) { report.skipped.push(label); return; }
+  if (await pathExists(to)) {
+    report.failed.push({ what: label, error: `target already exists: ${to}` });
+    return;
+  }
+  try {
+    await fs.mkdir(path.dirname(to), { recursive: true });
+    await fs.rename(from, to);
+    report.moved.push(label);
+  } catch (e: any) {
+    report.failed.push({ what: label, error: String(e?.message || e) });
+  }
+}
+
+/**
+ * Rename `<oldStem>_<n>.md` → `<newStem>_<n>.md` inside one directory.
+ * Files that don't match the pattern are left exactly as they are — a
+ * hand-named summary keeps its name.
+ */
+async function retitleNumberedFiles(
+  dir: string,
+  oldStem: string,
+  newStem: string,
+  label: string,
+  report: RenameFolderReport
+): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch { return; }
+  const re = new RegExp(`^${escapeForRegExp(oldStem)}_(\\d+)\\.md$`);
+  let n = 0;
+  for (const name of entries) {
+    const m = re.exec(name);
+    if (!m) continue;
+    const to = path.join(dir, `${newStem}_${m[1]}.md`);
+    if (await pathExists(to)) {
+      report.failed.push({ what: `${label}/${name}`, error: 'target already exists' });
+      continue;
+    }
+    try { await fs.rename(path.join(dir, name), to); n++; }
+    catch (e: any) { report.failed.push({ what: `${label}/${name}`, error: String(e?.message || e) }); }
+  }
+  if (n > 0) report.moved.push(`${label} (${n} file${n === 1 ? '' : 's'})`);
+}
+
+/**
+ * Rewrite every conversation log in the (already moved) directory so its
+ * internal `folderName` matches the new identity, and retitle the ones using
+ * the `<identity>_<n>` convention.
+ *
+ * This is not cosmetic. `saveLog` deletes copies of a conversation id from
+ * every logs directory whose name differs from the payload's `folderName`, so
+ * a log left claiming the old name would, on its very next save, be moved back
+ * into a freshly recreated directory under the old name.
+ */
+async function rewriteLogsForRename(
+  logDir: string,
+  oldName: string,
+  newName: string,
+  report: RenameFolderReport
+): Promise<void> {
+  let files: string[];
+  try {
+    files = (await fs.readdir(logDir)).filter(f => f.endsWith('.json'));
+  } catch { return; }
+
+  let rewritten = 0;
+  for (const file of files) {
+    const p = path.join(logDir, file);
+    try {
+      const parsed = JSON.parse(await fs.readFile(p, 'utf-8'));
+      const nextTitle = retitleForRenamedIdentity(parsed.title || '', oldName, newName);
+      if (parsed.folderName === newName && nextTitle === parsed.title) continue;
+      parsed.folderName = newName;
+      if (parsed.title) parsed.title = nextTitle;
+      // Same lock key saveLog uses, so a rename can't interleave with a save.
+      await withWriteLock(`log:${parsed.id || file.replace(/\.json$/, '')}`, async () => {
+        await atomicWriteFile(p, serializeLogHeaderFirst(parsed));
+      });
+      rewritten++;
+    } catch (e: any) {
+      report.failed.push({ what: `logs/${file}`, error: String(e?.message || e) });
+    }
+  }
+  if (rewritten > 0) report.moved.push(`conversation logs (${rewritten} rewritten)`);
+}
+
+export async function renameFolder(oldName: string, newName: string): Promise<RenameFolderReport> {
   await ensureDirs();
+
+  const trimmed = String(newName || '').trim();
+  if (!trimmed) throw new Error('New identity name is empty.');
+  if (trimmed === oldName) throw new Error('New identity name is the same as the old one.');
+  if (/[\\/:*?"<>|]/.test(trimmed)) {
+    throw new Error('An identity name cannot contain \\ / : * ? " < > |');
+  }
+  // Refuse before touching anything, rather than half-merging two identities.
+  if (await pathExists(path.join(FOLDERS_DIR, `${trimmed}.json`))) {
+    throw new Error(`An identity named "${trimmed}" already exists.`);
+  }
+  if (await pathExists(path.join(LOGS_DIR, trimmed))) {
+    throw new Error(`A conversation folder named "${trimmed}" already exists.`);
+  }
+
+  const report: RenameFolderReport = { moved: [], skipped: [], failed: [] };
+
+  // 1. The folder JSON — carries the name inside it as well as in its filename.
   try {
     const oldFilePath = path.join(FOLDERS_DIR, `${oldName}.json`);
-    const newFilePath = path.join(FOLDERS_DIR, `${newName}.json`);
-    const data = await fs.readFile(oldFilePath, 'utf-8');
-    const parsed = JSON.parse(data);
-    parsed.name = newName;
-    await fs.writeFile(newFilePath, JSON.stringify(parsed, null, 2));
+    const parsed = JSON.parse(await fs.readFile(oldFilePath, 'utf-8'));
+    parsed.name = trimmed;
+    await fs.writeFile(path.join(FOLDERS_DIR, `${trimmed}.json`), JSON.stringify(parsed, null, 2));
     await fs.unlink(oldFilePath);
-  } catch (e) {}
+    report.moved.push('identity settings');
+  } catch (e: any) {
+    // An identity with no settings file is legal — listFolders synthesizes one
+    // from the logs directory — so a missing file is "skipped", not "failed".
+    if (e?.code === 'ENOENT') report.skipped.push('identity settings');
+    else report.failed.push({ what: 'identity settings', error: String(e?.message || e) });
+  }
 
-  // Move the per-entity CSS theme file alongside the rename.
-  try {
-    await fs.mkdir(THEMES_DIR, { recursive: true });
-    await fs.rename(themeCssPath(oldName), themeCssPath(newName));
-  } catch (e) {}
+  // 2. Flat, raw-name files.
+  await fs.mkdir(THEMES_DIR, { recursive: true });
+  await movePathIfPresent(themeCssPath(oldName), themeCssPath(trimmed), 'CSS theme', report);
+  await movePathIfPresent(
+    path.join(DATA_DIR, 'tts_dict', `${oldName}.json`),
+    path.join(DATA_DIR, 'tts_dict', `${trimmed}.json`),
+    'TTS pronunciation dictionary', report
+  );
 
-  try {
-    const oldLogDir = path.join(LOGS_DIR, oldName);
-    const newLogDir = path.join(LOGS_DIR, newName);
-    await fs.rename(oldLogDir, newLogDir);
-  } catch (e) {}
+  // 3. Conversations: move the directory, then fix what's inside it.
+  const newLogDir = path.join(LOGS_DIR, trimmed);
+  await movePathIfPresent(path.join(LOGS_DIR, oldName), newLogDir, 'conversations folder', report);
+  await rewriteLogsForRename(newLogDir, oldName, trimmed, report);
+
+  // 4. Per-identity directories. Most sanitize the name for the path; browser
+  //    profiles use their own slightly different rule.
+  const oldSafe = sanitizeFolderName(oldName);
+  const newSafe = sanitizeFolderName(trimmed);
+
+  await movePathIfPresent(
+    path.join(WORKSPACES_DIR, oldSafe), path.join(WORKSPACES_DIR, newSafe),
+    'workspace', report
+  );
+  await movePathIfPresent(
+    path.join(DATA_DIR, 'browser_profiles', browserProfileName(oldName)),
+    path.join(DATA_DIR, 'browser_profiles', browserProfileName(trimmed)),
+    'browser profile', report
+  );
+
+  // 5. Directories whose *contents* are also named after the identity.
+  const spDir = path.join(DATA_DIR, 'system_prompts', newSafe);
+  await movePathIfPresent(path.join(DATA_DIR, 'system_prompts', oldSafe), spDir, 'system prompts', report);
+  await retitleNumberedFiles(spDir, oldSafe, newSafe, 'system prompts', report);
+
+  const sumDir = path.join(DATA_DIR, 'summaries', newSafe);
+  await movePathIfPresent(path.join(DATA_DIR, 'summaries', oldSafe), sumDir, 'summaries', report);
+  await retitleNumberedFiles(sumDir, oldName, trimmed, 'summaries', report);
+
+  const clDir = path.join(DATA_DIR, 'changelogs', newSafe);
+  await movePathIfPresent(path.join(DATA_DIR, 'changelogs', oldSafe), clDir, 'changelogs', report);
+  await retitleNumberedFiles(clDir, oldName, trimmed, 'changelogs', report);
+
+  // 6. Backups. Not on the original list, but leaving them behind makes every
+  //    existing backup unreachable from the Backups window — the files survive
+  //    while the only way to open them does not.
+  await movePathIfPresent(
+    path.join(BACKUPS_DIR, oldName), path.join(BACKUPS_DIR, trimmed),
+    'backups', report
+  );
+  if (oldSafe !== oldName) {
+    await movePathIfPresent(
+      path.join(BACKUPS_DIR, oldSafe), path.join(BACKUPS_DIR, newSafe),
+      'backups (sanitized path)', report
+    );
+  }
+
+  return report;
 }
 
 export async function deleteFolder(folderName: string) {
@@ -685,6 +891,34 @@ async function atomicWriteFile(filePath: string, data: string) {
     try { await fs.unlink(tmp); } catch {}
     throw e;
   }
+}
+
+/**
+ * Serialize a conversation log with the small metadata fields the header parser
+ * cares about hoisted to the very FRONT of the object, ahead of large fields
+ * like `systemPrompt` and the `messages` array.
+ *
+ * `readLogHeaderMetadata` only reads the first 4KB; `systemPrompt` alone can
+ * blow past that, so if `active`/`title` sit after it they fall outside the
+ * window and a "Mark inactive" toggle silently reverts. Pulling them first
+ * guarantees they're always visible.
+ *
+ * Every writer of a log file must go through here — `saveLog` and the identity
+ * rename both do — or the 4KB guarantee holds in one place and not the other.
+ */
+function serializeLogHeaderFirst(logData: any): string {
+  const { messages: _msgs, ...headerFields } = logData;
+  const { id: _id, folderName: _fn, aiName: _ai, title: _t, active: _act, updatedAt: _ua, ...rest } = headerFields;
+  return JSON.stringify({
+    id: _id,
+    folderName: _fn,
+    aiName: _ai,
+    title: _t,
+    active: _act,
+    updatedAt: _ua,
+    ...rest,
+    messages: _msgs,
+  }, null, 2);
 }
 
 // Hash a file WITHOUT reading it into a string. Used by the backup identity
@@ -797,25 +1031,7 @@ export async function saveLog(convoId: string, logData: any) {
       console.error('[attachments] externalize pass failed (saving as-is):', e);
     }
 
-    // Hoist the small metadata fields the header parser cares about to the very
-    // FRONT of the object, ahead of large fields like `systemPrompt` and the
-    // `messages` array. The header parser (readLogHeaderMetadata) only reads the
-    // first 4KB; `systemPrompt` alone can blow past that, so if `active`/`title`
-    // sit after it they fall outside the window and a "Mark inactive" toggle
-    // silently reverts. Pulling them first guarantees they're always visible.
-    const { messages: _msgs, ...headerFields } = logData;
-    const { id: _id, folderName: _fn, aiName: _ai, title: _t, active: _act, updatedAt: _ua, ...rest } = headerFields;
-    const serialized = {
-      id: _id,
-      folderName: _fn,
-      aiName: _ai,
-      title: _t,
-      active: _act,
-      updatedAt: _ua,
-      ...rest,
-      messages: _msgs,
-    };
-    const currentJson = JSON.stringify(serialized, null, 2);
+    const currentJson = serializeLogHeaderFirst(logData);
     await atomicWriteFile(filePath, currentJson);
 
     // --- Auto-Backup ---
