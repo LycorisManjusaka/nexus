@@ -40,6 +40,11 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'app.welcome.subtitle': 'Select or create a conversation to start',
   'app.welcome.newChat': 'New Chat',
 
+  // ── User guide ───────────────────────────────────────────────────────────
+  'guide.title': 'Nexus — User Guide',
+  'guide.open': 'User guide',
+  'guide.close': 'Close',
+
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': 'Preferences',
   'settings.tab.keys': 'API Keys',
@@ -1296,6 +1301,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'app.welcome.title': 'NEXUS へようこそ',
   'app.welcome.subtitle': '会話を選ぶか、新しく作成してください',
   'app.welcome.newChat': '新しい会話',
+
+  // ── User guide ───────────────────────────────────────────────────────────
+  'guide.title': 'Nexus — 使い方',
+  'guide.open': '使い方',
+  'guide.close': '閉じる',
 
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': '設定',

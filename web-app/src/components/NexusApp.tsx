@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from '@/components/Sidebar';
 import ChatArea from '@/components/ChatArea';
 import SettingsModal from '@/components/SettingsModal';
+import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
@@ -51,6 +52,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const [conversationsLoading, setConversationsLoading] = useState(true);
   const [currentConvoId, setCurrentConvoId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
   // NOTE: maxRecommendedContext, autoTrimCopiedMessages, and
   // maxTokensPerLayer were moved out of globalSettings into per-folder
   // settings (Folder Settings → Context Management). Old user_settings.json
@@ -564,6 +566,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         onCloneChat={cloneChat}
         onToggleActive={toggleChatActive}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenGuide={() => setIsGuideOpen(true)}
         folders={folders}
         setFolders={setFolders}
         activeFolderId={activeFolderId}
@@ -610,12 +613,25 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
           />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground">
-            <h2 className="text-2xl font-semibold mb-2">{translate('app.welcome.title', globalSettings.language)}</h2>
-            <p className="mb-4 text-sm">{translate('app.welcome.subtitle', globalSettings.language)}</p>
-            <button onClick={createNewChat} className="px-6 py-2 bg-primary text-primary-foreground rounded-full font-medium hover:opacity-90 transition-opacity">
-              {translate('app.welcome.newChat', globalSettings.language)}
-            </button>
+          // Empty state. The old "Welcome to NEXUS + New Chat" panel was a dead
+          // end for a first-time reader: with no identity yet, New Chat has
+          // nothing to attach a conversation to. The guide is what someone
+          // standing here actually needs, so it IS the empty state.
+          //
+          // The New Chat button is kept only when an identity already exists —
+          // then this is a returning user who just has nothing selected.
+          <div className="flex-1 min-h-0 flex flex-col">
+            {activeFolder && (
+              <div className="shrink-0 px-8 pt-6 flex justify-end">
+                <button
+                  onClick={createNewChat}
+                  className="px-6 py-2 bg-primary text-primary-foreground rounded-full font-medium hover:opacity-90 transition-opacity"
+                >
+                  {translate('app.welcome.newChat', globalSettings.language)}
+                </button>
+              </div>
+            )}
+            <UserGuidePane language={globalSettings.language} />
           </div>
         )}
       </main>
@@ -625,6 +641,13 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           onClose={() => setIsSettingsOpen(false)}
           globalSettings={globalSettings}
           setGlobalSettings={setGlobalSettings}
+        />
+      )}
+
+      {isGuideOpen && (
+        <UserGuideModal
+          language={globalSettings.language}
+          onClose={() => setIsGuideOpen(false)}
         />
       )}
     </div>

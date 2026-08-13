@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock } from 'lucide-react';
+import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
 import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
@@ -26,6 +26,9 @@ interface SidebarProps {
   onCloneChat: (id: string) => void;
   onToggleActive?: (id: string) => void;
   onOpenSettings: () => void;
+  // The user guide is not about the current conversation or identity, so its
+  // entry point lives up here next to Preferences, not in the chat tool row.
+  onOpenGuide?: () => void;
 
   folders: any[];
   setFolders?: React.Dispatch<React.SetStateAction<any[]>>;
@@ -50,6 +53,7 @@ export default function Sidebar({
   onCloneChat,
   onToggleActive,
   onOpenSettings,
+  onOpenGuide,
   folders,
   setFolders,
   activeFolderId,
@@ -585,12 +589,26 @@ export default function Sidebar({
     <div className="w-64 sm:w-72 h-full flex flex-col bg-secondary/30 backdrop-blur-xl border-r border-border shadow-2xl z-10 transition-colors">
       <div className="p-4 flex items-center justify-between">
         <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">Nexus</h1>
-        <button 
-          onClick={onOpenSettings}
-          className="p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
-        >
-          <Settings size={20} />
-        </button>
+        <div className="flex items-center">
+          {onOpenGuide && (
+            <button
+              onClick={onOpenGuide}
+              title={t('guide.open')}
+              aria-label={t('guide.open')}
+              className="p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+            >
+              <HelpCircle size={20} />
+            </button>
+          )}
+          <button
+            onClick={onOpenSettings}
+            title={t('settings.title')}
+            aria-label={t('settings.title')}
+            className="p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+          >
+            <Settings size={20} />
+          </button>
+        </div>
       </div>
 
       <div className="px-4 pb-2 space-y-3 relative">
