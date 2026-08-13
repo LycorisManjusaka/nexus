@@ -211,9 +211,14 @@ export interface SummaryIndexEntry {
 }
 
 // `hintOverride` is the per-folder editable hint (folder.settings.summaryIndexHint).
-// When undefined, the default hint is used; the {example} token in either is
+// When undefined, the language-matched default hint is used (`lang`, default
+// 'ja' for backward compatibility); the {example} token in either is
 // substituted with the first real title. Pass '' to omit the hint entirely.
-export function assembleSummaryIndex(entries: SummaryIndexEntry[], hintOverride?: string): string {
+export function assembleSummaryIndex(
+  entries: SummaryIndexEntry[],
+  hintOverride?: string,
+  lang: 'en' | 'ja' = 'ja',
+): string {
   const blocks: string[] = [];
   let firstTitle = '';
   for (const e of entries) {
@@ -237,7 +242,7 @@ export function assembleSummaryIndex(entries: SummaryIndexEntry[], hintOverride?
   // (previously it guessed the old "＃<full-width>" form, e.g. 先輩＃46, which
   // no longer matches the renamed "<base>_<index>" titles). When the resolved
   // hint is empty (folder cleared the field), no hint block is prepended.
-  const hint = resolveSummaryHint(hintOverride, firstTitle);
+  const hint = resolveSummaryHint(hintOverride, firstTitle, lang);
   if (!hint) return blocks.join('\n\n');
   return [hint, ...blocks].join('\n\n');
 }

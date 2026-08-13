@@ -58,6 +58,7 @@ export async function GET(req: Request) {
     const folder = url.searchParams.get('folder') || '';
     const mode = url.searchParams.get('mode') || '';
     const title = url.searchParams.get('title') || '';
+    const lang = url.searchParams.get('lang') === 'en' ? 'en' : 'ja';
 
     if (!folder) {
       return NextResponse.json({ error: 'folder is required' }, { status: 400 });
@@ -96,7 +97,7 @@ export async function GET(req: Request) {
         // Present oldest → newest, matching the old baked Layer 4 ordering.
         // orderedConvos follows the sidebar order (newest-first), so reverse it.
         .reverse();
-      return NextResponse.json({ body: assembleSummaryIndex(entries, hintOverride) });
+      return NextResponse.json({ body: assembleSummaryIndex(entries, hintOverride, lang) });
     }
 
     if (title) {

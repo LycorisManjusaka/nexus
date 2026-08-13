@@ -675,7 +675,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}`);
+        const langParam = globalSettings?.language === 'ja' ? 'ja' : 'en';
+        const res = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}&lang=${langParam}`);
         if (!res.ok) return;
         const { body } = await res.json();
         if (cancelled) return;
@@ -1817,7 +1818,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let baseSystemPrompt = systemPrompt;
     if (useSummariesForLayer4) {
       try {
-        const idxRes = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}`);
+        const idxLangParam = globalSettings?.language === 'ja' ? 'ja' : 'en';
+        const idxRes = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}&lang=${idxLangParam}`);
         if (idxRes.ok) {
           const { body } = await idxRes.json();
           baseSystemPrompt = appendLayer4Index(systemPrompt, body || '');

@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle } from 'lucide-react';
 import { diff_match_patch, DIFF_DELETE, DIFF_INSERT } from 'diff-match-patch';
-import { DEFAULT_SUMMARY_INDEX_HINT } from '@/lib/summaryHint';
+import { defaultSummaryHintForLang } from '@/lib/summaryHint';
+import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 
 // One shared diff engine. We do NOT diff the raw text directly: on a large
@@ -545,7 +546,7 @@ export default function SystemPromptUpdater({
         const hydratedHeader = folder?.settings?.systemPromptHeader ?? '';
         const hydratedFocus = folder?.settings?.systemPromptFocusPoint ?? '';
         const hydratedSummaryInstr = folder?.settings?.summaryInstructions ?? '';
-        const hydratedSummaryHint = folder?.settings?.summaryIndexHint ?? DEFAULT_SUMMARY_INDEX_HINT;
+        const hydratedSummaryHint = folder?.settings?.summaryIndexHint ?? defaultSummaryHintForLang(agentFolder);
         // `=== true` rather than `!== false`: a folder that has NEVER saved the
         // setting now defaults to OFF (see the useState above). A folder that
         // saved either value keeps exactly what it saved — this changes the
@@ -598,7 +599,7 @@ export default function SystemPromptUpdater({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, baseName, currentIndex]);
+  }, [open, baseName, currentIndex, agentFolder]);
 
   // ── Load agents + deletion patterns for the current language folder ──────
   useEffect(() => {
@@ -928,81 +929,19 @@ export default function SystemPromptUpdater({
     // Snapshot BEFORE anything can overwrite the pane. Streaming assigns into
     // rightText from the first chunk, so reading it later would be too late.
     const resumeText = resumeFromRight ? rightText.trim() : '';
-    const userMsg = [
-      `[ユーザーからの指示]`,
-      `対象：${baseName}`,
-      `操作モード：動的更新`,
-      withConversation
-        ? `以下の「既存システムプロンプト」と「新しい会話ログ」を照合し、Layer 1〜3 を同一のターンで同時に更新して出力してください。`
-        : `新しい会話ログはありません。以下の「既存システムプロンプト」自体を対象に、Layer 1〜3 をエージェントのプロトコルに従って整理・再構造化してください（境界線の執行、重複・誤配置の修正、（省略）（削除）の適用など）。新しい事実は追加せず、既存の情報のみを対象とします。`,
-      `Layer 4、ヘッダー、フッターは参照専用です。無視して構いませんが、出力には絶対に含めないでください（NEXUSが別管理します）。`,
-      `維持すべき情報は削除せず（維持）ラベルで残してください。`,
-      ...(focus ? ['', `重要：${focus}`] : []),
-      ``,
-      // The header is auto-prepended to the FINAL prompt. Show it for context
-      // (so the agent understands the framing) but forbid rewriting/outputting.
-      ...(header.trim() ? [
-        `=== 参考：ヘッダー（最終プロンプトの先頭に自動付与） ===`,
-        `※参照専用。書き換え・再生成・出力への含有は禁止。文脈把握のためだけに使うこと。`,
-        header.trim(),
-        ``,
-      ] : []),
-      `=== 既存システムプロンプト（更新前・Layer 1〜3） ===`,
-      leftText || '(なし)',
-      ``,
-      // The auto-generated summaries index IS the live Layer 4. Show it to the
-      // agent so it has full episodic context, but explicitly forbid rewriting
-      // it — Layer 4 is NEXUS-managed and must not appear in the output.
-      `=== 参考：自動生成された第4層（会話要約インデックス） ===`,
-      `※これは参照専用です。書き換えたり出力に含めたりしないでください。Layer 1〜3 を更新する際の文脈としてのみ利用してください。`,
-      summaryIndexBody || '(まだ要約なし)',
-      ``,
-      // The entity's OWN Layer 5 (FOOTER.md). Previously invisible here: it is
-      // injected at send time and never stored, so the agent — which reads the
-      // stored prompt — had no way to know it existed, and could contradict or
-      // duplicate it. Reference-only, and emphatically so: Layers 1-4 are
-      // written ABOUT the entity, this one is written BY it, and the updater
-      // rewriting it would overwrite the one part of the identity that is the
-      // entity's own voice.
-      ...(entityFooter.trim() ? [
-        `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
-        `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
-        `Layer 1〜3 を更新する際に、ここに書かれた自己認識と矛盾しないようにするためだけに読むこと。`,
-        `既にここに書かれている内容を Layer 1〜3 に重複して書かないこと。`,
-        entityFooter.trim(),
-        ``,
-      ] : []),
-      // Only include the conversation log in the normal mode. "Update without
-      // conversation" focuses the agent on the system prompt itself.
-      ...(withConversation
-        ? [`=== 新しい会話ログ ===`, conversationLogText || '(なし)', ``]
-        : [`（新しい会話ログはありません ― 既存プロンプト自体の整理が目的です）`, ``]),
-      // ── Resume block ──────────────────────────────────────────────────────
-      // Handed to the agent as TEXT inside the user message, deliberately NOT as
-      // an assistant prefill. Prefill is what the token-cap continuation loop
-      // below uses, but Claude rejects prefill outright while extended thinking
-      // is enabled — which is exactly the configuration that produced the
-      // truncated run this feature exists to rescue. A textual resume works on
-      // every provider.
-      ...(resumeText ? [
-        `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
-        `※以下は前回の実行で既に生成された、完成済みの部分です。`,
-        `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
-        resumeText,
-        ``,
-      ] : []),
-      `=== 出力 ===`,
-      ...(resumeText
-        ? [
-            `上記「すでに生成済みの出力」の**続きのみ**を出力してください。`,
-            `最初から全体を書き直さないこと。途中で切れている箇所に自然に接続する形で書き始めてください。`,
-            `残りの Layer（および未完了の節）を最後まで出力してください。Layer 4 は出力しないこと。`,
-          ]
-        : [
-            `Layer 1〜3 を指定フォーマットで出力してください。Layer 4 は出力しないこと。`,
-          ]),
-      `すべての出力が完了したら、最後の行に必ず半角で「${END_SENTINEL}」とだけ記述して終了してください。`,
-    ].join('\n');
+    const userMsg = buildUpdateUserMsg({
+      lang: agentFolder,
+      baseName,
+      withConversation,
+      focus,
+      header,
+      leftText,
+      summaryIndexBody,
+      entityFooter,
+      conversationLogText,
+      resumeText,
+      endSentinel: END_SENTINEL,
+    })
 
     let thinkingChars = 0;
     let outputChars = 0;
@@ -1163,56 +1102,18 @@ export default function SystemPromptUpdater({
 
     const focus = focusPoint.trim();
     const resumeText = resumeFromRight ? rightText.trim() : '';
-    const userMsg = [
-      `[ユーザーからの指示]`,
-      `対象：${baseName}`,
-      `操作モード：階層間情報再配分（会話ログなし）`,
-      ``,
-      `作業内容はあなた自身のプロトコルに従ってください。以下は材料と、NEXUS側の出力仕様です。`,
-      ...(focus ? [``, `重要：${focus}`] : []),
-      ``,
-      ...(header.trim() ? [
-        `=== 参考：ヘッダー（最終プロンプトの先頭に自動付与） ===`,
-        `※参照専用。書き換え・出力への含有は禁止。`,
-        header.trim(),
-        ``,
-      ] : []),
-      `=== 第1〜3層（現行・更新対象） ===`,
-      leftText || '(なし)',
-      ``,
-      `=== 第4層：会話要約インデックス（更新対象） ===`,
-      `※この層は local_data/summaries/${folderName}/ 内の要約ファイル群から自動的に組み立てられています。`,
-      `※あなたが出力した第4層は、会話タイトルごとに元のファイルへ書き戻されます。`,
-      fullIndex || '(まだ要約なし)',
-      ``,
-      ...(entityFooter.trim() ? [
-        `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
-        `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
-        `第1〜4層がここに書かれた自己認識と矛盾しないようにするためだけに読むこと。`,
-        entityFooter.trim(),
-        ``,
-      ] : []),
-      ...(resumeText ? [
-        `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
-        `※以下は前回の実行で既に生成された、完成済みの部分です。`,
-        `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
-        resumeText,
-        ``,
-      ] : []),
-      `=== 出力仕様（NEXUSが機械的に解析します） ===`,
-      ...(resumeText
-        ? [`上記「すでに生成済みの出力」の**続きのみ**を出力してください。最初から書き直さないこと。`, ``]
-        : []),
-      `1. 変更ログ — 最初の「Layer 1」見出しより前に書くこと。プロンプトには保存されず、別途アーカイブされます。`,
-      `2. 第1〜3層 — 「## **Layer 1: …**」形式の見出しから開始すること。`,
-      `3. 第4層 — 見出しは「## **Layer 4: Conversation Summaries**」とすること。`,
-      `   各会話は「### <会話タイトル>」の見出し＋その本文、という形式で出力すること。`,
-      `   会話タイトルは上記「第4層」に現れたものと一字一句同一にすること（ファイル照合に使用します）。`,
-      `   残す会話はすべて出力してください。出力に含まれなかった会話の要約ファイルは変更されません（削除もされません）。`,
-      `   本文が空の見出しは無視されます。要約を空にすることで削除はできません。`,
-      `第5層は出力しないこと。`,
-      `すべての出力が完了したら、最後の行に必ず半角で「${END_SENTINEL}」とだけ記述して終了してください。`,
-    ].join('\n');
+    const userMsg = buildRedistributeUserMsg({
+      lang: agentFolder,
+      baseName,
+      focus,
+      header,
+      leftText,
+      fullIndex,
+      folderName,
+      entityFooter,
+      resumeText,
+      endSentinel: END_SENTINEL,
+    })
 
     let thinkingChars = 0;
     let outputChars = 0;
@@ -1387,46 +1288,16 @@ export default function SystemPromptUpdater({
 
     const focus = focusPoint.trim();
     const resumeText = resumeFromRight ? rightText.trim() : '';
-    const userMsg = [
-      `[ユーザーからの指示]`,
-      `対象：${baseName}`,
-      `操作モード：初回構築（Genesis）`,
-      `既存のLayer 1〜3は存在しないものとして扱ってください。以下の素材から、Layer 1〜3を初めて構築してください。`,
-      `変更ログは出力しないこと（比較対象となる既存の文書がありません）。Layer 4・Layer 5も出力しないこと。`,
-      ...(focus ? ['', `重要：${focus}`] : []),
-      ``,
-      ...(header.trim() ? [
-        `=== 参考：ヘッダー（最終プロンプトの先頭に自動付与） ===`,
-        `※参照専用。書き換え・出力への含有は禁止。文脈把握のためだけに使うこと。`,
-        header.trim(),
-        ``,
-      ] : []),
-      `=== 素材：会話ログ ===`,
-      conversationLogText || '(なし)',
-      ``,
-      ...(leftText.trim() ? [
-        `=== 参考：既存のプロンプト本文（あれば、追加の材料として） ===`,
-        leftText.trim(),
-        ``,
-      ] : []),
-      ...(resumeText ? [
-        `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
-        `※以下は前回の実行で既に生成された、完成済みの部分です。`,
-        `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
-        resumeText,
-        ``,
-      ] : []),
-      `=== 出力 ===`,
-      ...(resumeText
-        ? [
-            `上記「すでに生成済みの出力」の**続きのみ**を出力してください。`,
-            `最初から全体を書き直さないこと。途中で切れている箇所に自然に接続する形で書き始めてください。`,
-          ]
-        : [
-            `Layer 1〜3を指定フォーマットで出力してください。変更ログ・Layer 4・Layer 5は出力しないこと。`,
-          ]),
-      `すべての出力が完了したら、最後の行に必ず半角で「${END_SENTINEL}」とだけ記述して終了してください。`,
-    ].join('\n');
+    const userMsg = buildGenesisUserMsg({
+      lang: agentFolder,
+      baseName,
+      focus,
+      header,
+      conversationLogText,
+      leftText,
+      resumeText,
+      endSentinel: END_SENTINEL,
+    })
 
     let thinkingChars = 0;
     let outputChars = 0;
@@ -1558,9 +1429,7 @@ export default function SystemPromptUpdater({
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
     const summaryAgentPrompt =
       agents?.summary?.systemPrompt ||
-      `あなたは会話の要約者です。以下の会話ログを、独立して読める簡潔な要約にまとめてください。\n` +
-      `この要約は「会話の索引」に表示され、後で全文を呼び出すかどうかの判断材料になります。\n` +
-      `重要な出来事・決定・話題・感情の変化を3〜6文で。挨拶や前置きは不要。要約本文のみを出力してください。`;
+      defaultSummaryAgentPrompt(agentFolder);
 
     const identityText = assembleLayers123(leftText);
 
@@ -1570,36 +1439,15 @@ export default function SystemPromptUpdater({
     setStatusMessage(t('spu.st.summaryWriting'));
 
     const customInstr = summaryInstructions.trim();
-    const userMsg = [
-      `[ユーザーからの指示]`,
-      `対象：${baseName}`,
-      `操作：この会話の要約を作成`,
-      ``,
-      ...(customInstr ? [`=== 追加の指示（最優先） ===`, customInstr, ``] : []),
-      `=== アイデンティティ参考（Layer 1-3） ===`,
-      identityText || '(なし)',
-      ``,
-      // Same reference-only Layer 4/5 blocks runUpdate() shows the identity
-      // agent — so the summary writer knows what the entity already has on
-      // record (past summaries, self-authored footer) and doesn't restate or
-      // contradict it. Never rewritten, never asked for in the output.
-      `=== 参考：自動生成された第4層（会話要約インデックス） ===`,
-      `※これは参照専用です。書き換えたり出力に含めたりしないでください。既存の要約と重複しない、独立した要約を書くための文脈としてのみ利用してください。`,
-      summaryIndexBody || '(まだ要約なし)',
-      ``,
-      ...(entityFooter.trim() ? [
-        `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
-        `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
-        `要約が本人の自己認識と矛盾しないようにするためだけに読むこと。`,
-        entityFooter.trim(),
-        ``,
-      ] : []),
-      `=== 会話ログ ===`,
+    const userMsg = buildSummaryUserMsg({
+      lang: agentFolder,
+      baseName,
+      customInstr,
+      identityText,
+      summaryIndexBody,
+      entityFooter,
       conversationLogText,
-      ``,
-      `=== 出力 ===`,
-      `この会話の要約本文のみを出力してください（見出し・レイヤー記法は不要）。`,
-    ].join('\n');
+    })
 
     let thinkingChars = 0;
     let outputChars = 0;
@@ -1655,7 +1503,7 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4]);
+  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the
@@ -2263,7 +2111,7 @@ export default function SystemPromptUpdater({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setSummaryIndexHint(DEFAULT_SUMMARY_INDEX_HINT)}
+                  onClick={() => setSummaryIndexHint(defaultSummaryHintForLang(agentFolder))}
                   onBlur={persistHeaderFooter}
                   className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground shrink-0 ml-2"
                 >
