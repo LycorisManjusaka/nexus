@@ -58,6 +58,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     kimi: '', cohere: '', minimax: '', openai: '', mimo: '', bytedance: '',
     digitalocean: '',
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
+    lmStudioPath: '',
   });
   const [loading, setLoading] = useState(true);
 
@@ -578,6 +579,22 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </label>
               <p className="text-xs text-muted-foreground mt-1">
                 <Tx k="settings.language.help" />
+              </p>
+            </div>
+
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.lmStudioPath.label')}</span>
+                <input
+                  type="text"
+                  value={keys.lmStudioPath ?? ''}
+                  placeholder={t('settings.lmStudioPath.placeholder')}
+                  onChange={e => setKeys({ ...keys, lmStudioPath: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.lmStudioPath.help" />
               </p>
             </div>
 

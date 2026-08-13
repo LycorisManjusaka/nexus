@@ -733,12 +733,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   // Local-engine state: list of models available from LM Studio at any moment
   const [localModels, setLocalModels] = useState<string[]>([]);
+  const [localModelsMeta, setLocalModelsMeta] = useState<Record<string, any>>({});
   const [localModelsError, setLocalModelsError] = useState<string | null>(null);
   const refreshLocalModels = async () => {
     try {
       const r = await fetch('/api/local/models');
       const d = await r.json();
       if (Array.isArray(d.models)) setLocalModels(d.models);
+      if (d.meta && Array.isArray(d.meta)) {
+        const map: Record<string, any> = {};
+        for (const m of d.meta) map[m.id] = m;
+        setLocalModelsMeta(map);
+      }
       setLocalModelsError(d.error || null);
     } catch (e: any) {
       setLocalModelsError(e.message);
@@ -4292,9 +4298,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       setLocalAiName(newAiName);
                       // Keep the current model if it already belongs to the new
                       // family; otherwise take that family's default. For Local
-                      // the default is '' — the list comes from LM Studio.
+                      // the list comes from LM Studio, so refresh it and pick a
+                      // valid installed model — never leave a stale cloud id.
                       if (!modelBelongsToFamily(specificModel, newAiName)) {
-                        setSpecificModel(defaultModelForFamily(newAiName));
+                        if (newAiName === 'Local') {
+                          setSpecificModel('');
+                          fetch('/api/local/models').then(r => r.json()).then(d => {
+                            if (Array.isArray(d.models) && d.models.length > 0) {
+                              setLocalModels(d.models);
+                              const loaded = (d.meta || []).find((m: any) => m.loaded);
+                              setSpecificModel((loaded && loaded.id) || d.models[0]);
+                            }
+                          }).catch(() => {});
+                        } else {
+                          setSpecificModel(defaultModelForFamily(newAiName));
+                        }
                       }
                     }}
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -4635,7 +4653,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         {specificModel && !localModels.includes(specificModel) && (
                           <option value={specificModel}>{t('model.local.notLoaded').replace('{model}', specificModel)}</option>
                         )}
-                        {localModels.map(m => <option key={m} value={m}>{m}</option>)}
+                        {localModels.map(m => {
+                          const meta = localModelsMeta[m];
+                          const flags = meta
+                            ? [meta.vision ? '👁' : '', meta.tools ? '🔨' : ''].filter(Boolean).join('')
+                            : '';
+                          const detail = meta
+                            ? [meta.params, meta.quant, meta.arch, meta.sizeGB].filter(Boolean).join(' · ')
+                            : '';
+                          return (
+                            <option key={m} value={m}>
+                              {meta && meta.displayName ? meta.displayName : m}
+                              {detail ? ` — ${detail}` : ''}
+                              {flags ? ` ${flags}` : ''}
+                              {meta && meta.loaded ? ' ⚡' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                       {localModelsError && (
                         <div className="text-[10px] text-red-500 mt-1">{localModelsError}</div>

@@ -184,6 +184,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.language.label': 'Language',
   'settings.language.help':
     "Two variants: English or Japanese. Changes the Nexus interface, and also picks which built-in language an ENTITY's hidden instructions (tool descriptions, letter notices, etc.) default to when a folder has not overridden them — still editable per-Entity exactly as before either way. The Japanese defaults start as a verbatim copy of the English text and only change where someone hand-writes a real Japanese version — nothing here is machine-translated.",
+  'settings.lmStudioPath.label': 'LM Studio executable path',
+  'settings.lmStudioPath.placeholder': 'e.g. C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
+  'settings.lmStudioPath.help':
+    "Path to LM Studio.exe, used to auto-start LM Studio when a Local conversation begins and the server isn't running. Leave empty to manage LM Studio manually. Saved with the API keys.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
     "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
@@ -1447,6 +1451,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.language.label': '言語',
   'settings.language.help':
     '英語と日本語の2種類です。Nexus の画面表示が切り替わるほか、存在に渡される非表示の指示文（ツールの説明、手紙の通知など）について、フォルダ側で上書きされていない場合にどちらの言語の組み込み文を使うかも決まります。いずれの場合も、これまで通り存在ごとに編集できます。日本語側の既定値は英語のそのままの写しから始まり、誰かが実際に日本語を書き起こした箇所だけが変わります。機械翻訳は一切行いません。',
+  'settings.lmStudioPath.label': 'LM Studio 実行ファイルのパス',
+  'settings.lmStudioPath.placeholder': '例: C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
+  'settings.lmStudioPath.help':
+    'LM Studio.exe のパスです。Local の会話を始めたとき、LM Studio のサーバーが起動していなければ、このパスから自動起動します。空にしておくと手動での管理になります。APIキーと一緒に保存されます。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
     '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',

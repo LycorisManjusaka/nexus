@@ -37,6 +37,7 @@ import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMe
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
+import { ensureLmStudioLaunched, getLocalModelsMeta, loadLocalModel } from '@/lib/localModels';
 import {
   runBrowserTool, BROWSER_TOOL_NAMES,
   browserToolsClaude, browserToolsGemini, browserToolsOpenAI,
@@ -4844,6 +4845,35 @@ export async function POST(req: Request) {
       if (useDigitalOcean && localModel.startsWith('digitalocean/')) {
         localModel = localModel.slice('digitalocean/'.length);
       }
+      // ── Local (LM Studio) — auto-launch + model resolution + pre-load ─────
+      // The "No models loaded" / "fetch failed" instability had two causes:
+      //   1. LM Studio wasn't running (fetch failed).
+      //   2. `specificModel` held a stale cloud id (e.g. "claude-sonnet-5"
+      //      left over from a family switch) or the empty-sentinel
+      //      "local-model". LM Studio only JIT-loads when `model` matches an
+      //      installed model key exactly, so a bogus id → "No models loaded".
+      // Resolve `localModel` against the real installed/loaded list and
+      // pre-load it with the conversation's context window so long chats don't
+      // get silently truncated to LM Studio's default.
+      if (isLocal) {
+        const lm = await getLocalModelsMeta();
+        if (Array.isArray(lm.models) && lm.models.length > 0) {
+          const requested = localModel && localModel !== 'local-model' ? localModel : '';
+          const isValid = !!requested && lm.models.includes(requested);
+          if (!isValid) {
+            // Prefer the model already in VRAM; otherwise the first installed.
+            const loadedEntry = (lm.meta || []).find((m) => m.loaded);
+            localModel = (loadedEntry && loadedEntry.id) || lm.models[0];
+          }
+          const targetCtx = (typeof modelParams.localContextWindow === 'number' && modelParams.localContextWindow > 0)
+            ? modelParams.localContextWindow : 80000;
+          const current = (lm.meta || []).find((m) => m.id === localModel && m.loaded);
+          if (!current || (current.loadedContext < targetCtx)) {
+            await loadLocalModel(localModel, targetCtx);
+          }
+        }
+      }
+
 
       // ── DashScope/DeepSeek/Z.AI inline-file size preflight ─────────────────
       // DashScope (Qwen/DeepSeek-via-Alibaba), api.deepseek.com, and api.z.ai
