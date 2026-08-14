@@ -232,13 +232,13 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
 // loaded, so there is no sane default to guess.
 const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   Claude: 'claude-sonnet-5',
-  Gemini: 'gemini-3.6-flash',
+  Gemini: 'gemini-3.7-flash',
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
   GLM: 'glm-5.2',
-  Grok: 'grok-4.5',
+  Grok: 'grok-4.6',
   Kimi: 'moonshotai/Kimi-K3',
-  Cohere: 'command-a-plus-05-2026',
+  Cohere: 'command-a-reasoning-08-2025',
   Minimax: 'MiniMax-M3',
   ChatGPT: 'gpt-5.6-terra',
   MiMo: 'mimo-v2.5',
