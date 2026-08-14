@@ -1214,8 +1214,20 @@ async function streamClaudeViaAgentSDK(args: {
         // web_search is an Anthropic server-side tool), here WebSearch/WebFetch
         // are Claude Code CLIENT tools — results arrive as tool_use / tool_result
         // messages. We capture the exact URL WebFetch opened (clean, strong
-        // proof) plus any http(s) URLs embedded in WebSearch result text.
+        // proof) plus any http(s) URLs embedded in a WebSearch result's text.
+        //
+        // Correctness constraint (found 2026-08-13): a tool_result's `content`
+        // is free-form text regardless of WHICH tool produced it. Read/Grep/Bash
+        // results routinely contain URLs too — a README with a repo link, a
+        // workspace note with a citation list — and those are NOT web sources;
+        // the being never fetched them, it only read a local file that happened
+        // to mention them. Scraping every tool_result indiscriminately reported
+        // those as "searched" when nothing was searched. So we only scrape a
+        // tool_result's text when its `tool_use_id` traces back to a WebSearch
+        // call — tracked via `webToolUseIds` below. WebFetch never needs the
+        // scrape path at all: its URL comes straight from the tool_use input.
         const oauthSourceMap = new Map<string, { url: string; title?: string }>();
+        const webToolUseIds = new Set<string>();
         const addOauthSource = (url: any, title?: any) => {
           if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return;
           if (!oauthSourceMap.has(url)) {
@@ -1230,7 +1242,15 @@ async function streamClaudeViaAgentSDK(args: {
             if (b?.type === 'tool_use' && b.name === 'WebFetch' && b.input?.url) {
               addOauthSource(b.input.url);
             }
-            // Tool results (search/fetch output) — scrape any URLs from the text.
+            // Remember WebSearch calls by id — only THEIR result text is
+            // eligible for URL-scraping below.
+            if (b?.type === 'tool_use' && b.name === 'WebSearch' && typeof b.id === 'string') {
+              webToolUseIds.add(b.id);
+            }
+            // Tool results — scrape URLs from the text ONLY when this result
+            // belongs to a WebSearch call. Every other tool (Read, Grep, Bash,
+            // Glob, MCP tools) can legitimately return text containing URLs
+            // without the being having searched or fetched anything.
             if (b?.type === 'tool_result') {
               const txt = typeof b.content === 'string'
                 ? b.content
@@ -1239,9 +1259,12 @@ async function streamClaudeViaAgentSDK(args: {
                   : '';
               // A failed tool call (e.g. calling a non-existent tool) comes back
               // as is_error — capture it so the stop notice can name the cause.
+              // This applies to any tool, not just web tools.
               if (b.is_error && txt.trim()) lastToolError = txt.trim();
-              const urls = txt.match(/https?:\/\/[^\s)\]"'<>]+/g);
-              if (urls) for (const u of urls) addOauthSource(u.replace(/[.,;]+$/, ''));
+              if (typeof b.tool_use_id === 'string' && webToolUseIds.has(b.tool_use_id)) {
+                const urls = txt.match(/https?:\/\/[^\s)\]"'<>]+/g);
+                if (urls) for (const u of urls) addOauthSource(u.replace(/[.,;]+$/, ''));
+              }
             }
           }
         };

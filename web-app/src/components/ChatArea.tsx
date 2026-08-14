@@ -84,6 +84,7 @@ Claude   | claude-sonnet-4-6            | on  | Claude Sonnet 4.6 Thinking
 Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
 
 # ── Gemini (Google) — 3.x always has thinking; level controls budget ──
+Gemini   | gemini-3.7-flash             | on  | Gemini 3.7 Flash
 Gemini   | gemini-3.6-flash             | on  | Gemini 3.6 Flash
 Gemini   | gemini-3.5-flash             | on  | Gemini 3.5 Flash
 Gemini   | gemini-3.5-flash-lite        | on  | Gemini 3.5 Flash Lite
@@ -125,6 +126,8 @@ GLM      | digitalocean/glm-5.1         | on  | GLM-5.1 (DigitalOcean)
 GLM      | digitalocean/glm-5           | on  | GLM-5 (DigitalOcean)
 
 # ── Grok (xAI) — reasoning controlled by model name suffix ─────────
+Grok     | grok-4.6                     | on  | Grok 4.6
+Grok     | grok-4.5                     | on  | Grok 4.5
 Grok     | grok-4.3                     | on  | Grok 4.3
 Grok     | grok-4.20-0309-reasoning     | on  | Grok 4.20 Reasoning
 Grok     | grok-4.20-0309-non-reasoning | off | Grok 4.20 Non-reasoning (fast)
@@ -4136,6 +4139,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
                           { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
                           { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
+                          { value: 'gemini-3.7-flash', label: 'gemini-3.7-flash (Google key)' },
                           { value: 'gemini-3.6-flash', label: 'gemini-3.6-flash (Google key)' },
                           { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Google key)' },
                           { value: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite (Google key)' },
@@ -4188,6 +4192,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       >
                         <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
                         <option value="qwen3.5-omni-plus">qwen3.5-omni-plus</option>
+                        <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
                         <option value="gemini-3.5-flash">gemini-3.5-flash</option>
                         <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
@@ -4238,6 +4243,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         onChange={(e) => setWatcherModel(e.target.value)}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                       >
+                        <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
                         <option value="gemini-3.5-flash">gemini-3.5-flash</option>
                         <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
@@ -4375,6 +4381,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                       <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
                       <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
                       <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
@@ -4497,7 +4504,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="grok-4.5">Grok 4.5 (flagship)</option>
+                      <option value="grok-4.6">Grok 4.6 (flagship)</option>
+                      <option value="grok-4.5">Grok 4.5</option>
                       <option value="grok-4.3">Grok 4.3</option>
                       <option value="grok-4.20-0309-reasoning">Grok 4.20 — Reasoning</option>
                       <option value="grok-4.20-0309-non-reasoning">Grok 4.20 — Non-reasoning (fast)</option>

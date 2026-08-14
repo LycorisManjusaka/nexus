@@ -21,6 +21,7 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
 
   // ── Google Gemini ──────────────────────────────────────────────────────────
   // All current Gemini models support vision.
+  'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3.5-flash-lite',
@@ -59,6 +60,7 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // 4.x family supports vision (text + image → text). code-fast / 4.1-fast are
   // conservative defaults. Grok is multimodal but NOT omnimodal — no native
   // audio/video in the chat API, so none appear in the audio/video sets.
+  'grok-4.6',
   'grok-4.5',
   'grok-4.3',
   'grok-4.20-reasoning',
@@ -141,6 +143,7 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
 
 export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // Google Gemini — all current models handle audio inline.
+  'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3.5-flash-lite',
@@ -176,6 +179,7 @@ export function isAudioCapable(specificModel: string | undefined | null): boolea
 // bridge.
 
 export const VIDEO_CAPABLE_MODELS = new Set<string>([
+  'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3.5-flash-lite',

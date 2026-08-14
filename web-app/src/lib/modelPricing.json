@@ -22,12 +22,16 @@
   "kimi-k2.6":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
   "kimi-k2.5":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
 
+  "_NOTE_gemini-3.7-flash": "Introductory pricing $0.75/$3.75 (input/output per 1M) in effect through 2026-12-31; reverts to standard $1.50/$7.50 (same as 3.6 Flash) after that. Numbers below use the CURRENT introductory rate — revisit after the cutover date.",
+  "gemini-3.7-flash":       { "input": 0.75, "cachedInput": 0.1875, "cacheWrite": 0, "output": 3.75 },
   "gemini-3.6-flash":       { "input": 1.5,  "cachedInput": 0.375, "cacheWrite": 0, "output": 7.5 },
   "gemini-3.5-flash":       { "input": 0.3,  "cachedInput": 0.075, "cacheWrite": 0, "output": 9 },
   "gemini-3.5-flash-lite":  { "input": 0.3,  "cachedInput": 0.075, "cacheWrite": 0, "output": 1.2 },
   "gemini-3.1-pro-preview": { "input": 1.25, "cachedInput": 0.31,  "cacheWrite": 0, "output": 10 },
   "gemini-3.1-flash-lite":  { "input": 0.1,  "cachedInput": 0.025, "cacheWrite": 0, "output": 0.4 },
 
+  "_NOTE_grok-4.6": "xAI bills grok-4.6 on a CLIFF-EDGE threshold, not a blended/tiered rate: prompts under 200K tokens are $2/$0.50 cached/$6 output per 1M; the moment ANY part of a request crosses 200K tokens, the ENTIRE request rebills at $4/$1 cached/$12 output per 1M (500K context window total). This flat schema has no field for that — numbers below are the UNDER-200K rate, so any turn that crosses the threshold will show as under-priced here. Flagged for Lizard-kun rather than guessed at.",
+  "grok-4.6":               { "input": 2,    "cachedInput": 0.5,  "cacheWrite": 0, "output": 6 },
   "grok-4.5":               { "input": 5,    "cachedInput": 1.25, "cacheWrite": 0, "output": 15 },
   "grok-4.3":               { "input": 3,    "cachedInput": 0.75, "cacheWrite": 0, "output": 15 },
 
@@ -40,6 +44,7 @@
   "glm-5-turbo":            { "input": 1.2,  "cachedInput": 0.24, "cacheWrite": 0, "output": 4 },
   "glm-5v-turbo":            { "input": 1.2,  "cachedInput": 0.24, "cacheWrite": 0, "output": 4 },
 
+  "_NOTE_deepseek-v4-pro": "As of 0813, 'deepseek-v4-pro' IS the V4-Pro-0813 GA build — DeepSeek updated the existing model id in place, no new UI id needed (confirmed via web search 2026-08-14: 'requests sent to deepseek-v4-pro now reach the 0813 build'). Numbers below are the flat pre-2026-08-16 rate. From 2026-08-16 16:00 UTC, DeepSeek switches to PEAK/OFF-PEAK pricing (peak 01:00-04:00 + 06:00-10:00 UTC): input rises to $1.32 (peak) / $0.66 (off-peak) from $0.435, output to $3.96 (peak) / $1.98 (off-peak) from $0.87. This flat schema has no time-of-day field — after the cutover this entry will underprice peak-hour calls. Revisit then.",
   "deepseek-v4-pro":      { "input": 0.435, "cachedInput": 0.003625, "cacheWrite": 0, "output": 0.87 },
   "deepseek-v4-flash-0731": { "input": 0.09, "cachedInput": 0.002, "cacheWrite": 0, "output": 0.18 },
   "deepseek-v4-flash":      { "input": 0.14, "cachedInput": 0.0028, "cacheWrite": 0, "output": 0.42 },
