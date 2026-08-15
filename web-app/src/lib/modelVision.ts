@@ -207,3 +207,28 @@ export function isVideoCapable(specificModel: string | undefined | null): boolea
   if (specificModel.toLowerCase().includes('seed-2-1')) return true;
   return false;
 }
+
+// Registry of Gemini models that reject `thinkingLevel: 'minimal'` outright
+// (the API replies with "Thinking level MINIMAL is not supported for this
+// model"). All Pro variants have always rejected it; Gemini 3.7 Flash rejects
+// it too as of its launch (Google has said minimal support is a planned fast
+// follow, not yet shipped) — this is a genuine model-specific gap, not a
+// naming-convention thing, so it's tracked explicitly rather than inferred
+// from a substring match on "flash".
+const GEMINI_NO_MINIMAL_THINKING = new Set<string>([
+  'gemini-3.7-flash',
+]);
+
+// Resolves the lowest thinking level a given Gemini model actually accepts.
+// Used by every call site that wants "as close to off as this model allows":
+// the Eyes/Ears/Watcher bridges (which always want minimal-effort captioning)
+// and the main chat path / auto-model-select preflight (which map a user's
+// "thinking off" choice to the lowest valid level for gemini-3.x). Pro
+// variants and Gemini 3.7 Flash fall back to 'low'; everything else gets the
+// true 'minimal'.
+export function resolveGeminiMinThinkingLevel(specificModel: string | undefined | null): 'minimal' | 'low' {
+  const model = (specificModel || '').toLowerCase();
+  if (model.includes('pro')) return 'low';
+  if (GEMINI_NO_MINIMAL_THINKING.has(specificModel || '')) return 'low';
+  return 'minimal';
+}

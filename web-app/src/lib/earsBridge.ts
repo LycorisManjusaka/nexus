@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
+import { resolveGeminiMinThinkingLevel } from './modelVision';
 
 // Disk cache for audio descriptions, keyed by SHA-256 of
 // (audio bytes ‖ ears prompt ‖ ears model). Survives server restarts.
@@ -154,10 +155,11 @@ async function callGeminiAudio(params: {
 }): Promise<BridgeResult> {
   const { audioBase64, audioMimeType, earsPrompt, earsModel, geminiKey } = params;
 
-  // Gemini Pro variants reject `thinkingLevel: 'minimal'` (the API replies with
-  // "Thinking level MINIMAL is not supported for this model"). 'low' is the
-  // lowest Pro accepts. Flash / Flash-Lite are fine with 'minimal'.
-  const bridgeThinkLevel = earsModel.toLowerCase().includes('pro') ? 'low' : 'minimal';
+  // Some Gemini models reject `thinkingLevel: 'minimal'` outright (the API
+  // replies with "Thinking level MINIMAL is not supported for this model") —
+  // all Pro variants, and as of launch, Gemini 3.7 Flash too. Resolve to the
+  // lowest level this specific model actually accepts.
+  const bridgeThinkLevel = resolveGeminiMinThinkingLevel(earsModel);
 
   const body = {
     contents: [

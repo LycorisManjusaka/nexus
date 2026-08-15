@@ -34,6 +34,25 @@ function navSet(key: string, value: string) {
   try { sessionStorage.setItem(key, value); localStorage.setItem(key, value); } catch {}
 }
 
+// First-run language default: a fresh install has never saved a language
+// choice anywhere, so there's nothing to respect yet — read the browser/OS
+// locale once and pick the closer default. Any machine whose language tag
+// (or any of its ranked alternates) starts with "ja" gets Japanese; every
+// other locale gets English, since English is the language the rest of the
+// project's content (agents, docs) is authored in first. This only ever
+// runs when no saved settings exist yet — an explicit prior choice, even a
+// blank/unset one that was still saved, is never overridden by this.
+function detectSystemLanguage(): 'en' | 'ja' {
+  try {
+    const candidates = (typeof navigator !== 'undefined' && navigator.languages && navigator.languages.length)
+      ? navigator.languages
+      : [typeof navigator !== 'undefined' ? navigator.language : ''];
+    return candidates.some((l) => (l || '').toLowerCase().startsWith('ja')) ? 'ja' : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
 export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | null }) {
   // A deep link must beat this tab's remembered folder/conversation, but only
   // for the first selection after load — afterwards the tab navigates normally.
@@ -71,8 +90,15 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     const savedGlobal = localStorage.getItem('nexus_globalSettings');
     if (savedGlobal) {
       try {
-        setGlobalSettings(JSON.parse(savedGlobal));
+        const parsed = JSON.parse(savedGlobal);
+        // 'language' key genuinely absent (older save, or a save from before
+        // this field existed) — same first-run treatment as no save at all.
+        if (!parsed.language) parsed.language = detectSystemLanguage();
+        setGlobalSettings(parsed);
       } catch (e) { }
+    } else {
+      // Nothing saved on this machine yet — detect once from the browser/OS.
+      setGlobalSettings((prev: any) => ({ ...prev, language: detectSystemLanguage() }));
     }
     fetchFolders();
     fetchLogs();
@@ -596,7 +622,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             defaultModelParams={activeFolder.settings?.modelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' }}
             defaultSpecificModel={activeFolder.settings?.specificModel}
             defaultCustomAiName={activeFolder.settings?.customAiName || ''}
-            defaultDateTimeVisibility={activeFolder.settings?.dateTimeVisibility || 'none'}
+            defaultDateTimeVisibility={activeFolder.settings?.dateTimeVisibility || 'all'}
             defaultVrchatMode={activeFolder.settings?.vrchatMode || false}
             defaultVrchatRule={activeFolder.settings?.vrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]"}
             defaultAiVoice={activeFolder.settings?.aiVoice}

@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
-import { isVisionCapable, isAudioCapable, isVideoCapable } from '@/lib/modelVision';
+import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel } from '@/lib/modelVision';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
@@ -2018,7 +2018,7 @@ export async function POST(req: Request) {
       suppressLayer5 = false,
       modelParams = { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' },
       specificModel = 'gemini-3.5-flash',
-      dateTimeVisibility = 'none',
+      dateTimeVisibility = 'all',
       creativityControlEnabled = false,
       hiddenAnalysisInstruction = DEFAULT_ANALYSIS_INSTRUCTION,
       creativityDisplayPattern = '[Chosen Creativity: {C}]\n\n',
@@ -2229,8 +2229,10 @@ export async function POST(req: Request) {
                 fam.includes('kimi') || fam.includes('cohere') || fam.includes('command')) {
               patch.qwenEnableThinking = t;
             }
-            // Gemini 3.x can't fully disable — map "off" to 'minimal'.
-            if (fam.includes('gemini')) patch.thinkingLevel = t ? 'medium' : 'minimal';
+            // Gemini 3.x can't fully disable — map "off" to the lowest level
+            // this specific chosen model actually accepts (some, like Pro
+            // variants and Gemini 3.7 Flash, reject 'minimal' outright).
+            if (fam.includes('gemini')) patch.thinkingLevel = t ? 'medium' : resolveGeminiMinThinkingLevel(chosen.specificModel);
             modelParams = { ...modelParams, ...patch };
             autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} → chose ${chosen.label}.`;
           } else {
@@ -3857,6 +3859,11 @@ export async function POST(req: Request) {
       if (specificModel.includes('gemini')) {
         let lvl = modelParams.thinkingLevel;
         if (!lvl || lvl === 'none') lvl = 'minimal';
+        // Some Gemini models (Pro variants, and Gemini 3.7 Flash as of launch)
+        // reject 'minimal' outright — clamp to the lowest level this specific
+        // model actually accepts. Any explicit non-minimal choice (low/medium/
+        // high) is always valid and passes through unchanged.
+        if (lvl === 'minimal') lvl = resolveGeminiMinThinkingLevel(specificModel);
         geminiConfig.thinkingConfig = {
           thinkingLevel: lvl,
           includeThoughts: true,

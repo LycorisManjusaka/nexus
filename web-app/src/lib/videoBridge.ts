@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
+import { resolveGeminiMinThinkingLevel } from './modelVision';
 
 // Disk cache for video descriptions. One file per (video bytes ‖ prompt ‖ model)
 // tuple, keyed by SHA-256. Video descriptions are typically the most expensive
@@ -167,10 +168,11 @@ async function callGeminiVideo(params: {
   const decodedBytes = Math.floor(videoBase64.length * 0.75);
   console.log(`${tag} POST → Gemini · model=${watcherModel} · mime=${videoMimeType} · decoded≈${(decodedBytes / 1024 / 1024).toFixed(2)} MiB`);
 
-  // Gemini Pro variants reject `thinkingLevel: 'minimal'` (the API replies with
-  // "Thinking level MINIMAL is not supported for this model"). 'low' is the
-  // lowest level Pro accepts. Flash / Flash-Lite are fine with 'minimal'.
-  const bridgeThinkLevel = watcherModel.toLowerCase().includes('pro') ? 'low' : 'minimal';
+  // Some Gemini models reject `thinkingLevel: 'minimal'` outright (the API
+  // replies with "Thinking level MINIMAL is not supported for this model") —
+  // all Pro variants, and as of launch, Gemini 3.7 Flash too. Resolve to the
+  // lowest level this specific model actually accepts.
+  const bridgeThinkLevel = resolveGeminiMinThinkingLevel(watcherModel);
 
   const body = {
     contents: [

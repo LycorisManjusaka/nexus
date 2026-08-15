@@ -440,7 +440,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   );
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
   const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
-  const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'none');
+  const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'all');
   const [claudeThinking, setClaudeThinking] = useState(false);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
   // When ON, a hidden note is appended to the system prompt each turn telling
@@ -975,7 +975,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
         if (typeof data.toolInstruction === 'string') setToolInstruction(data.toolInstruction);
         if (typeof data.toolImageInstruction === 'string') setToolImageInstruction(data.toolImageInstruction);
-        setDateTimeVisibility(data.dateTimeVisibility || 'none');
+        setDateTimeVisibility(data.dateTimeVisibility || 'all');
         setClaudeThinking(data.claudeThinking || false);
         setSaveThinkingToLog(data.saveThinkingToLog || false);
         setShowFatigueToEntity(data.showFatigueToEntity || false);
@@ -1048,7 +1048,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
-        setDateTimeVisibility(defaultDateTimeVisibility || 'none');
+        setDateTimeVisibility(defaultDateTimeVisibility || 'all');
         setVrchatMode(defaultVrchatMode || false);
         setVrchatRule(defaultVrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]");
         setLocalAiName(aiName);

@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
+import { resolveGeminiMinThinkingLevel } from './modelVision';
 
 // Cache root. One file per (image, eyes prompt, eyes model) tuple, keyed by
 // SHA-256. Easy to inspect (cat the .txt) or clear (delete the file or the
@@ -147,9 +148,10 @@ async function callGeminiVision(params: {
   geminiKey: string;
 }): Promise<EyesResult> {
   const { imageBase64, imageMimeType, eyesPrompt, eyesModel, geminiKey } = params;
-  // Pro variants reject `thinkingLevel: 'minimal'` — same constraint as the
-  // ears/watcher Gemini paths. 'low' is the lowest Pro accepts.
-  const bridgeThinkLevel = eyesModel.toLowerCase().includes('pro') ? 'low' : 'minimal';
+  // Some Gemini models reject `thinkingLevel: 'minimal'` outright — same
+  // constraint as the ears/watcher Gemini paths. Resolve to the lowest level
+  // this specific model actually accepts.
+  const bridgeThinkLevel = resolveGeminiMinThinkingLevel(eyesModel);
   const body = {
     contents: [
       {
