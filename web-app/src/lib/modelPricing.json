@@ -35,6 +35,7 @@
   "grok-4.5":               { "input": 5,    "cachedInput": 1.25, "cacheWrite": 0, "output": 15 },
   "grok-4.3":               { "input": 3,    "cachedInput": 0.75, "cacheWrite": 0, "output": 15 },
 
+  "glm-5.3":                { "input": 1.4,  "cachedInput": 0.26, "cacheWrite": 0, "output": 4.4 },
   "glm-5.2":                { "input": 1.4,  "cachedInput": 0.26, "cacheWrite": 0, "output": 4.4 },
   "digitalocean/glm-5.2":   { "input": 0.7,  "cachedInput": 0.12, "cacheWrite": 0, "output": 2.2 },
   "digitalocean/glm-5.1":   { "input": 0.975,"cachedInput": 0.26, "cacheWrite": 0, "output": 4.3 },
@@ -45,7 +46,7 @@
   "glm-5v-turbo":            { "input": 1.2,  "cachedInput": 0.24, "cacheWrite": 0, "output": 4 },
 
   "_NOTE_deepseek-v4-pro": "As of 0813, 'deepseek-v4-pro' IS the V4-Pro-0813 GA build — DeepSeek updated the existing model id in place, no new UI id needed (confirmed via web search 2026-08-14: 'requests sent to deepseek-v4-pro now reach the 0813 build'). Numbers below are the flat pre-2026-08-16 rate. From 2026-08-16 16:00 UTC, DeepSeek switches to PEAK/OFF-PEAK pricing (peak 01:00-04:00 + 06:00-10:00 UTC): input rises to $1.32 (peak) / $0.66 (off-peak) from $0.435, output to $3.96 (peak) / $1.98 (off-peak) from $0.87. This flat schema has no time-of-day field — after the cutover this entry will underprice peak-hour calls. Revisit then.",
-  "deepseek-v4-pro":      { "input": 0.435, "cachedInput": 0.003625, "cacheWrite": 0, "output": 0.87 },
+  "deepseek-v4-pro":      { "input": 1.32, "cachedInput": 0.003625, "cacheWrite": 0, "output": 3.96 },
   "deepseek-v4-flash-0731": { "input": 0.09, "cachedInput": 0.002, "cacheWrite": 0, "output": 0.18 },
   "deepseek-v4-flash":      { "input": 0.14, "cachedInput": 0.0028, "cacheWrite": 0, "output": 0.42 },
 

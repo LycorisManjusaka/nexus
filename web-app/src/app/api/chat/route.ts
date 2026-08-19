@@ -1885,7 +1885,13 @@ async function runModelSelectorPreflight(args: {
   // ("Thinking mode does not support this tool_choice"). Direct DeepSeek must
   // use the same object shape as GLM/Kimi below instead.
   if ((isQwen || (isDeepSeek && !useDeepSeekDirect)) && !isOmni) extra.enable_thinking = false;
+  // glm-5.3 is the GLM-side K3: Z.AI rejects `thinking: { type: 'disabled' }`
+  // for it outright ("always operates with reasoning enabled"). Depth is set
+  // with `reasoning_effort` instead — 'low' here, since picking an index is a
+  // trivial task and we don't want reasoning eating latency.
+  const selGLM53 = isGLM && !useDigitalOcean && /glm-5\.3/i.test(String(specificModel || ''));
   if (useDigitalOcean) extra.reasoning_effort = 'none';
+  else if (selGLM53) { extra.thinking = { type: 'enabled' }; extra.reasoning_effort = 'low'; }
   else if (isGLM || (isKimi && !selKimiK3) || useDeepSeekDirect) extra.thinking = { type: 'disabled' };
   if (selKimiK3) extra.reasoning_effort = 'max';
   if (isCohere) extra.reasoning_effort = 'none';
@@ -5488,7 +5494,21 @@ export async function POST(req: Request) {
         // temperature (1.0) and top_p (0.95) server-side — sending either 400s —
         // so we strip both. Net: the Thinking-Mode toggle has no effect on K3.
         const isKimiK3 = isKimi && /kimi-k3/i.test(String(requestBody.model || ''));
-        if (isKimiK3) {
+        // GLM-5.3 is the GLM-side equivalent of the K3 exception: Z.AI's docs
+        // state it "always operates with reasoning enabled" and reject
+        // `thinking: { type: 'disabled' }` outright. Depth is instead selected
+        // with the top-level `reasoning_effort` field ('low' | 'high' | 'max',
+        // default 'max'). Both fields are sent together — that is exactly the
+        // shape of Z.AI's own documented curl example. The shared Thinking-Mode
+        // toggle therefore maps onto depth rather than on/off: ON → 'max'
+        // (the documented default), OFF → 'low' (the shallowest reasoning the
+        // model will accept). Turning the toggle off cannot silence reasoning
+        // entirely on this model.
+        const isGLM53 = isGLM && !useDigitalOcean && /glm-5\.3/i.test(String(requestBody.model || ''));
+        if (isGLM53) {
+          requestBody.thinking = { type: 'enabled' };
+          requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'max' : 'low';
+        } else if (isKimiK3) {
           requestBody.reasoning_effort = 'max';
           delete requestBody.temperature;
           delete requestBody.top_p;
