@@ -49,6 +49,17 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'qwen3.5-omni-flash', // also handles audio/video
   'qwen3.5-omni-plus',  // omni-plus — image + audio + video, higher quality than -flash
 
+  // ── DeepSeek ─────────────────────────────────────────────────────────────
+  // DeepSeek's FIRST vision model (V4-Flash-Vision-Exp, experimental). Per
+  // api-docs.deepseek.com/guides/vision: ONLY this id accepts image input —
+  // every other deepseek-* model returns a 400 ("This model does not support
+  // image"). Image parts use the standard OpenAI-compatible `image_url` shape,
+  // which the shared OpenAI-compatible branch already emits, so no special
+  // request-shape handling is needed. Thinking mode is supported (default on),
+  // so the existing `thinking` toggle applies unchanged. Text-only DeepSeek
+  // models (v4-pro / v4-flash / v3.2 / legacy) stay OUT — default-deny.
+  'deepseek-v4-flash-vision-exp',
+
   // ── GLM (Z.AI) ─────────────────────────────────────────────────────────────
   // Only the 'v' variants are multimodal. glm-5.1 / glm-5 / glm-5-turbo /
   // glm-4.7 / glm-4.6 / glm-4.5-air are text-only.

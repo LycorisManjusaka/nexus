@@ -102,6 +102,7 @@ Qwen     | qwen3.5-omni-flash           | off | Qwen 3.5 Omni Flash (multimodal)
 DeepSeek | deepseek-v4-pro              | on  | DeepSeek V4 Pro
 DeepSeek | deepseek-v4-flash-0731         | on  | DeepSeek V4 Flash 0731
 DeepSeek | deepseek-v4-flash            | off | DeepSeek V4 Flash
+DeepSeek | deepseek-v4-flash-vision-exp | off | DeepSeek V4 Flash Vision (experimental)
 DeepSeek | deepseek-reasoner            | on  | DeepSeek Reasoner
 DeepSeek | deepseek-chat                | off | DeepSeek Chat
 DeepSeek | deepseek-v3.2                | on  | DeepSeek V3.2 (hybrid reasoning)
@@ -4428,6 +4429,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
                         <option value="deepseek-v4-flash-0731">DeepSeek V4 Flash 0731 (official release, 1M context)</option>
                         <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+                        <option value="deepseek-v4-flash-vision-exp">DeepSeek V4 Flash Vision (experimental)</option>
                         <option value="deepseek-reasoner">DeepSeek Reasoner (legacy alias)</option>
                         <option value="deepseek-chat">DeepSeek Chat (legacy alias)</option>
                       </optgroup>

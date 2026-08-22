@@ -49,6 +49,8 @@
   "deepseek-v4-pro":      { "input": 1.32, "cachedInput": 0.003625, "cacheWrite": 0, "output": 3.96 },
   "deepseek-v4-flash-0731": { "input": 0.09, "cachedInput": 0.002, "cacheWrite": 0, "output": 0.18 },
   "deepseek-v4-flash":      { "input": 0.14, "cachedInput": 0.0028, "cacheWrite": 0, "output": 0.42 },
+  "_NOTE_deepseek-v4-flash-vision-exp": "DeepSeek's first vision model. Pricing is IDENTICAL to deepseek-v4-flash (peak/off-peak per api-docs.deepseek.com/quick_start/pricing: cache-hit $0.014/$0.007, cache-miss $0.44/$0.22, output $1.32/$0.66). Numbers below are PEAK rates, matching the deepseek-v4-pro entry's convention. Images are billed as input tokens by dimension (upper bound ~384 tokens/image). NOTE: deepseek-v4-flash and deepseek-v4-flash-0731 entries above are now STALE — the pricing page shows v4-flash has moved to the same peak/off-peak scheme as pro/vision, but those two rows still carry the old flat numbers. Flagged, not changed (out of scope).",
+  "deepseek-v4-flash-vision-exp": { "input": 0.44, "cachedInput": 0.014, "cacheWrite": 0, "output": 1.32 },
 
   "_NOTE_qwen3.8-max": "PUBLISHED prices (not an estimate). Model Studio lists input $2, output $6, implicit-cache hit $0.25, explicit-cache creation $2.50, explicit-cache hit $0.17. NEXUS never creates an explicit DashScope cache, so cachedInput uses the IMPLICIT hit price ($0.25) and cacheWrite is 0. If explicit caching is ever wired for DashScope, change these to 0.17 / 2.5.",
   "qwen3.8-max":            { "input": 2,    "cachedInput": 0.25, "cacheWrite": 0,    "output": 6 },
