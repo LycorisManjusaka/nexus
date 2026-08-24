@@ -130,6 +130,51 @@ export async function writeSystemPromptFile(
   return p;
 }
 
+// ── Shift right pane -> left pane (SPU "start of a new run" contract) ──────
+// Called right before any of the four update buttons begins writing into the
+// right pane, whenever the right pane already holds a finished draft. Backs
+// up the current left content (best-effort — a backup hiccup must not block
+// the shift), writes the old right content into the left (current) index,
+// and clears the right (next) index so the new run starts from a blank slate.
+const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+
+function shiftBackupStamp(d = new Date()): string {
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}` +
+    `-${pad(d.getMilliseconds(), 3)}`
+  );
+}
+
+export async function shiftRightToLeft(
+  folderName: string,
+  currentIndex: number,
+  previousLeftContents: string,
+  newLeftContents: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    // Best-effort backup of what the left pane held before the shift.
+    try {
+      const bdir = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), 'system_prompts');
+      await fs.mkdir(bdir, { recursive: true });
+      const safe = sanitizeFolderName(folderName);
+      await fs.writeFile(
+        path.join(bdir, `${safe}_${currentIndex}_${shiftBackupStamp()}.md`),
+        previousLeftContents,
+        'utf-8'
+      );
+    } catch {
+      // A backup hiccup must not block the shift.
+    }
+    await writeSystemPromptFile(folderName, currentIndex, newLeftContents);
+    await writeSystemPromptFile(folderName, currentIndex + 1, '');
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'could not shift right pane to left' };
+  }
+}
+
 // ── Layer parsing/assembly ──────────────────────────────────────────────────
 // A "layer" is anything bounded by `### **Layer N:` headers. We tolerate
 // missing layers (return empty content for those indices) so the user can

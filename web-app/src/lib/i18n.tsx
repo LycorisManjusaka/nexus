@@ -1199,6 +1199,11 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.resumeDesc': 'the agent receives it as already-finished output and writes only what follows, instead of starting over.',
   'spu.resumeTruncated': 'Right side looks truncated (no Layer 3), so this was enabled automatically.',
   'spu.resumeComplete': 'Right side looks complete — leave this off for a normal re-run.',
+  'spu.shiftConfirm':
+    'The right pane already holds a finished draft.\n\n' +
+    'Continuing will back up {name}’s current left-side soul, move this draft into the left side, ' +
+    'and clear the right side so this run can write into it fresh.\n\n' +
+    'Continue?',
   'spu.currentLabel': 'Current (all layers — edit freely; remove Layer 4 here once)',
   'spu.tokens': 'tokens',
   'spu.chars': 'chars',
@@ -1270,6 +1275,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.logsSeparated': ' · {n} chars of logs separated',
   'spu.st.updateStopped': 'Update stopped.',
   'spu.st.updateFailed': 'Update failed: {e}',
+  'spu.st.shiftFailed': 'Could not move the right pane to the left pane, so the run was cancelled: {e}',
   'spu.st.redistributing': 'Redistributing Layers 1-4 (no conversation log)...',
   'spu.st.redistStoppedEmpty': 'Redistribute stopped — no output was produced yet.',
   'spu.st.redistNoText': 'Redistribute returned no text — model may have refused or hit a filter.',
@@ -2453,6 +2459,11 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.resumeDesc': 'エージェントは右側を「すでに書き終えた出力」として受け取り、最初からやり直さずに続きだけを書きます。',
   'spu.resumeTruncated': '右側が途中で切れているようです（Layer 3 が無い）ので、自動的に有効化しました。',
   'spu.resumeComplete': '右側は完成しているようです。通常の再実行ならオフのままにしてください。',
+  'spu.shiftConfirm':
+    '右側にはすでに完成した草稿があります。\n\n' +
+    'このまま続けると、{name}の現在の左側の魂をバックアップしたうえで、この草稿を左側に移し、' +
+    '右側を空にしてこの実行が新しく書き込めるようにします。\n\n' +
+    '続けますか？',
   'spu.currentLabel': '現在（全レイヤー — 自由に編集できます。Layer 4 はここで一度だけ削除してください）',
   'spu.tokens': 'トークン',
   'spu.chars': '文字',
@@ -2524,6 +2535,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.logsSeparated': ' · ログ {n} 文字を分離',
   'spu.st.updateStopped': '更新を停止しました。',
   'spu.st.updateFailed': '更新に失敗しました: {e}',
+  'spu.st.shiftFailed': '右側を左側に移せなかったため、実行を中止しました: {e}',
   'spu.st.redistributing': 'Layer 1〜4 を再配分中（会話ログなし）…',
   'spu.st.redistStoppedEmpty': '再配分を停止しました — まだ出力はありません。',
   'spu.st.redistNoText': '再配分エージェントがテキストを返しませんでした — モデルが拒否したか、フィルターに掛かった可能性があります。',

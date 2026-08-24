@@ -915,6 +915,56 @@ export default function SystemPromptUpdater({
     return accum;
   }, [folderName, modelParams]);
 
+  // ── Shift right pane -> left pane before a run starts ────────────────────
+  // Matches how Lizard-kun already used the two panes by hand: when the right
+  // side holds a finished draft, an update/reorganize/redistribute/genesis run
+  // should not just start overwriting it — that draft either gets promoted to
+  // the left (current) side first, or it's lost with no trace. Every run
+  // function calls this before it does anything else and uses the RETURNED
+  // text (not the `leftText` closure, which won't see the setState in time)
+  // as the "current soul" it feeds to the agent. Returns null to mean "the
+  // run must not start" (user declined the dialog, or the shift failed).
+  const maybeShiftRightToLeft = useCallback(async (): Promise<string | null> => {
+    // "Continue from the right-side text" means the user explicitly wants
+    // this run to keep building on the current right-side draft, not archive
+    // it as finished — skip the shift entirely in that case.
+    if (resumeFromRight) return leftText;
+    if (!rightText.trim()) return leftText;
+    const confirmed = window.confirm(
+      t('spu.shiftConfirm').replace('{name}', aiName)
+    );
+    if (!confirmed) return null;
+    const previousLeftContents = leftText;
+    const newLeftContents = rightText;
+    try {
+      const res = await fetch('/api/system-prompts/shift', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder: baseName,
+          index: currentIndex,
+          previousLeftContents,
+          newLeftContents,
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(errText || `HTTP ${res.status}`);
+      }
+    } catch (e: any) {
+      setStatusMessage(t('spu.st.shiftFailed').replace('{e}', e?.message || String(e)));
+      return null;
+    }
+    // Mirror the write into local state + the auto-save "last saved" refs, so
+    // the debounced auto-save effects see nothing new to push (the shift
+    // endpoint already wrote both files).
+    lastSavedLeftRef.current = newLeftContents;
+    lastSavedRightRef.current = '';
+    setLeftText(newLeftContents);
+    setRightText('');
+    return newLeftContents;
+  }, [resumeFromRight, rightText, leftText, baseName, currentIndex, aiName, t]);
+
   // ── Run the single identity (Layers 1-3) update ──────────────────────────
   // ONE agent, ONE logical pass over the whole identity. Supports continuation:
   // if the model hits its output cap (no END sentinel yet), we prefill-continue
@@ -931,6 +981,8 @@ export default function SystemPromptUpdater({
       );
       return null;
     }
+    const effectiveLeftText = await maybeShiftRightToLeft();
+    if (effectiveLeftText === null) return null;
     const controller = new AbortController();
     abortRef.current = controller;
     setUpdateStatus({ state: 'called' });
@@ -951,7 +1003,7 @@ export default function SystemPromptUpdater({
       withConversation,
       focus,
       header,
-      leftText,
+      leftText: effectiveLeftText,
       summaryIndexBody,
       entityFooter,
       conversationLogText,
@@ -1071,7 +1123,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter]);
+  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter, maybeShiftRightToLeft]);
 
   // ── Run the Layers 1-4 redistribution ────────────────────────────────────
   // A third mode, separate from both update paths above. The agent sees the
@@ -1099,6 +1151,8 @@ export default function SystemPromptUpdater({
       );
       return false;
     }
+    const effectiveLeftText = await maybeShiftRightToLeft();
+    if (effectiveLeftText === null) return false;
     const controller = new AbortController();
     abortRef.current = controller;
     setUpdateStatus({ state: 'called' });
@@ -1123,7 +1177,7 @@ export default function SystemPromptUpdater({
       baseName,
       focus,
       header,
-      leftText,
+      leftText: effectiveLeftText,
       fullIndex,
       folderName,
       entityFooter,
@@ -1277,7 +1331,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title]);
+  }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title, maybeShiftRightToLeft]);
 
   // ── Run the genesis (first-time) construction ────────────────────────────
   // A fourth mode, distinct from all three above: it assumes NO prior Layers
@@ -1296,6 +1350,8 @@ export default function SystemPromptUpdater({
       );
       return null;
     }
+    const effectiveLeftText = await maybeShiftRightToLeft();
+    if (effectiveLeftText === null) return null;
     const controller = new AbortController();
     abortRef.current = controller;
     setUpdateStatus({ state: 'called' });
@@ -1310,7 +1366,7 @@ export default function SystemPromptUpdater({
       focus,
       header,
       conversationLogText,
-      leftText,
+      leftText: effectiveLeftText,
       resumeText,
       endSentinel: END_SENTINEL,
     })
@@ -1404,7 +1460,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, folderName, title, resumeFromRight, rightText]);
+  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, folderName, title, resumeFromRight, rightText, maybeShiftRightToLeft]);
 
 
   // First-message timestamp for summary baking
