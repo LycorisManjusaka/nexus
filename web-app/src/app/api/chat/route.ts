@@ -839,7 +839,12 @@ async function streamClaudeViaAgentSDK(args: {
                       model: childModel,
                       systemPrompt: childSystem,
                       cwd: workspaceDir,
-                      additionalDirectories: agentFullSystemAccess ? [pathModule.parse(workspaceDir).root] : [],
+                      // Same trusted-junction fix as the parent query() below —
+                      // the child inherits the same workspace and the same
+                      // junction-escape need (e.g. common_workspace).
+                      additionalDirectories: agentFullSystemAccess
+                        ? [pathModule.parse(workspaceDir).root]
+                        : (trustedJunctionRoot ? [trustedJunctionRoot] : []),
                       // Read-only investigation: whitelist read tools (+ web when
                       // the conversation has web search on) and explicitly block
                       // write/edit/delete, shell, and recursion. Claude Code's
@@ -1116,13 +1121,33 @@ async function streamClaudeViaAgentSDK(args: {
           ...(isAdaptiveOauth ? { effort: oauthEffort } : {}),
           // Sandboxes the entity's file tools to its own workspace folder.
           // Claude Code refuses paths outside cwd unless they're explicitly
-          // listed in `additionalDirectories` (we leave that empty).
+          // listed in `additionalDirectories` — and this is a HARD gate inside
+          // the SDK's own file-tool implementation, enforced before canUseTool
+          // is ever consulted. canUseTool's withinSandbox() (above) already
+          // treats trustedJunctionRoot as valid — that's what lets a symlink
+          // INSIDE the workspace (e.g. workspaces/<Entity>/common_workspace →
+          // local_data/common_workspace, a sibling of workspaces/, not a
+          // descendant of it) resolve to somewhere canUseTool will allow. But
+          // canUseTool never got a chance to run: the SDK's own cwd-only check
+          // rejected the realpath'd target first, silently as far as our
+          // diagnostics are concerned (no denyMsg, since canUseTool wasn't
+          // reached). Found 2026-08-24: OAuth was the only path that couldn't
+          // follow this junction — every other model uses NEXUS's own
+          // Read/Write/Edit/Glob/Grep (resolveWorkspacePathSafe in
+          // fsStorage.ts), which already trusts trustedJunctionRoot. Adding it
+          // here brings OAuth to the SAME trust boundary the other paths
+          // already have — not a new grant, just closing the gap between what
+          // canUseTool permits and what the SDK's native gate was told about.
           cwd: workspaceDir,
-          // Sandbox scope. Default: only the entity's workspace (additional dirs
-          // empty → Claude Code refuses paths outside cwd). With per-Entity full
-          // system access ON: grant the whole drive that holds the workspace so
-          // the entity can read/write anywhere on the PC.
-          additionalDirectories: agentFullSystemAccess ? [pathModule.parse(workspaceDir).root] : [],
+          // Sandbox scope. Default: the entity's workspace PLUS the shared
+          // trusted-junction root (parent of local_data's real target — the
+          // deployment's own sync-parent folder, same scope every other
+          // provider already trusts). With per-Entity full system access ON:
+          // grant the whole drive instead, so the entity can read/write
+          // anywhere on the PC.
+          additionalDirectories: agentFullSystemAccess
+            ? [pathModule.parse(workspaceDir).root]
+            : (trustedJunctionRoot ? [trustedJunctionRoot] : []),
           // Without this, the SDK only yields final `assistant` messages
           // (one per turn, with the complete content). With it, the SDK
           // additionally yields `stream_event` messages carrying the raw
