@@ -7,6 +7,7 @@ import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
+import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 
 // One shared diff engine. We do NOT diff the raw text directly: on a large
 // prompt, character-level diff_main blows past its time cap and bails out to a
@@ -182,6 +183,13 @@ async function countTokens(text: string, model: string): Promise<number> {
   } catch {
     return Math.ceil(text.length / 4);
   }
+}
+
+// Human-readable label for a soul backup: "<from> → <to> · <timestamp>".
+function formatBackupLabel(b: SoulBackupInfo): string {
+  const m = b.stamp.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/);
+  const ts = m ? `${m[1]} ${m[2]}:${m[3]}:${m[4]}` : b.stamp;
+  return `${b.fromTitle} → ${b.toTitle} · ${ts}`;
 }
 
 // The agent ends its output with bookkeeping log sections (the format file
@@ -438,6 +446,11 @@ export default function SystemPromptUpdater({
   const lastSavedRightRef = useRef<string | null>(null);
   const lastSavedFolderRef = useRef<string | null>(null);
   const [autoSaveState, setAutoSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // Restorable soul backups (BEFORE/AFTER snapshots of each update stage).
+  const [soulBackups, setSoulBackups] = useState<SoulBackupInfo[]>([]);
+  const [beforeSel, setBeforeSel] = useState('');
+  const [afterSel, setAfterSel] = useState('');
 
   // All updater agent .md files in the selected type subfolder + the (separate)
   // summary writer agent. Each action button below runs a FIXED filename out of
@@ -736,6 +749,65 @@ export default function SystemPromptUpdater({
     })();
     return () => { cancelled = true; };
   }, [open, folderName, convoId, summaryText]);
+
+  // ── Restorable soul backups (BEFORE/AFTER snapshots) ──────────────────────
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/system-prompts/backups?folder=${encodeURIComponent(baseName)}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!cancelled) setSoulBackups(Array.isArray(d?.backups) ? d.backups : []);
+      } catch { /* no backups yet */ }
+    })();
+    return () => { cancelled = true; };
+  }, [open, baseName]);
+
+  const beforeBackups = useMemo(() => soulBackups.filter((b) => b.phase === 'BEFORE'), [soulBackups]);
+  const afterBackups = useMemo(() => soulBackups.filter((b) => b.phase === 'AFTER'), [soulBackups]);
+
+  // Write a stage snapshot through the API. Best-effort: a backup failure must
+  // never block the transition it is protecting.
+  const writeSoulBackup = useCallback(async (
+    phase: 'BEFORE' | 'AFTER',
+    fromIndex: number,
+    toIndex: number,
+    contents: string
+  ) => {
+    try {
+      await fetch('/api/system-prompts/backups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: baseName, fromIndex, toIndex, phase, contents }),
+      });
+    } catch { /* best-effort */ }
+  }, [baseName]);
+
+  // Load a chosen snapshot into the matching pane; the existing auto-save then
+  // persists it to the current index files. BEFORE → left (current soul),
+  // AFTER → right (next draft).
+  const restoreBackup = useCallback(async (phase: 'BEFORE' | 'AFTER', filename: string) => {
+    if (!filename) return;
+    try {
+      const r = await fetch(`/api/system-prompts/backups?folder=${encodeURIComponent(baseName)}&file=${encodeURIComponent(filename)}`);
+      const d = await r.json();
+      if (!r.ok || typeof d?.contents !== 'string') {
+        setStatusMessage(t('spu.backupRestoreFailed'));
+        return;
+      }
+      if (phase === 'BEFORE') {
+        setLeftText(d.contents);
+        setStatusMessage(t('spu.backupRestoredBefore'));
+      } else {
+        setRightText(d.contents);
+        setStatusMessage(t('spu.backupRestoredAfter'));
+      }
+    } catch {
+      setStatusMessage(t('spu.backupRestoreFailed'));
+    }
+  }, [baseName, t]);
 
   // ── Auto-save summary ────────────────────────────────────────────────────
   useEffect(() => {
@@ -1688,6 +1760,16 @@ export default function SystemPromptUpdater({
     try {
       const nextIndex = currentIndex + 1;
 
+      // Snapshot the stage before committing it: the soul at N (left) and the
+      // result at N+1 (right). Best-effort — a backup failure must not block
+      // the transition. Empty panes are skipped.
+      if (leftText.trim()) {
+        await writeSoulBackup('BEFORE', currentIndex, nextIndex, leftText);
+      }
+      if (rightText.trim()) {
+        await writeSoulBackup('AFTER', currentIndex, nextIndex, rightText);
+      }
+
       // 1) Persist LEFT (current) to <baseName>_<currentIndex>.md.
       await fetch('/api/system-prompts', {
         method: 'POST',
@@ -1727,7 +1809,7 @@ export default function SystemPromptUpdater({
     } finally {
       setLoading(false);
     }
-  }, [baseName, currentIndex, deletionPatterns, header, leftText, rightText, onClose, onFinalize, persistHeaderFooter]);
+  }, [baseName, currentIndex, deletionPatterns, header, leftText, rightText, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
 
   if (!open) return null;
 
@@ -1977,6 +2059,61 @@ export default function SystemPromptUpdater({
                     : <span className="text-muted-foreground"> {t('spu.resumeComplete')}</span>}
                 </span>
               </label>
+            )}
+
+            {/* Restorable soul backups — BEFORE restores into the left pane,
+                AFTER into the right. Shown only once at least one snapshot
+                exists. */}
+            {soulBackups.length > 0 && (
+              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2 border border-border rounded px-3 py-2 bg-muted/10">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
+                  {t('spu.backupsLabel')}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-medium">{t('spu.beforeBackup')}</span>
+                  <select
+                    value={beforeSel}
+                    onChange={(e) => setBeforeSel(e.target.value)}
+                    disabled={!beforeBackups.length}
+                    className="px-2 py-1 bg-background border border-border rounded text-xs outline-none focus:ring-2 focus:ring-indigo-500/50 disabled:opacity-40 max-w-[360px]"
+                  >
+                    <option value="">{beforeBackups.length ? t('spu.pickBackup') : t('spu.noBackups')}</option>
+                    {beforeBackups.map((b) => (
+                      <option key={b.filename} value={b.filename}>{formatBackupLabel(b)}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => restoreBackup('BEFORE', beforeSel)}
+                    disabled={!beforeSel || busy}
+                    title={t('spu.restoreBeforeTitle')}
+                    className="px-2 py-1 text-xs font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {t('spu.restore')}
+                  </button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-medium">{t('spu.afterBackup')}</span>
+                  <select
+                    value={afterSel}
+                    onChange={(e) => setAfterSel(e.target.value)}
+                    disabled={!afterBackups.length}
+                    className="px-2 py-1 bg-background border border-border rounded text-xs outline-none focus:ring-2 focus:ring-emerald-500/50 disabled:opacity-40 max-w-[360px]"
+                  >
+                    <option value="">{afterBackups.length ? t('spu.pickBackup') : t('spu.noBackups')}</option>
+                    {afterBackups.map((b) => (
+                      <option key={b.filename} value={b.filename}>{formatBackupLabel(b)}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => restoreBackup('AFTER', afterSel)}
+                    disabled={!afterSel || busy}
+                    title={t('spu.restoreAfterTitle')}
+                    className="px-2 py-1 text-xs font-medium bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {t('spu.restore')}
+                  </button>
+                </div>
+              </div>
             )}
 
             <div className="grid grid-cols-2 gap-3">

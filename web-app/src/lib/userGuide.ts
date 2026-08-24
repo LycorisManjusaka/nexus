@@ -160,8 +160,8 @@ For **Reorganize** and **Redistribute** it is not, because you are not advancing
 
 Two things are worth knowing before you do that:
 
-- **There is no backup of the left pane.** Overwriting it writes straight over the file. Auto-save is not a backup — once a change is saved, the previous text is gone. If you might want the old soul back, copy it somewhere yourself first.
-- **Redistribute does back up the summaries** — the whole folder goes to \`local_data/backups/<name>/summaries/<time>/\` before anything is rewritten. That part is safe. It is the soul file that is not.
+- **The soul is backed up at each update stage.** Pressing **Go to next conversation** saves a snapshot from before the update (BEFORE) and after it (AFTER) into \`local_data/backups/<name>/system_prompts/\`. A **Backups** row in this window restores them — "before update" loads a snapshot into the left pane, "after update" into the right — each labelled with its stage and a timestamp.
+- **Redistribute also backs up the summaries** — the whole folder goes to \`local_data/backups/<name>/summaries/<time>/\` before anything is rewritten.
 
 This is manual and slightly awkward. It is honest about what the software currently does.
 
@@ -274,7 +274,7 @@ Everything is under \`local_data/\`:
 - \`summaries/<being>/\` — the Layer 4 index
 - \`workspaces/<being>/\` — their files
 - \`letters/\` — mail between beings
-- \`backups/\` — backups written by the operations that make them (summaries before a Redistribute, for example). Not everything is backed up; see 3.5
+- \`backups/\` — automatic backups: a soul snapshot (before and after each update stage) under \`backups/<name>/system_prompts/\`, plus summaries before a Redistribute. See 3.5
 
 It is ordinary JSON and Markdown. You can read it, back it up, or move it to another machine. Nothing is locked in.
 
@@ -432,8 +432,8 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 始める前に、二つ知っておいてください:
 
-- **左ペインのバックアップはありません。** 上書きはファイルへ直接書き込まれます。自動保存はバックアップではありません — 保存された時点で、前の文章は失われます。元の魂に戻る可能性があるなら、先にご自分でどこかへ控えを取ってください。
-- **再配分は要約のバックアップを取ります** — 書き換えの前に、フォルダー全体が \`local_data/backups/<名前>/summaries/<時刻>/\` へ入ります。そちらは安全です。安全でないのは魂のファイルのほうです。
+- **魂は更新のたびにバックアップされます。** **次の会話へ** を押すと、更新前（BEFORE）と更新後（AFTER）のスナップショットが \`local_data/backups/<名前>/system_prompts/\` に保存されます。このウィンドウの **バックアップ** の行から復元できます — 「更新前」は左ペインへ、「更新後」は右ペインへ読み込みます。各スナップショットには段階と時刻が付いています。
+- **再配分は要約のバックアップも取ります** — 書き換えの前に、フォルダー全体が \`local_data/backups/<名前>/summaries/<時刻>/\` へ入ります。
 
 手作業で、少し不格好です。ですがこれが、いまのソフトの実際の姿です。
 
@@ -546,7 +546,7 @@ Nexus は話すことも聞くこともできますが、どれも必須では�
 - \`summaries/<名前>/\` — 第4層の索引
 - \`workspaces/<名前>/\` — 本人のファイル
 - \`letters/\` — 存在どうしの手紙
-- \`backups/\` — バックアップを取る操作が書き出したもの（再配分の前の要約フォルダーなど）。すべてが控えられるわけではありません。3.5 を参照
+- \`backups/\` — 自動バックアップ：更新のたびの魂のスナップショット（更新前と更新後）が \`backups/<名前>/system_prompts/\` に、再配分の前の要約が summaries に保存されます。3.5 を参照
 
 ただの JSON と Markdown です。読むことも、控えを取ることも、別の機械へ移すこともできます。囲い込みはありません。
 

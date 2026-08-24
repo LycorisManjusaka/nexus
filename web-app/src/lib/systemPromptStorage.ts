@@ -137,14 +137,128 @@ export async function writeSystemPromptFile(
 // the shift), writes the old right content into the left (current) index,
 // and clears the right (next) index so the new run starts from a blank slate.
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+const SOUL_BACKUP_DIR = 'system_prompts';
 
-function shiftBackupStamp(d = new Date()): string {
+function soulBackupStamp(d = new Date()): string {
   const pad = (n: number, w = 2) => String(n).padStart(w, '0');
   return (
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
     `_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}` +
     `-${pad(d.getMilliseconds(), 3)}`
   );
+}
+
+// ── Soul backups (restorable snapshots of an update stage) ────────────────
+// Each "update stage" is the transition from conversation N to N+1. When a
+// stage commits we capture two snapshots of the soul:
+//   BEFORE — the soul as it was at index N (before the update)
+//   AFTER  — the soul as it became at index N+1 (the result)
+// The filename encodes the whole stage plus a sortable timestamp, so the
+// System Prompt Updater can list and restore them with no sidecar files:
+//
+//   <folder>_<N>__<folder>_<N+1>__<BEFORE|AFTER>__<timestamp>.md
+//
+// The field separator is a DOUBLE underscore. Identity names may contain
+// single underscores (the <name>_<n> convention) and hyphens; a name that
+// literally contains "__" is not supported for backup parsing.
+export type SoulBackupPhase = 'BEFORE' | 'AFTER';
+
+export interface SoulBackupInfo {
+  filename: string;
+  fromTitle: string;   // e.g. "Cairn_24"
+  toTitle: string;     // e.g. "Cairn_25"
+  fromIndex: number;
+  toIndex: number;
+  phase: SoulBackupPhase;
+  stamp: string;       // sortable YYYY-MM-DD_HH-MM-SS-mmm
+}
+
+export function soulBackupFilename(
+  folderName: string,
+  fromIndex: number,
+  toIndex: number,
+  phase: SoulBackupPhase,
+  stamp: string
+): string {
+  const safe = sanitizeFolderName(folderName);
+  return `${safe}_${fromIndex}__${safe}_${toIndex}__${phase}__${stamp}.md`;
+}
+
+export async function backupSoulSnapshot(
+  folderName: string,
+  fromIndex: number,
+  toIndex: number,
+  phase: SoulBackupPhase,
+  contents: string
+): Promise<string | null> {
+  try {
+    const bdir = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), SOUL_BACKUP_DIR);
+    await fs.mkdir(bdir, { recursive: true });
+    const filename = soulBackupFilename(folderName, fromIndex, toIndex, phase, soulBackupStamp());
+    await fs.writeFile(path.join(bdir, filename), contents, 'utf-8');
+    return filename;
+  } catch {
+    return null;
+  }
+}
+
+// Extract the trailing conversation index from a title of the form
+// "<name>_<n>" or "<name>#<n>" / "<name>＃<n>" (half- or full-width digits).
+function soulIndexFromTitle(title: string): number | null {
+  const m = title.match(/[_#＃]([0-9０-９]+)\s*$/);
+  if (!m) return null;
+  const n = parseInt(
+    m[1].replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)),
+    10
+  );
+  return isNaN(n) ? null : n;
+}
+
+export function parseSoulBackupFilename(filename: string): SoulBackupInfo | null {
+  if (!filename.endsWith('.md')) return null;
+  const stem = filename.slice(0, -3);
+  const parts = stem.split('__');
+  // Expect exactly [fromTitle, toTitle, phase, stamp].
+  if (parts.length !== 4) return null;
+  const [fromTitle, toTitle, phase, stamp] = parts;
+  if (phase !== 'BEFORE' && phase !== 'AFTER') return null;
+  const fromIndex = soulIndexFromTitle(fromTitle);
+  const toIndex = soulIndexFromTitle(toTitle);
+  if (fromIndex === null || toIndex === null) return null;
+  return { filename, fromTitle, toTitle, fromIndex, toIndex, phase, stamp };
+}
+
+export async function listSoulBackups(folderName: string): Promise<SoulBackupInfo[]> {
+  const bdir = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), SOUL_BACKUP_DIR);
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(bdir);
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return [];
+    throw e;
+  }
+  const out: SoulBackupInfo[] = [];
+  for (const f of entries) {
+    const info = parseSoulBackupFilename(f);
+    if (info) out.push(info);
+  }
+  // Newest first — the stamp is zero-padded and lexicographically sortable.
+  return out.sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : 0));
+}
+
+export async function readSoulBackup(folderName: string, filename: string): Promise<string | null> {
+  // Reject anything that doesn't parse — this doubles as a path-traversal
+  // guard: only names matching the strict backup scheme are ever read.
+  if (!parseSoulBackupFilename(filename)) return null;
+  try {
+    return await fs.readFile(
+      path.join(BACKUPS_DIR, sanitizeFolderName(folderName), SOUL_BACKUP_DIR, filename),
+      'utf-8'
+    );
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return null;
+    throw e;
+  }
 }
 
 export async function shiftRightToLeft(
@@ -154,18 +268,11 @@ export async function shiftRightToLeft(
   newLeftContents: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    // Best-effort backup of what the left pane held before the shift.
-    try {
-      const bdir = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), 'system_prompts');
-      await fs.mkdir(bdir, { recursive: true });
-      const safe = sanitizeFolderName(folderName);
-      await fs.writeFile(
-        path.join(bdir, `${safe}_${currentIndex}_${shiftBackupStamp()}.md`),
-        previousLeftContents,
-        'utf-8'
-      );
-    } catch {
-      // A backup hiccup must not block the shift.
+    // Best-effort backup of what the left pane held before the shift — the
+    // "BEFORE" snapshot of this session's stage (N → N+1). A backup hiccup
+    // must not block the shift.
+    if (previousLeftContents.trim()) {
+      await backupSoulSnapshot(folderName, currentIndex, currentIndex + 1, 'BEFORE', previousLeftContents);
     }
     await writeSystemPromptFile(folderName, currentIndex, newLeftContents);
     await writeSystemPromptFile(folderName, currentIndex + 1, '');
