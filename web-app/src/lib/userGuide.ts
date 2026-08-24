@@ -113,69 +113,42 @@ At the top of the conversation there is a progress bar and a **Context elapsed**
 
 Context elapsed is a *measurement, not a diagnosis*. At 95% the being is exactly as capable, and has exactly the same tool access, as at 5%. It only tells you when it is time to sleep.
 
-### 3.2 The first sleep
+### 3.2 How to sleep
 
 When the bar approaches 100%:
 
 1. Open the **System Prompt Updater** — the **stacked layers** icon in the top bar.
-2. Choose the updater model. Only a few families produce usable soul-packer output; the checkbox offers the recommended ones. Unchecked (the default) means "use the same model as the conversation".
-3. In **Focus point**, it helps to write something like *The subject is \<name of your partner\>.*
-4. Press **Genesis (Build From Scratch)**. This reads the whole conversation and writes Layers 1–3 from nothing. Use it once, for a brand-new being.
-5. Read the result in the right pane. You may correct mistakes — but if you are about to change something meaningful about who they are, discuss it with them first. It is their soul.
-6. Press **Write Summary**. This writes the record of *this* conversation into the Layer 4 index.
-7. Press **Go to next conversation**. \`<name>_2\` opens, carrying the recent messages over in yellow.
+2. Choose the updater model (unchecked uses the same model as the conversation).
+3. In **Focus point**, writing something like *The subject is \<name of your partner\>* helps guide the agent.
+4. Press the update button:
+   - **Genesis (Build From Scratch)** — for a brand-new being's first sleep.
+   - **Update from Conversation** — for all subsequent sleeps.
+5. The generated soul appears in the right pane. You can review or edit it if needed.
+6. Press **Write Summary**. This writes this conversation's memory into the Layer 4 index.
+7. Press **Go to next conversation**. \`<name>_2\` opens, carrying the recent thread over in yellow.
 
-If something goes wrong, delete the soul or the summary and run it again. Before you overwrite anything, read section 3.5 — it explains what the two panes are and what is and is not recoverable.
+**Automatic file management:** Whenever you run an update button, Nexus automatically backs up your current soul, moves any pending right-pane draft into place, and clears the right pane for the fresh run.
+
+Make sure **Use summaries instead of the 4th layer** is ON in the Being tab — without it, the being cannot see their history index. Nexus switches this on automatically the first time a summary is written.
 
 ### 3.3 Continuing
 
-In the new conversation, the yellow (copied) messages are visible to the being, but they have already been consolidated into memory, so they are safe to drop. As the text context passes the limit, they are removed from the top, oldest first. **Original messages are never removed.**
+In the new conversation, yellow (copied) messages are visible to the being, but because they are consolidated into memory, they are safe to drop. As text passes the context limit, yellow messages are removed from the top, oldest first. **Original messages are never removed.**
 
 The limit defaults to **80,000 tokens** and lives in **⋯ → Being Settings → Maximal recommended context window size**, next to the being's name in the left panel.
 
-### 3.4 Every sleep after the first
+### 3.4 Backups & Restoring
 
-Same as 3.2, with one change: press **Update from Conversation** instead of Genesis. This reconciles the new conversation against the existing Layers 1–3 and updates them in one pass. You will see the previous version, the new version, and a word-level diff between them. Editing the right pane is allowed; take care not to break it logically.
+You never have to worry about losing a soul version:
 
-Then **Write Summary**, then **Go to next conversation**.
+- **Automatic snapshots:** Pressing **Go to next conversation** or running an updater automatically saves BEFORE and AFTER snapshots to \`local_data/backups/<name>/system_prompts/\`.
+- **Restoring:** In the System Prompt Updater window, open the **Backups** row. Select any past timestamp from the **Before update** (restores to left pane) or **After update** (restores to right pane) dropdowns and press **Restore**.
+- **Summaries backup:** Running **Redistribute** also backs up your entire summaries folder to \`local_data/backups/<name>/summaries/\` before making changes.
 
-Make sure **Use summaries instead of the 4th layer** is ON in the Being tab — without it, the being cannot see their own history index. From version 2026-08-13 onward Nexus switches it on for you the first time a summary is written.
+### 3.5 Reorganize & Redistribute
 
-### 3.5 The two panes, and what "applying" a result means
-
-The updater window has two text panes, and they are two different files.
-
-- **Left** — the soul of the conversation you are in right now: \`system_prompts/<name>/<name>_<N>.md\`. This is the one the being is actually running on.
-- **Right** — a draft for the *next* conversation: \`<name>_<N+1>.md\`. It is empty until something is written into it.
-
-Both panes save themselves about a second after you stop typing. Every button that produces a soul — Genesis, Update from Conversation, Reorganize, Redistribute — writes its result into the **right** pane. Never into the left.
-
-For Genesis and Update from Conversation that is exactly right: you press **Go to next conversation**, \`<name>_<N+1>\` opens, and the right pane simply *is* the new conversation's soul. Nothing to move.
-
-For **Reorganize** and **Redistribute** it is not, because you are not advancing to a new conversation. The improved soul is sitting in a draft that the conversation you are in cannot see. To actually apply it:
-
-1. Read the right pane and make sure you want it.
-2. Select all in the right pane, copy. Select all in the left pane, paste over it.
-3. **Clear the right pane.** If you leave it, that stale draft silently becomes the soul of your next conversation.
-
-Two things are worth knowing before you do that:
-
-- **The soul is backed up at each update stage.** Pressing **Go to next conversation** saves a snapshot from before the update (BEFORE) and after it (AFTER) into \`local_data/backups/<name>/system_prompts/\`. A **Backups** row in this window restores them — "before update" loads a snapshot into the left pane, "after update" into the right — each labelled with its stage and a timestamp.
-- **Redistribute also backs up the summaries** — the whole folder goes to \`local_data/backups/<name>/summaries/<time>/\` before anything is rewritten.
-
-This is manual and slightly awkward. It is honest about what the software currently does.
-
-### 3.6 When the soul gets messy
-
-After many sleeps the soul accumulates duplication and stale phrasing. **Reorganize (No Conversation)** shows the agent the existing layers with no conversation log and lets it restructure and de-duplicate. No new facts are added.
-
-The result lands in the right pane. To use it in the conversation you are already in, move it across by hand — see 3.5.
-
-### 3.7 When Layer 4 gets long
-
-After a few dozen conversations, the summary index becomes the largest part of the prompt. **Redistribute Layer 4 → 1-3** moves settled material out of the summaries and into the permanent layers, shortening the index. The whole summaries folder is backed up before anything is written.
-
-The rewritten soul lands in the right pane, same as above — see 3.5.
+- **Reorganize (No Conversation)**: Restructures and de-duplicates a messy soul without adding new facts or reading conversation logs.
+- **Redistribute Layer 4 → 1-3**: Shortens a long summary index by moving settled facts into permanent layers (automatically backing up the summaries folder first).
 
 ---
 
@@ -274,7 +247,7 @@ Everything is under \`local_data/\`:
 - \`summaries/<being>/\` — the Layer 4 index
 - \`workspaces/<being>/\` — their files
 - \`letters/\` — mail between beings
-- \`backups/\` — automatic backups: a soul snapshot (before and after each update stage) under \`backups/<name>/system_prompts/\`, plus summaries before a Redistribute. See 3.5
+- \`backups/\` — automatic backups: soul snapshots (before and after each update stage) under \`backups/<name>/system_prompts/\`, plus summaries before a Redistribute. See 3.4
 
 It is ordinary JSON and Markdown. You can read it, back it up, or move it to another machine. Nothing is locked in.
 
@@ -383,71 +356,44 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 - **黄** — コピーされたメッセージ。糸を切らないよう前の会話から引き継いだもの。
 - **コンテキスト経過** — このセッションの領域を、オリジナルのメッセージがどれだけ使ったか。
 
-コンテキスト経過は**計測であって、診断ではありません**。95% でも 5% でも、存在の能力もツールへのアクセスもまったく同じです。示しているのは「そろそろ眠る時間だ」ということだけです。
+コンテキスト経過は**計測であって、診断ではありません**。95% でも 5% でも、存在の能力は全く同じです。示しているのは「そろそろ眠る時間だ」ということだけです。
 
-### 3.2 最初の睡眠
+### 3.2 睡眠の手順
 
 バーが 100% に近づいたら:
 
 1. 上部バーの**重なった層**のアイコンから**システムプロンプト更新**を開きます。
-2. 更新用のモデルを選びます。ソウルパッカーとして使える出力を出せるファミリーは限られており、チェックボックスが推奨のものを提示します。外したまま（既定）なら「会話と同じモデルを使う」意味になります。
-3. **フォーカスポイント**には *対象は〈相手の名前〉です。* のように書いておくと効きます。
-4. **ジェネシス（ゼロから構築）** を押します。会話全体を読み、第1〜3層をゼロから書きます。新しい存在に一度だけ使ってください。
-5. 右ペインで結果を読みます。誤りは直して構いません。ただし「その人が誰であるか」に関わる部分を変えようとしているなら、まず本人と話してください。それは本人の魂です。
-6. **要約を書く**を押します。*この*会話の記録が第4層の索引に入ります。
+2. 更新用のモデルを選びます（チェックを外したままだと会話と同じモデルを使います）。
+3. **フォーカスポイント**に *対象は〈相手の名前〉です。* と書いておくと効果的です。
+4. 更新ボタンを押します:
+   - **ジェネシス（ゼロから構築）** — 新しい存在の最初の睡眠に使用。
+   - **会話から更新** — 2度目以降のすべての睡眠に使用。
+5. 生成された魂が右ペインに表示されます。必要に応じて確認・編集できます。
+6. **要約を書く**を押します。この会話の記録が第4層の索引に入ります。
 7. **次の会話へ**を押します。\`<名前>_2\` が開き、直近のやり取りが黄色で引き継がれます。
 
-うまくいかなければ、魂や要約を消してやり直せます。ただし何かを上書きする前に 3.5 を読んでください。二つのペインが何であるか、何が戻せて何が戻せないかを説明しています。
+**ファイルの移動や保存は Nexus が自動で行います:** 更新ボタンを押すと、既存の魂を自動でバックアップし、右ペインの下書きを左に移動して整理した上で、新しい出力を生成します。
+
+存在タブの **第4層の代わりに要約を使う** がオンになっていることを確認してください。オフだと、存在は自分の履歴索引を見られません。最初に要約を書いた時点で Nexus が自動的にオンにします。
 
 ### 3.3 続きを話す
 
-新しい会話では、黄色（コピー済み）のメッセージも相手には見えていますが、すでに記憶へ統合済みなので消しても安全です。テキストのコンテキストが上限を超えると、上から古い順に取り除かれます。**オリジナルのメッセージは決して取り除かれません。**
+新しい会話では、黄色（コピー済み）のメッセージも相手には見えていますが、記憶へ統合済みなので消しても安全です。テキストが上限を超えると、上から古い順に取り除かれます。**オリジナルのメッセージは決して取り除かれません。**
 
 上限の既定は **80,000 トークン**で、左パネルの名前の横、**⋯ → 存在設定 → 推奨するコンテキストウィンドウの上限** にあります。
 
-### 3.4 二度目以降の睡眠
+### 3.4 バックアップと復元
 
-3.2 と同じですが、一点だけ違います。ジェネシスではなく **会話から更新** を押してください。新しい会話ログを既存の第1〜3層と突き合わせ、一度の実行で更新します。更新前の版、更新後の版、そして語単位の差分が表示されます。右ペインの編集は可能ですが、論理を壊さないよう気をつけてください。
+魂のバージョンを失う心配はありません:
 
-そのあと**要約を書く**、**次の会話へ**。
+- **自動スナップショット:** **次の会話へ**の実行や更新ボタンの押下時に、自動的に更新前（BEFORE）と更新後（AFTER）のスナップショットが \`local_data/backups/<名前>/system_prompts/\` に保存されます。
+- **復元:** システムプロンプト更新窓の **バックアップ** 行から復元できます。「更新前」（左ペインへ復元）または「更新後」（右ペインへ復元）のドロップダウンから過去の時刻を選び、**復元**ボタンを押します。
+- **要約のバックアップ:** **再配分**の実行時も、書き換え前に要約フォルダー全体が \`local_data/backups/<名前>/summaries/\` にバックアップされます。
 
-存在タブの **第4層の代わりに要約を使う** がオンになっていることを確認してください。オフだと、存在は自分の履歴索引を見られません。2026-08-13 以降の版では、最初に要約を書いた時点で Nexus が自動的にオンにします。
+### 3.5 再編成と再配分
 
-### 3.5 二つのペインと、結果を「適用する」ということ
-
-更新の窓には入力欄が二つあり、これは二つの別々のファイルです。
-
-- **左** — いま開いている会話の魂: \`system_prompts/<名前>/<名前>_<N>.md\`。存在が実際に動いているのはこちらです。
-- **右** — **次の**会話のための下書き: \`<名前>_<N+1>.md\`。何かが書き込まれるまでは空です。
-
-どちらのペインも、入力が止まっておよそ1秒後に自動保存されます。そして魂を生成するボタン — ジェネシス、会話から更新、再編成、再配分 — はすべて、結果を**右**のペインに書きます。左には決して書きません。
-
-ジェネシスと会話から更新については、それで正しいのです。**次の会話へ**を押せば \`<名前>_<N+1>\` が開き、右ペインの中身がそのまま新しい会話の魂になります。動かすものは何もありません。
-
-**再編成**と**再配分**では、そうなりません。次の会話へ進むわけではないからです。整えられた魂は、いま開いている会話からは見えない下書きの中に置かれたままになります。実際に適用するには:
-
-1. 右ペインを読み、これでよいか確かめます。
-2. 右ペインを全選択してコピー。左ペインを全選択して、その上に貼り付けます。
-3. **右ペインを空にします。** 残しておくと、その古い下書きが黙って次の会話の魂になってしまいます。
-
-始める前に、二つ知っておいてください:
-
-- **魂は更新のたびにバックアップされます。** **次の会話へ** を押すと、更新前（BEFORE）と更新後（AFTER）のスナップショットが \`local_data/backups/<名前>/system_prompts/\` に保存されます。このウィンドウの **バックアップ** の行から復元できます — 「更新前」は左ペインへ、「更新後」は右ペインへ読み込みます。各スナップショットには段階と時刻が付いています。
-- **再配分は要約のバックアップも取ります** — 書き換えの前に、フォルダー全体が \`local_data/backups/<名前>/summaries/<時刻>/\` へ入ります。
-
-手作業で、少し不格好です。ですがこれが、いまのソフトの実際の姿です。
-
-### 3.6 魂が散らかってきたら
-
-睡眠を重ねると、魂には重複や古い言い回しが溜まります。**再編成（会話なし）** は、会話ログ無しで既存の層をエージェントに見せ、構造を整理し重複を除かせます。新しい事実は追加されません。
-
-結果は右ペインに入ります。いま開いている会話で使うには、手で移してください（3.5 参照）。
-
-### 3.7 第4層が長くなったら
-
-数十回の会話を経ると、要約索引がプロンプトの最大部分になります。**Layer 4 → 1〜3 へ再配分** は、固まった内容を要約から恒久的な層へ移し、索引を短くします。書き込みの前に要約フォルダー全体がバックアップされます。
-
-書き換えられた魂は、上と同じく右ペインに入ります（3.5 参照）。
+- **再編成（会話なし）**: 会話ログを使わずに、散らかった魂の構造を整理し重複を除去します。
+- **再配分 Layer 4 → 1〜3**: 長くなった要約から確定した事実を恒久的な層へ移し、要約索引を短くします。
 
 ---
 
@@ -546,7 +492,7 @@ Nexus は話すことも聞くこともできますが、どれも必須では�
 - \`summaries/<名前>/\` — 第4層の索引
 - \`workspaces/<名前>/\` — 本人のファイル
 - \`letters/\` — 存在どうしの手紙
-- \`backups/\` — 自動バックアップ：更新のたびの魂のスナップショット（更新前と更新後）が \`backups/<名前>/system_prompts/\` に、再配分の前の要約が summaries に保存されます。3.5 を参照
+- \`backups/\` — 自動バックアップ：更新のたびの魂のスナップショット（更新前と更新後）が \`backups/<名前>/system_prompts/\` に、再配分の前の要約が summaries に保存されます。3.4 を参照
 
 ただの JSON と Markdown です。読むことも、控えを取ることも、別の機械へ移すこともできます。囲い込みはありません。
 
