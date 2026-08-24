@@ -6,6 +6,7 @@ import { diff_match_patch, DIFF_DELETE, DIFF_INSERT } from 'diff-match-patch';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
+import { setUnloadGuard } from '@/lib/unloadGuard';
 
 // One shared diff engine. We do NOT diff the raw text directly: on a large
 // prompt, character-level diff_main blows past its time cap and bails out to a
@@ -350,6 +351,20 @@ export default function SystemPromptUpdater({
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'summary' | 'auto'>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+
+  // ── Close/reload guard ─────────────────────────────────────────────────────
+  // A soul-packing run is the most expensive thing in Nexus to lose: minutes of
+  // a paid model call, and NOTHING is written to disk until it finishes. A
+  // reload here throws all of it away with no trace. Hold the guard for exactly
+  // as long as a run is in flight — see src/lib/unloadGuard.ts for why the
+  // dialog's own wording cannot be customised.
+  useEffect(() => {
+    setUnloadGuard('spu', running ? t('unload.busy.spu') : null);
+  }, [running, t]);
+
+  // Clear on unmount (modal closed, page navigated). Without this a guard left
+  // behind would make an idle page unclosable — the exact opposite of the point.
+  useEffect(() => () => { setUnloadGuard('spu', null); }, []);
 
   // The whole identity prompt is now ONE editable block per side (no per-layer
   // split). Left = current file, Right = updated draft. Both are the RAW file

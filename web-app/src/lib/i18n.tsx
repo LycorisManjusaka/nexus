@@ -774,6 +774,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.save.warnPrefix': 'Approaching the save size limit. ',
   'chat.save.dismiss': 'Dismiss',
   'chat.save.dismissTitle': 'Hide this notice (the underlying problem is not fixed)',
+
+  // ── Close/reload guard ───────────────────────────────────────────────────
+  // Short by design: these are shown as a browser TAB TITLE prefix, which is
+  // the only surface we control. The confirmation dialog itself is written by
+  // the browser and cannot be customised (see src/lib/unloadGuard.ts).
+  'unload.busy.generating': '{name} is working',
+  'unload.busy.spu': 'Updating the soul',
+  'unload.busy.saving': 'Saving',
   'chat.marker.aria': 'First original message marker',
   'chat.marker.divider': 'original conversation starts',
   'chat.subagent.summary': '🔍 Subagent: {task}',
@@ -2022,6 +2030,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.save.warnPrefix': '保存サイズの上限に近づいています。',
   'chat.save.dismiss': '閉じる',
   'chat.save.dismissTitle': 'この通知を隠す（原因は解消されていません）',
+
+  // ── 閉じる／再読み込みの確認 ─────────────────────────────────────────────
+  'unload.busy.generating': '{name}は作業中',
+  'unload.busy.spu': '魂を更新中',
+  'unload.busy.saving': '保存中',
   'chat.marker.aria': '最初の新規メッセージの目印',
   'chat.marker.divider': 'ここから新規の会話',
   'chat.subagent.summary': '🔍 サブエージェント：{task}',

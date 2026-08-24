@@ -26,6 +26,7 @@ import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_IN
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
+import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -307,6 +308,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // effect (which stringifies anyway, so this is free) and read by handleSend
   // to warn BEFORE a large attachment makes the conversation unsavable.
   const savedBytesRef = useRef(0);
+  // Number of auto-save POSTs currently in flight. Counted rather than a
+  // boolean because a fast edit can start a second save before the first
+  // settles, and a boolean would clear the close-guard while bytes are still
+  // on the wire. Read only by the guard — nothing renders from it.
+  const savesInFlightRef = useRef(0);
+  // Assigned during render (same pattern as plannedTitleRef above) so the save
+  // effect can read the translated label WITHOUT taking `t` as a dependency.
+  // Listing `t` there would re-fire that effect on a language change and
+  // re-POST the whole conversation — a fresh updatedAt purely from switching
+  // language, which is the exact churn its header comment warns against.
+  const savingLabelRef = useRef('');
+  savingLabelRef.current = t('unload.busy.saving');
   const [totalTokens, setTotalTokens] = useState(0);
   const [conversationTokens, setConversationTokens] = useState(0);
   const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
@@ -1192,6 +1205,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSaveError(null);
       }
 
+      // Hold the close-guard for the round trip. This window is short, but it
+      // is exactly the window in which the turn on screen is not yet on disk,
+      // and a multi-MB conversation makes it long enough to lose a close race.
+      savesInFlightRef.current += 1;
+      setUnloadGuard('save', savingLabelRef.current);
+
       fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1212,6 +1231,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             level: 'error',
             text: 'Could not reach the local server to save this conversation. Nothing on screen has been lost, but this turn is not on disk yet.'
           });
+        })
+        .finally(() => {
+          // Release only when the LAST in-flight save settles. Failure still
+          // releases: the guard's job is "bytes are on the wire", not "the data
+          // is safe" — a failed save already shouts through the error banner,
+          // and holding the guard forever would make an idle page unclosable.
+          savesInFlightRef.current = Math.max(0, savesInFlightRef.current - 1);
+          if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
   }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
@@ -1378,11 +1405,41 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     prevMessagesLengthRef.current = messages.length;
   }, [messages, loading, deepLinkScrollPending]);
 
-  // Sync browser tab title with current conversation
+  // ── Close/reload guard ───────────────────────────────────────────────────
+  // A reload or tab close mid-generation destroys the turn: the auto-save
+  // effect above deliberately skips the POST while `loading === true`, so a
+  // streaming reply exists only in memory. Hold the guard for exactly as long
+  // as that is true, and release it the instant it isn't — an idle page must
+  // close with no dialog at all. See src/lib/unloadGuard.ts for why the dialog
+  // text itself cannot be customised.
   useEffect(() => {
-    document.title = title ? `${title} — Nexus` : 'Nexus';
+    setUnloadGuard(
+      'generation',
+      loading ? t('unload.busy.generating').replace('{name}', localAiName || 'The being') : null
+    );
+  }, [loading, localAiName, t]);
+
+  // Release every guard this component owns when it unmounts (conversation
+  // switch, navigation). Separate from the effect above so it runs once, on
+  // teardown only — a stale guard would block closing an idle page forever,
+  // which is the exact failure this feature exists to avoid.
+  useEffect(() => () => {
+    setUnloadGuard('generation', null);
+    setUnloadGuard('save', null);
+  }, []);
+
+  // Sync browser tab title with current conversation.
+  //
+  // The busy prefix is load-bearing, not decoration: the browser writes its own
+  // generic "Leave site?" text and ignores anything we pass, so the tab strip
+  // is the only place we can say WHO is working. It sits behind the dialog and
+  // is what makes that generic prompt legible.
+  const busyLabel = useBusyLabel();
+  useEffect(() => {
+    const base = title ? `${title} — Nexus` : 'Nexus';
+    document.title = busyLabel ? `● ${busyLabel} — ${base}` : base;
     return () => { document.title = 'Nexus'; };
-  }, [title]);
+  }, [title, busyLabel]);
 
   // ── Deep-link scroll target ──────────────────────────────────────────────
   // Runs after messages render. `messages.length` is in the deps because on a
