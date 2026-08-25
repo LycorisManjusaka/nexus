@@ -188,6 +188,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.lmStudioPath.placeholder': 'e.g. C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
   'settings.lmStudioPath.help':
     "Path to LM Studio.exe, used to auto-start LM Studio when a Local conversation begins and the server isn't running. Leave empty to manage LM Studio manually. Saved with the API keys.",
+  'settings.diffViewerPath.label': 'Diff viewer executable path',
+  'settings.diffViewerPath.placeholder': 'e.g. C:\\Program Files\\WinMerge\\WinMergeU.exe',
+  'settings.diffViewerPath.help':
+    "Full path to your external diff tool (e.g. WinMerge). The Compare button in the System Prompt Updater opens it with the current and updated soul files; edits saved there flow back into Nexus. For tools that need flags, use {left} / {right} placeholders (e.g. code --diff {left} {right}). Saved with the API keys.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
     "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
@@ -1227,7 +1231,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.streamingRO': '· streaming (read-only)...',
   'spu.emptyPh': '(empty)',
   'spu.noUpdatePh': '(no update yet — click Update from Conversation)',
-  'spu.diffTitle': 'Word-level diff (current → updated)',
+  'spu.compareButton': 'Compare in diff tool',
+  'spu.compareActive': 'Syncing edits from the diff tool…',
   'spu.changelogLabel': 'Changelog (above Layer 1 — archived to changelogs/{folder}/{title}.md · never in context)',
   'spu.layer4Write': 'Layer 4 write · summaries/{folder}/',
   'spu.backupLine': 'Backup: {n} file(s) →',
@@ -1485,6 +1490,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.lmStudioPath.placeholder': '例: C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
   'settings.lmStudioPath.help':
     'LM Studio.exe のパスです。Local の会話を始めたとき、LM Studio のサーバーが起動していなければ、このパスから自動起動します。空にしておくと手動での管理になります。APIキーと一緒に保存されます。',
+  'settings.diffViewerPath.label': '差分比較ツールの実行ファイルのパス',
+  'settings.diffViewerPath.placeholder': '例: C:\\Program Files\\WinMerge\\WinMergeU.exe',
+  'settings.diffViewerPath.help':
+    '外部の差分比較ツール（例: WinMerge）へのフルパスです。システムプロンプト更新画面の「差分ツールで比較」ボタンが、現行／更新後の魂のファイルを引数にこのツールを開き、ツール内で保存した編集はNexusへ同期されます。フラグが必要なツール向けに {left} / {right} プレースホルダーも使えます（例: code --diff {left} {right}）。APIキーと一緒に保存されます。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
     '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',
@@ -2500,7 +2509,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.streamingRO': '· 受信中（読み取り専用）…',
   'spu.emptyPh': '（空）',
   'spu.noUpdatePh': '（まだ更新はありません — 「会話から更新」を押してください）',
-  'spu.diffTitle': '単語単位の差分（現在 → 更新後）',
+  'spu.compareButton': '差分ツールで比較',
+  'spu.compareActive': '差分ツールの編集を同期中…',
   'spu.changelogLabel': '変更履歴（Layer 1 より上 — changelogs/{folder}/{title}.md に保存 · コンテキストには入りません）',
   'spu.layer4Write': 'Layer 4 書き込み · summaries/{folder}/',
   'spu.backupLine': 'バックアップ: {n} ファイル →',

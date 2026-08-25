@@ -59,6 +59,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     digitalocean: '',
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
     lmStudioPath: '',
+    diffViewerPath: '',
   });
   const [loading, setLoading] = useState(true);
 
@@ -595,6 +596,22 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </label>
               <p className="text-xs text-muted-foreground mt-1">
                 <Tx k="settings.lmStudioPath.help" />
+              </p>
+            </div>
+
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.diffViewerPath.label')}</span>
+                <input
+                  type="text"
+                  value={keys.diffViewerPath ?? ''}
+                  placeholder={t('settings.diffViewerPath.placeholder')}
+                  onChange={e => setKeys({ ...keys, diffViewerPath: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.diffViewerPath.help" />
               </p>
             </div>
 

@@ -2,60 +2,11 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle } from 'lucide-react';
-import { diff_match_patch, DIFF_DELETE, DIFF_INSERT } from 'diff-match-patch';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
-
-// One shared diff engine. We do NOT diff the raw text directly: on a large
-// prompt, character-level diff_main blows past its time cap and bails out to a
-// degenerate "delete everything / insert everything" result (two big blocks,
-// no per-word matching). Instead we use diff-match-patch's documented
-// words-to-chars trick — tokenize each side into words/whitespace/CJK-chars,
-// map every distinct token to one private code point, diff those compact
-// strings (1 unit per token → fast + word-granular), then map the result back
-// to real text. This is both fast AND granular.
-const dmp = new diff_match_patch();
-dmp.Diff_Timeout = 2.0; // generous: the token-encoded strings are short, so a
-                        // normal update finishes in milliseconds anyway.
-
-// Tokenize: Latin/digit runs as words, whitespace runs together, every other
-// character (CJK, punctuation, symbols) as its own token. Joined back, the
-// tokens reproduce the input exactly.
-const DIFF_TOKEN_RE = /[A-Za-z0-9]+|\s+|[\s\S]/g;
-
-function diffByTokens(before: string, after: string): Array<[number, string]> {
-  const tokenArray: string[] = [];
-  const tokenHash = new Map<string, number>();
-  const encode = (text: string): string => {
-    const tokens = text.match(DIFF_TOKEN_RE) || [];
-    let out = '';
-    for (const tok of tokens) {
-      let idx = tokenHash.get(tok);
-      if (idx === undefined) {
-        // ~65k distinct tokens is far more than any real prompt produces; if it
-        // were ever exceeded, fromCharCode would wrap — acceptably rare.
-        idx = tokenArray.length;
-        tokenArray.push(tok);
-        tokenHash.set(tok, idx);
-      }
-      out += String.fromCharCode(idx);
-    }
-    return out;
-  };
-  const e1 = encode(before);
-  const e2 = encode(after);
-  // checklines=false: our "characters" are token ids, not lines.
-  const diffs = dmp.diff_main(e1, e2, false) as Array<[number, string]>;
-  // Decode each chunk's token-id chars back into the original text.
-  return diffs.map(([op, data]) => {
-    let s = '';
-    for (let i = 0; i < data.length; i++) s += tokenArray[data.charCodeAt(i)] ?? '';
-    return [op, s] as [number, string];
-  });
-}
 
 // ── Title <-> index helpers (client-side mirror of the lib) ─────────────────
 const fwToHw = (s: string) =>
@@ -94,28 +45,6 @@ function assembleLayers123(text: string): string {
     .filter((l) => l.index >= 1 && l.index <= 3)
     .map((l) => `## **Layer ${l.index}: ${l.name}**\n${l.content}`)
     .join('\n\n');
-}
-
-// ── Word-level diff display ────────────────────────────────────────────────
-function DiffView({ before, after }: { before: string; after: string }) {
-  const t = useT();
-  const parts = useMemo(() => {
-    if (!before && !after) return null;
-    // Token-level diff — fast and word-granular (see diffByTokens above).
-    return diffByTokens(before, after);
-  }, [before, after]);
-  if (!parts) return <div className="italic text-muted-foreground text-xs">{t('spu.empty')}</div>;
-  return (
-    <div className="text-[12px] leading-relaxed whitespace-pre-wrap font-mono break-words">
-      {parts.map(([op, text], i) => {
-        if (op === DIFF_INSERT)
-          return <span key={i} className="bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 underline decoration-emerald-500/60">{text}</span>;
-        if (op === DIFF_DELETE)
-          return <span key={i} className="bg-red-500/15 text-red-700 dark:text-red-300 line-through decoration-red-500/60">{text}</span>;
-        return <span key={i}>{text}</span>;
-      })}
-    </div>
-  );
 }
 
 // ── Run lifecycle indicator chip ────────────────────────────────────────────
@@ -381,9 +310,25 @@ export default function SystemPromptUpdater({
   const [rightText, setRightText] = useState('');
   const [leftTokens, setLeftTokens] = useState(0);
   const [rightTokens, setRightTokens] = useState(0);
-  // Debounced snapshots for the (expensive) word-level diff.
-  const [diffLeft, setDiffLeft] = useState('');
-  const [diffRight, setDiffRight] = useState('');
+  // External diff-tool session (Preferences → Other → diff viewer path).
+  // openCompare() writes both panes to temp files and spawns the configured
+  // tool; the poll below reads them back so edits saved in the tool land in
+  // these panes (and then persist via the normal debounced auto-save).
+  const [compareSession, setCompareSession] = useState<{ leftFile: string; rightFile: string; leftSent: string; rightSent: string } | null>(null);
+  // The viewer path lives in the API-keys blob (same place as lmStudioPath),
+  // NOT in globalSettings — fetch it when the modal opens.
+  const [diffViewerPath, setDiffViewerPath] = useState('');
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch('/api/keys')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setDiffViewerPath(typeof data?.diffViewerPath === 'string' ? data.diffViewerPath.trim() : '');
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open]);
 
   const [updateStatus, setUpdateStatus] = useState<RunStatus>({ state: 'idle' });
   // The agent appends "## [Abbreviations log]" / "## [Deletions log]" sections
@@ -563,8 +508,6 @@ export default function SystemPromptUpdater({
         // effect won't write a spurious empty <baseName>_<index+1>.md on open.
         setLeftText(leftRaw);
         setRightText(nextRaw);
-        setDiffLeft(leftRaw);
-        setDiffRight(nextRaw);
         setUpdateStatus({ state: 'idle' });
         setUpdateLogs('');
         setChangelogText('');
@@ -688,20 +631,108 @@ export default function SystemPromptUpdater({
     return () => clearTimeout(h);
   }, [open, rightText, aiName]);
 
-  // ── Diff snapshot debounce ───────────────────────────────────────────────
+  // ── External diff tool session ────────────────────────────────────────────
+  // Opens the configured viewer with temp copies of both panes. The temp files
+  // keep the real soul-file names (<name>_<N>.md / <name>_<N+1>.md) so the
+  // tool's tab titles are meaningful. See /api/diff-viewer for the spawn
+  // contract (positional args, or {left}/{right} placeholders for tools that
+  // need flags like `code --diff`).
+  const openCompare = useCallback(async () => {
+    const viewerPath = diffViewerPath;
+    if (!viewerPath) return;
+    const parsed = parseTitleIndex(title);
+    const base = (parsed?.base ?? folderName).replace(/[^\w.\-]+/g, '_');
+    const n = parsed?.index ?? 1;
+    try {
+      const res = await fetch('/api/diff-viewer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'open',
+          viewerPath,
+          leftText,
+          rightText,
+          leftName: `${base}_${n}.md`,
+          rightName: `${base}_${n + 1}.md`,
+        }),
+      });
+      const data = await res.json();
+      if (data?.error) {
+        setStatusMessage(String(data.error));
+        return;
+      }
+      setCompareSession({ leftFile: data.leftFile, rightFile: data.rightFile, leftSent: leftText, rightSent: rightText });
+    } catch (err: any) {
+      setStatusMessage(`Diff viewer failed: ${err?.message ?? err}`);
+    }
+  }, [diffViewerPath, title, folderName, leftText, rightText]);
+
+  // Poll the temp files while a session is open. Only apply a side when the
+  // file no longer matches what we last wrote — that means the user saved an
+  // edit in the external tool. (Edits typed into the panes themselves never
+  // travel TO the tool mid-session; open the tool again to push fresh copies.)
+  // Paused during runs/streaming so we never clobber an in-flight agent write.
   useEffect(() => {
-    if (!open) return;
-    const h = setTimeout(() => setDiffLeft(leftText), 450);
-    return () => clearTimeout(h);
-  }, [open, leftText]);
+    if (!open || !compareSession || running || streamingUpdate) return;
+    const session = compareSession;
+    // Liveness gating: treat "not running" as a close only AFTER we've seen the
+    // viewer running at least once (a slow cold start racing the first poll
+    // must not tear the session down), then require two consecutive misses so a
+    // momentary process blip doesn't kill it either.
+    let seenAlive = false;
+    let deadTicks = 0;
+    const iv = setInterval(async () => {
+      try {
+        const res = await fetch('/api/diff-viewer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'read', leftFile: session.leftFile, rightFile: session.rightFile }),
+        });
+        const data = await res.json();
+        if (data?.error) return;
+        if (data?.alive === true) {
+          seenAlive = true;
+          deadTicks = 0;
+        } else if (data?.alive === false) {
+          if (seenAlive) deadTicks += 1;
+          if (deadTicks >= 2) {
+            // Viewer closed — stop syncing and clean up the temp files.
+            setCompareSession(null);
+            fetch('/api/diff-viewer', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'close', leftFile: session.leftFile, rightFile: session.rightFile }),
+            }).catch(() => {});
+            return;
+          }
+        }
+        if (typeof data.leftText === 'string' && data.leftText !== session.leftSent) {
+          setLeftText(data.leftText);
+          setCompareSession((s) => (s ? { ...s, leftSent: data.leftText } : s));
+        }
+        if (typeof data.rightText === 'string' && data.rightText !== session.rightSent) {
+          setRightText(data.rightText);
+          setCompareSession((s) => (s ? { ...s, rightSent: data.rightText } : s));
+        }
+      } catch { /* transient — next tick retries */ }
+    }, 2000);
+    return () => clearInterval(iv);
+  }, [open, compareSession, running, streamingUpdate]);
+
+  // End the session when the modal closes (best-effort temp cleanup — if the
+  // tool still holds the files open, Windows refuses the delete and the files
+  // simply age out of the OS temp dir).
   useEffect(() => {
-    // Don't recompute the diff while the agent is streaming into the right pane
-    // — the snapshot is frozen until the run finishes/aborts (streamingUpdate
-    // flips false), at which point this effect re-runs against the final text.
-    if (!open || streamingUpdate) return;
-    const h = setTimeout(() => setDiffRight(rightText), 450);
-    return () => clearTimeout(h);
-  }, [open, rightText, streamingUpdate]);
+    if (open) return;
+    if (!compareSession) return;
+    const session = compareSession;
+    setCompareSession(null);
+    fetch('/api/diff-viewer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'close', leftFile: session.leftFile, rightFile: session.rightFile }),
+    }).catch(() => {});
+  }, [open, compareSession]);
 
   // ── Load the existing summary ────────────────────────────────────────────
   useEffect(() => {
@@ -2156,15 +2187,26 @@ export default function SystemPromptUpdater({
               </div>
             </div>
 
-            {/* Word-level diff */}
-            <details className="mt-2" open>
-              <summary className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold cursor-pointer select-none hover:text-foreground">
-                {t('spu.diffTitle')}
-              </summary>
-              <div className="mt-2 p-2 border border-border rounded bg-background/60 max-h-96 overflow-y-auto">
-                <DiffView before={diffLeft} after={diffRight} />
+            {/* External diff tool — replaces the old built-in word-level diff.
+                Writes both panes to temp files named after the real soul files
+                (so the tool's tabs read <name>_<N>.md / <name>_<N+1>.md) and
+                spawns the configured executable. While a session is open we
+                poll the temp files: an edit saved in the tool flows back into
+                the panes, then persists via the normal debounced auto-save. */}
+            {diffViewerPath ? (
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={openCompare}
+                  disabled={!!running}
+                  className="inline-flex items-center gap-1.5 px-2 py-1 text-xs font-medium bg-slate-500/15 text-slate-600 dark:text-slate-300 hover:bg-slate-500/25 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ArrowRight size={12} />{t('spu.compareButton')}
+                </button>
+                {compareSession && (
+                  <span className="text-[11px] text-muted-foreground animate-pulse">{t('spu.compareActive')}</span>
+                )}
               </div>
-            </details>
+            ) : null}
 
             {/* Changelog — everything above "## Layer 1" in the agent output.
                 Read-only. Archived to local_data/changelogs/<folder>/<title>.md
