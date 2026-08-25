@@ -780,6 +780,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // the only surface we control. The confirmation dialog itself is written by
   // the browser and cannot be customised (see src/lib/unloadGuard.ts).
   'unload.busy.generating': '{name} is working',
+  'unload.busy.thinking': 'thinking',
   'unload.busy.spu': 'Updating the soul',
   'unload.busy.saving': 'Saving',
   'chat.marker.aria': 'First original message marker',
@@ -892,6 +893,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'chat.toolAction.WebSearch': 'search the web',
   'chat.toolAction.web_fetch': 'fetch a web page',
   'chat.toolAction.WebFetch': 'fetch a web page',
+  // Not a tool the entity called — the provider refused the request on a
+  // per-minute quota and told us how long to wait. Shown in the same slot so a
+  // deliberate pause never looks like a freeze.
+  'chat.toolAction.rate_limit_wait': 'wait out the provider rate limit',
 
   // ── System Instructions ▸ Being (continued) ───────────────────────────
   'id.websearch.label': '🌐 Enable Web Search & Access',
@@ -2050,6 +2055,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   // ── 閉じる／再読み込みの確認 ─────────────────────────────────────────────
   'unload.busy.generating': '{name}は作業中',
+  'unload.busy.thinking': '考え中',
   'unload.busy.spu': '魂を更新中',
   'unload.busy.saving': '保存中',
   'chat.marker.aria': '最初の新規メッセージの目印',
@@ -2163,6 +2169,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'chat.toolAction.WebSearch': 'ウェブを検索して',
   'chat.toolAction.web_fetch': 'ウェブページを取得して',
   'chat.toolAction.WebFetch': 'ウェブページを取得して',
+  'chat.toolAction.rate_limit_wait': 'レート制限の解除を待って',
 
   // ── システム指示 ▸ 存在（続き） ──────────────────────────
   'id.websearch.label': '🌐 ウェブ検索とアクセスを有効にする',

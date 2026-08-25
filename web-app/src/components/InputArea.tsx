@@ -526,7 +526,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!disabled) setIsDragging(true);
+    if (!disabled && !isGenerating) setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -537,7 +537,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (disabled || !e.dataTransfer.files) return;
+    if (disabled || isGenerating || !e.dataTransfer.files) return;
     await processFiles(Array.from(e.dataTransfer.files));
   };
 
@@ -642,7 +642,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           <button
             onClick={() => fileInputRef.current?.click()}
             className="p-3 text-muted-foreground hover:text-foreground hover:bg-muted rounded-xl transition-colors"
-            disabled={disabled}
+            disabled={disabled || isGenerating}
           >
             <Paperclip size={20} />
           </button>
@@ -705,13 +705,13 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            disabled={disabled || isGenerating}
-            placeholder={t('input.placeholder')}
+            disabled={disabled}
+            placeholder={isGenerating ? t('chat.interject.placeholder') : t('input.placeholder')}
             className="w-full max-h-48 min-h-[44px] bg-transparent resize-none pb-3 pt-1 px-2 outline-none text-sm overflow-y-auto"
             rows={1}
           />
         </div>
-        {isGenerating ? (
+        {isGenerating && (
           <button 
             onClick={onStop}
             className="p-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors shadow-sm"
@@ -719,15 +719,14 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           >
             <Square size={18} className="fill-current" />
           </button>
-        ) : (
-          <button 
-            onClick={handleSend}
-            disabled={disabled || (!text.trim() && attachments.length === 0)}
-            className="p-3 bg-primary text-primary-foreground rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shadow-sm"
-          >
-            <Send size={18} />
-          </button>
         )}
+        <button 
+          onClick={handleSend}
+          disabled={disabled || (!text.trim() && attachments.length === 0)}
+          className="p-3 bg-primary text-primary-foreground rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shadow-sm"
+        >
+          <Send size={18} />
+        </button>
       </div>
     </div>
   );

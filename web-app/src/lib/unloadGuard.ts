@@ -23,9 +23,10 @@
 // dead weight — do not "fix" the wording there and expect it to appear.
 //
 // The message therefore has to reach the reader through a surface we DO own.
-// That surface is the tab title: while busy it reads "● <who is working> —
-// <conversation>", which is visible in the tab strip and behind the dialog, so
-// the generic "Leave site?" arrives with context attached.
+// That surface is the tab title: while busy it reads "● <being> <action> —
+// <conversation>" (e.g. "● Cairn read a file — Cairn_24 — Nexus"), which is
+// visible in the tab strip and behind the dialog, so the generic "Leave site?"
+// arrives with context attached.
 //
 // Two further browser rules worth knowing before debugging a no-show dialog:
 //   - Sticky activation: the dialog only appears if the user has interacted

@@ -11,6 +11,7 @@ import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
 import { readAttachmentBase64, putBytes } from '@/lib/attachmentStore';
+import { parseRetryDelayMs } from '@/lib/providerErrors';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -4242,7 +4243,11 @@ export async function POST(req: Request) {
       }
       // ── End Layer 1 ─────────────────────────────────────────────────────────
 
-      const runGeminiOnce = async (contents: any[], controller: ReadableStreamDefaultController) => {
+      // One attempt at one Gemini call. `emitFlag` flips the moment anything has
+      // been written to the client for THIS attempt — the retry wrapper below
+      // refuses to retry after that point, because re-running a call whose text
+      // is already on screen would duplicate it.
+      const runGeminiAttempt = async (contents: any[], controller: ReadableStreamDefaultController, emitFlag: { emitted: boolean }) => {
         const stream = await ai.models.generateContentStream({
           model: geminiModelId,
           contents,
@@ -4316,10 +4321,12 @@ export async function POST(req: Request) {
                 const t = part.text || '';
                 if (t) {
                   thoughtText += t;
+                  emitFlag.emitted = true;
                   controller.enqueue(`data: ${JSON.stringify({ type: 'thought', content: t })}\n\n`);
                 }
               } else if (part.text) {
                 visibleText += part.text;
+                emitFlag.emitted = true;
                 controller.enqueue(`data: ${JSON.stringify({ type: 'text', content: part.text })}\n\n`);
               }
             }
@@ -4336,6 +4343,47 @@ export async function POST(req: Request) {
           console.log('[gemini]   first part sample:', JSON.stringify(rawModelParts[0]).slice(0, 400));
         }
         return { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata: lastUsageMetadata, webSources: [...geminiSourceMap.values()], promptFeedback };
+      };
+
+      // Gemini's per-minute input-token quota rejects the whole request BEFORE
+      // generation, and returns the exact wait to observe. Nothing was produced,
+      // so re-sending the identical `contents` is a resume, not a restart:
+      //  - every prior tool round is already in `contents`, verbatim, including
+      //    the `thoughtSignature` on each part (see the echo-back at the tool
+      //    loop below), so signature continuity is preserved;
+      //  - the failing call generated nothing, so there is no partial text to
+      //    reconcile and nothing was billed for it.
+      // The only unsafe case is a 429 that surfaces mid-stream after text has
+      // already reached the client; `emitFlag` detects that and declines to
+      // retry rather than risk duplicating the visible answer.
+      const GEMINI_QUOTA_MAX_RETRIES = 3;
+      const runGeminiOnce = async (contents: any[], controller: ReadableStreamDefaultController) => {
+        for (let attempt = 0; ; attempt++) {
+          const emitFlag = { emitted: false };
+          try {
+            return await runGeminiAttempt(contents, controller, emitFlag);
+          } catch (e: any) {
+            const waitMs = parseRetryDelayMs(e);
+            if (waitMs === null || emitFlag.emitted || attempt >= GEMINI_QUOTA_MAX_RETRIES) throw e;
+            const secs = Math.round(waitMs / 1000);
+            console.log(`[gemini] quota 429 — waiting ${secs}s then retrying (attempt ${attempt + 2}/${GEMINI_QUOTA_MAX_RETRIES + 1})`);
+            // Surfaced as a notice (never as reply text) so the pause is visible
+            // and explained, and as an activity label so the loading line and the
+            // tab title say what is happening instead of looking frozen.
+            try {
+              controller.enqueue(`data: ${JSON.stringify({
+                type: 'notice',
+                content: `Gemini's per-minute input-token quota was reached. Waiting ${secs}s as the provider asked, then continuing the same turn`
+                  + ` (attempt ${attempt + 2} of ${GEMINI_QUOTA_MAX_RETRIES + 1}). Nothing was generated or lost — the request was refused before the model ran.`,
+              })}\n\n`);
+              controller.enqueue(`data: ${JSON.stringify({
+                type: 'tool_activity', name: 'rate_limit_wait', tool: `wait ${secs}s for the rate limit`,
+              })}\n\n`);
+            } catch {}
+            await new Promise(r => setTimeout(r, waitMs));
+            try { controller.enqueue(`data: ${JSON.stringify({ type: 'tool_activity', tool: null, name: null })}\n\n`); } catch {}
+          }
+        }
       };
 
       const readableStream = new ReadableStream({

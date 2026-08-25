@@ -27,6 +27,7 @@ import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
+import { describeProviderError } from '@/lib/providerErrors';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -410,10 +411,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Mid-turn "partner interjection": a per-turn id (also sent in the request
   // body) lets you POST a message to /api/chat/inject WHILE the entity is
   // working; the running tool loop folds it in at its next model-call boundary.
-  // `injectTurnId` is non-null only while a turn is in flight. `interjectText`
-  // is the input box; `interjectStatus` shows a brief send/deliver confirmation.
+  // `injectTurnId` is non-null only while a turn is in flight. Interjections now
+  // go through the NORMAL input (sending while a turn is in flight routes here);
+  // `interjectStatus` shows a brief send/deliver confirmation.
   const [injectTurnId, setInjectTurnId] = useState<string | null>(null);
-  const [interjectText, setInterjectText] = useState('');
   const [interjectStatus, setInterjectStatus] = useState<string | null>(null);
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
@@ -1413,11 +1414,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // close with no dialog at all. See src/lib/unloadGuard.ts for why the dialog
   // text itself cannot be customised.
   useEffect(() => {
-    setUnloadGuard(
-      'generation',
-      loading ? t('unload.busy.generating').replace('{name}', localAiName || 'The being') : null
-    );
-  }, [loading, localAiName, t]);
+    if (!loading) {
+      setUnloadGuard('generation', null);
+      return;
+    }
+    // "<Being> <current action>" — the action is the SAME phrase the loading
+    // indicator shows (`liveToolActivity`, e.g. "read a file"), or "thinking"
+    // while no tool is running. This used to read "{model family} is working"
+    // — naming the wrong actor. The being is who acts; the model is what they
+    // act through.
+    const being = folderName || 'The being';
+    const action = liveToolActivity || t('unload.busy.thinking');
+    setUnloadGuard('generation', `${being} ${action}`);
+  }, [loading, folderName, liveToolActivity, t]);
 
   // Release every guard this component owns when it unmounts (conversation
   // switch, navigation). Separate from the effect above so it runs once, on
@@ -1523,6 +1532,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   const handleSend = async (text: string, attachments: any[]) => {
     if (!text.trim() && attachments.length === 0) return;
+
+    // A turn is in flight → this message is a mid-turn INTERJECTION, not a new
+    // message. It's delivered to the running turn at its next tool-loop step
+    // and never appended to the conversation log. (The old dedicated interject
+    // input box is gone — sending normally while they work IS the interjection.)
+    if (injectTurnId) {
+      await sendInterjection(text);
+      return;
+    }
 
     // Pre-flight size check. Attachments are persisted as inline base64, so
     // every one of them counts against V8's ~512 MB max-string-length ceiling
@@ -1797,16 +1815,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Send a mid-turn interjection to the running turn. Fire-and-forget POST to
   // /api/chat/inject; the backend queues it and the tool loop folds it in at
   // its next model-call boundary.
-  const sendInterjection = async () => {
-    const text = interjectText.trim();
-    if (!text || !injectTurnId) return;
-    setInterjectText('');
+  const sendInterjection = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || !injectTurnId) return;
     setInterjectStatus(t('chat.interject.sent'));
     try {
       const r = await fetch('/api/chat/inject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId: injectTurnId, text }),
+        body: JSON.stringify({ turnId: injectTurnId, text: trimmed }),
       });
       if (!r.ok) setInterjectStatus(t('chat.interject.queueFailedEnded'));
     } catch {
@@ -1838,7 +1855,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // input can address this specific turn.
     const turnId = `turn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     setInjectTurnId(turnId);
-    setInterjectText('');
     setInterjectStatus(null);
 
     // Continuing: reuse the existing message's id so every streaming update
@@ -1931,6 +1947,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const fatiguePct = Math.round((tokenBreakdown.original / Math.max(1, fatigueMax - tokenBreakdown.sys)) * 100);
       effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${fatiguePct}%`)}`.trim();
     }
+
+    // Turn-stopped diagnostics ("a file operation was blocked…", "hit the
+    // token limit…") and provider failures. Display-only, exactly like
+    // webSources: kept off the message body so they are never persisted into
+    // the reply text, never replayed to the model, and never counted as tokens.
+    // Declared OUTSIDE the try so the catch below can add the failure reason to
+    // the same channel instead of concatenating it into the reply.
+    const notices: string[] = [];
 
     try {
       // Slim the wire payload aggressively. The backend only reads role / content /
@@ -2061,11 +2085,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // are the clickable proof that the model actually consulted live pages
       // (vs. hallucinating "news"). Display-only — NOT in slimHistory.
       let webSources: { url: string; title?: string }[] | null = null;
-      // Turn-stopped diagnostics ("a file operation was blocked…", "hit the
-      // token limit…"). Display-only, exactly like webSources: kept off the
-      // message body so they are never persisted into the reply text, never
-      // replayed to the model, and never counted as tokens.
-      const notices: string[] = [];
       // Every tool the model actually dispatched this turn, with its arguments.
       // This is the evidence behind the 🔧 report button: a reply that claims
       // "I saved the file" can be checked against whether a Write really ran.
@@ -2407,9 +2426,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
     } catch (err: any) {
       if (err.name !== 'AbortError') {
+        // A provider failure is information ABOUT the turn, not something the
+        // being said. Putting it in `content` wrote a wall of raw provider JSON
+        // into the reply — which was then saved to the log and replayed to the
+        // model on every later turn, as if it were their own words. It belongs
+        // in the notice channel: visible to the reader, invisible to the model.
+        notices.push(describeProviderError(err?.message ?? err));
         setMessages(prev => prev.map(m =>
           m.id === msgId
-            ? { ...m, content: m.content + (m.content ? '\n\n' : '') + `Error: ${err.message}` }
+            ? { ...m, notices: [...notices], streaming: false }
             : m
         ));
       }
@@ -3397,31 +3422,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         : t('chat.stall.sec').replace('{n}', String(stallIdleSeconds)))}
                   </span>
                 )}
-                {/* Mid-turn interjection: send a note to the entity WHILE it
-                    works. Lands at the next tool-loop step (OAuth: at its next
-                    tool call). If it makes no further tool calls this turn, the
-                    note won't land — send it as a normal next message instead. */}
-                {injectTurnId && (
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <input
-                      value={interjectText}
-                      onChange={(e) => setInterjectText(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendInterjection(); } }}
-                      placeholder={t('chat.interject.placeholder')}
-                      className="text-xs px-2 py-1 w-72 max-w-[60vw] rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
-                    />
-                    <button
-                      type="button"
-                      onClick={sendInterjection}
-                      disabled={!interjectText.trim()}
-                      className="text-xs px-2 py-1 rounded-md border border-indigo-500/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10 disabled:opacity-40"
-                    >
-                      {t('chat.interject.send')}
-                    </button>
-                    {interjectStatus && (
-                      <span className="text-[10px] text-muted-foreground">{interjectStatus}</span>
-                    )}
-                  </div>
+                {/* Partner interjection status: a message sent through the
+                    normal input while the entity is working is delivered at
+                    their next tool-loop step, never appended to the log. This
+                    line confirms it was queued / delivered. */}
+                {interjectStatus && (
+                  <span className="text-xs text-muted-foreground">{interjectStatus}</span>
                 )}
               </div>
             </motion.div>
@@ -3567,7 +3573,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
               </div>
             )}
-            <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={loading} aiName={localAiName} vrchatMode={vrchatMode} globalSettings={globalSettings} convoId={convoId} />
+            <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={false} aiName={localAiName} vrchatMode={vrchatMode} globalSettings={globalSettings} convoId={convoId} />
           </div>
         </div>
       </div>
