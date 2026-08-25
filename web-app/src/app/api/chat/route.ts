@@ -5050,6 +5050,39 @@ export async function POST(req: Request) {
       if (useDigitalOcean && localModel.startsWith('digitalocean/')) {
         localModel = localModel.slice('digitalocean/'.length);
       }
+
+      // ── Z.AI "Preserved Thinking" (GLM agentic continuity) ────────────────
+      // GLM discards its own reasoning between tool rounds UNLESS the client
+      // opts in. Z.AI's Thinking-Mode docs describe two halves that MUST be
+      // done together:
+      //   1. send `thinking: { type: 'enabled', clear_thinking: false }`
+      //      (Preserved Thinking is OFF by default on the standard API — it is
+      //      only ON by default on their Coding Plan endpoint, which is why
+      //      Z.AI can advertise "5 hours of independent agentic work" while a
+      //      plain API client sees the model stop after ~3 tool calls);
+      //   2. replay the model's own `reasoning_content` back, unmodified, on
+      //      the assistant tool-call message of every subsequent round.
+      // Their docs are explicit that omitting (2) "degrades performance —
+      // particularly problematic for agentic and tool-calling scenarios".
+      //
+      // NEXUS previously did NEITHER for GLM: `clear_thinking` was never sent,
+      // and the `reasoning_content` echo below was gated to Kimi only (Kimi
+      // 400s without it — a loud failure we noticed; GLM degrades silently —
+      // a quiet one we did not). Net effect: every GLM tool round started with
+      // no memory of why it was doing any of this. Corroborated externally by
+      // goose#7363 ("GLM loses reasoning state between turns").
+      //
+      // Z.AI-direct only. DigitalOcean's OpenAI-compatible surface exposes
+      // reasoning through `reasoning_effort` and has no `thinking` object at
+      // all, so Preserved Thinking is simply unavailable on that route.
+      const isGLM53Wire = isGLM && !useDigitalOcean && /glm-5\.3/i.test(String(localModel || ''));
+      // GLM-5.3 always reasons (it rejects `thinking: { type: 'disabled' }`),
+      // so preservation applies regardless of the Thinking-Mode toggle. On
+      // every other GLM the toggle genuinely turns reasoning off, and with no
+      // reasoning there is nothing to preserve.
+      const glmPreservedThinking =
+        isGLM && !useDigitalOcean &&
+        (isGLM53Wire || modelParams.qwenEnableThinking !== false);
       // ── Local (LM Studio) — auto-launch + model resolution + pre-load ─────
       // The "No models loaded" / "fetch failed" instability had two causes:
       //   1. LM Studio wasn't running (fetch failed).
@@ -5676,7 +5709,11 @@ export async function POST(req: Request) {
         // entirely on this model.
         const isGLM53 = isGLM && !useDigitalOcean && /glm-5\.3/i.test(String(requestBody.model || ''));
         if (isGLM53) {
-          requestBody.thinking = { type: 'enabled' };
+          requestBody.thinking = {
+            type: 'enabled',
+            // See the Preserved Thinking comment above `glmPreservedThinking`.
+            ...(glmPreservedThinking ? { clear_thinking: false } : {}),
+          };
           requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'max' : 'low';
         } else if (isKimiK3) {
           requestBody.reasoning_effort = 'max';
@@ -5695,6 +5732,11 @@ export async function POST(req: Request) {
           // NOT the DashScope `enable_thinking` boolean handled above.
           requestBody.thinking = {
             type: modelParams.qwenEnableThinking !== false ? 'enabled' : 'disabled',
+            // Z.AI-direct GLM only — see the Preserved Thinking comment above
+            // `glmPreservedThinking`. Kimi and DeepSeek share this field's
+            // `{ type }` shape but have no `clear_thinking` of their own, so
+            // the spread keeps it off their wire entirely.
+            ...(glmPreservedThinking ? { clear_thinking: false } : {}),
           };
         }
         // DigitalOcean Inference defaults max output to ~2048 tokens when no
@@ -6159,13 +6201,27 @@ export async function POST(req: Request) {
                 msgs = [...msgs, {
                   role: 'assistant',
                   content: visibleText || '',
-                  // Kimi (Moonshot) with thinking enabled validates that the
-                  // assistant tool-call message carries the reasoning_content
-                  // from that same turn; omitting it 400s the NEXT iteration
-                  // ("reasoning_content is missing in assistant tool call
-                  // message"). Echo it back. Gated to Kimi+thinking so we don't
-                  // send a non-standard field to providers that reject it.
-                  ...((isKimi && modelParams.qwenEnableThinking !== false)
+                  // Echo the model's own reasoning back on its tool-call turn.
+                  // Two providers need this, for different reasons:
+                  //
+                  //  • Kimi (Moonshot) with thinking enabled VALIDATES it —
+                  //    omitting it 400s the NEXT iteration outright
+                  //    ("reasoning_content is missing in assistant tool call
+                  //    message"). A loud failure.
+                  //  • GLM (Z.AI-direct) needs it as the replay half of
+                  //    Preserved Thinking — see the comment above
+                  //    `glmPreservedThinking`. Omitting it does not error; the
+                  //    model simply loses the thread and stops calling tools
+                  //    after a few rounds. A silent failure, which is why this
+                  //    stayed broken far longer than the Kimi one.
+                  //
+                  // Z.AI's docs require the replayed blocks to match the
+                  // original sequence exactly — do not trim, summarize or
+                  // reorder `reasoningText`. It is the raw accumulation of that
+                  // response's `reasoning_content` deltas, which is precisely
+                  // what they ask for. Still gated, so providers that reject
+                  // the non-standard field never see it.
+                  ...(((isKimi && modelParams.qwenEnableThinking !== false) || glmPreservedThinking)
                     ? { reasoning_content: reasoningText || '' }
                     : {}),
                   tool_calls: toolCalls.map(tc => ({
