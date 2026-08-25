@@ -219,11 +219,26 @@ function makeRepeatGuard() {
 // the message and never sends back to the model.
 function toolLimitNotice(rounds: number): string {
   return `Stopped after ${rounds} rounds of tool use — the turn hit the tool-call limit before finishing.`
-    + ` Any work from the last round was discarded. Raise "Tool-call limit per turn" in Preferences → Other if the task genuinely needs more steps.`;
+    + ` NEXUS asked the model to write its final answer with tools disabled, so the reply reflects everything gathered up to that point. Raise "Tool-call limit per turn" in Preferences → Other if the task genuinely needs more steps.`;
 }
 function toolRepeatNotice(name: string): string {
   return `Stopped: \`${name}\` was called ${TOOL_REPEAT_LIMIT} times in a row with identical arguments,`
     + ` which means the turn was no longer making progress. This usually means the tool keeps failing, or the model is asking for something that does not exist.`;
+}
+
+// Injected as a final user turn when the tool budget is exhausted, so the model
+// writes a closing answer from what it has already gathered instead of the turn
+// dying with no output. Instruction-only: no new tool results are executed, so
+// the wrap-up costs exactly one model call and can never itself loop.
+function toolWrapUpInstruction(language?: string | null): string {
+  if (language === 'ja') {
+    return 'このターンのツール使用上限に達しました。これ以上ツールを呼び出さないでください。'
+      + 'これまでに集めた内容をもとに、パートナーへの最終的な回答を今ここで書いてください。'
+      + '終えられなかったこと、検証できなかったことがあれば、はっきり明記してください。';
+  }
+  return 'Your tool-use budget for this turn is exhausted. Do not call any more tools. '
+    + 'Using everything you have gathered so far, write your final answer to your partner now '
+    + 'and be explicit about anything you could not finish or verify.';
 }
 
 function toolActivityLabel(name: string): string | null {
@@ -3578,6 +3593,49 @@ export async function POST(req: Request) {
               // we execute now can never be answered, so stop and say so.
               if (iter === MAX_TOOL_ITERATIONS - 1) {
                 toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
+                // Give the model ONE final tools-free call to write its closing answer
+                // from what it has already gathered, instead of the turn dying empty.
+                try {
+                  enqueue({ type: 'tool_activity', tool: 'write the final answer' });
+                  const wrapResults = assistantBlocks
+                    .filter((blk: any) => blk.type === 'tool_use')
+                    .map((blk: any) => ({
+                      type: 'tool_result',
+                      tool_use_id: blk.id,
+                      content: 'Not executed: the tool-use budget for this turn was exhausted before this call could run.',
+                    }));
+                  const wrapMessages = [
+                    ...currentMessages,
+                    { role: 'assistant', content: assistantBlocks },
+                    { role: 'user', content: [...wrapResults, { type: 'text', text: toolWrapUpInstruction(language) }] },
+                  ];
+                  const wrapParams: any = { ...claudeParams, messages: wrapMessages };
+                  delete wrapParams.tools;
+                  const wrapStream = await anthropic.messages.stream(wrapParams, claudeRequestOptions);
+                  for await (const chunk of wrapStream as any) {
+                    if (chunk.type === 'message_start' && chunk.message?.usage) {
+                      const u = chunk.message.usage;
+                      cumUsage.input += Number(u.input_tokens || 0);
+                      cumUsage.output += Number(u.output_tokens || 0);
+                      cumUsage.cacheRead += Number(u.cache_read_input_tokens || 0);
+                      cumUsage.cacheCreate += Number(u.cache_creation_input_tokens || 0);
+                    } else if (chunk.type === 'message_delta' && chunk.usage) {
+                      cumUsage.output += Number(chunk.usage.output_tokens || 0);
+                    }
+                    if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta' && chunk.delta.text) {
+                      enqueue({ type: 'text', content: chunk.delta.text });
+                    } else if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'summary_delta') {
+                      const t = chunk.delta.summary || chunk.delta.text || '';
+                      if (t) enqueue({ type: 'thought', content: t });
+                    } else if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'thinking_delta' && chunk.delta.thinking) {
+                      enqueue({ type: 'thought', content: chunk.delta.thinking });
+                    }
+                  }
+                } catch (e: any) {
+                  console.warn('[claude-api] wrap-up call failed:', e?.message);
+                } finally {
+                  enqueue({ type: 'tool_activity', tool: null });
+                }
                 break;
               }
 
@@ -4430,6 +4488,44 @@ export async function POST(req: Request) {
             while (true) {
               if (toolIterations >= MAX_TOOL_ITERATIONS) {
                 toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
+                // One final tools-free call so the model writes its closing answer
+                // from what it has already gathered, instead of dying with no output.
+                try {
+                  enqueue({ type: 'tool_activity', tool: 'write the final answer' });
+                  const savedTools = geminiConfig.tools;
+                  const savedToolConfig = geminiConfig.toolConfig;
+                  delete geminiConfig.tools;
+                  delete geminiConfig.toolConfig;
+                  try {
+                    const wrapContents = contents.map((c: any, ci: number) =>
+                      ci === contents.length - 1
+                        ? { ...c, parts: [...c.parts, { text: toolWrapUpInstruction(language) }] }
+                        : c
+                    );
+                    const wrap = await runGeminiOnce(wrapContents, controller);
+                    if (wrap.usageMetadata) {
+                      cumGeminiUsage.promptTokenCount += Number(wrap.usageMetadata.promptTokenCount || 0);
+                      cumGeminiUsage.candidatesTokenCount += Number(wrap.usageMetadata.candidatesTokenCount || 0);
+                      cumGeminiUsage.cachedContentTokenCount += Number(wrap.usageMetadata.cachedContentTokenCount || 0);
+                    }
+                    totalVisibleEmitted += wrap.visibleText.length;
+                    lastFinishReason = wrap.finishReason;
+                    lastVisibleLen = wrap.visibleText.length;
+                    lastPartCount = wrap.rawModelParts.length;
+                    lastBlockReason = wrap.promptFeedback?.blockReason ? String(wrap.promptFeedback.blockReason) : null;
+                    lastThoughtOnly = wrap.visibleText.length === 0 && wrap.functionCalls.length === 0 && wrap.rawModelParts.length > 0;
+                    for (const ws of (wrap.webSources || [])) {
+                      if (!cumGeminiSourceMap.has(ws.url)) cumGeminiSourceMap.set(ws.url, ws);
+                    }
+                  } finally {
+                    if (savedTools !== undefined) geminiConfig.tools = savedTools;
+                    if (savedToolConfig !== undefined) geminiConfig.toolConfig = savedToolConfig;
+                  }
+                } catch (e: any) {
+                  console.warn('[gemini] wrap-up call failed:', e?.message);
+                } finally {
+                  enqueue({ type: 'tool_activity', tool: null });
+                }
                 break;
               }
               const { visibleText, finishReason, functionCalls, rawModelParts, usageMetadata, webSources, promptFeedback } = await runGeminiOnce(contents, controller);
@@ -4737,7 +4833,7 @@ export async function POST(req: Request) {
             // when the thinking budget consumed all output tokens) or was
             // refused/blocked. Surface it instead of leaving the user with
             // a silent empty bubble.
-            if (totalVisibleEmitted === 0 || lastVisibleLen === 0) {
+            if ((totalVisibleEmitted === 0 || lastVisibleLen === 0) && !toolStopNotice) {
               const fin = String(lastFinishReason || '').toUpperCase();
               // Name the reason Gemini gave. These are the documented
               // finishReason values; anything unrecognised falls through with
@@ -4766,7 +4862,7 @@ export async function POST(req: Request) {
 
               if (totalVisibleEmitted === 0) {
                 console.warn(`[gemini] empty visible response — ${diag}`);
-                enqueue({ type: 'text', content: `[empty response — ${diag}]` });
+                enqueue({ type: 'notice', content: `The turn produced no visible answer — ${diag}` });
               } else {
                 // There IS real text to keep; the turn just died after the last
                 // tool call. Use a notice so the saved message is not polluted.
@@ -5476,7 +5572,8 @@ export async function POST(req: Request) {
       const runLocalOnce = async (
         msgs: any[],
         controller: ReadableStreamDefaultController,
-        state: { inThink: boolean; textTail: string }
+        state: { inThink: boolean; textTail: string },
+        opts?: { noTools?: boolean }
       ): Promise<{
         visibleText: string;
         reasoningText: string;
@@ -5525,7 +5622,7 @@ export async function POST(req: Request) {
         // tool-loop iteration. Assigning by reference made each iteration push
         // another search entry onto the SAME `localTools` array, so by the 2nd
         // iteration Kimi 400'd with "function name $web_search is duplicated".
-        if (localTools.length) requestBody.tools = [...localTools];
+        if (localTools.length && !opts?.noTools) requestBody.tools = [...localTools];
         // DashScope thinking toggle via `enable_thinking` (extra top-level field).
         //   - Qwen 3.x: hybrid, on/off toggle
         //   - DeepSeek V3.2: also hybrid, same flag, same semantics (served via
@@ -6010,6 +6107,38 @@ export async function POST(req: Request) {
               // ending the turn on whatever text happened to be produced.
               if (toolCalls.length > 0 && toolIterations >= MAX_TOOL_ITERATIONS) {
                 toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
+                // One final tools-free call so the model writes its closing answer
+                // from what it has already gathered, instead of dying with no output.
+                try {
+                  enqueue({ type: 'tool_activity', tool: 'write the final answer' });
+                  const wrap = await runLocalOnce(
+                    [...msgs, { role: 'user', content: toolWrapUpInstruction(language) }],
+                    controller,
+                    tagState,
+                    { noTools: true },
+                  );
+                  cumulativeAssistantText += wrap.visibleText;
+                  cumulativeReasoningText += wrap.reasoningText;
+                  if (wrap.usage) {
+                    cumOaiUsage.prompt_tokens += Number(wrap.usage.prompt_tokens || 0);
+                    cumOaiUsage.completion_tokens += Number(wrap.usage.completion_tokens || 0);
+                    cumOaiUsage.cached_tokens += Number(
+                      wrap.usage.prompt_tokens_details?.cached_tokens ??
+                      wrap.usage.cache_read_input_tokens ??
+                      wrap.usage.cached_tokens ??
+                      0
+                    );
+                    cumOaiUsage.prompt_cache_hit_tokens += Number(wrap.usage.prompt_cache_hit_tokens || 0);
+                    cumOaiUsage.prompt_cache_miss_tokens += Number(wrap.usage.prompt_cache_miss_tokens || 0);
+                  }
+                  for (const s of wrap.webSources) {
+                    if (!cumWebSourceMap.has(s.url)) cumWebSourceMap.set(s.url, s);
+                  }
+                } catch (e: any) {
+                  console.warn(`[${providerHint}] wrap-up call failed:`, e?.message);
+                } finally {
+                  enqueue({ type: 'tool_activity', tool: null });
+                }
               }
 
               // 1) Tool calls present → execute, append assistant turn (with
