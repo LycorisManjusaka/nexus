@@ -548,13 +548,13 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 <input
                   type="number"
                   min={1}
-                  max={200}
-                  value={globalSettings.maxToolIterations ?? 40}
+                  max={300}
+                  value={globalSettings.maxToolIterations ?? 300}
                   onChange={e => {
                     const n = parseInt(e.target.value, 10);
                     setGlobalSettings({
                       ...globalSettings,
-                      maxToolIterations: Number.isFinite(n) ? Math.min(200, Math.max(1, n)) : 40,
+                      maxToolIterations: Number.isFinite(n) ? Math.min(300, Math.max(1, n)) : 300,
                     });
                   }}
                   className="mt-1 w-28 px-2 py-1 rounded-md border border-border bg-background text-sm"

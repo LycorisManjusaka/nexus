@@ -2170,7 +2170,7 @@ export async function POST(req: Request) {
     // stopped around the second Bash — before any Edit ran — with no message
     // explaining why. Claude OAuth is unaffected: Claude Code runs its own loop
     // and NEXUS sets no maxTurns on the main query.
-    const MAX_TOOL_ROUNDS = Math.min(200, Math.max(1, Number(maxToolIterationsRaw) || 40));
+    const MAX_TOOL_ROUNDS = Math.min(300, Math.max(1, Number(maxToolIterationsRaw) || 300));
 
     // Per-Entity editable footer = Layer 5. When the entity keeps a FOOTER.md in
     // its workspace, its contents are injected as a self-authored "Layer 5"
