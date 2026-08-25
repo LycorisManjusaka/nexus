@@ -438,7 +438,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       // (base64 length = ceil(n/3)*4), so this is the same trigger point as the
       // old `dataUrl.length > 20 MiB` check — just without materializing the
       // string to find out.
-      const autoSplit = globalSettings?.autoSplitVideos !== false;
+      const autoSplit = globalSettings?.autoSplitVideos === true;
       if (isVideo && autoSplit && file.size > 15 * 1024 * 1024) {
         try {
           const fd = new FormData();

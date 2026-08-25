@@ -531,7 +531,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={globalSettings.autoSplitVideos ?? true}
+                  checked={globalSettings.autoSplitVideos ?? false}
                   onChange={e => setGlobalSettings({...globalSettings, autoSplitVideos: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"
                 />
