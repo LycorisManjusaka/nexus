@@ -418,9 +418,20 @@ export interface OpenProfileResult {
  * see the version warning in `openProfileBrowser`.
  */
 function findSystemBrowser(): { name: string; exe: string } | null {
-  const PF = process.env['ProgramFiles'] || 'C:\\Program Files';
-  const PF86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
-  const LOCAL = process.env['LOCALAPPDATA'] || '';
+  // These fall back rather than assume: an incomplete environment (see
+  // claudeAgentEnv() for how that happens) would otherwise drop candidates
+  // silently. LOCALAPPDATA in particular is where a per-user Chrome install
+  // lives, so losing it hid user-installed Chrome entirely — derive it from
+  // USERPROFILE, which survives even a stripped environment.
+  const SYSDRIVE = process.env['SystemDrive'] || 'C:';
+  const PF = process.env['ProgramFiles'] || `${SYSDRIVE}\\Program Files`;
+  const PF86 = process.env['ProgramFiles(x86)'] || `${SYSDRIVE}\\Program Files (x86)`;
+  const USERHOME = process.env['USERPROFILE']
+    || (process.env['HOMEDRIVE'] && process.env['HOMEPATH']
+      ? `${process.env['HOMEDRIVE']}${process.env['HOMEPATH']}`
+      : '');
+  const LOCAL = process.env['LOCALAPPDATA']
+    || (USERHOME ? path.join(USERHOME, 'AppData\\Local') : '');
   const candidates: { name: string; exe: string }[] = [
     { name: 'Google Chrome', exe: path.join(PF, 'Google\\Chrome\\Application\\chrome.exe') },
     { name: 'Google Chrome', exe: path.join(PF86, 'Google\\Chrome\\Application\\chrome.exe') },

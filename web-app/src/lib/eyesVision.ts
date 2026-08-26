@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
 import { resolveGeminiMinThinkingLevel } from './modelVision';
+import { claudeAgentEnv } from './agentEnv';
 
 // Cache root. One file per (image, eyes prompt, eyes model) tuple, keyed by
 // SHA-256. Easy to inspect (cat the .txt) or clear (delete the file or the
@@ -285,7 +286,10 @@ async function callOAuthClaudeVision(params: {
     for await (const m of query({
       prompt: prompt(),
       options: {
-        env: { CLAUDE_CODE_OAUTH_TOKEN: oauthToken },
+        // Inherited environment + token — see claudeAgentEnv(). The SDK's
+        // `env` replaces rather than merges, so a bare {TOKEN} object would
+        // strip the child's Windows environment.
+        env: claudeAgentEnv(oauthToken),
         model,
         systemPrompt: 'You describe images. Output ONLY the description, no preamble, no follow-up.',
         // Pure single-turn description — block every tool so the SDK can't

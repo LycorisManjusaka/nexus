@@ -12,6 +12,7 @@ import { readConversationByName } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
 import { readAttachmentBase64, putBytes } from '@/lib/attachmentStore';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
+import { claudeAgentEnv } from '@/lib/agentEnv';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -851,7 +852,12 @@ async function streamClaudeViaAgentSDK(args: {
                       yield { type: 'user' as const, message: { role: 'user' as const, content: [{ type: 'text', text: a.task }] }, parent_tool_use_id: null };
                     }
                     const childOpts: any = {
-                      env: { CLAUDE_CODE_OAUTH_TOKEN: oauthToken },
+                      // Full inherited environment + the OAuth token — see
+                      // claudeAgentEnv(). A bare {TOKEN} object would REPLACE
+                      // the child's whole environment (SDK contract), stripping
+                      // APPDATA/PATHEXT/etc. and breaking hg, git and every
+                      // native exe launched from PowerShell.
+                      env: claudeAgentEnv(oauthToken),
                       model: childModel,
                       systemPrompt: childSystem,
                       cwd: workspaceDir,
@@ -1126,7 +1132,12 @@ async function streamClaudeViaAgentSDK(args: {
           // binary WITHOUT mutating process.env (which would race across
           // concurrent requests). This is the documented clean way to inject
           // per-request credentials.
-          env: { CLAUDE_CODE_OAUTH_TOKEN: oauthToken },
+          //
+          // It must ALSO carry the inherited environment: the SDK's `env`
+          // REPLACES the subprocess environment rather than merging into it, so
+          // a bare {TOKEN} object left the child without APPDATA, LOCALAPPDATA,
+          // ProgramFiles, ComSpec or PATHEXT. See claudeAgentEnv().
+          env: claudeAgentEnv(oauthToken),
           model,
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
           // below (they're mutually exclusive — systemPrompt only applies when
