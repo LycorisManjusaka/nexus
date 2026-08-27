@@ -21,6 +21,7 @@ import {
   loadOutputDeviceId,
   saveOutputDeviceId,
 } from '@/lib/audioServices';
+import { startEnginesForIdentities } from '@/lib/ttsEngines';
 
 // Control panel for the audio-session helper processes.
 //
@@ -123,7 +124,16 @@ export async function POST(req: Request) {
     }
 
     if (action === 'startAll' || action === 'stopAll') {
-      const results = action === 'startAll' ? await startSession() : await stopSession();
+      // Engines FIRST, and only on start: voice_changer.py expects its engine to
+      // already be listening, and startEngine() returns immediately rather than
+      // blocking on the model load, so this costs the session nothing but gives
+      // the engines a head start on the helpers.
+      //
+      // Deliberately NOT mirrored on stopAll: an engine may be serving another
+      // being, or a TTS call outside the session entirely. Stopping one stays an
+      // explicit, per-engine action in Preferences.
+      const engineRows = action === 'startAll' ? await startEnginesForIdentities() : [];
+      const results = [...engineRows, ...(action === 'startAll' ? await startSession() : await stopSession())];
       return NextResponse.json({ ok: results.every(r => r.ok), results, services: await getServiceStatuses() });
     }
 

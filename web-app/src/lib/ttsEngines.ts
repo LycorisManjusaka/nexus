@@ -5,6 +5,10 @@ import { spawn, execFile } from 'child_process';
 // Reused rather than reimplemented: the Audio Session panel already solved
 // "who owns this port?" for the voicechanger services.
 import { findPidByPort } from './audioServices';
+// Safe direction: characterMap imports only voicechangerPaths, so this closes no
+// cycle. (The reverse — putting this logic in audioServices — would, since
+// ttsEngines already imports from there.)
+import { readCharacterMap } from './characterMap';
 
 // Auto-start for the local TTS engines.
 //
@@ -395,4 +399,81 @@ export async function restartEngine(engine: number): Promise<EngineActionResult>
   return started.ok
     ? { ok: true, message: 'restarting… (loading voice models can take up to a minute)' }
     : started;
+}
+
+// ── Engines the registered identities actually need ──────────────────────────
+//
+// voice_changer.py EXPECTS its engine to already be listening; it does not launch
+// one. Starting the Audio Session used to launch only the helper processes, so a
+// being whose voice lives on an engine that happened to be down could not say
+// anything new — cached .wav files still replayed, which makes the failure look
+// like nothing is wrong. That is exactly what happened to ふわふわ (VOICEVOX down)
+// while ユキ (COEIROINK up) spoke normally.
+//
+// The set of engines to start is READ FROM character_map.json rather than being
+// "all three": an engine no identity references is not needed, and launching it
+// would spend a minute of model loading and a few GB of RAM on nothing.
+
+/**
+ * Distinct engine ids referenced by any identity in character_map.json.
+ *
+ * Identities with no voice, and identities naming an engine this build does not
+ * know, contribute nothing — an unknown name is skipped rather than guessed at.
+ */
+export function enginesUsedByIdentities(): number[] {
+  const seen = new Set<number>();
+  try {
+    for (const rule of readCharacterMap().rules) {
+      if (!rule.engine) continue;
+      const num = resolveEngineNum(rule.engine);
+      if (num >= 0 && ENGINES[num]) seen.add(num);
+    }
+  } catch (e: any) {
+    // A missing or malformed character map must not stop the Audio Session from
+    // starting: this feature is an assist, not a precondition.
+    console.warn('[tts-engine] could not read identities:', e?.message || e);
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * Start every engine a registered identity needs that isn't already up.
+ *
+ * Returns one row per engine considered, in the shape the Audio Session panel
+ * already renders. Never throws — a failure here is reported, not propagated,
+ * because the helper services are still worth starting without it.
+ *
+ * On `ok`: false means WE TRIED AND FAILED (exe missing, launch error). An engine
+ * with no configured executable path reports ok:true with an explicit message
+ * saying it was skipped and why — that is a machine that never had this engine
+ * installed (the work PC, Teams mode), not a broken session, and painting the
+ * whole panel red for it would misdescribe what happened.
+ */
+export async function startEnginesForIdentities(): Promise<
+  { id: string; label: string; ok: boolean; message: string }[]
+> {
+  const rows: { id: string; label: string; ok: boolean; message: string }[] = [];
+  const paths = await loadEnginePaths();
+
+  for (const num of enginesUsedByIdentities()) {
+    const def = ENGINES[num];
+    const id = `_tts_${def.key}`;
+    const label = `${def.name} (TTS engine)`;
+
+    if (await isEngineUp(num)) {
+      rows.push({ id, label, ok: true, message: 'already running' });
+      continue;
+    }
+    if (!normalizeExePath(paths[def.key] || '')) {
+      rows.push({
+        id, label, ok: true,
+        message: `needed by a registered identity, but no executable path is configured — skipped (set it in Preferences → TTS engines)`,
+      });
+      continue;
+    }
+    const r = await startEngine(num);
+    rows.push({ id, label, ok: r.ok, message: r.message });
+  }
+
+  return rows;
 }
