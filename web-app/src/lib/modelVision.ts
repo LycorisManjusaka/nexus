@@ -61,8 +61,11 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'deepseek-v4-flash-vision-exp',
 
   // ── GLM (Z.AI) ─────────────────────────────────────────────────────────────
-  // Only the 'v' variants are multimodal. glm-5.1 / glm-5 / glm-5-turbo /
-  // glm-4.7 / glm-4.6 / glm-4.5-air are text-only.
+  // The 'v' variants AND glm-5.3-flash are multimodal. glm-5.3-flash is the
+  // first natively multimodal GLM-5 model (image + video + file input, 1M
+  // context). glm-5.3 / glm-5.2 / glm-5.1 / glm-5 / glm-5-turbo / glm-4.7 /
+  // glm-4.6 / glm-4.5-air are text-only.
+  'glm-5.3-flash',
   'glm-4.6v',
   'glm-4.6v-flash',
   'glm-5v-turbo',
@@ -203,6 +206,9 @@ export const VIDEO_CAPABLE_MODELS = new Set<string>([
   'mimo-v2.5',
   // MiniMax M3 — natively multimodal, documents image + video understanding.
   'MiniMax-M3',
+  // GLM-5.3-Flash — first natively multimodal GLM-5 model, documents image +
+  // video + file input (1M context). Not audio.
+  'glm-5.3-flash',
 ]);
 
 export function isVideoCapable(specificModel: string | undefined | null): boolean {

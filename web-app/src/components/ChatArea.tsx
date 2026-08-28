@@ -110,9 +110,10 @@ DeepSeek | deepseek-chat                | off | DeepSeek Chat
 DeepSeek | deepseek-v3.2                | on  | DeepSeek V3.2 (hybrid reasoning)
 
 # ── GLM (Z.AI) ─────────────────────────────────────────────────────
-# glm-5.3 reasoning is ALWAYS on (Z.AI rejects thinking:{type:'disabled'}),
-# so the on/off column is advisory only for that row.
+# glm-5.3 / glm-5.3-flash reasoning is ALWAYS on (Z.AI rejects
+# thinking:{type:'disabled'}), so the on/off column is advisory for those rows.
 GLM      | glm-5.3                      | on  | GLM-5.3 Thinking
+GLM      | glm-5.3-flash                | on  | GLM-5.3 Flash Thinking (multimodal)
 GLM      | glm-5.2                      | on  | GLM-5.2 Thinking
 GLM      | glm-5.1                      | on  | GLM-5.1 Thinking
 GLM      | glm-5                        | on  | GLM-5 Thinking
@@ -556,6 +557,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "Claude | claude-sonnet-5 | on | Claude Sonnet 5 Thinking\n" +
     "Claude | claude-haiku-4-5-20251001 | off | Claude Haiku 4.5\n" +
     "GLM    | glm-5.3          | on | GLM-5.3 Thinking\n" +
+    "GLM    | glm-5.3-flash    | on | GLM-5.3 Flash Thinking (multimodal)\n" +
     "GLM    | glm-5.2          | on | GLM-5.2 Thinking\n" +
     "GLM    | glm-4.6v-flash   | off | GLM-4.6V Flash"
   );
@@ -4204,6 +4206,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'claude-opus-5', label: t('senses.eyes.optOpus5') },
                           { value: 'claude-opus-4-8', label: t('senses.eyes.optOpus48') },
                           { value: 'local:qwen2-vl-7b-instruct', label: t('senses.eyes.optLocal') },
+                          { value: 'glm-5.3-flash', label: 'glm-5.3-flash (Z.AI key)' },
                           { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
                           { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
                           { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
@@ -4672,7 +4675,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         const isDO = (specificModel || '').startsWith('digitalocean/');
                         const valid = isDO
                           ? ['digitalocean/glm-5.2', 'digitalocean/glm-5.1', 'digitalocean/glm-5']
-                          : ['glm-5.3','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'];
+                          : ['glm-5.3','glm-5.3-flash','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'];
                         return valid.includes(specificModel || '') ? specificModel : '';
                       })()}
                       onChange={(e) => setSpecificModel(e.target.value)}
@@ -4689,10 +4692,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         </>
                       ) : (
                         <>
-                          {(specificModel && !['glm-5.3','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'].includes(specificModel)) && (
+                          {(specificModel && !['glm-5.3','glm-5.3-flash','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'].includes(specificModel)) && (
                             <option value="" disabled>{t('model.glm.notOnZai').replace('{model}', specificModel || '')}</option>
                           )}
                           <option value="glm-5.3">GLM-5.3 (latest, 1M context, reasoning always on)</option>
+                          <option value="glm-5.3-flash">GLM-5.3 Flash (multimodal, 1M context, reasoning always on)</option>
                           <option value="glm-5.2">GLM-5.2</option>
                           <option value="glm-5.1">GLM-5.1</option>
                           <option value="glm-5">GLM-5</option>
