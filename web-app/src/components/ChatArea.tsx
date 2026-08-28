@@ -28,6 +28,7 @@ import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
+import { ensureAudioPermission } from '@/lib/audioSink';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -1795,6 +1796,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     tick();
     const id = setInterval(tick, 1200);
     return () => { cancelled = true; clearInterval(id); };
+  }, [vrchatMode]);
+
+  // Audio session ON → acquire the microphone permission that OUTPUT-device
+  // routing depends on.
+  //
+  // setSinkId() rejects, and enumerateDevices() withholds real device ids,
+  // unless the origin holds an active microphone permission. Until now the only
+  // two getUserMedia() calls in the whole tree lived in SettingsModal — so the
+  // permission was acquired as a side effect of opening a dialog about something
+  // else. That is why "open Preferences first" and "restart the browser, then
+  // open Preferences" appeared to fix output routing: the dialog was not a
+  // ritual, it WAS the permission acquisition, just spelled somewhere nobody
+  // would look for an output-routing problem.
+  //
+  // Attaching it to the session toggle puts the prerequisite on the event that
+  // actually needs it. Best-effort: a denial is logged by ensureAudioPermission
+  // and playback still runs, on the system default device.
+  useEffect(() => {
+    if (!vrchatMode) return;
+    ensureAudioPermission();
   }, [vrchatMode]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -5184,6 +5205,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         aiVoice={folders?.find((f: any) => f.name === folderName)?.settings?.aiVoice}
         audioOutDevice1={globalSettings?.device1Id}
         audioOutDevice2={globalSettings?.device2Id}
+        audioOutLabel1={globalSettings?.device1Label}
+        audioOutLabel2={globalSettings?.device2Label}
         seedMessages={messages
           .filter((m: any) => isMessageOriginal(m.id))
           .map((m: any) => ({

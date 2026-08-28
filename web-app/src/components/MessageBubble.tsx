@@ -11,6 +11,7 @@ import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
 import { useT } from '@/lib/i18n';
+import { applySinkId } from '@/lib/audioSink';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
@@ -306,17 +307,15 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       streamingPlayNext(signal);
     };
     audio1.onended = advance;
-    if (isVRChatMode && globalSettings?.device1Id && typeof (audio1 as any).setSinkId === 'function') {
-      try { await (audio1 as any).setSinkId(globalSettings.device1Id); } catch {}
+    if (isVRChatMode && (globalSettings?.device1Id || globalSettings?.device1Label)) {
+      await applySinkId(audio1, { id: globalSettings.device1Id, label: globalSettings.device1Label }, 'primary');
     }
     const p1 = audio1.play();
     let p2: Promise<void> | null = null;
-    if (isVRChatMode && globalSettings?.device2Id) {
+    if (isVRChatMode && (globalSettings?.device2Id || globalSettings?.device2Label)) {
       const audio2 = new Audio(url);
       currentAudioRef2.current = audio2;
-      if (typeof (audio2 as any).setSinkId === 'function') {
-        try { await (audio2 as any).setSinkId(globalSettings.device2Id); } catch {}
-      }
+      await applySinkId(audio2, { id: globalSettings.device2Id, label: globalSettings.device2Label }, 'secondary');
       p2 = audio2.play();
     }
     try {
@@ -807,18 +806,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         const url = audioQueue.shift()!;
         const audio1 = new Audio(url);
         currentAudioRef.current = audio1;
-        if (isVRChatMode && globalSettings?.device1Id && typeof (audio1 as any).setSinkId === 'function') {
-          try { await (audio1 as any).setSinkId(globalSettings.device1Id); } catch(e) {}
+        if (isVRChatMode && (globalSettings?.device1Id || globalSettings?.device1Label)) {
+          await applySinkId(audio1, { id: globalSettings.device1Id, label: globalSettings.device1Label }, 'primary');
         }
         let p1 = audio1.play();
         let p2 = null;
 
-        if (isVRChatMode && globalSettings?.device2Id) {
+        if (isVRChatMode && (globalSettings?.device2Id || globalSettings?.device2Label)) {
           const audio2 = new Audio(url);
           currentAudioRef2.current = audio2;
-          if (typeof (audio2 as any).setSinkId === 'function') {
-            try { await (audio2 as any).setSinkId(globalSettings.device2Id); } catch(e) {}
-          }
+          await applySinkId(audio2, { id: globalSettings.device2Id, label: globalSettings.device2Label }, 'secondary');
           p2 = audio2.play();
         }
 

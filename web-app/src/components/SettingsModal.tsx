@@ -5,6 +5,7 @@ import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users } from 'lucide-rea
 import VoiceSelector from './VoiceSelector';
 import UserIdentityEditor from './UserIdentityEditor';
 import { useT, Tx } from '@/lib/i18n';
+import { ensureAudioPermission, supportsSinkId, invalidateDeviceCache } from '@/lib/audioSink';
 
 // Preferences is split into tabs because the three groups have nothing to do
 // with each other and the API-key list alone is twelve providers long. Add a
@@ -64,6 +65,10 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const [loading, setLoading] = useState(true);
 
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  // null until measured on the client. Deliberately not computed during render:
+  // setSinkId does not exist during SSR, so rendering the "unsupported" notice
+  // straight from supportsSinkId() would flash it on every Chromium load too.
+  const [sinkSupported, setSinkSupported] = useState<boolean | null>(null);
   const [tab, setTab] = useState<TabId>('keys');
 
   // TTS engine executables. Stored SERVER-SIDE (local_data/tts_engines.json),
@@ -135,6 +140,30 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     }
   };
 
+  /**
+   * Record the label of already-saved devices that were stored as a bare id.
+   *
+   * Devices picked before this existed have an id and no name. The id works
+   * right up until it rotates — and at that moment there is nothing left to
+   * recognise the device by, which is what made them look like they had
+   * disappeared. So while the id is still valid, capture its name. Runs once per
+   * Preferences open; a no-op when the names are already recorded.
+   */
+  const backfillDeviceLabels = (devs: MediaDeviceInfo[]) => {
+    if (devs.length === 0 || !devs[0].label) return; // unpermissioned: labels are blank, nothing to learn
+    setGlobalSettings((prev: any) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const n of [1, 2] as const) {
+        const id = prev[`device${n}Id`];
+        if (!id || prev[`device${n}Label`]) continue;
+        const label = devs.find(d => d.deviceId === id)?.label;
+        if (label) { next[`device${n}Label`] = label; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  };
+
   useEffect(() => {
     fetch('/api/keys').then(r => r.json()).then(data => {
       setKeys(data);
@@ -147,21 +176,30 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
         devs = devs.filter(d => d.kind === 'audiooutput');
         setDevices(devs);
 
-        // Auto-request for chromium (works without user gesture sometimes, but not in Firefox)
-        if (devs.length > 0 && !devs[0].label) {
-          try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            stream.getTracks().forEach(t => t.stop());
+        // Request the permission when the list is EMPTY or unlabelled.
+        //
+        // This guard used to read `devs.length > 0 && !devs[0].label`, which
+        // deadlocked Firefox: Chromium returns a placeholder entry with a blank
+        // label while unpermissioned (so length > 0 held and the request fired),
+        // but Firefox enumerates no output devices at all without permission —
+        // so the list was empty, the guard was false, and the code declined to
+        // ask for the very permission that would populate the list. No devices →
+        // no request → no devices. The dropdowns stayed empty forever.
+        if (devs.length === 0 || !devs[0].label) {
+          const granted = await ensureAudioPermission();
+          if (granted) {
             devs = await navigator.mediaDevices.enumerateDevices();
             devs = devs.filter(d => d.kind === 'audiooutput');
             setDevices(devs);
-          } catch(e) {}
+          }
         }
+        backfillDeviceLabels(devs);
       } catch(e) {
         console.error("Error enumerating devices:", e);
       }
     };
     getDevices();
+    setSinkSupported(supportsSinkId());
     refreshEngines(true);
   }, []);
 
@@ -172,14 +210,41 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // API calls on every open of this modal.
 
   const requestAudioPermission = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(tr => tr.stop());
-      let devs = await navigator.mediaDevices.enumerateDevices();
-      setDevices(devs.filter(d => d.kind === 'audiooutput'));
-    } catch(e) {
-      alert(t('settings.audio.permissionDenied') + e);
+    // One implementation of "acquire the permission that output routing needs",
+    // shared with the audio session itself (ChatArea) — so that opening this
+    // dialog and enabling the session do the same thing, and neither is a
+    // ritual the other depends on.
+    const granted = await ensureAudioPermission();
+    if (!granted) {
+      alert(t('settings.audio.permissionNeeded'));
+      return;
     }
+    invalidateDeviceCache();
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    setDevices(devs.filter(d => d.kind === 'audiooutput'));
+  };
+
+  /** Current label of a deviceId, '' if it does not enumerate. */
+  const labelOf = (id: string) => devices.find(d => d.deviceId === id)?.label ?? '';
+
+  /**
+   * Which option this dropdown should show.
+   *
+   * deviceId is salted per origin and rotates whenever the browser permission or
+   * site storage is reset. When that happens the saved id matches no <option>,
+   * the select silently falls back to "" — and the device looks like it
+   * "disappeared" and has to be picked again. The label survives the rotation,
+   * so if the id is stale we re-find the same physical device by name and show
+   * that. The stored id is repaired on the next explicit pick; playback repairs
+   * itself independently via resolveSinkId().
+   */
+  const shownDeviceValue = (id?: string, label?: string) => {
+    if (id && devices.some(d => d.deviceId === id)) return id;
+    if (label) {
+      const byLabel = devices.find(d => d.label === label) ?? devices.find(d => !!d.label && d.label.startsWith(label));
+      if (byLabel) return byLabel.deviceId;
+    }
+    return '';
   };
 
   // Mirror Primary/Secondary output device picks into
@@ -187,14 +252,24 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // the right speakers without a separate configuration step. Called on every
   // dropdown change (immediate) AND from saveKeys (failsafe).
   const mirrorDeviceSettings = (newDevice1Id?: string, newDevice2Id?: string) => {
+    // Resolve id → label, but fall back to the saved label when the id no longer
+    // enumerates. Without that fallback, saveKeys() (which calls this with no
+    // arguments) would find nothing after a deviceId rotation and POST empty
+    // keywords — erasing a *working* voice_changer.py configuration because the
+    // browser's own id went stale. The label is the durable key on both sides.
     const d1 = devices.find(d => d.deviceId === (newDevice1Id ?? globalSettings.device1Id));
     const d2 = devices.find(d => d.deviceId === (newDevice2Id ?? globalSettings.device2Id));
+    // `undefined` means "not being changed right now" — only then is the saved
+    // label a legitimate fallback. An explicit pick of '' (System default) must
+    // clear the keyword, not resurrect the old one.
+    const label1 = d1?.label ?? (newDevice1Id !== undefined ? '' : (globalSettings.device1Label ?? ''));
+    const label2 = d2?.label ?? (newDevice2Id !== undefined ? '' : (globalSettings.device2Label ?? ''));
     fetch('/api/device-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        voiceSpeakerKeyword: d1?.label ?? '',
-        notificationSpeakerKeyword: d2?.label ?? '',
+        voiceSpeakerKeyword: label1,
+        notificationSpeakerKeyword: label2,
       }),
     }).catch(() => {}); // best-effort, never block the UI
   };
@@ -365,12 +440,22 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
                 <Volume2 size={16} /> {t('settings.audio.heading')}
               </h3>
-              {devices.length > 0 && !devices[0].label && (
+              {/* Same guard as the enumeration effect: an EMPTY list also means
+                  "not permitted yet" (Firefox), not "no devices exist". */}
+              {(devices.length === 0 || !devices[0].label) && (
                 <button onClick={requestAudioPermission} className="text-[10px] bg-primary/20 text-primary px-2 py-1 rounded hover:bg-primary/30 transition">
                   {t('settings.audio.unlock')}
                 </button>
               )}
             </div>
+
+            {/* Say plainly when the feature cannot work here, instead of
+                appearing to work and routing everything to the default device. */}
+            {sinkSupported === false && (
+              <div className="text-xs leading-relaxed p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                {t('settings.audio.unsupported')}
+              </div>
+            )}
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.vrchatPath')}</label>
               <input
@@ -384,8 +469,8 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.device1')}</label>
               <select
-                value={globalSettings.device1Id || ''}
-                onChange={e => { const v = e.target.value; setGlobalSettings({...globalSettings, device1Id: v}); mirrorDeviceSettings(v, undefined); }}
+                value={shownDeviceValue(globalSettings.device1Id, globalSettings.device1Label)}
+                onChange={e => { const v = e.target.value; setGlobalSettings({...globalSettings, device1Id: v, device1Label: labelOf(v)}); mirrorDeviceSettings(v, undefined); }}
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               >
                 <option value="">{t('settings.audio.device.system')}</option>
@@ -397,8 +482,8 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">{t('settings.audio.device2')}</label>
               <select
-                value={globalSettings.device2Id || ''}
-                onChange={e => { const v = e.target.value; setGlobalSettings({...globalSettings, device2Id: v}); mirrorDeviceSettings(undefined, v); }}
+                value={shownDeviceValue(globalSettings.device2Id, globalSettings.device2Label)}
+                onChange={e => { const v = e.target.value; setGlobalSettings({...globalSettings, device2Id: v, device2Label: labelOf(v)}); mirrorDeviceSettings(undefined, v); }}
                 className="w-full px-3 py-2 bg-background border border-border rounded-md text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
               >
                 <option value="">{t('settings.audio.device.none')}</option>

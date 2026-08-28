@@ -116,13 +116,15 @@ export const UI_STRINGS_EN: Record<string, string> = {
 
   // ── Preferences → VRChat & Audio ─────────────────────────────────────────
   'settings.audio.heading': 'VRChat & Audio Routing',
-  'settings.audio.unlock': 'Unlock Devices (Firefox)',
+  'settings.audio.unlock': 'Unlock Device List',
   'settings.audio.vrchatPath': 'VRChat Pictures Folder Path',
   'settings.audio.device1': 'Primary Audio Output Device',
   'settings.audio.device2': 'Secondary Audio Output Device',
   'settings.audio.device.system': 'Default System Device',
   'settings.audio.device.none': 'None',
   'settings.audio.permissionDenied': 'Permission denied or error: ',
+  'settings.audio.permissionNeeded': "Microphone permission was not granted. Choosing an audio OUTPUT device requires it — that is the browser's rule, not ours. Without it, audio plays on the system default device.",
+  'settings.audio.unsupported': 'This browser cannot route audio to a chosen output device (setSinkId is not implemented). The audio session needs a Chromium-based browser — Chrome, Edge or Brave. Settings below will still be saved, but all audio will play on the system default device.',
   'settings.engines.heading': 'TTS Engine Executables',
   'settings.engines.refresh': 'Refresh status',
   'settings.engines.refresh.title': 'Re-check which engines are currently running',
@@ -1418,13 +1420,15 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   // ── Preferences → VRChat & Audio ─────────────────────────────────────────
   'settings.audio.heading': 'VRChat・音声の出力先',
-  'settings.audio.unlock': 'デバイスを有効化（Firefox）',
+  'settings.audio.unlock': 'デバイス一覧を有効化',
   'settings.audio.vrchatPath': 'VRChat スクリーンショット フォルダ',
   'settings.audio.device1': '音声出力デバイス（メイン）',
   'settings.audio.device2': '音声出力デバイス（サブ）',
   'settings.audio.device.system': 'システム既定のデバイス',
   'settings.audio.device.none': 'なし',
   'settings.audio.permissionDenied': '権限が拒否されたか、エラーが発生しました：',
+  'settings.audio.permissionNeeded': 'マイクの権限が許可されませんでした。音声の「出力先」デバイスを選ぶにはこの権限が必要です（ブラウザ側の仕様で、Nexus の都合ではありません）。権限がない場合、音声はシステム既定のデバイスから再生されます。',
+  'settings.audio.unsupported': 'このブラウザは音声の出力先デバイスを指定できません（setSinkId が未実装です）。音声セッションには Chromium 系ブラウザ（Chrome・Edge・Brave）が必要です。以下の設定は保存されますが、音声はすべてシステム既定のデバイスから再生されます。',
   'settings.engines.heading': 'TTSエンジンの実行ファイル',
   'settings.engines.refresh': '状態を再確認',
   'settings.engines.refresh.title': '各エンジンが現在起動しているか再確認します',

@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Radio, Square, AlertCircle } from 'lucide-react';
 import { useT, renderRich } from '@/lib/i18n';
+import { applySinkId } from '@/lib/audioSink';
 
 // Voice selection moved to per-folder settings (Sidebar → Folder Settings →
 // Live Session Voice). The voiceName prop is passed in by ChatArea from the
@@ -24,11 +25,16 @@ interface LiveSessionProps {
   aiVoice?: { engine?: number; char_idx?: number; style_idx?: number; char_name?: string; style_name?: string; speed?: number };
   audioOutDevice1?: string;
   audioOutDevice2?: string;
+  // Durable device names. deviceId is salted per origin and rotates when the
+  // browser permission or site storage is reset; the label survives that and is
+  // used to re-bind the id. See audioSink.ts.
+  audioOutLabel1?: string;
+  audioOutLabel2?: string;
 }
 
 export default function LiveSession({
   open, onClose, onCommit, systemPrompt, seedMessages, voiceName, aiVoice,
-  audioOutDevice1, audioOutDevice2,
+  audioOutDevice1, audioOutDevice2, audioOutLabel1, audioOutLabel2,
 }: LiveSessionProps) {
   const t = useT();
   const [phase, setPhase] = useState<'config' | 'starting' | 'live' | 'stopping'>('config');
@@ -107,16 +113,14 @@ export default function LiveSession({
       // One HTMLAudioElement per device, played in parallel
       const a1 = new Audio(url);
       fallbackAudioRefs.current.push(a1);
-      if (audioOutDevice1 && (a1 as any).setSinkId) {
-        try { await (a1 as any).setSinkId(audioOutDevice1); } catch {}
+      if (audioOutDevice1 || audioOutLabel1) {
+        await applySinkId(a1, { id: audioOutDevice1, label: audioOutLabel1 }, 'live-primary');
       }
       let a2: HTMLAudioElement | null = null;
-      if (audioOutDevice2) {
+      if (audioOutDevice2 || audioOutLabel2) {
         a2 = new Audio(url);
         fallbackAudioRefs.current.push(a2);
-        if ((a2 as any).setSinkId) {
-          try { await (a2 as any).setSinkId(audioOutDevice2); } catch {}
-        }
+        await applySinkId(a2, { id: audioOutDevice2, label: audioOutLabel2 }, 'live-secondary');
       }
 
       try {
@@ -187,11 +191,11 @@ export default function LiveSession({
     el2.srcObject = dest2.stream;
     el1.autoplay = true;
     el2.autoplay = true;
-    if (audioOutDevice1 && (el1 as any).setSinkId) {
-      try { await (el1 as any).setSinkId(audioOutDevice1); } catch (e) { /* fallback to default */ }
+    if (audioOutDevice1 || audioOutLabel1) {
+      await applySinkId(el1, { id: audioOutDevice1, label: audioOutLabel1 }, 'live-stream-primary');
     }
-    if (audioOutDevice2 && (el2 as any).setSinkId) {
-      try { await (el2 as any).setSinkId(audioOutDevice2); } catch (e) { /* fallback to default */ }
+    if (audioOutDevice2 || audioOutLabel2) {
+      await applySinkId(el2, { id: audioOutDevice2, label: audioOutLabel2 }, 'live-stream-secondary');
     }
     document.body.appendChild(el1);
     document.body.appendChild(el2);
