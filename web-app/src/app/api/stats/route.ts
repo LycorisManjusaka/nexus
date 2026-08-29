@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { resolvePrice, messageCost } from '@/lib/modelPricing';
+import { resolvePrice, messageCost, effectivePrice } from '@/lib/modelPricing';
 
 // Full-scan billing statistics. Unlike the header-only listLogs() path, this
 // reads every active conversation in full, walks its messages in order, and
@@ -211,11 +211,12 @@ export async function GET() {
             let unpriced = false;
 
             if (m.cacheUsage) {
-              const mc = messageCost(m.cacheUsage, modelId, output);
+              const mc = messageCost(m.cacheUsage, modelId, output, m.timestamp);
               if (mc) { usd = mc.usd; estimated = false; }
               else { unpriced = !price; estimated = false; }
             } else if (price) {
-              usd = (running * price.input + output * price.output) / 1_000_000;
+              const eff = effectivePrice(price, m.timestamp);
+              usd = (running * eff.input + output * eff.output) / 1_000_000;
               estimated = true;
             } else {
               unpriced = true;

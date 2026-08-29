@@ -7,6 +7,12 @@
 // shows (normalizeCacheUsage in the chat route): uncached input, cached input,
 // cache-write (Anthropic), and output. Cost is a straight per-bucket multiply.
 //
+// Peak/off-peak (DeepSeek V4): a model whose row carries `peakHoursUtc` is
+// billed at the peak* rates while a message's timestamp falls inside a peak
+// window (Mon–Fri, [start,end) UTC hours); every other time — including
+// weekends, and any message priced WITHOUT a timestamp — it is billed at the
+// base (off-peak) rates.
+//
 // OAuth Claude is priced exactly like the Claude API (same model ids, no
 // separation) — the user pays real subscription/credit value either way and
 // wants to see it. Local models are never priced (caller skips them).
@@ -14,10 +20,15 @@
 import PRICING from './modelPricing.json';
 
 export interface ModelPrice {
-  input: number;       // USD per 1M uncached input tokens
-  cachedInput: number; // USD per 1M cache-hit input tokens
+  input: number;       // USD per 1M uncached input tokens (cache MISS) — OFF-PEAK
+  cachedInput: number; // USD per 1M cache-hit input tokens — OFF-PEAK
   cacheWrite: number;  // USD per 1M cache-creation tokens (Anthropic; 0 elsewhere)
-  output: number;      // USD per 1M output tokens
+  output: number;      // USD per 1M output tokens — OFF-PEAK
+  // Optional peak/off-peak (DeepSeek V4). Absent on every other provider.
+  peakInput?: number;
+  peakCachedInput?: number;
+  peakOutput?: number;
+  peakHoursUtc?: [number, number][]; // [startHour, endHour) UTC ranges; weekends off-peak
 }
 
 export interface CacheUsageLike {
@@ -43,6 +54,31 @@ export function resolvePrice(modelId?: string | null): ModelPrice | null {
   return row && typeof row.input === 'number' ? (row as ModelPrice) : null;
 }
 
+/** True when a UTC timestamp falls inside a model's peak-pricing window. */
+export function isPeakTime(timestamp: number | null | undefined, peakHoursUtc?: [number, number][]): boolean {
+  if (!timestamp || !peakHoursUtc || peakHoursUtc.length === 0) return false;
+  const d = new Date(timestamp);
+  const day = d.getUTCDay(); // 0 = Sun … 6 = Sat
+  if (day === 0 || day === 6) return false; // weekends are always off-peak
+  const h = d.getUTCHours();
+  return peakHoursUtc.some(([start, end]) => h >= start && h < end);
+}
+
+/** The effective rate row for a timestamp: peak rates inside the window, base
+ *  (off-peak) rates otherwise. Returns the same object when the model has no
+ *  peak schedule or no timestamp is available. */
+export function effectivePrice(price: ModelPrice, timestamp?: number | null): ModelPrice {
+  if (isPeakTime(timestamp, price.peakHoursUtc)) {
+    return {
+      input: price.peakInput ?? price.input,
+      cachedInput: price.peakCachedInput ?? price.cachedInput,
+      cacheWrite: price.cacheWrite,
+      output: price.peakOutput ?? price.output,
+    };
+  }
+  return price;
+}
+
 /** Format a USD amount with precision that stays meaningful for tiny costs. */
 export function fmtUSD(v: number): string {
   if (!isFinite(v) || v <= 0) return '$0.00';
@@ -56,14 +92,20 @@ export function fmtUSD(v: number): string {
  * Returns null when the model has no price row or there's no usage to price.
  * `fallbackOutput` (e.g. the message's estimated output tokens) is used when the
  * provider didn't report output tokens in the usage block.
+ * `timestamp` (ms) selects peak vs off-peak rates for peak/off-peak models.
  */
 export function messageCost(
   cu: CacheUsageLike | undefined | null,
   modelId?: string | null,
   fallbackOutput?: number,
+  timestamp?: number | null,
 ): { usd: number; breakdown: string } | null {
-  const price = resolvePrice(modelId);
-  if (!price || !cu) return null;
+  const resolved = resolvePrice(modelId);
+  if (!resolved || !cu) return null;
+
+  const hasPeak = !!resolved.peakHoursUtc?.length;
+  const peak = hasPeak && isPeakTime(timestamp, resolved.peakHoursUtc);
+  const price = peak ? effectivePrice(resolved, timestamp) : resolved;
 
   const cached = cu.cachedInputTokens ?? 0;
   const uncached =
@@ -80,8 +122,9 @@ export function messageCost(
   const cOut = (output * price.output) / M;
   const usd = cIn + cCached + cWrite + cOut;
 
+  const rateTag = hasPeak ? (peak ? ' · PEAK rate' : ' · off-peak rate') : '';
   const breakdown =
-    `Estimated cost: ${fmtUSD(usd)}  (${normalizeId(modelId)})\n` +
+    `Estimated cost: ${fmtUSD(usd)}  (${normalizeId(modelId)}${rateTag})\n` +
     `  input uncached: ${uncached.toLocaleString()} × $${price.input}/M = ${fmtUSD(cIn)}\n` +
     (cached ? `  input cached:   ${cached.toLocaleString()} × $${price.cachedInput}/M = ${fmtUSD(cCached)}\n` : '') +
     (cacheWrite ? `  cache write:    ${cacheWrite.toLocaleString()} × $${price.cacheWrite}/M = ${fmtUSD(cWrite)}\n` : '') +

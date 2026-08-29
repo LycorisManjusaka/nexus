@@ -3104,7 +3104,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 if (m.cacheUsage) anyUnpriced = true;
                 continue;
               }
-              const c = messageCost(m.cacheUsage, modelId, m.textTokens ?? m.tokens);
+              const c = messageCost(m.cacheUsage, modelId, m.textTokens ?? m.tokens, m.timestamp);
               if (c) { total += c.usd; anyPriced = true; }
             }
             if (!anyPriced && !anyUnpriced) return null;

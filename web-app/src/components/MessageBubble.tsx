@@ -1092,7 +1092,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               >$</span>
             );
           }
-          const cost = messageCost(msg.cacheUsage, modelId, displayTokens);
+          const cost = messageCost(msg.cacheUsage, modelId, displayTokens, msg.timestamp);
           if (!cost) return null;
           return (
             <span
