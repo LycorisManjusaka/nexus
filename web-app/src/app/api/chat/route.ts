@@ -47,6 +47,7 @@ import {
 import {
   runComputerTool, COMPUTER_TOOL_NAMES,
   computerToolsClaude, computerToolsGemini, computerToolsOpenAI,
+  registerActiveTurnStop, ensureStopKeyWatcher,
 } from '@/lib/computerTools';
 import { looksLikeText, isMediaMime, SNIFF_BYTES, TEXT_MAX_BYTES } from '@/lib/textSniff';
 import { GoogleGenAI } from '@google/genai';
@@ -563,6 +564,7 @@ async function streamClaudeViaAgentSDK(args: {
   const readableStream = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+      registerActiveTurnStop(() => { try { controller.close(); } catch {} });
 
       // ── Stall watchdog ──────────────────────────────────────────────────
       // The SDK yields a message for every stream event — even a huge Write
@@ -2080,6 +2082,19 @@ async function runModelSelectorPreflight(args: {
 
 export async function POST(req: Request) {
   try {
+    // Global stop-key watcher (Ctrl+Shift+X). Started once per server process,
+    // targeted at THIS instance's port so the hotkey always reaches the right
+    // stop endpoint. Cheap: one hidden PowerShell process, no-op until pressed.
+    // Guarded inside ensureStopKeyWatcher so a second request can't spawn two.
+    try {
+      let port = 0;
+      const host = req.headers.get('host') || '';
+      const m = host.match(/:(\d+)$/);
+      if (m) port = Number(m[1]);
+      if (!port) port = Number(process.env.PORT) || 3000;
+      if (port > 0) ensureStopKeyWatcher(port);
+    } catch { /* watcher is a convenience; never block the turn on it */ }
+
     // `let` (not const) — auto-model-selection may override aiName,
     // specificModel, and modelParams below before the provider flags are
     // computed. All downstream code reads the post-override values.
@@ -3340,6 +3355,7 @@ export async function POST(req: Request) {
       const readableStream = new ReadableStream({
         async start(controller) {
           const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+          registerActiveTurnStop(() => { try { controller.close(); } catch {} });
 
           // Identify the model+thinking-mode that's about to respond. Always
           // emitted, regardless of auto-select. The frontend stashes this on
@@ -4536,6 +4552,7 @@ export async function POST(req: Request) {
       const readableStream = new ReadableStream({
         async start(controller) {
           const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+          registerActiveTurnStop(() => { try { controller.close(); } catch {} });
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);
@@ -6154,6 +6171,7 @@ export async function POST(req: Request) {
       const readableStream = new ReadableStream({
         async start(controller) {
           const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+          registerActiveTurnStop(() => { try { controller.close(); } catch {} });
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);

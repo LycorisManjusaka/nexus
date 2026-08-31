@@ -75,6 +75,76 @@ const LOG_DIR = path.join(DATA_DIR, 'computer_control_logs');
 
 export const COMPUTER_TOOL_NAMES = ['computer_screens', 'computer_screenshot', 'computer_input'] as const;
 
+// ── Global stop key (Ctrl+Shift+X) ──────────────────────────────────────────
+// A runaway computer_input batch is the one thing the Stop button cannot
+// interrupt — it runs inside a PowerShell process that keeps executing mouse/
+// keyboard commands for up to 30s even after the client aborts its fetch. So
+// the stop key does two things the button can't: (1) kill that in-flight
+// input process immediately, and (2) close the active turn's SSE stream so the
+// client finalizes (and, with the finalize-on-abort fix, saves the billing and
+// tool-usage it had accumulated). Both are reachable from a small global-hotkey
+// watcher process that POSTs to /api/computer/stop — no browser focus required.
+
+/** The in-flight computer_input PowerShell process, if any. Killed on stop. */
+let activeInputChild: ReturnType<typeof execFile> | null = null;
+/** Closes the active turn's SSE stream. Registered by each provider path. */
+let activeTurnStop: (() => void) | null = null;
+/** The global-hotkey watcher child process, so we start it at most once. */
+let stopKeyWatcherChild: ReturnType<typeof spawn> | null = null;
+/** Synchronous guard against two concurrent POSTs double-spawning the watcher. */
+let watcherStartInFlight = false;
+
+export function registerActiveTurnStop(stop: (() => void) | null): void {
+  activeTurnStop = stop;
+}
+
+export function stopComputerSession(): { killedInput: boolean; stoppedTurn: boolean } {
+  let killedInput = false;
+  if (activeInputChild) {
+    try { activeInputChild.kill(); killedInput = true; } catch { /* already gone */ }
+    activeInputChild = null;
+  }
+  let stoppedTurn = false;
+  if (activeTurnStop) {
+    try { activeTurnStop(); stoppedTurn = true; } catch { /* stream already ended */ }
+    activeTurnStop = null;
+  }
+  return { killedInput, stoppedTurn };
+}
+
+/** Start the global-hotkey watcher once, targeting this server's own port. */
+export async function ensureStopKeyWatcher(port: number): Promise<void> {
+  if (stopKeyWatcherChild && !stopKeyWatcherChild.killed) return;
+  if (watcherStartInFlight) return;
+  watcherStartInFlight = true;
+  try {
+    const pidFile = path.join(LOG_DIR, 'stopkey.pid');
+    // Self-heal: a watcher spawned by a previous server process (before a
+    // restart) still holds the hotkey. Kill it so the new one can register.
+    try {
+      const oldPid = parseInt((await fsp.readFile(pidFile, 'utf8')).trim(), 10);
+      if (Number.isFinite(oldPid) && oldPid > 0 && oldPid !== process.pid) {
+        try { process.kill(oldPid); } catch { /* already dead */ }
+      }
+    } catch { /* no pidfile yet */ }
+    const scriptPath = path.resolve(process.cwd(), 'scripts', 'nexus-stopkey.ps1');
+    try {
+      stopKeyWatcherChild = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Port', String(port), '-PidFile', pidFile],
+        { detached: false, stdio: 'ignore', windowsHide: true },
+      );
+      const child = stopKeyWatcherChild;
+      child.on('error', () => { if (stopKeyWatcherChild === child) stopKeyWatcherChild = null; });
+      child.on('exit', () => { if (stopKeyWatcherChild === child) stopKeyWatcherChild = null; });
+    } catch {
+      stopKeyWatcherChild = null;
+    }
+  } finally {
+    watcherStartInFlight = false;
+  }
+}
+
 export interface ComputerToolCtx {
   /** The entity making the call — used for the audit-log folder/filename. */
   me: string;
@@ -110,13 +180,14 @@ function psQuote(s: string): string {
 
 interface PsRunResult { ok: boolean; stdout: string; error?: string; }
 
-function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024): Promise<PsRunResult> {
+function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024, trackInput = false): Promise<PsRunResult> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', script],
       { timeout: timeoutMs, windowsHide: true, maxBuffer },
       (err, stdout, stderr) => {
+        if (trackInput) activeInputChild = null;
         if (err) {
           resolve({ ok: false, stdout: String(stdout || ''), error: String(stderr || err.message || err).split('\n')[0].slice(0, 300) });
         } else {
@@ -124,6 +195,7 @@ function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024): 
         }
       },
     );
+    if (trackInput) activeInputChild = child;
   });
 }
 
@@ -349,8 +421,8 @@ function buttonCode(b?: string): number {
 
 // ── computer_input command resolution + execution ───────────────────────────
 
-type ResolvedType = 'move' | 'down' | 'up' | 'click' | 'keydown' | 'keyup' | 'keypress' | 'text' | 'idle';
-interface ResolvedCommand { t: ResolvedType; x?: number; y?: number; btn?: number; vk?: number; s?: string; ms?: number; }
+type ResolvedType = 'move' | 'down' | 'up' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'keypress' | 'text' | 'idle';
+interface ResolvedCommand { t: ResolvedType; x?: number; y?: number; btn?: number; vk?: number; s?: string; ms?: number; delta?: number; }
 
 const MAX_COMMANDS = 200;
 const MAX_IDLE_MS = 15000;
@@ -379,6 +451,10 @@ function resolveCommands(raw: any[]): { resolved: ResolvedCommand[]; errors: str
         return;
       case 'mouse_click':
         resolved.push({ t: 'click', btn: buttonCode(c.button), x, y });
+        return;
+      case 'mouse_wheel':
+        if (!Number.isFinite(c.delta)) { errors.push(`#${i} mouse_wheel needs a numeric "delta" (positive = up/away, negative = down; one notch ≈ 120)`); return; }
+        resolved.push({ t: 'wheel', delta: Math.trunc(c.delta), x, y });
         return;
       case 'key_down':
       case 'key_up':
@@ -430,6 +506,14 @@ public class NxInput {
     inp.u.mi.dwFlags = flag;
     SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
   }
+  public static void SendMouseWheel(int delta) {
+    var inp = new INPUT();
+    inp.type = 0;
+    inp.u.mi = new MOUSEINPUT();
+    inp.u.mi.mouseData = (uint)delta;
+    inp.u.mi.dwFlags = 0x0800; // MOUSEEVENTF_WHEEL
+    SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+  }
   public static void SendKey(ushort vk, bool down) {
     var inp = new INPUT();
     inp.type = 1;
@@ -478,6 +562,10 @@ foreach ($c in $cmds) {
         [NxInput]::SendMouseButton([int]$c.btn, $true)
         Start-Sleep -Milliseconds 40
         [NxInput]::SendMouseButton([int]$c.btn, $false)
+      }
+      'wheel' {
+        if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
+        [NxInput]::SendMouseWheel([int]$c.delta)
       }
       'keydown' { [NxInput]::SendKey([uint16]$c.vk, $true) }
       'keyup' { [NxInput]::SendKey([uint16]$c.vk, $false) }
@@ -683,7 +771,7 @@ $bmp.Dispose()
         }
         console.log(`[computer] ${ctx.me}: ${resolved.length} input command(s) — ${resolved.map((r) => r.t).join(', ')}`);
         const script = buildInputScript(resolved);
-        const run = await runPS(script, 30000, 4 * 1024 * 1024);
+        const run = await runPS(script, 30000, 4 * 1024 * 1024, true);
         if (!run.ok) {
           return { text: `Error: input execution failed${run.error ? ' — ' + run.error : ''}.${errors.length ? ' Also skipped: ' + errors.join('; ') : ''}` };
         }

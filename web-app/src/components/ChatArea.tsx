@@ -1985,6 +1985,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Declared OUTSIDE the try so the catch below can add the failure reason to
     // the same channel instead of concatenating it into the reply.
     const notices: string[] = [];
+    // Assigned just after the streaming declarations (before the read loop) so
+    // the catch below can invoke it on AbortError and still persist billing
+    // (cacheUsage) and the 🔧 tool report (toolCalls) instead of dropping them.
+    let finalizeMessage: (() => void) | null = null;
 
     try {
       // Slim the wire payload aggressively. The backend only reads role / content /
@@ -2132,6 +2136,51 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Subagent runs for this turn (task + distilled result). Persisted onto
       // the assistant message and shown as a collapsed group on reload.
       const subagentRuns: any[] = [];
+
+      // Finalizes the assistant message by committing everything the streaming
+      // loop accumulated: the (possibly partial) text, thinking-token count,
+      // prompt-cache usage, and the tool calls that drive the 🔧 report.
+      // Defined here — before the read loop — so the catch below can invoke it
+      // when the partner stops the turn mid-stream.
+      finalizeMessage = () => {
+        const finalText = currentText;
+        const fallbackTokens = Math.ceil((finalText || '').length / 4);
+        const thinkingTokens = currentThought ? Math.ceil(currentThought.length / 4) : 0;
+        setMessages(prev => prev.map(m =>
+          m.id === msgId
+            ? {
+                ...m,
+                content: finalText,
+                tokens: fallbackTokens,
+                textTokens: fallbackTokens,
+                // Store the ACTUAL thinking-token count (not zeroed when the
+                // reuse toggle happens to be off at generation time) so flipping
+                // "Save & reuse thinking process" on later recomputes correctly.
+                thinkingTokens,
+                // Total generation time (ms) for this turn — shown in the meta
+                // bar, saved to the log, hidden from the entity.
+                generationMs: Date.now() - genStartTime,
+                autoPlay: vrchatMode,
+                streaming: false,
+                ...(continuationCount > 0 ? { continuationCount } : {}),
+                ...(claudeThinkingBlocks.length > 0 ? { claudeThinkingBlocks } : {}),
+                ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
+                ...(chosenModelFamily ? {
+                  modelFamily: chosenModelFamily,
+                  modelSpecific: chosenModelSpecific,
+                  modelThinking: chosenModelThinking,
+                  modelLabel: chosenModelLabel,
+                } : {}),
+                ...(cacheUsage ? { cacheUsage } : {}),
+                ...(webSources ? { webSources } : {}),
+                ...(notices.length > 0 ? { notices } : {}),
+                ...(toolCalls.length > 0 ? { toolCalls } : {}),
+                ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
+                ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
+              }
+            : m
+        ));
+      };
 
       // Throttle the streaming UI update to ONE render per animation frame.
       // GLM-5.2 with tool calls (e.g. read_conversation) flushes the buffered
@@ -2397,54 +2446,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // awaiting it here used to block setLoading(false) — leaving the
       // "thinking..." indicator and TTS auto-play stuck after streaming
       // had already finished. Token count refines in the background below.
-      const thinkingTokens = currentThought ? Math.ceil(currentThought.length / 4) : 0;
-      // Leading "[YYYY-MM-DD HH:MM:SS]" stacks were already stripped
-      // continuously as the reply streamed in (see the `text` branch above),
-      // so currentText is final. A one-shot strip here would shrink content
-      // after TTS started and break the streaming-TTS offset tracking.
-      // currentText is already timestamp-clean: the per-chunk strip above ran on
-      // the whole reply as it streamed, removing every tag (leading or mid).
+      // Commit the finished message (partial text, tool calls, cache usage,
+      // streaming:false). finalizeMessage was defined just after the streaming
+      // declarations and reads the accumulated values at call time — the catch
+      // below reuses it when the partner stops the turn.
       const finalText = currentText;
-      const fallbackTokens = Math.ceil((finalText || '').length / 4);
-      setMessages(prev => prev.map(m =>
-        m.id === msgId
-          ? {
-              ...m,
-              content: finalText,
-              tokens: fallbackTokens,
-              textTokens: fallbackTokens,
-              // Store the ACTUAL thinking-token count (not zeroed when the
-              // reuse toggle happens to be off at generation time) so flipping
-              // "Save & reuse thinking process" on later recomputes correctly.
-              // Whether it COUNTS toward context is gated by saveThinkingToLog
-              // at display time, not baked in here.
-              thinkingTokens,
-              // Total generation time (ms) for this turn — shown in the meta
-              // bar, saved to the log, hidden from the entity.
-              generationMs: Date.now() - genStartTime,
-              autoPlay: vrchatMode,
-              // Streaming finished — flip the flag so MessageBubble's streaming
-              // TTS path flushes the final non-terminated tail (if any) as its
-              // last segment. For non-streaming-TTS paths this field is ignored.
-              streaming: false,
-              ...(continuationCount > 0 ? { continuationCount } : {}),
-              ...(claudeThinkingBlocks.length > 0 ? { claudeThinkingBlocks } : {}),
-              ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
-              ...(chosenModelFamily ? {
-                modelFamily: chosenModelFamily,
-                modelSpecific: chosenModelSpecific,
-                modelThinking: chosenModelThinking,
-                modelLabel: chosenModelLabel,
-              } : {}),
-              ...(cacheUsage ? { cacheUsage } : {}),
-              ...(webSources ? { webSources } : {}),
-              ...(notices.length > 0 ? { notices } : {}),
-              ...(toolCalls.length > 0 ? { toolCalls } : {}),
-              ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
-              ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
-            }
-          : m
-      ));
+      finalizeMessage();
 
       // Refine tokens in the background — message bubble and TTS are already
       // unblocked at this point; the token counter just updates a moment later.
@@ -2463,9 +2470,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // model on every later turn, as if it were their own words. It belongs
         // in the notice channel: visible to the reader, invisible to the model.
         notices.push(describeProviderError(err?.message ?? err));
+      }
+      // Commit whatever the turn accumulated — partial text, tool calls, cache
+      // usage — even when the partner stopped it (AbortError), so billing and
+      // the 🔧 tool report are saved to the log instead of lost. If the turn
+      // failed before streaming began (finalizeMessage never assigned), just
+      // flip the placeholder out of streaming state and attach any notice.
+      if (finalizeMessage) {
+        finalizeMessage();
+      } else {
         setMessages(prev => prev.map(m =>
           m.id === msgId
-            ? { ...m, notices: [...notices], streaming: false }
+            ? { ...m, ...(notices.length > 0 ? { notices: [...notices] } : {}), streaming: false }
             : m
         ));
       }

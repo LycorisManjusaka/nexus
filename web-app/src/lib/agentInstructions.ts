@@ -269,6 +269,8 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'An array of command objects executed in order. Each has a "type": ' +
     '"mouse_move" {x,y}, "mouse_down"/"mouse_up" {button, x?, y?} (button: "left"|"right"|"middle"; omit x/y ' +
     'to act at the current cursor position, e.g. for a drag), "mouse_click" {button, x?, y?}, ' +
+    '"mouse_wheel" {delta, x?, y?} (scrolls at the cursor — positive delta = up/away, negative = down; ' +
+    'one notch ≈ 120; x/y move the cursor first if given), ' +
     '"key_down"/"key_up" {key}, "key_press" {key} (a full press-and-release of a single key or combo name), ' +
     '"type_text" {text} (types literal text, including non-Latin characters), "idle" {ms} (pause before the ' +
     'next command, up to 15000ms).',
