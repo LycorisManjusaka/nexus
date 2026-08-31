@@ -957,6 +957,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.browser.buttonsHelp':
     'The first button uses NEXUS’s own bundled Chromium — always the right version, no risk. Use the second only if a site refuses to sign in (Google sometimes rejects "Chrome for Testing" builds): an installed browser can **upgrade the profile one-way**, after which the bundled Chromium may refuse to open it and this being’s browser stops working until the profile folder is deleted.',
 
+  'id.computer.label': '🖱️ Computer control (OS-level mouse, keyboard, screen — Windows only)',
+  'id.computer.help':
+    'OFF by default. When ON, this being gets `computer_screens`, `computer_screenshot` and `computer_input` — real control of the whole physical desktop, not a sandboxed browser window. Every screenshot flashes a visible red border around the captured monitor on the real screen; every click flashes a visible red circle at the moment it happens. Nothing here is silent: every command is written to the server log, and an annotated copy of each screenshot (with click marks and coordinates) is saved under `local_data/computer_control_logs/{folder}/` for your own review — the being only ever sees the clean, unmarked image. Windows only; requires a vision-capable model (or the eyes bridge) to actually see the screenshots.',
+
   'id.subagent.label': '🔍 Subagent tool (delegate investigation to a fresh-context helper)',
   'id.subagent.help':
     'OFF (default): the model investigates inline. ON: the model gets a `spawn_subagent` tool that hands a task to a **read-only** child agent with its own fresh context. The child reads files (Read/Glob/Grep) and returns only a distilled result — its file dumps never enter this conversation’s context. Ideal for tracing large codebases without flooding the main thread. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo) + local, and Gemini.*',
@@ -2236,6 +2240,10 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'id.browser.withChrome': '…インストール済みの Chrome で開く',
   'id.browser.buttonsHelp':
     '1 番目のボタンは NEXUS 同梱の Chromium を使います — 常に正しいバージョンで、危険はありません。2 番目は、サイトがサインインを拒む場合にだけ使ってください（Google は「Chrome for Testing」版を弾くことがあります）。インストール済みブラウザは **プロファイルを一方向にアップグレード** することがあり、その後は同梱 Chromium が開けなくなって、プロファイルフォルダーを削除するまでこの存在のブラウザが使えなくなります。',
+
+  'id.computer.label': '🖱️ 画面操作（OS レベルのマウス・キーボード・画面 — Windows のみ）',
+  'id.computer.help':
+    '既定は OFF。ON にすると、この存在に `computer_screens`・`computer_screenshot`・`computer_input` が渡されます — サンドボックス化されたブラウザではなく、物理デスクトップ全体への実際の操作です。スクリーンショットを撮るたびに、撮影中のモニターの周りに赤い太枠が実画面上に一瞬表示されます。クリックのたびに、その瞬間に赤い円が実画面上に表示されます。ここで起きることは何も見えないところでは行われません — すべてのコマンドはサーバーのログに記録され、各スクリーンショットのクリック跡・座標付きの記録用コピーが `local_data/computer_control_logs/{folder}/` に保存されます（あなた自身の確認用）。存在に渡されるのは、印のない綺麗な画像だけです。Windows 専用。スクリーンショットを実際に見るには、画像を扱えるモデル（または eyes ブリッジ）が必要です。',
 
   'id.subagent.label': '🔍 サブエージェント（調査を文脈の新しい助手に委任）',
   'id.subagent.help':

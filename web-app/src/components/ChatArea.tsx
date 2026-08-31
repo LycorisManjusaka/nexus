@@ -367,6 +367,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // describes one launch, not a setting.
   const [browserProfileMsg, setBrowserProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [browserProfileBusy, setBrowserProfileBusy] = useState(false);
+  // OS-level mouse/keyboard/screen control (Windows only). OFF by default,
+  // same boundary discipline as browserEnabled — a wider reach than the
+  // browser sandbox, so it gets its own separate flag rather than piggybacking.
+  const [computerControlEnabled, setComputerControlEnabled] = useState(false);
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -992,6 +996,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserAllowedHosts(typeof data.browserAllowedHosts === 'string' ? data.browserAllowedHosts : '');
         setBrowserAllowAnyHost(data.browserAllowAnyHost === true);
         setBrowserCompact(data.browserCompact === true);
+        // Same `=== true` discipline as browserEnabled above.
+        setComputerControlEnabled(data.computerControlEnabled === true);
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -1067,6 +1073,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserAllowedHosts(pick('browserAllowedHosts', ''));
         setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
         setBrowserCompact(pick('browserCompact', false));
+        setComputerControlEnabled(pick('computerControlEnabled', false));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -1182,7 +1189,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1245,7 +1252,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2053,6 +2060,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // box accepts whichever way the host list was typed.
         browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
         browserAllowAnyHost, browserCompact,
+        computerControlEnabled,
         instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
@@ -2670,6 +2678,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       browserAllowedHosts,
       browserAllowAnyHost,
       browserCompact,
+      computerControlEnabled,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -4116,6 +4125,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 )}
               </div>
 
+              {/* ── Computer control (OS-level mouse/keyboard/screen, Windows only)
+                  OFF by default. Separate boundary from browser control — this
+                  reaches the whole physical desktop, not a sandboxed window.
+                  Every capture and click is flashed visibly on the real screen
+                  and logged; nothing here happens invisibly. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={computerControlEnabled}
+                    onChange={(e) => setComputerControlEnabled(e.target.checked)}
+                    className="accent-red-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('id.computer.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  <Tx k="id.computer.help" />
+                </p>
+              </div>
+
               {/* ── Subagent (context-firewall helper) — OAuth Claude only ───── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -5134,6 +5163,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       browserAllowedHosts,
                       browserAllowAnyHost,
                       browserCompact,
+                      computerControlEnabled,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

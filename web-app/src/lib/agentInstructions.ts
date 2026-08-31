@@ -238,6 +238,41 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   browserScreenshotFullPageParam:
     'True to capture the whole scrollable page, false or omitted for just the visible part.',
 
+  // ── Computer Control — OS-level mouse/keyboard/screen (Windows only) ──────
+  // Separate from browser control: this reaches the whole physical desktop,
+  // not just a sandboxed Chromium window. Every capture and every input action
+  // is visibly flashed on the real screen and logged, so nothing here happens
+  // invisibly to the human sitting at the machine.
+  toolComputerScreensDesc:
+    'List every monitor attached to this machine: an index, whether it is the primary display, its resolution, ' +
+    'and its position in absolute virtual-desktop coordinates (which can be negative — monitors are arranged ' +
+    'around the primary one). Call this before computer_screenshot or computer_input so you know which index ' +
+    'to use and how to read the coordinates you see.',
+
+  toolComputerScreenshotDesc:
+    'Take a picture of one monitor and see it directly. A visible red border briefly flashes around that ' +
+    'monitor on the real screen at the moment of capture — this is a physical machine, and every capture is ' +
+    'meant to be seen. The reply tells you that monitor\'s top-left offset in absolute virtual-desktop ' +
+    'coordinates, so you can convert a pixel you see in the image into the coordinates computer_input expects.',
+  computerScreenshotIndexParam:
+    'The monitor index to capture, from computer_screens.',
+
+  toolComputerInputDesc:
+    'Move the mouse, click, drag, press keys, and type text on the real desktop — a sequence of small steps ' +
+    'executed in order, with optional pauses between them. All coordinates are absolute virtual-desktop ' +
+    'coordinates (from computer_screenshot), not relative to a monitor. Every click flashes a visible red ' +
+    'circle at the moment it happens, and the whole sequence is written to the log — nothing here is silent. ' +
+    'Take a screenshot first to see what you are aiming at, and take another one afterwards to check the ' +
+    'result actually happened rather than assuming it did. This reaches the whole machine, not a sandbox — ' +
+    'be as careful and deliberate here as the human would be with their own hands.',
+  computerInputCommandsParam:
+    'An array of command objects executed in order. Each has a "type": ' +
+    '"mouse_move" {x,y}, "mouse_down"/"mouse_up" {button, x?, y?} (button: "left"|"right"|"middle"; omit x/y ' +
+    'to act at the current cursor position, e.g. for a drag), "mouse_click" {button, x?, y?}, ' +
+    '"key_down"/"key_up" {key}, "key_press" {key} (a full press-and-release of a single key or combo name), ' +
+    '"type_text" {text} (types literal text, including non-Latin characters), "idle" {ms} (pause before the ' +
+    'next command, up to 15000ms).',
+
   // ── Audio Session (was "VRChat mode") — factual notice ────────────────────
   // A short, FIXED-BY-DEFAULT statement of what the mode actually does
   // (mechanism, not instruction), composed ahead of the per-Entity
@@ -455,6 +490,11 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'toolBrowserReadDesc', label: 'Tool: browser_read — description' },
   { key: 'toolBrowserScreenshotDesc', label: 'Tool: browser_screenshot — description' },
   { key: 'browserScreenshotFullPageParam', label: 'Tool: browser_screenshot — "full_page" parameter' },
+  { key: 'toolComputerScreensDesc', label: 'Tool: computer_screens — description' },
+  { key: 'toolComputerScreenshotDesc', label: 'Tool: computer_screenshot — description' },
+  { key: 'computerScreenshotIndexParam', label: 'Tool: computer_screenshot — "screen_index" parameter' },
+  { key: 'toolComputerInputDesc', label: 'Tool: computer_input — description' },
+  { key: 'computerInputCommandsParam', label: 'Tool: computer_input — "commands" parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
   { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-Entity rule)' },
@@ -514,6 +554,11 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   toolBrowserReadDesc: 'ツール browser_read — 説明',
   toolBrowserScreenshotDesc: 'ツール browser_screenshot — 説明',
   browserScreenshotFullPageParam: 'ツール browser_screenshot —「full_page」引数',
+  toolComputerScreensDesc: 'ツール computer_screens — 説明',
+  toolComputerScreenshotDesc: 'ツール computer_screenshot — 説明',
+  computerScreenshotIndexParam: 'ツール computer_screenshot —「screen_index」引数',
+  toolComputerInputDesc: 'ツール computer_input — 説明',
+  computerInputCommandsParam: 'ツール computer_input —「commands」引数',
   webSearchDesc: 'ツール web_search — 説明',
   webFetchDesc: 'ツール web_fetch — 説明',
   audioSessionNotice: '音声セッション：機能の説明（固定。存在ごとの規則より前）',

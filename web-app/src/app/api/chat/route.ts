@@ -44,6 +44,10 @@ import {
   runBrowserTool, BROWSER_TOOL_NAMES,
   browserToolsClaude, browserToolsGemini, browserToolsOpenAI,
 } from '@/lib/browserTools';
+import {
+  runComputerTool, COMPUTER_TOOL_NAMES,
+  computerToolsClaude, computerToolsGemini, computerToolsOpenAI,
+} from '@/lib/computerTools';
 import { looksLikeText, isMediaMime, SNIFF_BYTES, TEXT_MAX_BYTES } from '@/lib/textSniff';
 import { GoogleGenAI } from '@google/genai';
 import sharp from 'sharp';
@@ -266,6 +270,9 @@ function toolActivityLabel(name: string): string | null {
     case 'browser_type': return 'type into the page';
     case 'browser_read': return 'read the page';
     case 'browser_screenshot': return 'photograph the page';
+    case 'computer_screens': return 'list monitors';
+    case 'computer_screenshot': return 'take a screenshot';
+    case 'computer_input': return 'control the mouse/keyboard';
     case 'web_search': case 'WebSearch': return 'search the web';
     case 'web_fetch': case 'WebFetch': return 'fetch a web page';
     case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
@@ -454,11 +461,12 @@ async function streamClaudeViaAgentSDK(args: {
   browserAllowedHosts: string[];   // per-Entity: hosts beyond localhost
   browserAllowAnyHost: boolean;    // per-Entity: drop the allowlist entirely
   browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
+  computerControlEnabled: boolean; // per-Entity: expose the OS-level mouse/keyboard/screen tools
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -613,7 +621,7 @@ async function streamClaudeViaAgentSDK(args: {
         // per-conversation toggles. Tool names as seen by the model:
         // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled) {
+        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled || computerControlEnabled) {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -731,6 +739,34 @@ async function streamClaudeViaAgentSDK(args: {
               sdk.tool('browser_screenshot', I.toolBrowserScreenshotDesc,
                 { full_page: z.boolean().optional().describe(I.browserScreenshotFullPageParam) },
                 bt('browser_screenshot')),
+            );
+          }
+          if (computerControlEnabled) {
+            // OS-level mouse/keyboard/screen control (Windows only). One executor
+            // (runComputerTool) shared with every other provider path. Unlike
+            // browser_screenshot (which the being cannot see itself), computer_screenshot
+            // DOES deliver a real image — MCP ImageContent blocks let the OAuth
+            // path return one directly, same as the other three provider paths.
+            const computerCtx = { me: folderName, instructions: I };
+            nexusTools.push(
+              sdk.tool('computer_screens', I.toolComputerScreensDesc, {}, async () => {
+                const r = await runComputerTool('computer_screens', {}, computerCtx);
+                return { content: [{ type: 'text' as const, text: r.text }] };
+              }),
+              sdk.tool('computer_screenshot', I.toolComputerScreenshotDesc,
+                { screen_index: z.number().describe(I.computerScreenshotIndexParam) },
+                async (a: { screen_index: number }) => {
+                  const r = await runComputerTool('computer_screenshot', a, computerCtx);
+                  const content: any[] = [{ type: 'text' as const, text: r.text }];
+                  if (r.image) content.push({ type: 'image' as const, data: r.image.base64, mimeType: r.image.mimeType });
+                  return { content };
+                }),
+              sdk.tool('computer_input', I.toolComputerInputDesc,
+                { commands: z.array(z.any()).describe(I.computerInputCommandsParam) },
+                async (a: { commands: any[] }) => {
+                  const r = await runComputerTool('computer_input', a, computerCtx);
+                  return { content: [{ type: 'text' as const, text: r.text }] };
+                }),
             );
           }
           if (askUserEnabled) {
@@ -2176,6 +2212,10 @@ export async function POST(req: Request) {
       browserAllowedHosts = [],
       browserAllowAnyHost = false,
       browserCompact = false,
+      // OS-level mouse/keyboard/screen control (Windows only). Off by default —
+      // same boundary discipline as browserEnabled: an unset field must never
+      // silently grant physical control of the machine.
+      computerControlEnabled = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -2760,6 +2800,7 @@ export async function POST(req: Request) {
           browserAllowedHosts,
           browserAllowAnyHost,
           browserCompact,
+          computerControlEnabled,
           convoId,
           keys,
           injectTurnId,
@@ -3050,6 +3091,11 @@ export async function POST(req: Request) {
       if (browserEnabled) {
         // Browser control — same six tools, same executor, as every other path.
         claudeTools.push(...browserToolsClaude(I));
+      }
+      if (computerControlEnabled) {
+        // OS-level mouse/keyboard/screen control — same three tools, same
+        // executor, as every other path.
+        claudeTools.push(...computerToolsClaude(I));
       }
       if (toolUseEnabled) {
         // Tool names mirror Claude Code's built-in workspace tools so the
@@ -3537,7 +3583,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES]);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // ── Truncated at the token cap → continue automatically ──────
@@ -3817,6 +3863,33 @@ export async function POST(req: Request) {
                       me: folderName, allowedHosts: browserAllowedHosts,
                       allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
                     });
+                  } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                    // OS-level mouse/keyboard/screen control. computer_screenshot
+                    // delivers a real image the same way Read does for an image
+                    // file — a two-element content array (text caption + image
+                    // block) so the being actually sees the monitor.
+                    const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
+                    if (cr.image) {
+                      resultContent = [
+                        { type: 'text', text: cr.text },
+                        { type: 'image', source: { type: 'base64', media_type: cr.image.mimeType, data: cr.image.base64 } },
+                      ];
+                      attachmentEvent = {
+                        type: 'file_attachment',
+                        attachment: {
+                          name: `screenshot_${Date.now()}.png`,
+                          type: cr.image.mimeType,
+                          size: Math.ceil(cr.image.base64.length * 0.75),
+                          isImage: true,
+                          ...(await toolAttachmentPayload(Buffer.from(cr.image.base64, 'base64'), cr.image.mimeType, cr.image.base64)),
+                          tokens: Math.max(1, Math.ceil(cr.image.base64.length * 0.75 / 750)),
+                          excluded: false,
+                          toolAction: 'read',
+                        },
+                      };
+                    } else {
+                      resultContent = cr.text;
+                    }
                   } else if (tu.name === 'AskQuestion') {
                     // Pause the turn: emit the question, wait for the user's
                     // selection (or the configured timeout), return it as the
@@ -4142,6 +4215,11 @@ export async function POST(req: Request) {
         // requires — a bare `{}` there rejects the entire tools array, taking
         // every other tool down with it.
         geminiTools.push({ functionDeclarations: browserToolsGemini(I) });
+      }
+      if (computerControlEnabled) {
+        // OS-level mouse/keyboard/screen control. Same UPPERCASE-type / empty-OBJECT
+        // requirement as computerToolsGemini() applies here.
+        geminiTools.push({ functionDeclarations: computerToolsGemini(I) });
       }
       // Optional interactive AskUserQuestion tool (independent of file tools).
       if (askUserEnabled) {
@@ -4738,6 +4816,28 @@ export async function POST(req: Request) {
                         me: folderName, allowedHosts: browserAllowedHosts,
                         allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
                       }) };
+                    } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
+                      // OS-level mouse/keyboard/screen control. computer_screenshot
+                      // delivers a real image via extraInlineParts, same as Read
+                      // does for an image file.
+                      const cr = await runComputerTool(fc.name, fc.args || {}, { me: folderName, instructions: I });
+                      result = { report: cr.text };
+                      if (cr.image) {
+                        extraInlineParts.push({ inlineData: { mimeType: cr.image.mimeType, data: cr.image.base64 } });
+                        attachmentEvent = {
+                          type: 'file_attachment',
+                          attachment: {
+                            name: `screenshot_${Date.now()}.png`,
+                            type: cr.image.mimeType,
+                            size: Math.ceil(cr.image.base64.length * 0.75),
+                            isImage: true,
+                            ...(await toolAttachmentPayload(Buffer.from(cr.image.base64, 'base64'), cr.image.mimeType, cr.image.base64)),
+                            tokens: Math.max(1, Math.ceil(cr.image.base64.length * 0.75 / 750)),
+                            excluded: false,
+                            toolAction: 'read',
+                          },
+                        };
+                      }
                     } else if (fc.name === 'AskQuestion') {
                       // Pause the turn: emit the question, wait for the user's
                       // selection (or the configured timeout), return it as the
@@ -5461,6 +5561,11 @@ export async function POST(req: Request) {
       // provider path.
       if (browserEnabled) {
         localTools.push(...browserToolsOpenAI(I));
+      }
+      // OS-level mouse/keyboard/screen control — same three tools and the same
+      // executor as every other provider path.
+      if (computerControlEnabled) {
+        localTools.push(...computerToolsOpenAI(I));
       }
 
       // Build base OpenAI-style messages from the conversation
@@ -6466,6 +6571,46 @@ export async function POST(req: Request) {
                         me: folderName, allowedHosts: browserAllowedHosts,
                         allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
                       });
+                    } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
+                      // OS-level mouse/keyboard/screen control. computer_screenshot
+                      // delivers a real image the same way Read does for an image
+                      // file: eyes-bridge description for text-only models,
+                      // pendingImageInjects for vision-capable ones.
+                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I });
+                      if (cr.image) {
+                        if (useEyes) {
+                          const eyesResult = await describeImage({
+                            imageBase64: cr.image.base64,
+                            imageMimeType: cr.image.mimeType,
+                            eyesPrompt,
+                            eyesModel,
+                            zaiKey: keys.glm || '',
+                            geminiKey: keys.gemini || '',
+                            mimoKey: keys.mimo || '',
+                            oauthToken: keys.claudeOAuthToken || '',
+                          });
+                          resultText = `${cr.text}\n\nDescribed via ${eyesModel}:\n\n${eyesResult.description}`;
+                        } else {
+                          const dataUrl = `data:${cr.image.mimeType};base64,${cr.image.base64}`;
+                          resultText = `${cr.text} Image content follows in the next user message.`;
+                          pendingImageInjects.push({ name: `screenshot_${Date.now()}.png`, dataUrl });
+                        }
+                        attachmentEvent = {
+                          type: 'file_attachment',
+                          attachment: {
+                            name: `screenshot_${Date.now()}.png`,
+                            type: cr.image.mimeType,
+                            size: Math.ceil(cr.image.base64.length * 0.75),
+                            isImage: true,
+                            ...(await toolAttachmentPayload(Buffer.from(cr.image.base64, 'base64'), cr.image.mimeType, cr.image.base64)),
+                            tokens: Math.max(1, Math.ceil(cr.image.base64.length * 0.75 / 750)),
+                            excluded: false,
+                            toolAction: 'read',
+                          },
+                        };
+                      } else {
+                        resultText = cr.text;
+                      }
                     } else if (tc.name === '$web_search') {
                       // Moonshot (Kimi) builtin web search. Unlike the
                       // workspace tools, the search itself runs on Moonshot's
