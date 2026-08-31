@@ -216,71 +216,129 @@ try { $dpiOk = [NxDpi]::SetProcessDpiAwarenessContext([IntPtr]::new(-4)) } catch
 if (-not $dpiOk) { try { [void][NxDpi]::SetProcessDPIAware() } catch {} }
 `;
 
-// A disposable, click-through, always-on-top borderless window that paints a
-// red rectangle or circle outline and closes itself after Ms milliseconds.
-// Entirely cosmetic — every call site wraps its use in try/catch so a failure
-// here (a locked desktop, an RDP session with no visible GDI surface, ...)
-// never touches real functionality.
-const FLASH_HELPER = `
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$ovSig = @'
+// Draws a red outline DIRECTLY ONTO THE SCREEN DC — no window is ever created.
+//
+// This is deliberate, and it is the second iteration. The first version showed
+// a borderless always-on-top Form. That was wrong for two measured reasons:
+//   1. Creating a window between mouse_down and mouse_up steals activation from
+//      the target application, which drops its mouse capture — so drags died
+//      and only the mouse_up coordinate registered. (Kiko's report.)
+//   2. A Form costs a WinForms load + message pump; drawing on the screen DC is
+//      immediate, so a click marker actually lands at the moment of the click.
+// Draw() snapshots the pixels it is about to cover and Clear() blits them back,
+// because "just ask everyone to repaint" leaves fragments behind on surfaces
+// that repaint lazily — Lizard-kun saw exactly that: leftover pieces of the
+// border sitting there until the cursor passed over them.
+const GDI_HELPER = `
+$gdiSig = @'
 using System;
 using System.Runtime.InteropServices;
-public class NxOv {
-  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
-  [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int i, int v);
+public class NxGdi {
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr r, IntPtr rg, uint f);
+  [DllImport("user32.dll")] public static extern bool InvalidateRect(IntPtr h, IntPtr r, bool erase);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreatePen(int s, int w, uint c);
+  [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr o);
+  [DllImport("gdi32.dll")] public static extern IntPtr GetStockObject(int i);
+  [DllImport("gdi32.dll")] public static extern bool Ellipse(IntPtr dc,int l,int t,int r,int b);
+  [DllImport("gdi32.dll")] public static extern bool Rectangle(IntPtr dc,int l,int t,int r,int b);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr dc);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleBitmap(IntPtr dc,int w,int h);
+  [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr d,int dx,int dy,int w,int h,IntPtr s,int sx,int sy,uint rop);
+  [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr dc);
+
+  class Saved { public IntPtr dc; public IntPtr bmp; public IntPtr old; public int x,y,w,h; }
+  static System.Collections.Generic.List<Saved> saved = new System.Collections.Generic.List<Saved>();
+
+  // Copy a strip of the live screen into an off-screen bitmap so Clear() can put
+  // the exact original pixels back. Repainting alone is not enough: parts of the
+  // mark land on surfaces that only repaint when something else forces them to
+  // (desktop, taskbar, idle windows), so the paint survives until the cursor
+  // happens to pass over it.
+  static void Save(IntPtr dc, int x, int y, int w, int h){
+    if (w <= 0 || h <= 0) return;
+    Saved s = new Saved();
+    s.dc = CreateCompatibleDC(dc);
+    s.bmp = CreateCompatibleBitmap(dc, w, h);
+    if (s.dc == IntPtr.Zero || s.bmp == IntPtr.Zero) return;
+    s.old = SelectObject(s.dc, s.bmp);
+    s.x = x; s.y = y; s.w = w; s.h = h;
+    BitBlt(s.dc, 0, 0, w, h, dc, x, y, 0x00CC0020);
+    saved.Add(s);
+  }
+
+  public static void Draw(int l,int t,int r,int b,bool circle,int width){
+    IntPtr dc = GetDC(IntPtr.Zero);
+    if (dc == IntPtr.Zero) return;
+    int pad = width / 2 + 2;
+    int thick = width + 4;
+    if (circle) {
+      Save(dc, l - pad, t - pad, (r - l) + pad * 2 + 1, (b - t) + pad * 2 + 1);
+    } else {
+      // Four edge strips, not the whole rectangle: restoring a monitor-sized
+      // snapshot 650 ms later would smear stale pixels over everything inside.
+      int fw = (r - l) + pad * 2 + 1;
+      int fh = (b - t) + pad * 2 + 1;
+      Save(dc, l - pad, t - pad, fw, thick);
+      Save(dc, l - pad, b - pad, fw, thick);
+      Save(dc, l - pad, t - pad, thick, fh);
+      Save(dc, r - pad, t - pad, thick, fh);
+    }
+    IntPtr pen = CreatePen(0, width, 0x000000FF);
+    IntPtr oldPen = SelectObject(dc, pen);
+    IntPtr oldBr = SelectObject(dc, GetStockObject(5));
+    if (circle) Ellipse(dc,l,t,r,b); else Rectangle(dc,l,t,r,b);
+    SelectObject(dc, oldPen); SelectObject(dc, oldBr);
+    DeleteObject(pen); ReleaseDC(IntPtr.Zero, dc);
+  }
+
+  public static bool HasMarks(){ return saved.Count > 0; }
+
+  public static void Clear(){
+    IntPtr dc = GetDC(IntPtr.Zero);
+    if (dc != IntPtr.Zero) {
+      for (int i = saved.Count - 1; i >= 0; i--) {
+        Saved s = saved[i];
+        BitBlt(dc, s.x, s.y, s.w, s.h, s.dc, 0, 0, 0x00CC0020);
+        SelectObject(s.dc, s.old); DeleteObject(s.bmp); DeleteDC(s.dc);
+      }
+      ReleaseDC(IntPtr.Zero, dc);
+    }
+    saved.Clear();
+    // Backstop for anything that repainted underneath us while the mark was up.
+    InvalidateRect(IntPtr.Zero, IntPtr.Zero, true);
+    RedrawWindow(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 0x0585);
+  }
 }
 '@
-Add-Type -TypeDefinition $ovSig -ErrorAction SilentlyContinue
-function Show-Flash {
-  param([int]$X, [int]$Y, [int]$W, [int]$H, [string]$Shape, [int]$Ms)
-  try {
-    $f = New-Object System.Windows.Forms.Form
-    $f.FormBorderStyle = 'None'
-    $f.ShowInTaskbar = $false
-    $f.TopMost = $true
-    $f.StartPosition = 'Manual'
-    $f.Location = New-Object System.Drawing.Point($X, $Y)
-    $f.Size = New-Object System.Drawing.Size([Math]::Max(1, $W), [Math]::Max(1, $H))
-    $f.BackColor = [System.Drawing.Color]::Magenta
-    $f.TransparencyKey = [System.Drawing.Color]::Magenta
-    $shapeLocal = $Shape
-    $formRef = $f
-    $f.Add_Paint({
-      param($s2, $e2)
-      $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 6)
-      if ($shapeLocal -eq 'circle') {
-        $e2.Graphics.DrawEllipse($pen, 3, 3, $formRef.Width - 6, $formRef.Height - 6)
-      } else {
-        $e2.Graphics.DrawRectangle($pen, 3, 3, $formRef.Width - 6, $formRef.Height - 6)
-      }
-      $pen.Dispose()
-    })
-    $f.Show()
-    try {
-      $ex = [NxOv]::GetWindowLong($f.Handle, -20)
-      [void][NxOv]::SetWindowLong($f.Handle, -20, $ex -bor 0x80020 -bor 0x8)
-    } catch {}
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($sw.ElapsedMilliseconds -lt $Ms) {
-      [System.Windows.Forms.Application]::DoEvents()
-      Start-Sleep -Milliseconds 15
-    }
-    $f.Close()
-    $f.Dispose()
-  } catch {}
-}
+Add-Type -TypeDefinition $gdiSig -ErrorAction SilentlyContinue
 `;
 
-/** Fire-and-forget: never awaited, never allowed to block or fail real work. */
-function fireFlash(x: number, y: number, w: number, h: number, shape: 'rect' | 'circle', ms: number) {
+/**
+ * Fire-and-forget monitor border, drawn out-of-process so it adds no latency to
+ * the being's own call.
+ *
+ * `detached: true` is deliberately ABSENT. On Windows it starts the child with
+ * DETACHED_PROCESS, which gives powershell.exe no console — it then exits 0
+ * without executing a single line of the script. That is why this overlay was
+ * silently dead: the exit code said success, and nothing ever drew. Measured,
+ * not guessed: with `detached` the screen was byte-identical before and after;
+ * without it, 36,383 red pixels appeared.
+ */
+function fireFlash(x: number, y: number, w: number, h: number, ms: number) {
   try {
-    const script = DPI_PREFIX + FLASH_HELPER +
-      `Show-Flash -X ${Math.trunc(x)} -Y ${Math.trunc(y)} -W ${Math.trunc(w)} -H ${Math.trunc(h)} -Shape '${shape}' -Ms ${Math.trunc(ms)}\n`;
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], {
-      detached: true, stdio: 'ignore', windowsHide: true,
+    const l = Math.trunc(x), t = Math.trunc(y);
+    const r = Math.trunc(x + w) - 1, b = Math.trunc(y + h) - 1;
+    const script = DPI_PREFIX + GDI_HELPER +
+      `[NxGdi]::Draw(${l}, ${t}, ${r}, ${b}, $false, 8)\n` +
+      `Start-Sleep -Milliseconds ${Math.trunc(ms)}\n` +
+      `[NxGdi]::Clear()\n`;
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      stdio: 'ignore', windowsHide: true,
     });
+    child.on('error', () => { /* cosmetic only */ });
     child.unref();
   } catch { /* cosmetic only */ }
 }
@@ -538,9 +596,14 @@ Add-Type -TypeDefinition $inSig -ErrorAction SilentlyContinue
 
 function buildInputScript(cmds: ResolvedCommand[]): string {
   const json = JSON.stringify(cmds);
-  return DPI_PREFIX + INPUT_HELPER + FLASH_HELPER + `
+  return DPI_PREFIX + INPUT_HELPER + GDI_HELPER + `
 $cmds = ${psQuote(json)} | ConvertFrom-Json
 $results = New-Object System.Collections.ArrayList
+function Mark-Cursor {
+  $mp = New-Object NxInput+POINT
+  [void][NxInput]::GetCursorPos([ref]$mp)
+  [NxGdi]::Draw($mp.X - 25, $mp.Y - 25, $mp.X + 25, $mp.Y + 25, $true, 6)
+}
 foreach ($c in $cmds) {
   try {
     switch ($c.t) {
@@ -548,20 +611,19 @@ foreach ($c in $cmds) {
       'down' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
         [NxInput]::SendMouseButton([int]$c.btn, $true)
-        if ($null -ne $c.x) { Show-Flash -X ([int]$c.x - 25) -Y ([int]$c.y - 25) -W 50 -H 50 -Shape 'circle' -Ms 250 }
+        Mark-Cursor
       }
       'up' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
         [NxInput]::SendMouseButton([int]$c.btn, $false)
+        Mark-Cursor
       }
       'click' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
-        $p = New-Object NxInput+POINT
-        [void][NxInput]::GetCursorPos([ref]$p)
-        Show-Flash -X ($p.X - 25) -Y ($p.Y - 25) -W 50 -H 50 -Shape 'circle' -Ms 250
         [NxInput]::SendMouseButton([int]$c.btn, $true)
         Start-Sleep -Milliseconds 40
         [NxInput]::SendMouseButton([int]$c.btn, $false)
+        Mark-Cursor
       }
       'wheel' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
@@ -583,6 +645,10 @@ foreach ($c in $cmds) {
   } catch {
     [void]$results.Add(@{ t = $c.t; ok = $false; error = $_.Exception.Message })
   }
+}
+if ([NxGdi]::HasMarks()) {
+  Start-Sleep -Milliseconds 350
+  [NxGdi]::Clear()
 }
 $results | ConvertTo-Json -Compress
 `.trim();
@@ -736,7 +802,7 @@ $bmp.Dispose()
 
         // Live on-screen confirmation, fired AFTER the clean capture so the
         // border can never end up in the pixels the being actually sees.
-        fireFlash(mon.x, mon.y, mon.width, mon.height, 'rect', 650);
+        fireFlash(mon.x, mon.y, mon.width, mon.height, 650);
 
         // Human audit copy: same pixels, border + any very recent clicks
         // burned in, saved to disk. The being never sees this file.
