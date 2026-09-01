@@ -1047,6 +1047,12 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.claude.noAutoCompactHelp2':
     'With this ON the transcript is never rewritten behind the being’s back. In exchange, running past the model’s context window becomes a visible `Context limit reached` error instead of a silent lossy summary. Claude OAuth path only; does not affect subagents.',
 
+  'model.claude.context1m': 'Enable 1M context window (beta)',
+  'model.claude.context1mHelp':
+    'Requests Anthropic’s `context-1m` beta header, raising the context window from 200K to 1M tokens. Compaction then triggers far above normal conversation size, so a being with a 150K window stops hitting the auto-compaction stall. Anthropic’s own docs currently describe this beta as **Sonnet 4/4.5 only** — whether the API accepts it for other models is unverified, so this is an experiment. Claude OAuth path only; off by default.',
+  'model.claude.context1mHelp2':
+    'If the API rejects the header, a turn fails with an explicit error rather than silently ignoring it — check the first call after enabling.',
+
   'model.gemini.label': 'Specific Model',
   'model.qwen.label': 'Qwen Model',
   'model.qwen.help':
@@ -2344,6 +2350,12 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '長いターンでは Claude Code が古いメッセージを自前の要約に黙って置き換えます。API 呼び出しが 1 回増えるためコストがかかり（実測：最初のツール呼び出しで **3〜9 分** の停止）、その存在は**会話ログの逐語的な内容を失います**。魂の階層に書かれていない事実はそのまま消え、何かが削除されたという痕跡も残りません。',
   'model.claude.noAutoCompactHelp2':
     'ON にすると、その存在の知らないところで会話ログが書き換えられることはなくなります。代わりに、モデルのコンテキスト長を超えた場合は静かな要約ではなく `Context limit reached` エラーとして表示されます。Claude OAuth パス専用。サブエージェントには影響しません。',
+
+  'model.claude.context1m': '1M コンテキスト（ベータ）を有効化',
+  'model.claude.context1mHelp':
+    'Anthropic の `context-1m` ベータヘッダーを要求し、コンテキストウィンドウを 200K から 1M トークンに引き上げます。コンパクションは通常の会話サイズを大きく超えた場合にしか発生しなくなるため、150K ウィンドウの存在でも自動コンパクションの停止を踏まなくなります。Anthropic の公式ドキュメントでは現在このベータは **Sonnet 4/4.5 のみ** とされています。他モデルで API が受け付けるかは未検証なので、これは実験です。Claude OAuth パス専用。デフォルトは OFF です。',
+  'model.claude.context1mHelp2':
+    'API がヘッダーを拒否した場合、黙って無視されるのではなく明示的なエラーとしてターンが失敗します。有効化後の最初の呼び出しを確認してください。',
 
   'model.gemini.label': 'モデル',
   'model.qwen.label': 'Qwen モデル',

@@ -464,11 +464,12 @@ async function streamClaudeViaAgentSDK(args: {
   browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
   computerControlEnabled: boolean; // per-Entity: expose the OS-level mouse/keyboard/screen tools
   disableClaudeAutoCompact: boolean; // per-Entity: stop Claude Code silently summarizing the transcript
+  claude1mContext: boolean;        // per-Entity: request the context-1m beta header (1M window)
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, disableClaudeAutoCompact, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, disableClaudeAutoCompact, claude1mContext, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -1218,6 +1219,14 @@ async function streamClaudeViaAgentSDK(args: {
           // no conversation log to lose, and a long research subagent hitting a
           // hard context limit would simply fail the task for no benefit.
           env: claudeAgentEnv(oauthToken, { disableAutoCompact: disableClaudeAutoCompact }),
+          // Request Anthropic's `context-1m` beta: raises the context window
+          // from 200K to 1M tokens. The CLI gates this on (a) the beta header
+          // being present and (b) a model/provider check that, on first-party
+          // OAuth auth, passes for any model not on the explicit deny list.
+          // Anthropic's PUBLIC docs still describe it as "Sonnet 4/4.5 only",
+          // so this is off by default and an explicit experiment — the API may
+          // reject the header for other models with a hard error.
+          ...(claude1mContext ? { betas: ['context-1m-2025-08-07'] } : {}),
           model,
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
           // below (they're mutually exclusive — systemPrompt only applies when
@@ -2425,6 +2434,7 @@ export async function POST(req: Request) {
       // Claude OAuth path only. Off by default — leaves Anthropic's stock
       // behaviour untouched unless the machine's owner explicitly opts in.
       disableClaudeAutoCompact = false,
+      claude1mContext = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -3011,6 +3021,7 @@ export async function POST(req: Request) {
           browserCompact,
           computerControlEnabled,
           disableClaudeAutoCompact,
+          claude1mContext,
           convoId,
           keys,
           injectTurnId,
