@@ -1374,9 +1374,79 @@ async function streamClaudeViaAgentSDK(args: {
           else { delete opts.resume; opts.systemPrompt = systemPrompt; }
           let resultSubtype: string | null = null;
           let resultErrorText = '';
+          // ── Turn instrumentation ────────────────────────────────────────
+          // We were blind to WHERE a slow OAuth turn spends its time. These
+          // three counters cost nothing and turn "it hung for 7 minutes" into
+          // "the gap was between SDK message #3 and #4". Server console only.
+          const turnT0 = Date.now();
+          let sdkMsgSeq = 0;
+          let lastSdkMsgAt = turnT0;
+          const oauthTag = `[oauth ${folderName || 'turn'}]`;
           for await (const msg of query({ prompt: userMsgGen(!useResume), options: opts } as any)) {
             // Any SDK message means the turn is alive — feed the watchdog.
             touchSdkActivity();
+            // Gap accounting: log any silence longer than 20s and say exactly
+            // which message boundary it fell on. A stall before seq 1 is
+            // pre-first-token (upload / queue / server side); a stall between
+            // later messages is mid-turn (tool round trip / retry / throttle).
+            {
+              const now = Date.now();
+              const gap = now - lastSdkMsgAt;
+              sdkMsgSeq++;
+              if (gap > 20000) {
+                const mt = (msg as any).type + ((msg as any).subtype ? `/${(msg as any).subtype}` : '');
+                console.log(`${oauthTag} GAP ${(gap / 1000).toFixed(1)}s before SDK msg #${sdkMsgSeq} (${mt}) @ t+${((now - turnT0) / 1000).toFixed(1)}s`);
+              }
+              lastSdkMsgAt = now;
+            }
+
+            // ── Control-plane messages the loop used to drop on the floor ──
+            // The SDK has been telling us about compaction, API retries and
+            // rate-limit standing all along; nothing here read them. They are
+            // the only first-hand evidence for why a turn stalls, so surface
+            // them to the console always and to the user when they matter.
+            if ((msg as any).type === 'system') {
+              const sub = (msg as any).subtype;
+              if (sub === 'status') {
+                const st = (msg as any).status;
+                if (st) console.log(`${oauthTag} status=${st} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
+                if (st === 'compacting') {
+                  // Anthropic's own auto-compaction, not NEXUS soul-packing.
+                  enqueue({ type: 'tool_activity', tool: 'compact the conversation' });
+                  enqueue({ type: 'notice', content: 'Claude Code ran its own automatic compaction on this turn (this is Anthropic-side, unrelated to NEXUS soul-packing). It can add minutes before the first tool call.' });
+                }
+                const cErr = (msg as any).compact_error;
+                if (cErr) {
+                  console.log(`${oauthTag} compact_error: ${cErr}`);
+                  enqueue({ type: 'notice', content: `Automatic compaction failed: ${cErr}` });
+                }
+                continue;
+              }
+              if (sub === 'compact_boundary') {
+                const meta = (msg as any).compact_metadata || {};
+                console.log(`${oauthTag} compact_boundary ${JSON.stringify(meta)} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
+                enqueue({ type: 'notice', content: `Automatic compaction completed (${meta.trigger || 'auto'}${meta.pre_tokens ? `, ${meta.pre_tokens} tokens before` : ''}).` });
+                continue;
+              }
+              if (sub === 'api_retry') {
+                const a: any = msg as any;
+                console.log(`${oauthTag} api_retry attempt=${a.attempt}/${a.max_retries} delay=${a.retry_delay_ms}ms status=${a.error_status} error=${a.error} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
+                // Waiting in silence is the worst version of this. Say it.
+                enqueue({ type: 'tool_activity', tool: 'wait out a provider retry' });
+                enqueue({ type: 'notice', content: `Anthropic asked for a retry (${a.error || 'error'}${a.error_status ? ` ${a.error_status}` : ''}), attempt ${a.attempt}/${a.max_retries}, waiting ${Math.round(Number(a.retry_delay_ms || 0) / 1000)}s.` });
+                continue;
+              }
+              continue;
+            }
+            if ((msg as any).type === 'rate_limit_event') {
+              const ri: any = (msg as any).rate_limit_info || {};
+              console.log(`${oauthTag} rate_limit ${ri.status} type=${ri.rateLimitType} util=${ri.utilization} resetsAt=${ri.resetsAt} overage=${ri.isUsingOverage} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
+              if (ri.status === 'rejected' || ri.surpassedThreshold) {
+                const pct = typeof ri.utilization === 'number' ? ` (${Math.round(ri.utilization * 100)}% used)` : '';
+                enqueue({ type: 'notice', content: `Subscription rate limit ${ri.status === 'rejected' ? 'reached' : 'threshold passed'} on the ${String(ri.rateLimitType || 'plan').replace(/_/g, '-')} budget${pct}${ri.resetsAt ? `, resets ${new Date(Number(ri.resetsAt) * 1000).toLocaleTimeString()}` : ''}.` });
+              }
+              continue;
+            }
             // Every message carries the session_id once Anthropic has assigned
             // one. We keep capturing in case the first chunks don't have it.
             if ((msg as any).session_id) capturedSessionId = (msg as any).session_id;
@@ -1494,6 +1564,16 @@ async function streamClaudeViaAgentSDK(args: {
                 sdkUsage.cacheRead += Number(u.cache_read_input_tokens || 0);
                 sdkUsage.cacheCreate += Number(u.cache_creation_input_tokens || 0);
                 sdkUsageCalls++;
+                // Per-call ledger. `input_tokens` here is Anthropic's own count,
+                // not our estimate — the only way to calibrate the context gauge
+                // against reality, and the only way to see whether a slow call
+                // was a cache miss (high cacheCreate, low cacheRead) or not.
+                console.log(
+                  `${oauthTag} call #${sdkUsageCalls} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`
+                  + ` in=${u.input_tokens || 0} cacheRead=${u.cache_read_input_tokens || 0}`
+                  + ` cacheCreate=${u.cache_creation_input_tokens || 0} out=${u.output_tokens || 0}`
+                  + ` stop=${(msg as any).message?.stop_reason || '-'}`
+                );
               }
               // Capture the model's stop_reason from each assistant turn; the
               // LAST one is why the overall turn ended.
