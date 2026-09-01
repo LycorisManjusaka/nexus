@@ -1282,6 +1282,14 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.badge.done': 'Done',
   'spu.badge.error': 'Error',
 
+  'spu.run.elapsed': 'Elapsed',
+  'spu.run.total': 'Total',
+  'spu.run.elapsedTitle': 'Wall-clock time for this soul-packing run. Shown only — not saved anywhere.',
+  'spu.run.activityTitle': 'What the provider reports it is doing right now.',
+  'spu.run.silent': 'no data for {d}',
+  'spu.run.silentTitle': 'Nothing has arrived from the provider for this long. Common causes: Anthropic-side automatic compaction, a retry wait, or a rate-limit queue. The run has not stopped.',
+  'spu.run.tokensTitle': 'Token usage reported by the provider for the last call in this run.',
+
   'spu.st.period': '.',
   'spu.st.loading': 'Loading current + next prompt files...',
   'spu.st.loadedDraft': 'Loaded existing draft for next conversation from disk — pick up where you left off.',
@@ -2565,6 +2573,14 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.badge.doneTitle': '完了 — 出力 {n} 文字',
   'spu.badge.done': '完了',
   'spu.badge.error': 'エラー',
+
+  'spu.run.elapsed': '経過',
+  'spu.run.total': '合計',
+  'spu.run.elapsedTitle': 'この魂梱包にかかった実時間。表示のみで、どこにも保存されません。',
+  'spu.run.activityTitle': 'プロバイダが「いま何をしているか」と報告している内容。',
+  'spu.run.silent': '{d} 無反応',
+  'spu.run.silentTitle': 'この時間、プロバイダから何も届いていません。よくある原因は Anthropic 側の自動コンパクション、リトライ待ち、レート制限の待機です。処理は止まっていません。',
+  'spu.run.tokensTitle': 'この実行の直近の呼び出しについて、プロバイダが報告したトークン使用量。',
 
   'spu.st.period': '。',
   'spu.st.loading': '現在／次のプロンプトファイルを読み込み中…',

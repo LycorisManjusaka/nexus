@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle } from 'lucide-react';
+import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info } from 'lucide-react';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
@@ -96,6 +96,23 @@ function StatusBadge({ status }: { status: RunStatus }) {
     </span>
   );
 }
+
+// Wall-clock formatter for the run telemetry strip. Seconds below a minute so
+// short runs stay precise; zero-padded minutes/seconds above it so the number
+// is readable at a glance rather than parsed.
+function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = String(s % 60).padStart(2, '0');
+  if (m < 60) return `${m}m ${rs}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m ${rs}s`;
+}
+// A streaming call that has said nothing for this long is worth flagging; at
+// the second threshold it is almost certainly a compaction, a retry wait, or a
+// genuine wedge, and the watcher deserves to be told which.
+const SILENCE_WARN_MS = 20_000;
+const SILENCE_ALARM_MS = 90_000;
 
 // ── Token-count helper ──────────────────────────────────────────────────────
 async function countTokens(text: string, model: string): Promise<number> {
@@ -332,6 +349,59 @@ export default function SystemPromptUpdater({
   }, [open]);
 
   const [updateStatus, setUpdateStatus] = useState<RunStatus>({ state: 'idle' });
+
+  // ── Live run telemetry ───────────────────────────────────────────────────
+  // A soul-packing run can sit silent for minutes (Anthropic-side automatic
+  // compaction, a provider retry, a rate-limit wait). Before this, the UI was
+  // a spinner: "still working" and "wedged" looked identical, and the only
+  // honest thing a watcher could do was guess. These four pieces of state make
+  // the run legible without adding a single API call — every one of them comes
+  // from SSE frames the route already sends and `streamChat` used to discard.
+  //
+  //   runStartedAt / runEndedAt  → wall-clock cost of THIS run (display only,
+  //                                never persisted; resets when a run starts)
+  //   runActivity                → the server's own label for what it is doing
+  //   runEvents                  → notices (compaction, retry, rate limit)
+  //   lastEventAtRef             → drives the silence counter, which is the
+  //                                only indicator that works on EVERY provider,
+  //                                including ones that report nothing at all
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [runEndedAt, setRunEndedAt] = useState<number | null>(null);
+  const [runActivity, setRunActivity] = useState<string | null>(null);
+  const [runEvents, setRunEvents] = useState<{ at: number; text: string }[]>([]);
+  const [runUsage, setRunUsage] = useState<{ total: number; cached: number; out: number } | null>(null);
+  // Refs, not state: these are written on every SSE frame. Keeping them out of
+  // React's render path means the 1s ticker below is the ONLY thing that
+  // re-renders the strip, however chatty the stream gets.
+  const lastEventAtRef = useRef<number>(0);
+  const runStartRef = useRef<number | null>(null);
+  const [nowTs, setNowTs] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    if (running) {
+      const t0 = Date.now();
+      runStartRef.current = t0;
+      lastEventAtRef.current = t0;
+      setRunStartedAt(t0);
+      setRunEndedAt(null);
+      setRunActivity(null);
+      setRunEvents([]);
+      setRunUsage(null);
+      setNowTs(t0);
+    } else if (runStartRef.current !== null) {
+      // Freeze the total. It stays on screen after the run so the number is
+      // still readable when the work is done — that was the whole request.
+      setRunEndedAt(Date.now());
+      setRunActivity(null);
+    }
+  }, [running]);
+
+  useEffect(() => {
+    if (!running) return;
+    const h = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(h);
+  }, [running]);
+
   // The agent appends "## [Abbreviations log]" / "## [Deletions log]" sections
   // after the layers. We split those off the result: they're shown read-only
   // for review and are NOT carried into the next conversation's prompt.
@@ -1005,10 +1075,35 @@ export default function SystemPromptUpdater({
         if (s === '[DONE]') continue;
         try {
           const d = JSON.parse(s);
+          // ANY parsed frame counts as a sign of life — this is what the
+          // silence counter measures against, so it must be updated before
+          // the type checks, not inside them.
+          lastEventAtRef.current = Date.now();
           if (d?.type === 'thought' && typeof d.content === 'string') onProgress(d.content.length, 0);
           if (d?.type === 'text' && typeof d.content === 'string') {
             accum += d.content;
             onProgress(0, d.content.length, d.content);
+          }
+          // The route already emits these; the SPU used to drop them on the
+          // floor. `tool_activity` is the server naming its own stall
+          // ("compact the conversation", "wait out a provider retry").
+          if (d?.type === 'tool_activity') {
+            setRunActivity(typeof d.tool === 'string' && d.tool.trim() ? d.tool.trim() : null);
+          }
+          if (d?.type === 'notice' && typeof d.content === 'string' && d.content.trim()) {
+            const text = d.content.trim();
+            setRunEvents((prev) => (
+              prev.length && prev[prev.length - 1].text === text
+                ? prev
+                : [...prev, { at: Date.now(), text }].slice(-12)
+            ));
+          }
+          if (d?.type === 'cache_usage') {
+            setRunUsage({
+              total: Number(d.totalInputTokens || 0),
+              cached: Number(d.cachedInputTokens || 0),
+              out: Number(d.outputTokens || 0),
+            });
           }
           if (d?.error) throw new Error(d.error);
         } catch (e: any) {
@@ -1846,6 +1941,10 @@ export default function SystemPromptUpdater({
   if (!open) return null;
 
   const busy = running !== null || loading;
+  // Reading the ref during render is deliberate: `nowTs` is what re-renders
+  // this (once a second, only while a run is live), so the value is always as
+  // fresh as the thing that displays it.
+  const silenceMs = running && lastEventAtRef.current ? Math.max(0, nowTs - lastEventAtRef.current) : 0;
 
   return (
     <div className="fixed inset-0 bg-background/85 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
@@ -1923,6 +2022,56 @@ export default function SystemPromptUpdater({
           <div className="px-6 py-1.5 text-[11px] bg-muted/40 border-b border-border text-muted-foreground flex items-center gap-2">
             {busy && <Loader2 size={12} className="animate-spin" />}
             {statusMessage}
+          </div>
+        )}
+
+        {/* Run telemetry — elapsed time, what the agent is doing, and how long
+            it has been silent. Stays visible after the run so the total is
+            still readable; cleared when the next run starts. */}
+        {runStartedAt !== null && (
+          <div className="px-6 py-1.5 text-[11px] bg-muted/20 border-b border-border flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="inline-flex items-center gap-1 font-mono text-muted-foreground" title={t('spu.run.elapsedTitle')}>
+              <Clock size={11} />
+              {running ? t('spu.run.elapsed') : t('spu.run.total')}{' '}
+              {formatDuration((runEndedAt ?? nowTs) - runStartedAt)}
+            </span>
+            {running && runActivity && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
+                title={t('spu.run.activityTitle')}>
+                <Loader2 size={10} className="animate-spin" />{runActivity}
+              </span>
+            )}
+            {running && silenceMs >= SILENCE_WARN_MS && (
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono ${
+                  silenceMs >= SILENCE_ALARM_MS
+                    ? 'bg-red-500/15 text-red-600 dark:text-red-400'
+                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
+                }`}
+                title={t('spu.run.silentTitle')}
+              >
+                <Hourglass size={10} />{t('spu.run.silent').replace('{d}', formatDuration(silenceMs))}
+              </span>
+            )}
+            {runUsage && (
+              <span className="font-mono text-muted-foreground/80" title={t('spu.run.tokensTitle')}>
+                {runUsage.total.toLocaleString()} in · {runUsage.cached.toLocaleString()} cached · {runUsage.out.toLocaleString()} out
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Provider-side events the route reports: Anthropic's own automatic
+            compaction, retry waits, rate-limit standing. */}
+        {runEvents.length > 0 && (
+          <div className="px-6 py-1 bg-amber-500/5 border-b border-border space-y-0.5 max-h-24 overflow-y-auto custom-scrollbar">
+            {runEvents.map((e, i) => (
+              <div key={`${e.at}-${i}`} className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                <Info size={11} className="mt-[2px] shrink-0" />
+                <span className="font-mono opacity-60 shrink-0">{new Date(e.at).toLocaleTimeString()}</span>
+                <span>{e.text}</span>
+              </div>
+            ))}
           </div>
         )}
 
