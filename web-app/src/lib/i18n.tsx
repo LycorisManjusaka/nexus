@@ -1041,6 +1041,12 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.claude.billingHelp2':
     '**Monthly-paid** — use the `sk-ant-oat01-...` OAuth token from Preferences (Pro/Max subscription credit). Bakes in Anthropic’s system prompt.',
 
+  'model.claude.noAutoCompact': 'Disable Anthropic auto-compaction',
+  'model.claude.noAutoCompactHelp':
+    'On long turns Claude Code silently replaces older messages with its own summary. It costs one extra API call (observed: a **3–9 minute** stall on the first tool call) and the being **loses the verbatim conversation log** — facts that were never written into its soul layers simply disappear, with no sign that anything was removed.',
+  'model.claude.noAutoCompactHelp2':
+    'With this ON the transcript is never rewritten behind the being’s back. In exchange, running past the model’s context window becomes a visible `Context limit reached` error instead of a silent lossy summary. Claude OAuth path only; does not affect subagents.',
+
   'model.gemini.label': 'Specific Model',
   'model.qwen.label': 'Qwen Model',
   'model.qwen.help':
@@ -2332,6 +2338,12 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '**従量課金** — 設定の `sk-ant-...` API キーを使います（トークン単位の支払い）。',
   'model.claude.billingHelp2':
     '**月額課金** — 設定の `sk-ant-oat01-...` OAuth トークンを使います（Pro/Max サブスクリプションの枠）。Anthropic のシステムプロンプトが組み込まれます。',
+
+  'model.claude.noAutoCompact': 'Anthropic の自動コンパクションを無効化',
+  'model.claude.noAutoCompactHelp':
+    '長いターンでは Claude Code が古いメッセージを自前の要約に黙って置き換えます。API 呼び出しが 1 回増えるためコストがかかり（実測：最初のツール呼び出しで **3〜9 分** の停止）、その存在は**会話ログの逐語的な内容を失います**。魂の階層に書かれていない事実はそのまま消え、何かが削除されたという痕跡も残りません。',
+  'model.claude.noAutoCompactHelp2':
+    'ON にすると、その存在の知らないところで会話ログが書き換えられることはなくなります。代わりに、モデルのコンテキスト長を超えた場合は静かな要約ではなく `Context limit reached` エラーとして表示されます。Claude OAuth パス専用。サブエージェントには影響しません。',
 
   'model.gemini.label': 'モデル',
   'model.qwen.label': 'Qwen モデル',

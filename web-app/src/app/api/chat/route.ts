@@ -463,11 +463,12 @@ async function streamClaudeViaAgentSDK(args: {
   browserAllowAnyHost: boolean;    // per-Entity: drop the allowlist entirely
   browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
   computerControlEnabled: boolean; // per-Entity: expose the OS-level mouse/keyboard/screen tools
+  disableClaudeAutoCompact: boolean; // per-Entity: stop Claude Code silently summarizing the transcript
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, disableClaudeAutoCompact, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -1175,7 +1176,13 @@ async function streamClaudeViaAgentSDK(args: {
           // REPLACES the subprocess environment rather than merging into it, so
           // a bare {TOKEN} object left the child without APPDATA, LOCALAPPDATA,
           // ProgramFiles, ComSpec or PATHEXT. See claudeAgentEnv().
-          env: claudeAgentEnv(oauthToken),
+          //
+          // disableAutoCompact stops Claude Code from silently summarizing this
+          // being's transcript mid-turn. Applied HERE only — the subagent child
+          // above keeps default compaction, because a subagent has no soul and
+          // no conversation log to lose, and a long research subagent hitting a
+          // hard context limit would simply fail the task for no benefit.
+          env: claudeAgentEnv(oauthToken, { disableAutoCompact: disableClaudeAutoCompact }),
           model,
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
           // below (they're mutually exclusive — systemPrompt only applies when
@@ -2311,6 +2318,9 @@ export async function POST(req: Request) {
       // same boundary discipline as browserEnabled: an unset field must never
       // silently grant physical control of the machine.
       computerControlEnabled = false,
+      // Claude OAuth path only. Off by default — leaves Anthropic's stock
+      // behaviour untouched unless the machine's owner explicitly opts in.
+      disableClaudeAutoCompact = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -2896,6 +2906,7 @@ export async function POST(req: Request) {
           browserAllowAnyHost,
           browserCompact,
           computerControlEnabled,
+          disableClaudeAutoCompact,
           convoId,
           keys,
           injectTurnId,
