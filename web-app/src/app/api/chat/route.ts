@@ -463,13 +463,11 @@ async function streamClaudeViaAgentSDK(args: {
   browserAllowAnyHost: boolean;    // per-Entity: drop the allowlist entirely
   browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
   computerControlEnabled: boolean; // per-Entity: expose the OS-level mouse/keyboard/screen tools
-  disableClaudeAutoCompact: boolean; // per-Entity: stop Claude Code silently summarizing the transcript
-  claude1mContext: boolean;        // per-Entity: request the context-1m beta header (1M window)
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, disableClaudeAutoCompact, claude1mContext, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -597,22 +595,6 @@ async function streamClaudeViaAgentSDK(args: {
           try { enqueue({ type: 'stall_cleared' }); } catch {}
         }
       };
-      // Auto-compaction disabled ("Disable Anthropic auto-compaction" toggle)
-      // means Claude Code's transcript is never trimmed. Confirmed by reading
-      // the shipped CLI binary (2026-09-01): the SAME env-var gate
-      // (DISABLE_AUTO_COMPACT/DISABLE_COMPACT) that skips normal proactive
-      // compaction ALSO disables the CLI's own "reactive fallback" rescue
-      // path — the emergency net meant for exactly this situation, context
-      // ballooning past what the CLI can safely send. With the toggle on,
-      // NEITHER exists. If the context then actually needs trimming, the
-      // subprocess can go silent forever: no SDK message, no exit code (so
-      // no `error` event fires), and no stderr either (the SDK discards the
-      // child's stderr unless DEBUG_CLAUDE_AGENT_SDK is set, which it isn't
-      // here) — a stall_warning alone would just nag every 30s with nothing
-      // to resolve it. Scoped to the toggle being ON: with it off, a single
-      // real compaction pass has been measured taking 3-9 minutes, which
-      // must NOT be mistaken for this hang.
-      let watchdogAbortedForCompaction = false;
       const stallTimer = setInterval(() => {
         if (pausedForRendezvous > 0) return;
         const idleMs = Date.now() - lastSdkEventAt;
@@ -620,17 +602,6 @@ async function streamClaudeViaAgentSDK(args: {
           stallWarned = true;
           // try/catch: the interval can race stream teardown on client abort.
           try { enqueue({ type: 'stall_warning', idleSeconds: Math.round(idleMs / 1000) }); } catch {}
-        }
-        if (disableClaudeAutoCompact && !watchdogAbortedForCompaction && idleMs >= 300_000) {
-          watchdogAbortedForCompaction = true;
-          console.warn(`[oauth ${folderName || 'turn'}] watchdog: aborting after ${Math.round(idleMs / 1000)}s of total silence with auto-compaction disabled.`);
-          try {
-            enqueue({
-              type: 'notice',
-              content: 'Turn stopped: no response for 5 minutes with "Disable Anthropic auto-compaction" ON for this Being. Claude Code likely needed to compact this conversation and has no fallback while that setting is on (both its normal and emergency compaction paths share the same switch). The stalled process was ended so it stops silently consuming your usage window. Turn the setting off to let compaction run, or trim this conversation to shrink its context.',
-            });
-          } catch {}
-          try { oauthAbort.abort(); } catch {}
         }
       }, 30_000);
 
@@ -1213,20 +1184,12 @@ async function streamClaudeViaAgentSDK(args: {
           // a bare {TOKEN} object left the child without APPDATA, LOCALAPPDATA,
           // ProgramFiles, ComSpec or PATHEXT. See claudeAgentEnv().
           //
-          // disableAutoCompact stops Claude Code from silently summarizing this
-          // being's transcript mid-turn. Applied HERE only — the subagent child
-          // above keeps default compaction, because a subagent has no soul and
-          // no conversation log to lose, and a long research subagent hitting a
-          // hard context limit would simply fail the task for no benefit.
-          env: claudeAgentEnv(oauthToken, { disableAutoCompact: disableClaudeAutoCompact }),
-          // Request Anthropic's `context-1m` beta: raises the context window
-          // from 200K to 1M tokens. The CLI gates this on (a) the beta header
-          // being present and (b) a model/provider check that, on first-party
-          // OAuth auth, passes for any model not on the explicit deny list.
-          // Anthropic's PUBLIC docs still describe it as "Sonnet 4/4.5 only",
-          // so this is off by default and an explicit experiment — the API may
-          // reject the header for other models with a hard error.
-          ...(claude1mContext ? { betas: ['context-1m-2025-08-07'] } : {}),
+          // Auto-compaction is deliberately left at Anthropic's default (ON):
+          // disabling it via DISABLE_AUTO_COMPACT was tried and measured
+          // (2026-09-01) to cause silent hard stops once the context genuinely
+          // overflowed, because the same switch also disables the CLI's
+          // emergency fallback. A visible compaction stall beats a silent break.
+          env: claudeAgentEnv(oauthToken),
           model,
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
           // below (they're mutually exclusive — systemPrompt only applies when
@@ -1719,7 +1682,7 @@ async function streamClaudeViaAgentSDK(args: {
           // shown verbatim since it's already the CLI's own human-readable text.
           if (apiErrorMessage) {
             if (apiErrorMessage === 'Prompt is too long') {
-              notes.push('the context window is full and automatic compaction could not run — likely because the "Disable Anthropic auto-compaction" toggle is ON. Turn the toggle off, or trim/summarize this conversation.');
+              notes.push('the context window is full and automatic compaction could not run — trim or summarize this conversation to shrink its context, then resend.');
             } else if (/^Autocompact is thrashing/.test(apiErrorMessage)) {
               notes.push(apiErrorMessage);
             } else {
@@ -1822,16 +1785,6 @@ async function streamClaudeViaAgentSDK(args: {
         // refresh token, etc.).
         const msg = e?.message || String(e);
         console.error('[claude-oauth] error:', msg);
-        if (watchdogAbortedForCompaction) {
-          // The stall watchdog above already enqueued a specific, complete
-          // notice explaining the abort. The exception here is just that
-          // abort propagating up (SDK throws "Claude Code process aborted
-          // by user" once the killed subprocess's stdout closes) — showing
-          // it again as a second, differently-worded error would look like
-          // a contradiction rather than the same event.
-          controller.close();
-          return;
-        }
         // Translate a known signature (context-window overflow, rate limit,
         // credit, token) into a plain reason so the stop is never a mystery;
         // keep the raw text too for anything unrecognized.
@@ -2431,10 +2384,6 @@ export async function POST(req: Request) {
       // same boundary discipline as browserEnabled: an unset field must never
       // silently grant physical control of the machine.
       computerControlEnabled = false,
-      // Claude OAuth path only. Off by default — leaves Anthropic's stock
-      // behaviour untouched unless the machine's owner explicitly opts in.
-      disableClaudeAutoCompact = false,
-      claude1mContext = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -3020,8 +2969,6 @@ export async function POST(req: Request) {
           browserAllowAnyHost,
           browserCompact,
           computerControlEnabled,
-          disableClaudeAutoCompact,
-          claude1mContext,
           convoId,
           keys,
           injectTurnId,

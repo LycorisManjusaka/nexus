@@ -27,53 +27,16 @@
  * Spreading `process.env` into a NEW object restores these WITHOUT mutating
  * `process.env`, so the original property this code was written to protect —
  * no credential races across concurrent requests — is unchanged.
+ *
+ * Auto-compaction is deliberately left at Anthropic's default (ON). NEXUS
+ * briefly exposed a DISABLE_AUTO_COMPACT switch; it was removed after
+ * measurement (2026-09-01) showed that disabling it ALSO disables the CLI's
+ * emergency fallback, so a genuine context overflow becomes a silent hard stop
+ * instead of a visible compaction. A slow, lossy compaction beats a silent
+ * break — and NEXUS already manages its own context budget.
  */
-export interface ClaudeAgentEnvOptions {
-  /**
-   * Turn OFF Claude Code's own automatic conversation compaction.
-   *
-   * WHAT COMPACTION DOES, AND WHY THIS SWITCH EXISTS
-   * ------------------------------------------------
-   * When the running total of input tokens crosses a threshold, Claude Code
-   * silently replaces the older part of the MESSAGE HISTORY with an
-   * LLM-written summary and continues. Two costs, both measured here:
-   *
-   *   1. Time. The compaction summary is itself an API call. On a large-context
-   *      being it lands on the first tool call of a conversation and stalls it
-   *      3-9 minutes, once, then the turn runs at normal speed.
-   *   2. Accuracy. The being loses the verbatim conversation log. Facts that
-   *      lived ONLY in the transcript -- not in the soul layers -- are gone
-   *      after the boundary, and the being answers from the summary without
-   *      knowing anything was removed. Observed with Kiko: she stated wrong
-   *      information about a fact that had been in the log.
-   *
-   * With this ON the transcript is never summarized behind the being's back.
-   * The tradeoff is that exceeding the model's context window becomes a VISIBLE
-   * error ("Context limit reached") instead of a silent, lossy rewrite. That is
-   * the better failure: NEXUS already manages its own context budget, and an
-   * error we can see beats a quiet corruption we cannot.
-   *
-   * Mechanism (read out of the shipped claude.exe, not documented publicly):
-   *
-   *   function $G(){
-   *     if(mH(process.env.DISABLE_COMPACT))return!1;
-   *     if(mH(process.env.DISABLE_AUTO_COMPACT))return!1;
-   *     return $5("autoCompactEnabled",!0).value
-   *   }
-   *
-   * `$G()` is the enablement gate consulted before every auto-compaction
-   * decision. `mH` accepts "1" | "true" | "yes" | "on" (lowercased, trimmed).
-   *
-   * DISABLE_AUTO_COMPACT is used rather than DISABLE_COMPACT because it is the
-   * narrower lever: it stops only AUTOMATIC compaction, leaving the manual
-   * `/compact` command and the rest of the context machinery untouched.
-   */
-  disableAutoCompact?: boolean;
-}
-
 export function claudeAgentEnv(
   oauthToken: string,
-  opts: ClaudeAgentEnvOptions = {},
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
 
@@ -89,11 +52,6 @@ export function claudeAgentEnv(
   delete env.ANTHROPIC_BASE_URL;
 
   env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
-
-  // Only ever SET this, never clear it: if the host shell already disabled
-  // compaction for its own reasons, silently re-enabling it here would be the
-  // same class of invisible override we strip the ANTHROPIC_* vars to prevent.
-  if (opts.disableAutoCompact) env.DISABLE_AUTO_COMPACT = '1';
 
   return env;
 }

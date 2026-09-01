@@ -371,12 +371,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // same boundary discipline as browserEnabled — a wider reach than the
   // browser sandbox, so it gets its own separate flag rather than piggybacking.
   const [computerControlEnabled, setComputerControlEnabled] = useState(false);
-  // Claude OAuth path only. Turns OFF Claude Code's own automatic compaction —
-  // the silent mid-turn summarization of the transcript that costs 3-9 minutes
-  // and loses facts that live only in the conversation log. OFF by default:
-  // Anthropic's stock behaviour stands unless explicitly opted out of.
-  const [disableClaudeAutoCompact, setDisableClaudeAutoCompact] = useState(false);
-  const [claude1mContext, setClaude1mContext] = useState(false);
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -1004,8 +998,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserCompact(data.browserCompact === true);
         // Same `=== true` discipline as browserEnabled above.
         setComputerControlEnabled(data.computerControlEnabled === true);
-        setDisableClaudeAutoCompact(data.disableClaudeAutoCompact === true);
-        setClaude1mContext(data.claude1mContext === true);
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -1082,8 +1074,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
         setBrowserCompact(pick('browserCompact', false));
         setComputerControlEnabled(pick('computerControlEnabled', false));
-        setDisableClaudeAutoCompact(pick('disableClaudeAutoCompact', false));
-        setClaude1mContext(pick('claude1mContext', false));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -1199,7 +1189,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, disableClaudeAutoCompact, claude1mContext, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1262,7 +1252,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, disableClaudeAutoCompact, claude1mContext, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2075,8 +2065,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
         browserAllowAnyHost, browserCompact,
         computerControlEnabled,
-        disableClaudeAutoCompact,
-        claude1mContext,
         instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
@@ -2707,8 +2695,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       browserAllowAnyHost,
       browserCompact,
       computerControlEnabled,
-      disableClaudeAutoCompact,
-      claude1mContext,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -4521,42 +4507,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <span className="block mt-0.5">{renderRich(t('model.claude.billingHelp2'))}</span>
                     </div>
                   </div>
-                  {/* Only meaningful on the OAuth path: this is a Claude Code
-                      subprocess setting, and the API-key path never spawns one. */}
-                  {claudeAuthMode === 'oauth' && (
-                    <>
-                    <div className="mb-4">
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={claude1mContext}
-                          onChange={(e) => setClaude1mContext(e.target.checked)}
-                          className="mt-0.5 accent-indigo-500"
-                        />
-                        <span className="text-xs font-medium">{t('model.claude.context1m')}</span>
-                      </label>
-                      <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed pl-6">
-                        {renderRich(t('model.claude.context1mHelp'))}
-                        <span className="block mt-0.5">{renderRich(t('model.claude.context1mHelp2'))}</span>
-                      </div>
-                    </div>
-                    <div className="mb-4">
-                      <label className="flex items-start gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={disableClaudeAutoCompact}
-                          onChange={(e) => setDisableClaudeAutoCompact(e.target.checked)}
-                          className="mt-0.5 accent-indigo-500"
-                        />
-                        <span className="text-xs font-medium">{t('model.claude.noAutoCompact')}</span>
-                      </label>
-                      <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed pl-6">
-                        {renderRich(t('model.claude.noAutoCompactHelp'))}
-                        <span className="block mt-0.5">{renderRich(t('model.claude.noAutoCompactHelp2'))}</span>
-                      </div>
-                    </div>
-                  </>
-                  )}
                   </>
                 )}
 
@@ -5230,8 +5180,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       browserAllowAnyHost,
                       browserCompact,
                       computerControlEnabled,
-                      disableClaudeAutoCompact,
-                      claude1mContext,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,
