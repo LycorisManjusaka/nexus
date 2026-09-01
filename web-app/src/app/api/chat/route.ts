@@ -565,7 +565,15 @@ async function streamClaudeViaAgentSDK(args: {
   const readableStream = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
-      registerActiveTurnStop(() => { try { controller.close(); } catch {} });
+      // Drives the Claude Code SUBPROCESS, not just this SSE stream. Without
+      // this, pressing Stop only closed the browser-facing stream — the
+      // spawned `claude` child kept running server-side (still burning the
+      // 5-hour OAuth window) because query() was never given an
+      // abortController to react to. Passed into queryOptions below and
+      // fired from both the Stop key/button (via registerActiveTurnStop)
+      // and the auto-compaction stall watchdog further down.
+      const oauthAbort = new AbortController();
+      registerActiveTurnStop(() => { try { controller.close(); } catch {} try { oauthAbort.abort(); } catch {} });
 
       // ── Stall watchdog ──────────────────────────────────────────────────
       // The SDK yields a message for every stream event — even a huge Write
@@ -588,6 +596,22 @@ async function streamClaudeViaAgentSDK(args: {
           try { enqueue({ type: 'stall_cleared' }); } catch {}
         }
       };
+      // Auto-compaction disabled ("Disable Anthropic auto-compaction" toggle)
+      // means Claude Code's transcript is never trimmed. Confirmed by reading
+      // the shipped CLI binary (2026-09-01): the SAME env-var gate
+      // (DISABLE_AUTO_COMPACT/DISABLE_COMPACT) that skips normal proactive
+      // compaction ALSO disables the CLI's own "reactive fallback" rescue
+      // path — the emergency net meant for exactly this situation, context
+      // ballooning past what the CLI can safely send. With the toggle on,
+      // NEITHER exists. If the context then actually needs trimming, the
+      // subprocess can go silent forever: no SDK message, no exit code (so
+      // no `error` event fires), and no stderr either (the SDK discards the
+      // child's stderr unless DEBUG_CLAUDE_AGENT_SDK is set, which it isn't
+      // here) — a stall_warning alone would just nag every 30s with nothing
+      // to resolve it. Scoped to the toggle being ON: with it off, a single
+      // real compaction pass has been measured taking 3-9 minutes, which
+      // must NOT be mistaken for this hang.
+      let watchdogAbortedForCompaction = false;
       const stallTimer = setInterval(() => {
         if (pausedForRendezvous > 0) return;
         const idleMs = Date.now() - lastSdkEventAt;
@@ -595,6 +619,17 @@ async function streamClaudeViaAgentSDK(args: {
           stallWarned = true;
           // try/catch: the interval can race stream teardown on client abort.
           try { enqueue({ type: 'stall_warning', idleSeconds: Math.round(idleMs / 1000) }); } catch {}
+        }
+        if (disableClaudeAutoCompact && !watchdogAbortedForCompaction && idleMs >= 300_000) {
+          watchdogAbortedForCompaction = true;
+          console.warn(`[oauth ${folderName || 'turn'}] watchdog: aborting after ${Math.round(idleMs / 1000)}s of total silence with auto-compaction disabled.`);
+          try {
+            enqueue({
+              type: 'notice',
+              content: 'Turn stopped: no response for 5 minutes with "Disable Anthropic auto-compaction" ON for this Being. Claude Code likely needed to compact this conversation and has no fallback while that setting is on (both its normal and emergency compaction paths share the same switch). The stalled process was ended so it stops silently consuming your usage window. Turn the setting off to let compaction run, or trim this conversation to shrink its context.',
+            });
+          } catch {}
+          try { oauthAbort.abort(); } catch {}
         }
       }, 30_000);
 
@@ -1245,6 +1280,19 @@ async function streamClaudeViaAgentSDK(args: {
           // no interactive prompt to hang the headless stream.
           permissionMode: 'default',
           canUseTool,
+          // Lets the Stop key/button and the auto-compaction stall watchdog
+          // (above) actually kill the spawned `claude` subprocess instead of
+          // only detaching NEXUS's own SSE stream from it.
+          abortController: oauthAbort,
+          // The Agent SDK silently discards the Claude Code child's stderr
+          // unless this callback (or DEBUG_CLAUDE_AGENT_SDK) is set — meaning
+          // any crash/warning the CLI itself prints was previously invisible
+          // to NEXUS. Server console only; harmless when there's nothing to
+          // say (most turns print nothing here).
+          stderr: (chunk: string) => {
+            const s = chunk.toString().trim();
+            if (s) console.warn(`[oauth ${folderName || 'turn'}] claude stderr: ${s}`);
+          },
         };
 
         let capturedSessionId: string | null = null;
@@ -1719,6 +1767,16 @@ async function streamClaudeViaAgentSDK(args: {
         // refresh token, etc.).
         const msg = e?.message || String(e);
         console.error('[claude-oauth] error:', msg);
+        if (watchdogAbortedForCompaction) {
+          // The stall watchdog above already enqueued a specific, complete
+          // notice explaining the abort. The exception here is just that
+          // abort propagating up (SDK throws "Claude Code process aborted
+          // by user" once the killed subprocess's stdout closes) — showing
+          // it again as a second, differently-worded error would look like
+          // a contradiction rather than the same event.
+          controller.close();
+          return;
+        }
         // Translate a known signature (context-window overflow, rate limit,
         // credit, token) into a plain reason so the stop is never a mystery;
         // keep the raw text too for anything unrecognized.
