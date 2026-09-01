@@ -1351,6 +1351,12 @@ async function streamClaudeViaAgentSDK(args: {
         let lastStopReason: string | null = null;
         let lastToolError: string | null = null;
         let anyToolUsed = false;
+        // Text of a locally-fabricated "isApiErrorMessage" assistant message
+        // (see below) — the CLI's own authoritative explanation for a hard
+        // stop that never touched the API, so it's the most trustworthy note
+        // available when present and must not be gated by anyToolUsed/
+        // producedContent the way the generic empty-turn note is.
+        let apiErrorMessage: string | null = null;
         // Set by canUseTool when a file op is blocked for being outside the
         // workspace (Full PC access OFF) — the classic "stops after saying it'll
         // read a file" cause.
@@ -1634,6 +1640,31 @@ async function streamClaudeViaAgentSDK(args: {
               // LAST one is why the overall turn ended.
               const sr = (msg as any).message?.stop_reason;
               if (sr) lastStopReason = sr;
+              // Claude Code sometimes yields a message it fabricated LOCALLY —
+              // never sent to the API at all — to explain why it refused to
+              // continue: context truly full with auto-compact disabled
+              // ("Prompt is too long"), the auto-compact/refill cycle thrashing
+              // ("Autocompact is thrashing..."), a malformed tool call that
+              // couldn't be retried, or a caught query exception. These carry
+              // `isApiErrorMessage: true` + `error`/`apiError`/`errorDetails` as
+              // TOP-LEVEL fields on the message (siblings of `.message`, not
+              // inside it) and default to all-zero usage + stop_reason
+              // "stop_sequence" — exactly the profile of the silent-failure
+              // reports ("in=0 out=0 ... stop=stop_sequence" and nothing shown).
+              // Because this content was never streamed via the API, none of
+              // it reached content_block_delta above — the "we skip assistant
+              // content, it was already streamed" assumption two blocks up is
+              // false for this one case, so without this branch the text is
+              // discarded entirely and the turn just stops with no reason.
+              if ((msg as any).isApiErrorMessage === true) {
+                const blocks = (msg as any).message?.content;
+                const text = Array.isArray(blocks)
+                  ? blocks.filter((b: any) => b?.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n').trim()
+                  : '';
+                const errCode = (msg as any).error;
+                console.log(`${oauthTag} api_error_message error=${errCode || '-'} text=${JSON.stringify(text).slice(0, 300)}`);
+                if (text) apiErrorMessage = text;
+              }
             } else if (msg.type === 'result') {
               // Result message signals the end of this query. SDK closes after.
               const errAny: any = msg as any;
@@ -1671,6 +1702,21 @@ async function streamClaudeViaAgentSDK(args: {
         {
           const sub = res.subtype || 'success';
           const notes: string[] = [];
+          // Most authoritative source first: the CLI's own locally-fabricated
+          // explanation (see the isApiErrorMessage branch above) for a hard
+          // stop that never reached the API — e.g. "Prompt is too long" when
+          // the context is full and auto-compact is disabled. Map the two
+          // known literal strings to an actionable note; anything else is
+          // shown verbatim since it's already the CLI's own human-readable text.
+          if (apiErrorMessage) {
+            if (apiErrorMessage === 'Prompt is too long') {
+              notes.push('the context window is full and automatic compaction could not run — likely because the "Disable Anthropic auto-compaction" toggle is ON. Turn the toggle off, or trim/summarize this conversation.');
+            } else if (/^Autocompact is thrashing/.test(apiErrorMessage)) {
+              notes.push(apiErrorMessage);
+            } else {
+              notes.push(`Claude Code stopped the turn itself: "${apiErrorMessage}"`);
+            }
+          }
           if (/max.?turns/i.test(sub)) {
             notes.push('it hit the tool-iteration limit — the model kept calling tools without finishing. A common cause is repeatedly calling a tool that does not exist, or one that keeps erroring.');
           } else if (sub !== 'success') {
@@ -1686,7 +1732,7 @@ async function streamClaudeViaAgentSDK(args: {
           } else if (lastStopReason === 'pause_turn') {
             notes.push('the model paused a long-running turn (stop_reason: pause_turn) and did not resume — resend to continue.');
           }
-          if (!producedContent && !anyToolUsed && sub === 'success' && (!lastStopReason || lastStopReason === 'end_turn')) {
+          if (!apiErrorMessage && !producedContent && !anyToolUsed && sub === 'success' && (!lastStopReason || lastStopReason === 'end_turn')) {
             notes.push('the turn ended with no output at all — the model stopped without generating any text or calling any tool.');
           }
           if (lastSandboxDenial) {
