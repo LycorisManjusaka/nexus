@@ -1134,7 +1134,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.claude.effortXhigh': 'X-High — deeper, for long agentic/coding work',
   'model.claude.effortMax': 'Max — absolute maximum capability',
   'model.claude.effortHelp':
-    'Controls adaptive-thinking depth on Opus 5, Opus 4.7/4.8, Sonnet 5 and Fable 5. Works in both Token-paid and Monthly-paid modes. `High` is the API default; higher levels spend more tokens, lower levels are faster/cheaper. Thinking and the visible answer share one output budget — if a turn ends with "hit the token limit", lower this or expect a bigger cap. Sonnet 5 has no `Max` tier (clamped to X-High server-side).',
+    'Controls adaptive-thinking depth on Opus 5, Opus 4.7/4.8, Sonnet 5, Fable 5 and Fable 5.1. Works in both Token-paid and Monthly-paid modes. `High` is the API default; higher levels spend more tokens, lower levels are faster/cheaper. Thinking and the visible answer share one output budget — if a turn ends with "hit the token limit", lower this or expect a bigger cap. Sonnet 5 has no `Max` tier (clamped to X-High server-side).',
 
   'model.auto.label': 'Automatic Model Selection',
   'model.auto.note': '(uses the currently-selected model as the selector)',
@@ -2426,7 +2426,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.claude.effortXhigh': '特高 — さらに深く。長いエージェント作業やコーディング向け',
   'model.claude.effortMax': '最大 — 能力の上限',
   'model.claude.effortHelp':
-    'Opus 5、Opus 4.7/4.8、Sonnet 5、Fable 5 の適応的思考の深さを制御します。従量課金と月額課金の両方で機能します。`High` が API の既定です。上のレベルほどトークンを消費し、下のレベルほど速く安くなります。思考と目に見える回答はひとつの出力枠を共有します — ターンが「トークン上限に達した」で終わる場合は、これを下げるか、より大きな上限を見込んでください。Sonnet 5 に `Max` はありません（サーバー側で特高に丸められます）。',
+    'Opus 5、Opus 4.7/4.8、Sonnet 5、Fable 5、Fable 5.1 の適応的思考の深さを制御します。従量課金と月額課金の両方で機能します。`High` が API の既定です。上のレベルほどトークンを消費し、下のレベルほど速く安くなります。思考と目に見える回答はひとつの出力枠を共有します — ターンが「トークン上限に達した」で終わる場合は、これを下げるか、より大きな上限を見込んでください。Sonnet 5 に `Max` はありません（サーバー側で特高に丸められます）。',
 
   'model.auto.label': 'モデルの自動選択',
   'model.auto.note': '（現在選択中のモデルが選択役を務めます）',

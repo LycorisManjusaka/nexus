@@ -78,6 +78,7 @@ const CLOUD_MODELS_FILL =
 # Format: family | specificModel | on|off | optional display label
 
 # ── Claude (Anthropic) ─────────────────────────────────────────────
+Claude   | claude-fable-5-1             | on  | Claude Fable 5.1 Thinking
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
 Claude   | claude-opus-5                | on  | Claude Opus 5 Thinking
 Claude   | claude-opus-4-8              | on  | Claude Opus 4.8 Thinking
@@ -555,6 +556,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Comments (#) and blank lines are ignored. Parsed server-side.
   const [autoModelSelectAllowedModels, setAutoModelSelectAllowedModels] = useState(
     "# family | specificModel | on/off | optional display label\n" +
+    "Claude | claude-fable-5-1 | on | Claude Fable 5.1 Thinking\n" +
     "Claude | claude-fable-5 | on | Claude Fable 5 Thinking\n" +
     "Claude | claude-opus-5 | on | Claude Opus 5 Thinking\n" +
     "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
@@ -4475,7 +4477,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, flagship)</option>
+                      <option value="claude-fable-5-1">Claude Fable 5.1 (adaptive thinking, flagship)</option>
+                      <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, legacy)</option>
                       <option value="claude-opus-5">Claude Opus 5 (adaptive thinking)</option>
                       <option value="claude-opus-4-8">Claude Opus 4.8 (thinking)</option>
                       <option value="claude-opus-4-7">Claude Opus 4.7 (thinking)</option>
