@@ -2233,6 +2233,603 @@ async function runModelSelectorPreflight(args: {
   return null;
 }
 
+// ── Anthropic-format adapter (Kimi + MiMo) ─────────────────────────────────
+// Kimi (Moonshot) and MiMo (Xiaomi) both ship a native Anthropic Messages API
+// endpoint that speaks the dialect these models were actually trained for —
+// typed `content` blocks (text / thinking / tool_use / tool_result) and
+// `stop_reason: 'tool_use'`. NEXUS previously routed both through the
+// OpenAI-compatible /chat/completions surface, where the tool-call dialect is
+// `tool_calls` + JSON-string arguments + `reasoning_content` — a shape the
+// model only emits INTERMITTENTLY. That intermittency was the "Kimi K3 doesn't
+// reason / narrates instead of calling tools" failure: measured 2/9 on the
+// OpenAI path vs 7/7 (streaming + non-streaming) on this one. Verified against
+// both providers' own docs (2026-09-02):
+//   • Kimi — POST https://api.moonshot.ai/anthropic/v1/messages, Bearer auth,
+//     tools + thinking (+signature) + image input, usage in Claude shape.
+//   • MiMo — POST https://api.xiaomimimo.com/anthropic/v1/messages, Bearer or
+//     api-key auth, tools + thinking (+signature) + images (v2.5 only).
+// This is a SELF-CONTAINED raw-fetch loop (no Anthropic SDK — those credentials
+// aren't Claude's), but it mirrors the Claude API-key path's tool loop exactly:
+// accumulate content blocks in order, execute local tool_use, echo the
+// assistant turn (incl. thinking signature) + a tool_result user turn, loop.
+//
+// Deliberate simplifications vs the Claude path, all safe for these models:
+//   • no cache_control breakpoints (Kimi/MiMo cache prompts server-side anyway)
+//   • no adaptive thinking / effort / task budget (not part of their surface)
+//   • no prefill auto-continuation (rare at the generous 32k cap)
+//   • no eyes-bridging (both target models are vision-capable; a text-only
+//     model routed here would get native image blocks it simply cannot see)
+async function streamViaAnthropicCompat(args: {
+  provider: 'kimi' | 'mimo';
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  processedMessages: any[];
+  modelSelectedPayload: any;
+  modelParams: any;
+  folderName: string;
+  senseEvents: any[];
+  toolUseEnabled: boolean;
+  enableReadConversation: boolean;
+  agentFullSystemAccess: boolean;
+  agentDangerousTools: boolean;
+  instructionOverrides: Record<string, any>;
+  language?: string;
+  askUserEnabled: boolean;
+  askUserTimeoutMs: number;
+  subagentEnabled: boolean;
+  subagentModel: string;
+  subagentFamily: string;
+  lettersEnabled: boolean;
+  browserEnabled: boolean;
+  browserAllowedHosts: string[];
+  browserAllowAnyHost: boolean;
+  browserCompact: boolean;
+  computerControlEnabled: boolean;
+  convoId: string;
+  keys: any;
+  injectTurnId: string;
+  maxToolRounds: number;
+}): Promise<Response> {
+  const {
+    provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
+    modelSelectedPayload, modelParams, folderName, senseEvents, toolUseEnabled,
+    enableReadConversation, agentFullSystemAccess, agentDangerousTools,
+    instructionOverrides, language, askUserEnabled, askUserTimeoutMs,
+    subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
+    browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
+    computerControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
+  } = args;
+  const I = resolveAgentInstructions(instructionOverrides, language);
+  const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
+  const pathRule = agentFullSystemAccess ? I.pathRuleFull : I.pathRuleSandbox;
+
+  // ── Messages in Anthropic content-block shape ────────────────────────────
+  const anthropicMessages = await Promise.all(processedMessages.map(async (m: any) => {
+    const contentArr: any[] = [];
+    for (const media of (m.mediaFiles || [])) {
+      if (media.mimeType?.startsWith('image/')) {
+        if (media.name) contentArr.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
+        // Downscale like the Claude path: a full-res screenshot is ~2.9 MB of
+        // base64 and makes vision turns take tens of seconds / trip the
+        // per-minute input quota. Kimi & MiMo are vision models — they read
+        // the resized image natively, so nothing is lost.
+        const img = await shrinkImageForClaude(media.base64Data, media.mimeType);
+        contentArr.push({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } });
+      }
+    }
+    if (m.content) contentArr.push({ type: 'text', text: m.content });
+    if (contentArr.length === 0) contentArr.push({ type: 'text', text: '-' });
+    return { role: m.role === 'user' ? 'user' : 'assistant', content: contentArr };
+  }));
+
+  // ── Tool definitions in Anthropic {name, description, input_schema} form ─
+  const tools: any[] = [];
+  if (toolUseEnabled) {
+    tools.push(
+      { name: 'Read', description: `${I.toolReadDesc} ${pathRule}`, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc } }, required: ['path'] } },
+      { name: 'Write', description: I.toolWriteDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc }, content: { type: 'string', description: 'Full file contents to write' } }, required: ['path', 'content'] } },
+      { name: 'Edit', description: I.toolEditDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc }, old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' }, new_string: { type: 'string', description: 'Text to replace it with.' } }, required: ['path', 'old_string', 'new_string'] } },
+      { name: 'Glob', description: I.toolGlobDesc, input_schema: { type: 'object', properties: { pattern: { type: 'string', description: 'Glob pattern. Use `**` to match all files.' } }, required: ['pattern'] } },
+      { name: 'Grep', description: I.toolGrepDesc, input_schema: { type: 'object', properties: { pattern: { type: 'string', description: 'JavaScript regex (no surrounding slashes).' }, file_pattern: { type: 'string', description: 'Optional glob to restrict files.' }, flags: { type: 'string', description: 'Optional regex flags (e.g. "i").' } }, required: ['pattern'] } },
+    );
+    if (agentDangerousTools) {
+      tools.push(
+        { name: 'Delete', description: I.toolDeleteDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: 'Path of the file to delete.' } }, required: ['path'] } },
+        { name: 'Bash', description: I.toolBashDesc, input_schema: { type: 'object', properties: { command: { type: 'string', description: 'The shell command to run.' }, timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 60000, max 600000).' } }, required: ['command'] } },
+      );
+    }
+  }
+  if (modelParams.enableWebSearch) {
+    tools.push(
+      { name: 'web_search', description: I.webSearchDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: 'The search query.' } }, required: ['query'] } },
+      { name: 'web_fetch', description: I.webFetchDesc, input_schema: { type: 'object', properties: { url: { type: 'string', description: 'The absolute http(s) URL to open and read.' } }, required: ['url'] } },
+    );
+  }
+  if (enableReadConversation) {
+    tools.push(
+      { name: 'read_conversation', description: I.readConversationDesc, input_schema: { type: 'object', properties: { name: { type: 'string', description: I.readConversationNameParam } }, required: ['name'] } },
+      { name: 'search_conversations', description: I.searchConversationsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchConversationsQueryParam } }, required: ['query'] } },
+    );
+  }
+  if (lettersEnabled) {
+    tools.push(
+      { name: 'write_letter', description: I.toolWriteLetterDesc, input_schema: { type: 'object', properties: { to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam }, title: { type: 'string', description: I.writeLetterTitleParam }, text: { type: 'string', description: I.writeLetterTextParam } }, required: ['to', 'title', 'text'] } },
+      { name: 'list_letters', description: I.toolListLettersDesc, input_schema: { type: 'object', properties: {}, required: [] } },
+      { name: 'read_letter', description: I.toolReadLetterDesc, input_schema: { type: 'object', properties: { id: { type: 'string', description: I.readLetterIdParam } }, required: ['id'] } },
+      { name: 'archive_letter', description: I.toolArchiveLetterDesc, input_schema: { type: 'object', properties: { id: { type: 'string', description: I.archiveLetterIdParam } }, required: ['id'] } },
+    );
+  }
+  if (browserEnabled) tools.push(...browserToolsClaude(I));
+  if (computerControlEnabled) tools.push(...computerToolsClaude(I));
+  if (askUserEnabled) {
+    tools.push({
+      name: 'AskQuestion', description: I.askUserDesc,
+      input_schema: {
+        type: 'object',
+        properties: {
+          questions: {
+            type: 'array', description: 'Between 1 and 4 questions to ask your partner.',
+            items: {
+              type: 'object',
+              properties: {
+                question: { type: 'string', description: 'The full question text. End with a question mark.' },
+                header: { type: 'string', description: 'Very short label/chip for the question (max ~12 chars).' },
+                multiSelect: { type: 'boolean', description: 'Set true to let your partner pick multiple options.' },
+                options: {
+                  type: 'array', description: '2 to 4 distinct, mutually-exclusive choices.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', description: 'Short option label (1-5 words).' },
+                      description: { type: 'string', description: 'What choosing this option means.' },
+                    },
+                    required: ['label'],
+                  },
+                },
+              },
+              required: ['question', 'options'],
+            },
+          },
+        },
+        required: ['questions'],
+      },
+    });
+  }
+  if (subagentEnabled) {
+    tools.push({
+      name: 'spawn_subagent', description: I.subagentDesc,
+      input_schema: {
+        type: 'object',
+        properties: {
+          task: { type: 'string', description: 'A precise, self-contained investigation for the helper to perform.' },
+          return_contract: { type: 'string', description: 'Optional: how the distilled result should be shaped/formatted.' },
+        },
+        required: ['task'],
+      },
+    });
+  }
+
+  const LOCAL_TOOL_NAMES_SET = new Set([
+    'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash',
+    'web_search', 'web_fetch', 'read_conversation', 'search_conversations',
+    'AskQuestion', 'spawn_subagent',
+    ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES,
+  ]);
+
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+      registerActiveTurnStop(() => { try { controller.close(); } catch {} });
+      enqueue(modelSelectedPayload);
+      for (const ev of senseEvents) enqueue(ev);
+
+      const repeatGuard = makeRepeatGuard();
+      let toolStopNotice = '';
+      let cumUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+      const sourceMap = new Map<string, { url: string; title?: string }>();
+
+      // One streaming call. Accumulates content blocks (text / thinking /
+      // tool_use) in order so the assistant turn can be echoed back verbatim.
+      const runOnce = async (msgs: any[], withTools: boolean) => {
+        const body: any = {
+          model,
+          ...(systemPrompt ? { system: systemPrompt } : {}),
+          messages: msgs,
+          max_tokens: 32000,
+          stream: true,
+        };
+        // Thinking: Kimi K3 reasons always (no request param needed — the
+        // toggle has no effect on it, same as the OpenAI path). MiMo exposes an
+        // explicit `thinking` object; map the shared toggle onto it.
+        if (provider === 'mimo') {
+          if (modelParams.qwenEnableThinking !== false) body.thinking = { type: 'enabled' };
+          body.temperature = Math.min(1.5, Math.max(0, Number(modelParams.temperature ?? 1)));
+          body.top_p = modelParams.topP ?? 0.95;
+        }
+        // Kimi K3 fixes temperature/top_p server-side — omit them entirely.
+        if (withTools && tools.length) body.tools = tools;
+
+        // A screenshot is re-sent on every tool round, so input is quadratic in
+        // rounds and trips the provider's per-minute input quota. A 429 means
+        // nothing was generated — resending the identical body after the wait is
+        // a resume, not a duplicate. Retry up to 3 times; anything else throws.
+        let res: Response | null = null;
+        for (let attempt = 0; ; attempt++) {
+          const r = await fetch(baseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify(body),
+          });
+          if (r.ok && r.body) { res = r; break; }
+          const errText = await r.text().catch(() => '');
+          const err = new Error(`${provider === 'kimi' ? 'Kimi' : 'MiMo'} Anthropic API: ${r.status} ${errText.slice(0, 400)}`);
+          const waitMs = parseRetryDelayMs(err);
+          if (waitMs === null || attempt >= 2) throw err;
+          console.log(`[${provider}] quota 429 — waiting ${Math.round(waitMs / 1000)}s, retry ${attempt + 2}/3`);
+          await new Promise((s) => setTimeout(s, waitMs));
+        }
+        if (!res || !res.body) throw new Error(`${provider} stream ended before body`);
+
+        const assistantBlocks: any[] = [];
+        let curTextIdx = -1;
+        let inThinking = false;
+        let thinkingText = '';
+        let thinkingSig = '';
+        let curTool: any = null;
+        let curToolJson = '';
+        let stopReason = '';
+        let streamError: string | null = null;
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const events = buf.split('\n\n');
+          buf = events.pop() || '';
+          for (const ev of events) {
+            const dl = ev.split('\n').find(l => l.startsWith('data:'));
+            if (!dl) continue;
+            const ds = dl.slice(5).trim();
+            if (ds === '[DONE]') continue;
+            let p: any;
+            try { p = JSON.parse(ds); } catch { continue; }
+
+            if (p.type === 'error') {
+              streamError = p.error?.message || JSON.stringify(p.error || p);
+              continue;
+            }
+            if (p.type === 'message_start') {
+              const u = p.message?.usage;
+              if (u) {
+                cumUsage.input += Number(u.input_tokens || 0);
+                cumUsage.output += Number(u.output_tokens || 0);
+                cumUsage.cacheRead += Number(u.cache_read_input_tokens || 0);
+                cumUsage.cacheCreate += Number(u.cache_creation_input_tokens || 0);
+              }
+            } else if (p.type === 'message_delta') {
+              if (p.usage?.output_tokens) cumUsage.output += Number(p.usage.output_tokens);
+              if (p.delta?.stop_reason) stopReason = p.delta.stop_reason;
+            } else if (p.type === 'content_block_start') {
+              const bt = p.content_block?.type;
+              if (bt === 'text') {
+                assistantBlocks.push({ type: 'text', text: '' });
+                curTextIdx = assistantBlocks.length - 1;
+                const init = p.content_block?.text || '';
+                if (init) { assistantBlocks[curTextIdx].text += init; enqueue({ type: 'text', content: init }); }
+              } else if (bt === 'thinking') {
+                inThinking = true;
+                thinkingText = p.content_block?.thinking || '';
+                thinkingSig = p.content_block?.signature || '';
+                if (thinkingText) enqueue({ type: 'thought', content: thinkingText });
+              } else if (bt === 'tool_use') {
+                curTool = { type: 'tool_use', id: p.content_block.id, name: p.content_block.name, input: {} };
+                curToolJson = '';
+              }
+            } else if (p.type === 'content_block_delta') {
+              const d = p.delta || {};
+              if (d.type === 'text_delta' && d.text) {
+                if (curTextIdx >= 0) assistantBlocks[curTextIdx].text += d.text;
+                enqueue({ type: 'text', content: d.text });
+              } else if (d.type === 'thinking_delta' && d.thinking) {
+                thinkingText += d.thinking;
+                enqueue({ type: 'thought', content: d.thinking });
+              } else if (d.type === 'signature_delta' && d.signature) {
+                thinkingSig += d.signature;
+              } else if (d.type === 'input_json_delta' && d.partial_json) {
+                curToolJson += d.partial_json;
+              }
+            } else if (p.type === 'content_block_stop') {
+              if (inThinking) {
+                assistantBlocks.push({ type: 'thinking', thinking: thinkingText, ...(thinkingSig ? { signature: thinkingSig } : {}) });
+                inThinking = false;
+              } else if (curTool) {
+                try { curTool.input = JSON.parse(curToolJson || '{}'); } catch { curTool.input = {}; }
+                assistantBlocks.push(curTool);
+                curTool = null;
+                curToolJson = '';
+              }
+            }
+          }
+        }
+
+        if (streamError && assistantBlocks.length === 0) throw new Error(streamError);
+        return { assistantBlocks, stopReason };
+      };
+
+      try {
+        let currentMessages = [...anthropicMessages];
+        for (let iter = 0; iter < maxToolRounds; iter++) {
+          const { assistantBlocks, stopReason } = await runOnce(currentMessages, true);
+
+          const toolUses = assistantBlocks.filter((b: any) => b.type === 'tool_use' && LOCAL_TOOL_NAMES_SET.has(b.name));
+          if (toolUses.length === 0) {
+            if (stopReason === 'max_tokens') {
+              enqueue({ type: 'text', content: '\n\n⚠️ _[Response hit the token limit and was cut off — resend to continue.]_' });
+            }
+            break;
+          }
+
+          // Progress check before spending anything (see makeRepeatGuard).
+          {
+            let stuck: string | null = null;
+            for (const tu of toolUses) {
+              const hit = repeatGuard(tu.name, tu.input);
+              if (hit) { stuck = hit; break; }
+            }
+            if (stuck) { toolStopNotice = toolRepeatNotice(stuck); break; }
+          }
+          // Last round and the model still wants tools: execute can't be
+          // answered, so stop and write a closing answer instead.
+          if (iter === maxToolRounds - 1) {
+            toolStopNotice = toolLimitNotice(maxToolRounds);
+            try {
+              enqueue({ type: 'tool_activity', tool: 'write the final answer' });
+              // Any tool_use blocks we refuse to execute still need a matching
+              // tool_result in the history, or the Anthropic-format endpoint
+              // rejects the turn ("tool_use must be followed by tool_result").
+              const wrapResults = assistantBlocks
+                .filter((blk: any) => blk.type === 'tool_use')
+                .map((blk: any) => ({
+                  type: 'tool_result',
+                  tool_use_id: blk.id,
+                  content: 'Not executed: the tool-use budget for this turn was exhausted before this call could run.',
+                }));
+              const wrapMsgs = [
+                ...currentMessages,
+                { role: 'assistant', content: assistantBlocks },
+                { role: 'user', content: [...wrapResults, { type: 'text', text: toolWrapUpInstruction(language) }] },
+              ];
+              await runOnce(wrapMsgs, false);
+            } catch (e: any) {
+              console.warn(`[${provider}] wrap-up call failed:`, e?.message);
+            } finally {
+              enqueue({ type: 'tool_activity', tool: null });
+            }
+            break;
+          }
+
+          // Append the assistant turn and execute each tool.
+          currentMessages.push({ role: 'assistant', content: assistantBlocks });
+          const toolResultBlocks: any[] = [];
+          for (const tu of toolUses) {
+            let resultContent: any = '';
+            const actLabel = toolActivityLabel(tu.name);
+            if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel, name: tu.name });
+            enqueue({ type: 'tool_call', call: { name: tu.name, input: truncateToolInput(tu.input), at: Date.now() } });
+            try {
+              if (tu.name === 'Read') {
+                const p = String(tu.input?.path || '');
+                if (isImageFilename(p)) {
+                  const bin = await readWorkspaceFileBinary(folderName, p, { fullAccess: agentFullSystemAccess });
+                  if (!bin) {
+                    resultContent = `Error: image not found or path outside workspace: ${p}`;
+                  } else {
+                    const base64 = bin.data.toString('base64');
+                    const img = await shrinkImageForClaude(base64, bin.mimeType);
+                    resultContent = [
+                      { type: 'text', text: `Image content of ${p} (${bin.mimeType}) follows:` },
+                      { type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } },
+                    ];
+                  }
+                } else {
+                  const txt = await readWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
+                  resultContent = txt == null ? `Error: file not found or path outside workspace: ${p}` : txt;
+                }
+              } else if (tu.name === 'Write') {
+                const p = String(tu.input?.path || '');
+                const c = String(tu.input?.content ?? '');
+                const wr = await writeWorkspaceFile(folderName, p, c, { fullAccess: agentFullSystemAccess });
+                resultContent = wr.ok ? `OK: ${wr.existed ? 'overwrote' : 'created'} ${p} (${c.length} chars).` : `Error: ${wr.error || 'write failed'}`;
+              } else if (tu.name === 'Edit') {
+                const p = String(tu.input?.path || '');
+                const oldS = String(tu.input?.old_string ?? '');
+                const newS = String(tu.input?.new_string ?? '');
+                const ed = await editWorkspaceFile(folderName, p, oldS, newS, { fullAccess: agentFullSystemAccess });
+                resultContent = ed.ok ? `OK: edited ${p} (replaced ${oldS.length} chars with ${newS.length} chars).` : `Error: ${ed.error || 'edit failed'}`;
+              } else if (tu.name === 'Glob') {
+                const pat = String(tu.input?.pattern || '**');
+                const matches = await globWorkspaceFiles(folderName, pat);
+                resultContent = matches.length === 0 ? `(no files match \`${pat}\`)` : matches.join('\n');
+              } else if (tu.name === 'Grep') {
+                const pat = String(tu.input?.pattern || '');
+                const filePat = tu.input?.file_pattern ? String(tu.input.file_pattern) : undefined;
+                const flags = tu.input?.flags ? String(tu.input.flags) : undefined;
+                const gr = await grepWorkspaceFiles(folderName, pat, { filePattern: filePat, flags });
+                if (!gr.ok) resultContent = `Error: ${gr.error}`;
+                else if (!gr.matches || gr.matches.length === 0) resultContent = `(no matches for /${pat}/${flags || ''})`;
+                else resultContent = gr.matches.map(x => `${x.path}:${x.line}: ${x.text}`).join('\n');
+              } else if (tu.name === 'Delete') {
+                const p = String(tu.input?.path || '');
+                const del = await deleteWorkspaceFile(folderName, p, { fullAccess: agentFullSystemAccess });
+                resultContent = del.ok ? `OK: deleted ${p}.` : `Error: ${del.error || 'delete failed'}`;
+              } else if (tu.name === 'Bash') {
+                const cmd = String(tu.input?.command || '');
+                if (!cmd.trim()) {
+                  resultContent = 'Error: Bash requires a non-empty "command".';
+                } else {
+                  const cwd = await ensureWorkspace(folderName);
+                  const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(tu.input?.timeout_ms) || undefined });
+                  resultContent = sh.output;
+                }
+              } else if (tu.name === 'web_search') {
+                const query = String(tu.input?.query || tu.input?.q || '').trim();
+                if (!query) {
+                  resultContent = 'Error: web_search requires a non-empty "query".';
+                } else {
+                  const hits = await webSearch(query, { maxResults: 6 });
+                  for (const h of hits) {
+                    if (h.url && !sourceMap.has(h.url)) sourceMap.set(h.url, { url: h.url, ...(h.title ? { title: h.title } : {}) });
+                  }
+                  resultContent = hits.length === 0
+                    ? `(no results for "${query}")`
+                    : hits.map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${h.snippet}` : ''}`).join('\n\n')
+                      + `\n\n(To read a full page, call web_fetch with one of the URLs above.)`;
+                }
+              } else if (tu.name === 'web_fetch') {
+                const target = String(tu.input?.url || tu.input?.URL || '').trim();
+                if (!target) {
+                  resultContent = 'Error: web_fetch requires an absolute "url".';
+                } else {
+                  const page = await webFetch(target, { maxChars: 8000 });
+                  if (page.url && !sourceMap.has(page.url)) sourceMap.set(page.url, { url: page.url, ...(page.title ? { title: page.title } : {}) });
+                  resultContent = `URL: ${page.url}\n` + (page.title ? `Title: ${page.title}\n` : '') + `\n${page.text}` + (page.truncated ? `\n\n[...content truncated...]` : '');
+                }
+              } else if (tu.name === 'read_conversation') {
+                const name = String(tu.input?.name || tu.input?.title || '').trim();
+                const r = await readConversationByName(folderName, name);
+                resultContent = r.ok ? `Transcript of "${r.title}":\n\n${r.transcript}` : `Error: ${r.error}`;
+              } else if (tu.name === 'search_conversations') {
+                const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
+                resultContent = formatSearchForTool(sr);
+              } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
+              } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                resultContent = await runBrowserTool(tu.name, tu.input || {}, {
+                  me: folderName, allowedHosts: browserAllowedHosts,
+                  allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                });
+              } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
+                if (cr.image) {
+                  // Computer screenshots carry a 1:1 pixel→absolute-coordinate
+                  // contract with their caption: runComputerTool reports the
+                  // monitor's NATIVE dimensions and tells the being to add the
+                  // top-left offset to the pixel it reads out of the image.
+                  // Resizing here broke that contract — a pixel at x=784 in a
+                  // 1568px downscale of a 1920px monitor is NOT at absolute 784,
+                  // it is at 960, so every click landed ~22% off toward the far
+                  // edge. Every other provider path (Claude API-key, Gemini,
+                  // OAuth, OpenAI-compatible) sends the capture at full native
+                  // resolution and relies on that 1:1 mapping; the adapter must
+                  // match or Kimi/MiMo click in the wrong place by the scale
+                  // factor regardless of how good their vision is. The cost is
+                  // a larger payload (and the corresponding per-minute input-
+                  // quota / vision-latency hit) — that is the inherent price of
+                  // computer control, not something a resize can remove without
+                  // breaking coordinates.
+                  resultContent = [
+                    { type: 'text', text: cr.text },
+                    { type: 'image', source: { type: 'base64', media_type: cr.image.mimeType, data: cr.image.base64 } },
+                  ];
+                } else {
+                  resultContent = cr.text;
+                }
+              } else if (tu.name === 'AskQuestion') {
+                const questions = normalizeQuestions(tu.input);
+                if (questions.length === 0) {
+                  resultContent = 'Error: AskQuestion requires 1-4 questions, each with 2-4 options.';
+                } else {
+                  const askId = createAskId();
+                  enqueue({ type: 'ask_user', askId, questions });
+                  const answered = await waitForAsk(askId, Number(askUserTimeoutMs) || 0);
+                  const timedOut = answered === null;
+                  const finalAnswers = timedOut ? recommendedDefaults(questions) : answered!;
+                  enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
+                  resultContent = formatAnswerForModel(finalAnswers, timedOut);
+                }
+              } else if (tu.name === 'spawn_subagent') {
+                const task = String((tu.input as any)?.task || '');
+                if (!task.trim()) {
+                  resultContent = 'Error: spawn_subagent requires a non-empty "task".';
+                } else {
+                  enqueue({ type: 'subagent_start', task });
+                  const childFamily = subagentFamily && subagentFamily.trim()
+                    ? subagentFamily.trim()
+                    : (provider === 'kimi' ? 'Kimi' : 'MiMo');
+                  const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : model;
+                  const sub = await runSubagent({
+                    family: childFamily, model: childModel, keys, task,
+                    returnContract: (tu.input as any)?.return_contract ? String((tu.input as any).return_contract) : undefined,
+                    folderName, fullAccess: agentFullSystemAccess,
+                    webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
+                  });
+                  cumUsage.input += sub.usage.input;
+                  cumUsage.output += sub.usage.output;
+                  cumUsage.cacheRead += sub.usage.cacheRead;
+                  cumUsage.cacheCreate += sub.usage.cacheCreate;
+                  enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
+                  resultContent = sub.text || '(subagent returned nothing)';
+                }
+              } else {
+                resultContent = `Error: unknown tool ${tu.name}`;
+              }
+            } catch (e: any) {
+              resultContent = `Error: ${e?.message || 'tool execution failed'}`;
+            }
+            toolResultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: resultContent });
+            if (actLabel) enqueue({ type: 'tool_activity', tool: null });
+          }
+          const injected = drainInjections(injectTurnId);
+          if (injected.length) {
+            toolResultBlocks.push({ type: 'text', text: frameInjection(injected, I.injectionFraming) });
+            enqueue({ type: 'injection_delivered', count: injected.length });
+          }
+          currentMessages.push({ role: 'user', content: toolResultBlocks });
+        }
+
+        if (toolStopNotice) {
+          console.warn(`[${provider}] ${toolStopNotice}`);
+          enqueue({ type: 'notice', content: toolStopNotice });
+        }
+        // Anthropic-shape usage (cache_read/cache_creation are separate buckets
+        // from input_tokens, exactly like Claude's) — normalize inline with the
+        // Claude branch's arithmetic rather than the OpenAI-style default, which
+        // would read prompt_tokens (absent here) and report 0 input.
+        enqueue({
+          type: 'cache_usage',
+          cachedInputTokens: cumUsage.cacheRead,
+          uncachedInputTokens: cumUsage.input,
+          totalInputTokens: cumUsage.cacheRead + cumUsage.cacheCreate + cumUsage.input,
+          outputTokens: cumUsage.output,
+          cacheCreationTokens: cumUsage.cacheCreate,
+          providerHint: provider,
+        });
+        if (sourceMap.size > 0) {
+          enqueue({ type: 'web_sources', sources: [...sourceMap.values()] });
+        }
+        controller.enqueue(`data: [DONE]\n\n`);
+        controller.close();
+      } catch (e: any) {
+        controller.enqueue(`data: ${JSON.stringify({ error: e?.message || 'unknown error' })}\n\n`);
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+
 export async function POST(req: Request) {
   try {
     // Global stop-key watcher (Ctrl+Shift+X). Started once per server process,
@@ -5178,6 +5775,56 @@ export async function POST(req: Request) {
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
         },
+      });
+    }
+    else if (isKimi || isMimo) {
+      // Kimi and MiMo speak their native Anthropic Messages dialect. Route them
+      // through the Anthropic-format adapter instead of the OpenAI-compatible
+      // /chat/completions surface — the tool-call reliability difference is
+      // measured (2/9 → 7/7, streaming and non-streaming). See
+      // streamViaAnthropicCompat above. (The OpenAI branch below still carries
+      // its isKimi/isMimo branches, but they are now unreachable from the main
+      // chat path — kept for reference, not wired.)
+      if (isKimi && !keys.kimi) {
+        return NextResponse.json({ error: 'Kimi requires the Kimi (Moonshot) API key in Preferences (from platform.kimi.ai → Console → API Keys).' }, { status: 400 });
+      }
+      if (isMimo && !keys.mimo) {
+        return NextResponse.json({ error: 'MiMo (Xiaomi) requires the MiMo API key in Preferences.' }, { status: 400 });
+      }
+      return streamViaAnthropicCompat({
+        provider: isKimi ? 'kimi' : 'mimo',
+        baseUrl: isKimi
+          ? 'https://api.moonshot.ai/anthropic/v1/messages'
+          : 'https://api.xiaomimimo.com/anthropic/v1/messages',
+        apiKey: isKimi ? keys.kimi : keys.mimo,
+        model: isKimi ? resolveKimiModel(specificModel) : (specificModel || 'mimo-v2.5'),
+        systemPrompt: enhancedSystemPrompt,
+        processedMessages,
+        modelSelectedPayload,
+        modelParams,
+        folderName,
+        senseEvents,
+        toolUseEnabled,
+        enableReadConversation,
+        agentFullSystemAccess,
+        agentDangerousTools,
+        instructionOverrides,
+        language,
+        askUserEnabled,
+        askUserTimeoutMs,
+        subagentEnabled,
+        subagentModel,
+        subagentFamily,
+        lettersEnabled,
+        browserEnabled,
+        browserAllowedHosts,
+        browserAllowAnyHost,
+        browserCompact,
+        computerControlEnabled,
+        convoId,
+        keys,
+        injectTurnId,
+        maxToolRounds: MAX_TOOL_ROUNDS,
       });
     }
     else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {

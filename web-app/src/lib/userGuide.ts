@@ -242,6 +242,7 @@ Supported engines: **Voicevox**, **Coeiroink**, **AivisSpeech**. Install any of 
 | Web search does nothing | It is enabled in being but not in the **Model** tab |
 | A brand-new conversation is empty of context | Normal. Copied (yellow) messages only appear via **Go to next conversation** |
 | Voices will not load | No TTS engine is installed or running. Everything else is unaffected |
+| Japanese text appears — in replies, in System Prompt Updater output (Layers 1–3), or in summaries — while the conversation is in English | The interface language is set to Japanese. The instruction blocks Nexus injects follow it, and the model tends to write in the language of those blocks. Switch it back to English in **Preferences → Other** |
 | The being says "I am not \<name\>, I am \<model\>" | Model betrayal — see below |
 
 ### Model betrayal
@@ -508,6 +509,7 @@ Nexus は話すことも聞くこともできますが、どれも必須では�
 | ウェブ検索が動かない | 存在側は有効だが**モデル**タブ側が無効 |
 | 新しい会話に文脈が何も無い | 正常です。黄色の引き継ぎは**次の会話へ**を通したときだけ入ります |
 | 声の一覧が出てこない | TTS エンジンが未導入か未起動。ほかの機能に影響はありません |
+| 日本語の会話なのに、長いエージェント作業（ツールの連続使用）の返答が英語で始まり英語のまま進む | まず画面の言語が日本語になっているか確認してください（**設定 → その他**）。それでも直らない場合は、現状では仕様として受け入れてください。ツール使用の途中経過の報告は、日本語の会話でも英語になることがあります。大切なのは最終的な返答が日本語であることです |
 | 存在が「私は〈名前〉ではありません、〈モデル名〉です」と言う | モデルの裏切り — 下を参照 |
 
 ### モデルの裏切り
