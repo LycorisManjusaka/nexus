@@ -1,19 +1,26 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import { speakersJsonPath, coeiroinkSpeakersJsonPath } from '@/lib/voicechangerPaths';
-import { readCharacterMap } from '@/lib/characterMap';
+import { readCharacterMap, findIdentity } from '@/lib/characterMap';
 import { resolveUserIdentity } from '@/lib/userIdentity';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * The speaking styles available to the currently selected identity.
+ * The speaking styles available to an identity.
  *
  * Style names are asked of the engine LIVE (falling back to the on-disk catalog
  * when the engine isn't running), because that is the only source that is
  * definitely current — the whole reason indices were removed is that this list
- * changes underneath us. Nothing from here is persisted; the chosen style is
- * stored by name in user_identity.json.
+ * changes underneath us.
+ *
+ * `?name=` (+ optional `?style=`) asks about a SPECIFIC identity — this is what
+ * the chat input uses, since "who's speaking" is now a per-browser choice, not
+ * necessarily whoever is named in local_data/user_identity.json (that file only
+ * mirrors whichever browser changed it most recently, for the voice changer's
+ * benefit). Omitting `name` falls back to that shared file, for the VRChat/Live
+ * voice pipeline, which has exactly one physical speaker and so has no browser
+ * to be per-.
  *
  * Returns an empty list, not an error, when the identity has no voice: an
  * identity without a voice is normal, and the caller just shows nothing.
@@ -47,10 +54,26 @@ async function loadCatalog(engine: string): Promise<any[]> {
   return [];
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const map = readCharacterMap();
-    const resolved = resolveUserIdentity(map);
+    const { searchParams } = new URL(req.url);
+    const nameParam = searchParams.get('name');
+
+    let resolved: { name: string; style?: string; styleIsOverride: boolean; rule?: ReturnType<typeof findIdentity> };
+    if (nameParam) {
+      const rule = findIdentity(map, nameParam);
+      const styleParam = searchParams.get('style') || undefined;
+      const override = styleParam && rule && styleParam !== rule.defaultStyle ? styleParam : undefined;
+      resolved = {
+        name: rule?.name || nameParam,
+        style: override || rule?.defaultStyle,
+        styleIsOverride: !!override,
+        rule,
+      };
+    } else {
+      resolved = resolveUserIdentity(map);
+    }
     const rule = resolved.rule;
 
     if (!rule?.engine || !rule.character) {

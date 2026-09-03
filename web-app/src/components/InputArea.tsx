@@ -7,6 +7,29 @@ import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { SNIFF_BYTES, TEXT_MAX_BYTES, MEDIA_EXT, looksLikeText } from '@/lib/textSniff';
 import { useT } from '@/lib/i18n';
 
+// Who's speaking in THIS browser. Kept in localStorage, not read back from
+// local_data/user_identity.json — that file is a single shared mirror the
+// voice changer reads on every utterance, so every browser writes it, but no
+// browser should read its OWN identity back from it: doing so meant one
+// person's pick silently overwrote what every other open browser displayed
+// (they all polled the same file every 30s). Each browser now remembers its
+// own choice; a pick still overwrites the shared file, for the voice changer
+// and the VRChat/Live pipeline, which have exactly one physical speaker and so
+// have no browser to be per-.
+const CURRENT_IDENTITY_KEY = 'nexus_current_identity';
+function readLocalIdentity(): { name: string; style: string } | null {
+  try {
+    const raw = localStorage.getItem(CURRENT_IDENTITY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.name !== 'string' || !parsed.name) return null;
+    return { name: parsed.name, style: typeof parsed?.style === 'string' ? parsed.style : '' };
+  } catch { return null; }
+}
+function writeLocalIdentity(name: string, style: string) {
+  try { localStorage.setItem(CURRENT_IDENTITY_KEY, JSON.stringify({ name, style })); } catch { /* ignore */ }
+}
+
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
   const t = useT();
   const [text, setText] = useState('');
@@ -83,34 +106,42 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   }, [text]);
 
   React.useEffect(() => {
-    // Who is speaking comes from local_data/user_identity.json (resolved against
-    // character_map.json) — one file, read by every window and by the voice
-    // changer, which is what makes a pick here show up everywhere. Refresh on
-    // mount, every 30s (catches a switch spoken into voice_changer.py), and
-    // immediately on nx-chara-changed, which the selector below dispatches after
-    // a pick so any other mounted copy resyncs without waiting for its poll.
-    const fetchName = () => {
+    // Load THIS browser's own choice first. Only when it has never chosen one
+    // (fresh browser/profile) do we ask the server for a starting point — the
+    // shared file's current fallback — and that's a one-time bootstrap, not an
+    // ongoing subscription: nothing here writes the shared file just for
+    // having loaded it.
+    const local = readLocalIdentity();
+    if (local) {
+      setUserName(local.name);
+      setActiveStyle(local.style);
+    } else {
       fetch('/api/chara/current').then(r => r.json()).then(data => {
-        if (data?.name) setUserName(data.name);
-        setActiveStyle(typeof data?.style === 'string' ? data.style : '');
+        const name = typeof data?.name === 'string' ? data.name : '';
+        const style = typeof data?.style === 'string' ? data.style : '';
+        if (name) { setUserName(name); setActiveStyle(style); writeLocalIdentity(name, style); }
       }).catch(() => {});
-    };
-    fetchName();
-    // Populate the speaker dropdown from character_map.json.
+    }
+    // Populate the speaker dropdown from character_map.json — shared registry,
+    // not per-browser state, so this one still comes straight from the server.
     fetch('/api/chara/list').then(r => r.json()).then(d => {
       setCharaList(d?.characters || []);
     }).catch(() => {});
-    const id = setInterval(fetchName, 30000);
-    const onCharaChanged = (e: any) => {
-      // The custom event optionally carries the new name in detail; trust the
-      // server response anyway in case multiple sources change the file.
-      if (e?.detail?.name) setUserName(e.detail.name);
-      fetchName();
+    // Re-sync from localStorage on two signals: the native 'storage' event
+    // (fires in OTHER tabs of this same browser the instant one of them
+    // writes the key — the cross-tab sync the old 30s server poll used to
+    // approximate, now instant and without touching any other browser) and
+    // the custom 'nx-chara-changed' event (fires in the SAME tab, for any
+    // other InputArea mounted on the same page).
+    const resync = () => {
+      const l = readLocalIdentity();
+      if (l) { setUserName(l.name); setActiveStyle(l.style); }
     };
-    window.addEventListener('nx-chara-changed', onCharaChanged as EventListener);
+    window.addEventListener('storage', resync);
+    window.addEventListener('nx-chara-changed', resync as EventListener);
     return () => {
-      clearInterval(id);
-      window.removeEventListener('nx-chara-changed', onCharaChanged as EventListener);
+      window.removeEventListener('storage', resync);
+      window.removeEventListener('nx-chara-changed', resync as EventListener);
     };
   }, []);
 
@@ -120,8 +151,14 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   // the identity changes, since styles belong to one specific character.
   React.useEffect(() => {
     if (!vrchatMode) { setStyleList([]); return; }
+    if (!userName) { setStyleList([]); return; }
     let cancelled = false;
-    fetch('/api/chara/styles')
+    // Ask about THIS browser's identity by name — not the shared file's
+    // "current" — so two browsers with two different identities selected each
+    // see their own styles rather than whichever one last touched the file.
+    const qs = new URLSearchParams({ name: userName });
+    if (activeStyle) qs.set('style', activeStyle);
+    fetch(`/api/chara/styles?${qs.toString()}`)
       .then(r => r.json())
       .then(d => {
         if (cancelled) return;
@@ -197,36 +234,42 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     };
   }, []);
 
-  // Switch the active speaker: writes local_data/user_identity.json via
-  // /api/chara/select, then tells the rest of the app to refresh so every open
-  // conversation window shows the same name. Switching identity drops any style
-  // override (the server does that) — a style belongs to one character.
+  // Switch the active speaker for THIS browser: saved to localStorage (the
+  // real source of truth for who this browser is speaking as) and mirrored to
+  // local_data/user_identity.json via /api/chara/select for the voice changer
+  // and the VRChat/Live pipeline, which read only that file. Switching
+  // identity drops any style override — a style belongs to one character.
   const handleCharaSelect = async (newName: string) => {
     if (!newName) return;
     setUserName(newName); // optimistic
     setActiveStyle('');
+    writeLocalIdentity(newName, '');
+    window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: newName } }));
     try {
       await fetch('/api/chara/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: newName }),
       });
-      window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: newName } }));
-    } catch { /* the 30s poll will reconcile if this fails */ }
+    } catch { /* this browser's own state already updated; only the shared
+                 mirror file (voice changer / other browsers' next bootstrap)
+                 missed the write */ }
   };
 
-  // Switch the speaking style for this session only. Sent as an explicit `style`
-  // key (empty string clears the override), so the server can tell "no style
-  // wanted" from "style not mentioned" — omitting the key means "leave it".
+  // Switch the speaking style for this session only, for THIS browser's
+  // identity. Sends `name` explicitly now — the server used to infer "whose
+  // style is this" from its own stored "current" identity, which is no longer
+  // necessarily what this browser has selected.
   const handleStyleSelect = async (newStyle: string) => {
     setActiveStyle(newStyle); // optimistic
+    writeLocalIdentity(userName, newStyle);
+    window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: userName } }));
     try {
       await fetch('/api/chara/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ style: newStyle || null }),
+        body: JSON.stringify({ name: userName, style: newStyle || null }),
       });
-      window.dispatchEvent(new CustomEvent('nx-chara-changed', { detail: { name: userName } }));
     } catch { /* the 30s poll will reconcile if this fails */ }
   };
 
