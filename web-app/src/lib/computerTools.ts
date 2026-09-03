@@ -202,6 +202,7 @@ function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024, t
 // ── DPI awareness + on-screen flash overlay, shared by every script ─────────
 
 const DPI_PREFIX = `
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
 $dpiSig = @'
 using System;
 using System.Runtime.InteropServices;
@@ -600,10 +601,46 @@ public class NxInput {
   [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
+  [DllImport("advapi32.dll")] static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr info, uint len, out uint retLen);
   // Cursor position readback — used to report where the pointer actually ended
   // up after a SetCursorPos, so a being can detect DPI virtualization or a
   // coordinate that silently did not move.
   public static POINT Cursor() { POINT p; GetCursorPos(out p); return p; }
+  // Whether the foreground window's process runs elevated (Administrator).
+  // This matters because SendInput's return value only confirms the event was
+  // accepted into the system input stream — UIPI (User Interface Privilege
+  // Isolation) then silently drops it before delivery if the target window
+  // belongs to a higher-integrity process than this one. That failure is
+  // invisible to every other check here: SendInput still reports success,
+  // SetCursorPos is the only API that visibly refuses (returns false) in that
+  // situation. Measured directly against an elevated RPG Maker game: keyboard
+  // input was accepted by SendInput and silently never arrived; SetCursorPos
+  // returned false; this check independently confirmed TokenElevation=1 on
+  // the target process using PROCESS_QUERY_LIMITED_INFORMATION, which (unlike
+  // full QUERY_INFORMATION) Windows grants across the integrity boundary.
+  // Returns 1 = confirmed elevated, 0 = confirmed not elevated, -1 = unknown.
+  public static int ForegroundElevated() {
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return -1;
+    uint pid;
+    GetWindowThreadProcessId(h, out pid);
+    if (pid == 0) return -1;
+    IntPtr ph = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+    if (ph == IntPtr.Zero) return -1;
+    IntPtr token;
+    if (!OpenProcessToken(ph, 0x0008 /* TOKEN_QUERY */, out token)) { CloseHandle(ph); return -1; }
+    IntPtr buf = Marshal.AllocHGlobal(4);
+    uint retLen;
+    int result = -1;
+    if (GetTokenInformation(token, 20 /* TokenElevation */, buf, 4, out retLen)) { result = Marshal.ReadInt32(buf); }
+    Marshal.FreeHGlobal(buf);
+    CloseHandle(token); CloseHandle(ph);
+    return result;
+  }
   // Which window owns the keyboard focus right now. SendInput is fire-and-
   // forget: it reports whether the OS accepted the event, NOT whether the
   // intended app processed it. Reporting the foreground window lets a being
@@ -733,7 +770,8 @@ foreach ($c in $cmds) {
   [void]$results.Add($d)
 }
 $fg = [NxInput]::ForegroundTitle()
-[void]$results.Add(@{ t = 'foreground'; title = $fg })
+$fgElevated = [NxInput]::ForegroundElevated()
+[void]$results.Add(@{ t = 'foreground'; title = $fg; elevated = $fgElevated })
 if ([NxGdi]::HasMarks()) {
   Start-Sleep -Milliseconds 350
   [NxGdi]::Clear()
@@ -999,6 +1037,15 @@ $bmp.Dispose()
           parts.push(`${failed.length} command(s) reported an error: ${failed.map((r) => `${r.t}: ${r.error}`).join('; ')}.`);
         }
         if (fg && fg.title) parts.push(`Foreground window after input: "${fg.title}".`);
+        if (fg && fg.elevated === 1) {
+          parts.push(
+            'That window runs elevated (Administrator) while this tool does not — Windows UIPI likely dropped ' +
+            'some or all of the input above silently: SendInput can still report success even though delivery ' +
+            'was blocked at the privilege boundary. If input to this app is not visibly working, this is very ' +
+            'likely why; it cannot be fixed from inside this tool. Ask the human to either run the target app ' +
+            'without elevation, or run Nexus itself elevated to match.',
+          );
+        }
         parts.push('This reports what the OS accepted, not what the target app did with it — always verify with a fresh computer_screenshot.');
         if (errors.length) parts.push(`Skipped: ${errors.join('; ')}.`);
         return { text: parts.join(' ') };
