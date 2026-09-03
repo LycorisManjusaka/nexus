@@ -85,4 +85,3 @@ The AGPL's network-use clause is the point of choosing it here: running
 a modified copy as a service still obligates offering the modified
 source to whoever uses that service, so this cannot be forked into a
 closed proprietary product -- by a company, or by anyone else.
-
