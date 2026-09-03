@@ -52,7 +52,7 @@
 // The being gets the clean capture, undecorated, because marks in the image
 // would just be noise it has to reason around. A second, annotated copy — a
 // red border plus a marker at every very-recent click that falls inside that
-// monitor — is written to disk under `local_data/computer_control_logs/` for
+// monitor — is written to disk under `local_data/beings/<name>/computer_control_logs/` for
 // the human to audit later. Compositing that copy is plain `sharp` + an SVG
 // overlay, not more PowerShell drawing code, because it's easier to get right
 // and easier to change.
@@ -69,9 +69,9 @@ import path from 'path';
 import fsp from 'fs/promises';
 import { spawn, execFile } from 'child_process';
 import sharp from 'sharp';
+import { beingComputerLogsDir } from './beingPaths';
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const LOG_DIR = path.join(DATA_DIR, 'computer_control_logs');
 
 export const COMPUTER_TOOL_NAMES = ['computer_screens', 'computer_screenshot', 'computer_input'] as const;
 
@@ -118,7 +118,7 @@ export async function ensureStopKeyWatcher(port: number): Promise<void> {
   if (watcherStartInFlight) return;
   watcherStartInFlight = true;
   try {
-    const pidFile = path.join(LOG_DIR, 'stopkey.pid');
+    const pidFile = path.join(DATA_DIR, 'stopkey.pid');
     // Self-heal: a watcher spawned by a previous server process (before a
     // restart) still holds the hotkey. Kill it so the new one can register.
     try {
@@ -409,7 +409,7 @@ function recentClicksIn(mx: number, my: number, mw: number, mh: number, withinMs
 }
 
 async function saveAuditScreenshot(entity: string, idx: number, mon: ComputerScreen, png: Buffer): Promise<void> {
-  const dir = path.join(LOG_DIR, safeName(entity));
+  const dir = beingComputerLogsDir(entity);
   await fsp.mkdir(dir, { recursive: true });
   const clicks = recentClicksIn(mon.x, mon.y, mon.width, mon.height, 120000);
   const parts: string[] = [

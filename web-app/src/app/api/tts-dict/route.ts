@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
+import { beingTtsDictFile } from '@/lib/beingPaths';
 
 export const dynamic = 'force-dynamic';
 
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const TTS_DICT_DIR = path.join(DATA_DIR, 'tts_dict');
-const dictPath = (folder: string) => path.join(TTS_DICT_DIR, `${folder}.json`);
+const dictPath = (folder: string) => beingTtsDictFile(folder);
 
 // GET /api/tts-dict?folder=X → { content }   (raw JSON text, '' if none)
 export async function GET(req: Request) {
@@ -45,7 +44,7 @@ export async function POST(req: Request) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return NextResponse.json({ error: 'Must be a JSON object of "from": "to" string pairs' }, { status: 400 });
     }
-    await fs.mkdir(TTS_DICT_DIR, { recursive: true });
+    await fs.mkdir(path.dirname(p), { recursive: true });
     // Re-serialize so the stored file is normalized/pretty.
     await fs.writeFile(p, JSON.stringify(parsed, null, 2), 'utf-8');
     return NextResponse.json({ ok: true });

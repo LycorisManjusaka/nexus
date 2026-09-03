@@ -639,9 +639,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'folder.css.label': 'CSS Theme (this being)',
   'folder.css.load': 'Load File',
   'folder.css.placeholder':
-    "Define this being's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/themes/<folder>.css. Empty = plain Dark.",
+    "Define this being's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/beings/<name>/theme.css. Empty = plain Dark.",
   'folder.css.help':
-    "This being's theme is its `local_data/themes/<name>.css` file. No file = Dark.",
+    "This being's theme is its `local_data/beings/<name>/theme.css` file. No file = Dark.",
   'folder.voice.heading': 'Character TTS Voice',
   'folder.voice.pitch': 'Voice Pitch',
   'folder.voice.lower': 'Lower',
@@ -1942,9 +1942,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'folder.css.label': 'CSSテーマ（この存在）',
   'folder.css.load': 'ファイルを読み込む',
   'folder.css.placeholder':
-    'ダークを土台に上書きして、このフォルダのテーマを定義します。例：\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nlocal_data/themes/<フォルダ名>.css に保存されます。空欄ならそのままダークです。',
+    'ダークを土台に上書きして、このフォルダのテーマを定義します。例：\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nlocal_data/beings/<フォルダ名>/theme.css に保存されます。空欄ならそのままダークです。',
   'folder.css.help':
-    'このフォルダのテーマは `local_data/themes/<フォルダ名>.css` です。ファイルが無ければダークになります。',
+    'このフォルダのテーマは `local_data/beings/<フォルダ名>/theme.css` です。ファイルが無ければダークになります。',
   'folder.voice.heading': 'キャラクターのTTS音声',
   'folder.voice.pitch': '声の高さ',
   'folder.voice.lower': '低い',

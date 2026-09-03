@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { beingChangelogsDir } from './beingPaths';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-conversation changelog storage. When the System Prompt Updater agent
@@ -8,22 +9,16 @@ import path from 'path';
 // off the layer content, shown read-only in the UI, and archived here. It is
 // NEVER fed back into any context window (entity prompt or updater agent).
 //
-// Layout: local_data/changelogs/<folderName>/<title>.md  (mirrors summaries).
+// Layout: local_data/beings/<folderName>/changelogs/<title>.md  (mirrors summaries).
 // ───────────────────────────────────────────────────────────────────────────
 
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const CHANGELOGS_DIR = path.join(DATA_DIR, 'changelogs');
-
-function sanitizeFolderName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]+/g, '_');
-}
 // Safe filename stem from a conversation title (keeps CJK/digits/_; strips
 // path-hostile chars and ".."). Matches the summary key convention.
 function changelogKey(title: string): string {
   return String(title || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.\.+/g, '_').trim();
 }
 function changelogDir(folderName: string): string {
-  return path.join(CHANGELOGS_DIR, sanitizeFolderName(folderName));
+  return beingChangelogsDir(folderName);
 }
 function changelogFilePath(folderName: string, title: string): string {
   return path.join(changelogDir(folderName), `${changelogKey(title)}.md`);

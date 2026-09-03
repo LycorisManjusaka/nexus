@@ -29,7 +29,7 @@
 //
 // PROFILES ARE LOCAL AND NEVER SYNC.
 // Each entity has its own persistent profile at
-// `local_data/browser_profiles/<Entity>/`, so logins survive between sessions.
+// `local_data/beings/<Entity>/browser_profile/`, so logins survive between sessions.
 // Those directories hold live session cookies and are excluded from the rclone
 // sync in `push_local_data.ps1` / `pull_local_data.ps1`, exactly like keys.json.
 // If that exclusion is ever removed, one machine's logged-in sessions would be
@@ -42,10 +42,7 @@ import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import type { BrowserContext, Page } from 'playwright';
 import { putBytes } from './attachmentStore';
-
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const PROFILES_DIR = path.join(DATA_DIR, 'browser_profiles');
-const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
+import { beingBrowserProfileDir, beingWorkspaceDir } from './beingPaths';
 
 export const BROWSER_TOOL_NAMES = [
   'browser_navigate',
@@ -275,7 +272,7 @@ async function launch(entity: string, ctx: BrowserToolCtx): Promise<Session> {
   // saying what to install.
   const { chromium } = await import('playwright');
 
-  const dir = path.join(PROFILES_DIR, safeName(entity));
+  const dir = beingBrowserProfileDir(entity);
   await fs.mkdir(dir, { recursive: true });
 
   const context = await chromium.launchPersistentContext(dir, {
@@ -322,12 +319,6 @@ async function launch(entity: string, ctx: BrowserToolCtx): Promise<Session> {
 
   startSweeper();
   return session;
-}
-
-function safeName(entity: string): string {
-  // Entity names are Japanese as often as not; keep them, drop only what
-  // Windows refuses in a path component.
-  return String(entity || 'Default').replace(/[\\/:*?"<>|]/g, '_').slice(0, 64) || 'Default';
 }
 
 /**
@@ -461,7 +452,7 @@ export async function openProfileBrowser(
   entity: string,
   opts: { useSystem?: boolean; executablePath?: string; url?: string } = {}
 ): Promise<OpenProfileResult> {
-  const dir = path.join(PROFILES_DIR, safeName(entity));
+  const dir = beingBrowserProfileDir(entity);
 
   let exe = String(opts.executablePath || '').trim();
   let kind: 'bundled' | 'system' = opts.useSystem || exe ? 'system' : 'bundled';
@@ -885,7 +876,7 @@ export async function runBrowserTool(name: string, args: any, ctx: BrowserToolCt
           return `Error: could not take the screenshot — ${String(e?.message || e).split('\n')[0]}`;
         }
         const { ref } = await putBytes(png, 'image/png');
-        const dir = path.join(WORKSPACES_DIR, safeName(ctx.me), 'screenshots');
+        const dir = path.join(beingWorkspaceDir(ctx.me), 'screenshots');
         await fs.mkdir(dir, { recursive: true });
         const file = `${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
         await fs.writeFile(path.join(dir, file), png);

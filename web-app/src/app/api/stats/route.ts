@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { resolvePrice, messageCost, effectivePrice } from '@/lib/modelPricing';
+import { BEINGS_DIR, beingLogsDir, beingSettingsFile } from '@/lib/beingPaths';
 
 // Full-scan billing statistics. Unlike the header-only listLogs() path, this
 // reads every active conversation in full, walks its messages in order, and
@@ -23,10 +24,6 @@ import { resolvePrice, messageCost, effectivePrice } from '@/lib/modelPricing';
 // via each conversation's stored claudeAuthMode.
 
 export const dynamic = 'force-dynamic';
-
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const LOGS_DIR = path.join(DATA_DIR, 'logs');
-const FOLDERS_DIR = path.join(DATA_DIR, 'folders');
 
 const GLOBAL_DEFAULT_MODEL = 'claude-opus-4-8';
 
@@ -121,12 +118,12 @@ function makeIsOriginal(log: any, messages: any[]): (idx: number) => boolean {
 
 async function readEntityDefaults(): Promise<Record<string, { model: string; authMode: string }>> {
   const out: Record<string, { model: string; authMode: string }> = {};
-  let files: string[] = [];
-  try { files = await fs.readdir(FOLDERS_DIR); } catch { return out; }
-  await Promise.all(files.filter((f) => f.endsWith('.json')).map(async (f) => {
+  let dirs: any[] = [];
+  try { dirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch { return out; }
+  await Promise.all(dirs.filter((d) => d.isDirectory()).map(async (d) => {
     try {
-      const parsed = JSON.parse(await fs.readFile(path.join(FOLDERS_DIR, f), 'utf-8'));
-      const name = parsed.name || f.replace(/\.json$/, '');
+      const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
+      const name = parsed.name || d.name;
       const s = parsed.settings || {};
       out[name] = {
         model: s.specificModel || GLOBAL_DEFAULT_MODEL,
@@ -142,20 +139,27 @@ export async function GET() {
     const entityDefaults = await readEntityDefaults();
 
     let dirs: any[] = [];
-    try { dirs = await fs.readdir(LOGS_DIR, { withFileTypes: true }); } catch {}
+    try { dirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch {}
 
     const records: StatRecord[] = [];
     let skippedInactive = 0;
 
-    // Collect every (entity, file) pair, then read in parallel.
+    // Collect every (entity, file) pair, then read in parallel. The display
+    // name (what the UI and entityDefaults are keyed on) is resolved from
+    // settings.json; the directory name is only the sanitized key.
     const files: { entity: string; full: string }[] = [];
     for (const d of dirs) {
       if (!d.isDirectory()) continue;
+      let entity = d.name;
+      try {
+        const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
+        if (parsed.name) entity = parsed.name;
+      } catch {}
       let fnames: string[] = [];
-      try { fnames = await fs.readdir(path.join(LOGS_DIR, d.name)); } catch { continue; }
+      try { fnames = await fs.readdir(beingLogsDir(d.name)); } catch { continue; }
       for (const fn of fnames) {
         if (fn.startsWith('.') || !fn.endsWith('.json')) continue;
-        files.push({ entity: d.name, full: path.join(LOGS_DIR, d.name, fn) });
+        files.push({ entity, full: path.join(beingLogsDir(d.name), fn) });
       }
     }
 

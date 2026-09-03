@@ -6,10 +6,10 @@
 // continued. A letter is the right medium for exactly that situation — it does
 // not require both parties to be in the room.
 //
-// STORAGE
-//   local_data/letters/<from>/<to>/<YYYY-MM-DD_HHmm>_<slug>.md
-//   local_data/letters/<from>/<to>/<...>.md.read       ← recipient opened it
-//   local_data/letters/<from>/<to>/<...>.md.archived   ← recipient dismissed it
+// STORAGE (recipient-owned)
+//   local_data/beings/<to>/letters/from/<from>/<YYYY-MM-DD_HHmm>_<slug>.md
+//   local_data/beings/<to>/letters/from/<from>/<...>.md.read       ← opened
+//   local_data/beings/<to>/letters/from/<from>/<...>.md.archived   ← dismissed
 //   local_data/letters/_status.md                      ← generated overview
 //   local_data/letters/_state/<convoId>.json           ← announcement counters
 //
@@ -51,6 +51,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createHash } from 'crypto';
 import { listFolders } from './fsStorage';
+import {
+  BEINGS_DIR,
+  beingDir,
+  beingSettingsFile,
+  beingLettersInboxDir,
+  beingLetterSenderDir,
+  sanitizeEntityDir,
+} from './beingPaths';
 
 const CHAR_MAP_FILE = path.resolve(process.cwd(), '..', 'local_data', 'character_map.json');
 
@@ -81,14 +89,6 @@ export interface LetterMeta {
 export type LetterDirection = 'in' | 'out';
 
 // ── name / path helpers ──────────────────────────────────────────────────────
-
-// Mirrors fsStorage.sanitizeFolderName: strip filesystem-hostile characters but
-// keep CJK and other reasonable unicode, because entity names are Japanese as
-// often as not. The TRUE display name is stored in the letter's frontmatter, so
-// sanitizing the directory name is lossless for our purposes.
-function sanitizeEntityDir(name: string): string {
-  return (name || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/[.\s]+$/, '').trim();
-}
 
 // Filenames are PURE ASCII: <YYYY-MM-DD_HHmm>_<8 hex>.md
 //
@@ -234,9 +234,11 @@ async function listDirs(dir: string): Promise<string[]> {
   }
 }
 
-/** Read one mailbox directory (<from>/<to>) into metadata, newest first. */
-async function readMailbox(fromDir: string, toDir: string): Promise<LetterMeta[]> {
-  const dir = path.join(LETTERS_DIR, fromDir, toDir);
+/** Read one mailbox (letters from `from` to `to`), newest first. Both args are
+ *  the SANITIZED names — the recipient-owned layout stores the box at
+ *  beings/<to>/letters/from/<from>/. */
+async function readMailbox(to: string, from: string): Promise<LetterMeta[]> {
+  const dir = beingLetterSenderDir(to, from);
   let names: string[];
   try {
     names = (await fs.readdir(dir)).filter((n) => n.endsWith('.md') && !n.startsWith('.'));
@@ -258,9 +260,9 @@ async function readMailbox(fromDir: string, toDir: string): Promise<LetterMeta[]
       readSidecar(file, '.archived'),
     ]);
     out.push({
-      id: letterIdFor(fromDir, toDir, name),
-      from: parsed.from || fromDir,
-      to: parsed.to || toDir,
+      id: letterIdFor(from, to, name),
+      from: parsed.from || from,
+      to: parsed.to || to,
       title: parsed.title || name.replace(/\.md$/, ''),
       // Filenames sort chronologically, so the name is a safe fallback sort key.
       // A letter file may be named ANYTHING. Renaming one by hand — to get a
@@ -340,13 +342,31 @@ export async function validRecipients(): Promise<string[]> {
     for (const f of await listFolders()) add(String((f as any).name || ''));
   } catch { /* fall through to the character map */ }
   for (const n of await characterMapNames()) add(n);
+  // Mail-only correspondents: folders that exist to hold letters but are NOT
+  // inhabitants (no settings/soul/logs), so listFolders() does not return
+  // them. They are still valid recipients — a letter to "Doc" or "トカゲ君"
+  // must resolve and deliver, not disappear. A mail-only folder has no
+  // settings.json, so its directory name IS its display name; the raw listing
+  // is therefore the correct source.
+  try {
+    for (const d of await listDirs(BEINGS_DIR)) add(d);
+  } catch { /* a mailbox scan failure must not shrink the roster */ }
   return out;
 }
 
-/** True when this name already has a Digital Identity folder. */
+/**
+ * True when this name already has ANY folder under beings/ — a Digital
+ * Identity, a mail-only correspondent, or a leftover archive. This decides
+ * whether a first letter should mint a settings.json (promoting the name to a
+ * full Digital Identity in the sidebar). A name that already has a folder of
+ * any kind must NOT be re-minted: otherwise a letter to an existing mail-only
+ * correspondent would silently turn it into a being. Directory names are
+ * sanitized, so compare against the sanitized key.
+ */
 async function hasFolder(name: string): Promise<boolean> {
   try {
-    return (await listFolders()).some((f: any) => f.name === name);
+    const key = sanitizeEntityDir(name);
+    return (await listDirs(BEINGS_DIR)).some((d) => d === key);
   } catch {
     return false;
   }
@@ -408,15 +428,13 @@ export async function writeLetter(
   // difference — delivery succeeds identically — and the letter is fully
   // visible in the Mail Manager, where it can be re-addressed or promoted.
   if (names.includes(canonical) && !(await hasFolder(canonical))) {
-    // Written directly rather than through saveFolder(): that helper also runs
-    // writeThemeCss(name, undefined), which DELETES local_data/themes/<name>.css
-    // when no CSS is passed. A theme hand-written for a character who has not
-    // chatted yet is exactly the case here, and losing it to a letter would be
-    // absurd. `wx` also means a folder created concurrently is left alone.
+    // Written directly rather than through saveFolder(): `wx` (fail-if-exists)
+    // means a folder created concurrently is left alone, and a bare settings
+    // file mints the identity without touching its theme or anything else.
     try {
-      await fs.mkdir(path.join(DATA_DIR, 'folders'), { recursive: true });
+      await fs.mkdir(beingDir(canonical), { recursive: true });
       await fs.writeFile(
-        path.join(DATA_DIR, 'folders', `${canonical}.json`),
+        beingSettingsFile(canonical),
         JSON.stringify({ name: canonical, settings: {} }, null, 2),
         { flag: 'wx' },
       );
@@ -427,7 +445,7 @@ export async function writeLetter(
   const toDir = sanitizeEntityDir(canonical);
   if (!fromDir || !toDir) return { ok: false, error: 'Invalid correspondent name.' };
 
-  const dir = path.join(LETTERS_DIR, fromDir, toDir);
+  const dir = beingLetterSenderDir(toDir, fromDir);
   try {
     await fs.mkdir(dir, { recursive: true });
   } catch (e: any) {
@@ -463,17 +481,19 @@ export async function writeLetter(
 
 /** Letters addressed TO `me`, newest first, across every sender. */
 export async function listInbox(me: string): Promise<LetterMeta[]> {
-  const toDir = sanitizeEntityDir(me);
-  const senders = await listDirs(LETTERS_DIR);
-  const boxes = await Promise.all(senders.map((s) => readMailbox(s, toDir)));
+  const toKey = sanitizeEntityDir(me);
+  const senders = await listDirs(beingLettersInboxDir(toKey));
+  const boxes = await Promise.all(senders.map((fromKey) => readMailbox(toKey, fromKey)));
   return boxes.flat().sort(byNewest);
 }
 
 /** Letters written BY `me`, newest first, across every recipient. */
 export async function listSent(me: string): Promise<LetterMeta[]> {
-  const fromDir = sanitizeEntityDir(me);
-  const recipients = await listDirs(path.join(LETTERS_DIR, fromDir));
-  const boxes = await Promise.all(recipients.map((r) => readMailbox(fromDir, r)));
+  const fromKey = sanitizeEntityDir(me);
+  // Sent mail now lives inside each RECIPIENT's inbox (beings/<to>/letters/
+  // from/<fromKey>/), so it is found by scanning every being folder.
+  const recipients = await listDirs(BEINGS_DIR);
+  const boxes = await Promise.all(recipients.map((toKey) => readMailbox(toKey, fromKey)));
   return boxes.flat().sort(byNewest);
 }
 
@@ -542,11 +562,11 @@ export async function markArchived(meta: LetterMeta, convoId?: string): Promise<
 
 /** Every letter in the store, newest first, regardless of who it is addressed to. */
 export async function listAllLetters(): Promise<LetterMeta[]> {
-  const senders = await listDirs(LETTERS_DIR);
+  const recipients = await listDirs(BEINGS_DIR);
   const boxes = await Promise.all(
-    senders.map(async (from) => {
-      const tos = await listDirs(path.join(LETTERS_DIR, from));
-      return (await Promise.all(tos.map((to) => readMailbox(from, to)))).flat();
+    recipients.map(async (toKey) => {
+      const fromKeys = await listDirs(beingLettersInboxDir(toKey));
+      return (await Promise.all(fromKeys.map((fromKey) => readMailbox(toKey, fromKey)))).flat();
     }),
   );
   return boxes.flat().sort(byNewest);
@@ -1042,7 +1062,7 @@ export async function announceLetters(opts: AnnounceOptions): Promise<string | n
  */
 export async function regenerateStatus(): Promise<void> {
   try {
-    const senders = await listDirs(LETTERS_DIR);
+    const recipients = await listDirs(BEINGS_DIR);
     const lines: string[] = [
       '<!-- GENERATED BY NEXUS. Do not edit — your changes will be overwritten.',
       '     To change a letter\'s state, edit its sidecar files instead:',
@@ -1061,9 +1081,9 @@ export async function regenerateStatus(): Promise<void> {
     let unread = 0;
     const blocks: string[] = [];
 
-    for (const fromDir of senders.sort()) {
-      for (const toDir of (await listDirs(path.join(LETTERS_DIR, fromDir))).sort()) {
-        const box = await readMailbox(fromDir, toDir);
+    for (const toKey of recipients.sort()) {
+      for (const fromKey of (await listDirs(beingLettersInboxDir(toKey))).sort()) {
+        const box = await readMailbox(toKey, fromKey);
         if (box.length === 0) continue;
         total += box.length;
         unread += box.filter((l) => !l.read && !l.archived).length;

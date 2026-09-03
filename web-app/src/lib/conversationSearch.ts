@@ -19,10 +19,8 @@ import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import path from 'path';
 import { compareConvoTitles } from './convoSort';
+import { DATA_DIR, BEINGS_DIR, beingLogsDir, beingSettingsFile } from './beingPaths';
 
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const LOGS_DIR = path.join(DATA_DIR, 'logs');
-const FOLDERS_DIR = path.join(DATA_DIR, 'folders');
 const CHARACTER_MAP = path.join(DATA_DIR, 'character_map.json');
 const USER_SETTINGS = path.join(DATA_DIR, 'user_settings.json');
 
@@ -112,11 +110,11 @@ async function loadValidNameKeys(): Promise<Set<string>> {
   add('Anonymous');
   add('User'); // legacy sentinel — still present in logs/exports predating the rename
   try {
-    const files = await fs.readdir(FOLDERS_DIR);
-    await Promise.all(files.filter((f) => f.endsWith('.json')).map(async (f) => {
+    const dirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true });
+    await Promise.all(dirs.filter((d) => d.isDirectory()).map(async (d) => {
       try {
-        const parsed = JSON.parse(await fs.readFile(path.join(FOLDERS_DIR, f), 'utf-8'));
-        add(parsed.name || f.replace(/\.json$/, ''));
+        const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
+        add(parsed.name || d.name);
         add(parsed?.settings?.aiName);
         add(parsed?.settings?.customAiName);
       } catch {}
@@ -217,7 +215,7 @@ export async function searchConversations(
   };
   if (!folderName || !q) return empty;
 
-  const dir = path.join(LOGS_DIR, String(folderName));
+  const dir = beingLogsDir(folderName);
   let files: string[] = [];
   try { files = (await fs.readdir(dir)).filter((f) => !f.startsWith('.') && f.endsWith('.json')); }
   catch { return empty; }
@@ -359,8 +357,28 @@ export async function searchConversations(
 /** Every entity that actually has a log directory. */
 export async function listSearchableFolders(): Promise<string[]> {
   try {
-    const entries = await fs.readdir(LOGS_DIR, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name).sort();
+    const dirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true });
+    const names: string[] = [];
+    for (const d of dirs) {
+      if (!d.isDirectory() || d.name.startsWith('.')) continue;
+      // A being is searchable iff it has a logs/ directory with at least one
+      // conversation file.
+      let hasLog = false;
+      try {
+        const files = await fs.readdir(beingLogsDir(d.name));
+        hasLog = files.some((f) => f.endsWith('.json'));
+      } catch {}
+      if (!hasLog) continue;
+      // Return the DISPLAY name (from settings.json) so results group under the
+      // same label the sidebar and entityDefaults use, not the sanitized key.
+      let name = d.name;
+      try {
+        const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
+        if (parsed.name) name = parsed.name;
+      } catch {}
+      names.push(name);
+    }
+    return names.sort();
   } catch {
     return [];
   }

@@ -1,10 +1,10 @@
 import fs from 'fs';
-import path from 'path';
+import { beingTtsDictFile } from './beingPaths';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-entity (folder) TTS pronunciation dictionary.
 //
-// A plain JSON object at local_data/tts_dict/<FolderName>.json mapping a source
+// A plain JSON object at local_data/beings/<FolderName>/tts_dict.json mapping a source
 // string to its replacement, e.g.:
 //   {
 //     "GLM": "ジーエルエム",
@@ -21,11 +21,8 @@ import path from 'path';
 // invalidated on mtime change, so edits are picked up without a restart.
 // ───────────────────────────────────────────────────────────────────────────
 
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const TTS_DICT_DIR = path.join(DATA_DIR, 'tts_dict');
-
 export function ttsDictPath(folder: string): string {
-  return path.join(TTS_DICT_DIR, `${folder}.json`);
+  return beingTtsDictFile(folder);
 }
 
 interface CacheEntry { mtimeMs: number; pairs: [string, string][]; }

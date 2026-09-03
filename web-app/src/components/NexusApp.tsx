@@ -547,7 +547,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
 
   // Apply the active folder's theme.
   //
-  // A folder's theme is ENTIRELY its local_data/themes/<name>.css file (loaded
+  // A folder's theme is ENTIRELY its local_data/beings/<name>/theme.css file (loaded
   // into settings.customCss by the API). There is no named-theme list anymore:
   //   • if the folder has a CSS file → inject it (it sets :root variables that
   //     override the dark base), and

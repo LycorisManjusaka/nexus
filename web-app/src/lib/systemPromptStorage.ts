@@ -1,9 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { DATA_DIR, sanitizeBeingName, beingSoulDir, beingSoulBackupsDir } from './beingPaths';
 
-// Resolves to <repo-root>/local_data/...
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const SP_ROOT = path.join(DATA_DIR, 'system_prompts');           // per-entity layer files
+// AGENTS_DIR is operator-owned (not per-being) — stays at local_data root.
 const AGENTS_DIR = path.join(DATA_DIR, 'system_prompt_agents');  // operator-owned overrides (preferred)
 // Repo-bundled defaults, shipped so a fresh checkout works with zero setup.
 // `process.cwd()` is the web-app repo root (same base `DATA_DIR` resolves against).
@@ -46,11 +45,10 @@ async function agentTypeDir(type: string): Promise<string> {
 }
 
 // ── Filesystem-safe folder names ────────────────────────────────────────────
-// Mirrors the convention from fsStorage.ts so the same folder maps to the
-// same directory across features.
-export function sanitizeFolderName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]+/g, '_');
-}
+// Re-exported for backward compatibility with anything still importing this
+// name from here; the actual sanitizer now lives in beingPaths.ts so every
+// subsystem agrees on one on-disk key per being.
+export const sanitizeFolderName = sanitizeBeingName;
 
 // ── Full-width <-> half-width digit conversion ──────────────────────────────
 // Conversation titles in NEXUS use the CJK convention "＃<full-width number>"
@@ -97,7 +95,7 @@ export function parseTitleNumber(
 // blocks concatenated (NO header/footer/deletions — those are applied later).
 
 function entityDir(folderName: string): string {
-  return path.join(SP_ROOT, sanitizeFolderName(folderName));
+  return beingSoulDir(folderName);
 }
 
 function entityFilePath(folderName: string, index: number): string {
@@ -136,9 +134,6 @@ export async function writeSystemPromptFile(
 // up the current left content (best-effort — a backup hiccup must not block
 // the shift), writes the old right content into the left (current) index,
 // and clears the right (next) index so the new run starts from a blank slate.
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
-const SOUL_BACKUP_DIR = 'system_prompts';
-
 function soulBackupStamp(d = new Date()): string {
   const pad = (n: number, w = 2) => String(n).padStart(w, '0');
   return (
@@ -192,7 +187,7 @@ export async function backupSoulSnapshot(
   contents: string
 ): Promise<string | null> {
   try {
-    const bdir = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), SOUL_BACKUP_DIR);
+    const bdir = beingSoulBackupsDir(folderName);
     await fs.mkdir(bdir, { recursive: true });
     const filename = soulBackupFilename(folderName, fromIndex, toIndex, phase, soulBackupStamp());
     await fs.writeFile(path.join(bdir, filename), contents, 'utf-8');
@@ -229,7 +224,7 @@ export function parseSoulBackupFilename(filename: string): SoulBackupInfo | null
 }
 
 export async function listSoulBackups(folderName: string): Promise<SoulBackupInfo[]> {
-  const bdir = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), SOUL_BACKUP_DIR);
+  const bdir = beingSoulBackupsDir(folderName);
   let entries: string[] = [];
   try {
     entries = await fs.readdir(bdir);
@@ -252,7 +247,7 @@ export async function readSoulBackup(folderName: string, filename: string): Prom
   if (!parseSoulBackupFilename(filename)) return null;
   try {
     return await fs.readFile(
-      path.join(BACKUPS_DIR, sanitizeFolderName(folderName), SOUL_BACKUP_DIR, filename),
+      path.join(beingSoulBackupsDir(folderName), filename),
       'utf-8'
     );
   } catch (e: any) {

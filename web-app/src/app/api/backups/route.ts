@@ -3,9 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { saveLog } from '@/lib/fsStorage';
-
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
+import { beingBackupsDir } from '@/lib/beingPaths';
 
 export async function GET(req: Request) {
   try {
@@ -13,7 +11,7 @@ export async function GET(req: Request) {
     const folderName = searchParams.get('folder');
     if (!folderName) return NextResponse.json({ error: 'Missing folder' }, { status: 400 });
 
-    const backupDir = path.join(BACKUPS_DIR, folderName);
+    const backupDir = beingBackupsDir(folderName);
     
     let files: string[] = [];
     try {
@@ -69,7 +67,7 @@ export async function POST(req: Request) {
     const { folderName, backupFile } = await req.json();
     if (!folderName || !backupFile) return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
 
-    const filePath = path.join(BACKUPS_DIR, folderName, backupFile);
+    const filePath = path.join(beingBackupsDir(folderName), backupFile);
     const data = await fs.readFile(filePath, 'utf-8');
     const parsed = JSON.parse(data);
 

@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { resolveSummaryHint } from './summaryHint';
+import { sanitizeBeingName, beingSummariesDir, beingSummariesBackupsDir } from './beingPaths';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-conversation summary storage. Each summary is a small Markdown file that
@@ -18,16 +19,6 @@ import { resolveSummaryHint } from './summaryHint';
 // the title the same way (see summaryKey).
 // ───────────────────────────────────────────────────────────────────────────
 
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const SUMMARIES_DIR = path.join(DATA_DIR, 'summaries');
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
-
-// Mirror the folder-name sanitization used elsewhere so the same entity maps
-// to the same directory across features.
-function sanitizeFolderName(name: string): string {
-  return name.replace(/[\\/:*?"<>|]+/g, '_');
-}
-
 // Turn a conversation title into a safe filename stem. Keeps CJK, digits, and
 // the "_" separator; strips path-hostile characters and "..". Exported so the
 // API route can match listSummaries() keys against live titles.
@@ -36,7 +27,7 @@ export function summaryKey(title: string): string {
 }
 
 function summaryDir(folderName: string): string {
-  return path.join(SUMMARIES_DIR, sanitizeFolderName(folderName));
+  return beingSummariesDir(folderName);
 }
 
 function summaryFilePath(folderName: string, title: string): string {
@@ -144,7 +135,7 @@ export async function backupSummaries(folderName: string): Promise<{ dir: string
   }
   if (files.length === 0) return { dir: null, files: 0 };
 
-  const dest = path.join(BACKUPS_DIR, sanitizeFolderName(folderName), 'summaries', timeStamp());
+  const dest = path.join(beingSummariesBackupsDir(folderName), timeStamp());
   await fs.mkdir(dest, { recursive: true });
   for (const n of files) {
     await fs.copyFile(path.join(src, n), path.join(dest, n));

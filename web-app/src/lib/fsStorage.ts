@@ -4,44 +4,40 @@ import { createHash } from 'crypto';
 import path from 'path';
 import { putDataUrl } from './attachmentStore';
 import { retitleForRenamedIdentity } from './convoNaming';
+import {
+  DATA_DIR,
+  BEINGS_DIR,
+  sanitizeBeingName,
+  sanitizeFolderName, // alias for sanitizeBeingName — kept so existing call
+                       // sites below don't all need renaming in this pass.
+  beingDir,
+  beingLogsDir,
+  beingSoulDir,
+  beingBackupsDir,
+  beingFooterBackupsDir,
+  beingSummariesDir,
+  beingChangelogsDir,
+  beingWorkspaceDir,
+  beingSettingsFile,
+  beingThemeFile,
+} from './beingPaths';
 
-const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
-const SETTINGS_DIR = path.join(DATA_DIR, 'settings');
-const LOGS_DIR = path.join(DATA_DIR, 'logs');
-const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
 const KEYS_FILE = path.join(DATA_DIR, 'keys.json');
-
 const USER_SETTINGS_FILE = path.join(DATA_DIR, 'user_settings.json');
 
-const FOLDERS_DIR = path.join(DATA_DIR, 'folders');
-const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
-
-// Per-entity CSS themes live as plain, hand-editable `.css` files here:
-//   local_data/themes/<EntityName>.css
-// This file is the SOURCE OF TRUTH for a folder's `customCss`:
-//   - saveFolder() writes the CSS out to it (and keeps it OUT of the folder JSON),
-//   - listFolders() reads it back into settings.customCss,
-// so you can open/edit the .css file directly and a reload picks it up.
-const THEMES_DIR = path.join(DATA_DIR, 'themes');
-
-/** Absolute path of a folder's theme file (raw name, matching the .json naming). */
-function themeCssPath(folderName: string): string {
-  return path.join(THEMES_DIR, `${folderName}.css`);
-}
-
-/** Read a folder's theme CSS file, or null if none exists. */
+/** Read a being's theme CSS file, or null if none exists. */
 async function readThemeCss(folderName: string): Promise<string | null> {
   try {
-    return await fs.readFile(themeCssPath(folderName), 'utf-8');
+    return await fs.readFile(beingThemeFile(folderName), 'utf-8');
   } catch {
     return null;
   }
 }
 
-/** Write (or, when empty, remove) a folder's theme CSS file. */
+/** Write (or, when empty, remove) a being's theme CSS file. */
 async function writeThemeCss(folderName: string, css: string | undefined | null): Promise<void> {
-  await fs.mkdir(THEMES_DIR, { recursive: true });
-  const p = themeCssPath(folderName);
+  const p = beingThemeFile(folderName);
+  await fs.mkdir(path.dirname(p), { recursive: true });
   if (css && css.trim()) {
     await fs.writeFile(p, css);
   } else {
@@ -51,17 +47,12 @@ async function writeThemeCss(folderName: string, css: string | undefined | null)
 }
 
 // -------- Agent workspace helpers ---------------------------------------
-// Each AI entity (Nexus folder) gets its own sandboxed directory under
-// workspaces/. Paths inside are relative and bounded — any attempt
-// to escape via "../" returns null and the operation refuses.
-
-function sanitizeFolderName(name: string): string {
-  // Strip filesystem-hostile chars but keep CJK and reasonable unicode.
-  return name.replace(/[\\/:*?"<>|]+/g, '_');
-}
+// Each AI entity (Nexus being) gets its own sandboxed directory under
+// beings/<name>/workspace/. Paths inside are relative and bounded — any
+// attempt to escape via "../" returns null and the operation refuses.
 
 export async function ensureWorkspace(folderName: string): Promise<string> {
-  const dir = path.join(WORKSPACES_DIR, sanitizeFolderName(folderName));
+  const dir = beingWorkspaceDir(folderName);
   await fs.mkdir(dir, { recursive: true });
   return dir;
 }
@@ -75,7 +66,7 @@ const FOOTER_FILENAME = 'FOOTER.md';
 
 /** Read an entity's workspace FOOTER.md, or null when there isn't one. */
 export async function readEntityFooter(folderName: string): Promise<string | null> {
-  const p = path.join(WORKSPACES_DIR, sanitizeFolderName(folderName), FOOTER_FILENAME);
+  const p = path.join(beingWorkspaceDir(folderName), FOOTER_FILENAME);
   try { return await fs.readFile(p, 'utf-8'); }
   catch { return null; }
 }
@@ -87,8 +78,8 @@ function footerBackupStamp(d = new Date()): string {
     `${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}-${p(d.getMilliseconds(), 3)}`;
 }
 
-// Snapshot an entity's footer to backups/<Entity>/footers/<timestamp>.md, but
-// ONLY when it has CHANGED since the last time we saw it. A hidden ".last"
+// Snapshot an entity's footer to beings/<Entity>/backups/footers/<timestamp>.md,
+// but ONLY when it has CHANGED since the last time we saw it. A hidden ".last"
 // marker holds the previously-seen content:
 //   - first sighting → record the marker only (the pre-existing "current"
 //     footer is NOT saved — we can only capture versions from now on),
@@ -99,7 +90,7 @@ async function backupFooterIfChanged(folderName: string): Promise<void> {
   try {
     const cur = await readEntityFooter(folderName);
     if (cur === null) return; // entity has no footer file → nothing to track
-    const dir = path.join(BACKUPS_DIR, folderName, 'footers');
+    const dir = beingFooterBackupsDir(folderName);
     const marker = path.join(dir, '.last');
     let prev: string | null = null;
     try { prev = await fs.readFile(marker, 'utf-8'); } catch {}
@@ -131,7 +122,7 @@ async function backupFooterIfChanged(folderName: string): Promise<void> {
  */
 export async function writeEntityFooter(folderName: string, body: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const dir = path.join(WORKSPACES_DIR, sanitizeFolderName(folderName));
+    const dir = beingWorkspaceDir(folderName);
     const file = path.join(dir, FOOTER_FILENAME);
     const text = String(body ?? '');
 
@@ -139,7 +130,7 @@ export async function writeEntityFooter(folderName: string, body: string): Promi
     if (cur !== null && cur !== text) {
       // Preserve the version being replaced, then advance the marker so the
       // saveLog hook doesn't snapshot this same content a second time.
-      const bdir = path.join(BACKUPS_DIR, folderName, 'footers');
+      const bdir = beingFooterBackupsDir(folderName);
       try {
         await fs.mkdir(bdir, { recursive: true });
         await atomicWriteFile(path.join(bdir, `${footerBackupStamp()}.md`), cur);
@@ -156,7 +147,7 @@ export async function writeEntityFooter(folderName: string, body: string): Promi
 }
 
 function resolveWorkspacePath(folderName: string, relPath: string): string | null {
-  const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
+  const root = path.resolve(beingWorkspaceDir(folderName));
   // Trim any leading slashes — model might emit "/notes.md"
   const cleaned = String(relPath || '').replace(/^[/\\]+/, '');
   const target = path.resolve(root, cleaned);
@@ -167,7 +158,7 @@ function resolveWorkspacePath(folderName: string, relPath: string): string | nul
 // local_data itself is commonly a junction/symlink (deployment sync setups
 // point it at a shared folder, e.g. C:\dev\common\local_data). A workspace
 // can also contain a SECOND junction nested inside it (e.g.
-// workspaces/<Entity>/common_workspace → C:\dev\common\common_workspace)
+// beings/<Entity>/workspace/common_workspace → C:\dev\common\common_workspace)
 // so multiple entities/machines can share one folder. That second junction's
 // real target is a SIBLING of local_data's real target, not a descendant of
 // it — so a plain realpath-prefix check against the workspace root rejects it
@@ -187,6 +178,15 @@ export async function getTrustedJunctionRoot(): Promise<string | null> {
     trustedJunctionRootPromise = (async () => {
       try {
         const realDataDir = await fs.realpath(DATA_DIR);
+        // Only widen trust when local_data is ACTUALLY a symlink/junction. If
+        // DATA_DIR is a plain real directory, realpath returns it unchanged,
+        // and path.dirname() of it would be the repo root — the entire
+        // source tree, not just the sync-parent folder a junction deployment
+        // implicitly trusts. That would hand additionalDirectories (OAuth)
+        // and the workspace-symlink containment check access to everything
+        // alongside local_data on a non-junctioned install, which is not
+        // what this exists for.
+        if (path.resolve(realDataDir) === path.resolve(DATA_DIR)) return null;
         return path.dirname(realDataDir);
       } catch {
         return null;
@@ -210,7 +210,7 @@ function isWithinTrustedRoots(real: string, realRoot: string, trustedRoot: strin
 async function resolveWorkspacePathSafe(folderName: string, relPath: string): Promise<string | null> {
   const target = resolveWorkspacePath(folderName, relPath);
   if (!target) return null;
-  const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
+  const root = path.resolve(beingWorkspaceDir(folderName));
   try {
     const realRoot = await fs.realpath(root);
     const trustedRoot = await getTrustedJunctionRoot();
@@ -254,7 +254,7 @@ async function resolveWorkspacePathSafe(folderName: string, relPath: string): Pr
 //   - fullAccess: when true, the entity's file tools are NOT sandboxed to its
 //     workspace. Absolute paths are used verbatim (anywhere on the PC) and
 //     relative paths are anchored to the workspace for convenience. When false
-//     (default) every path is contained to workspaces/<Entity>/ exactly
+//     (default) every path is contained to beings/<Entity>/workspace/ exactly
 //     as before.
 // This is the mechanism behind "full PC access is optional per Entity".
 export interface WsOpts { fullAccess?: boolean }
@@ -267,7 +267,7 @@ async function resolvePathForAccess(folderName: string, relPath: string, opts?: 
     if (!cleaned) return null;
     // Absolute → use as-is (whole filesystem). Relative → anchor to workspace.
     if (path.isAbsolute(cleaned)) return path.resolve(cleaned);
-    const root = path.resolve(WORKSPACES_DIR, sanitizeFolderName(folderName));
+    const root = path.resolve(beingWorkspaceDir(folderName));
     return path.resolve(root, cleaned);
   }
   return resolveWorkspacePathSafe(folderName, relPath);
@@ -495,63 +495,56 @@ export async function grepWorkspaceFiles(folderName: string, pattern: string, op
   return { ok: true, matches };
 }
 
-async function migrateOldLogs() {
-  try {
-    const files = await fs.readdir(LOGS_DIR, { withFileTypes: true });
-    let hasRootLogs = false;
-    for (const file of files) {
-      if (file.isFile() && file.name.endsWith('.json')) {
-        hasRootLogs = true;
-        break;
-      }
-    }
-    if (hasRootLogs) {
-      const defaultDir = path.join(LOGS_DIR, 'Default');
-      await fs.mkdir(defaultDir, { recursive: true });
-      for (const file of files) {
-        if (file.isFile() && file.name.endsWith('.json')) {
-          await fs.rename(path.join(LOGS_DIR, file.name), path.join(defaultDir, file.name));
-        }
-      }
-    }
-  } catch (e) {}
+async function ensureDirs() {
+  await fs.mkdir(BEINGS_DIR, { recursive: true });
 }
 
-async function ensureDirs() {
-  await fs.mkdir(SETTINGS_DIR, { recursive: true });
-  await fs.mkdir(LOGS_DIR, { recursive: true });
-  await fs.mkdir(BACKUPS_DIR, { recursive: true });
-  await fs.mkdir(FOLDERS_DIR, { recursive: true });
-  await fs.mkdir(THEMES_DIR, { recursive: true });
-  await migrateOldLogs();
+/**
+ * A being is an INHABITANT (shown in the sidebar/beings panel) only when it has
+ * its own data — a settings.json (minted when a being is configured, or when a
+ * known character-map name receives its first letter), conversation logs, or a
+ * soul. A directory that exists only as a mail target (beings/<name>/letters/…)
+ * or holds leftover pre-rename backups (beings/<old name>/backups/…) is NOT a
+ * being: it's a correspondent or an archive. Such folders must not appear in
+ * the beings panel, but their letters are still delivered and preserved.
+ */
+async function isInhabitantDir(dirName: string): Promise<boolean> {
+  const dir = beingDir(dirName);
+  for (const sub of ['settings.json', 'logs', 'soul']) {
+    try { await fs.stat(path.join(dir, sub)); return true; } catch { /* keep looking */ }
+  }
+  return false;
 }
 
 export async function listFolders() {
   await ensureDirs();
   try {
-    const files = await fs.readdir(FOLDERS_DIR);
-    const folders = [];
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const data = await fs.readFile(path.join(FOLDERS_DIR, file), 'utf-8');
-        try {
-          const parsed = JSON.parse(data);
-          const name = parsed.name || file.replace('.json', '');
-          const settings = parsed.settings || {};
-          // The .css theme file is the source of truth — overlay it onto
-          // settings.customCss so manual edits to the file are picked up.
-          const css = await readThemeCss(name);
-          if (css !== null) settings.customCss = css;
-          folders.push({ id: file.replace('.json', ''), name, settings });
-        } catch (e) {}
-      }
-    }
-    const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
-    for (const dir of logDirs) {
-      if (dir.isDirectory() && !folders.find(f => f.name === dir.name)) {
-        const css = await readThemeCss(dir.name);
-        folders.push({ id: dir.name, name: dir.name, settings: css !== null ? { customCss: css } : {} });
-      }
+    const dirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true });
+    const folders: any[] = [];
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      // Skip non-inhabitants — mail-only correspondents and leftover archives
+      // live under beings/ too, but they are not beings. See isInhabitantDir.
+      if (!(await isInhabitantDir(dir.name))) continue;
+      // The directory name is the sanitized key; `name` (the display name
+      // shown in the UI and written into conversation folderName fields) is
+      // recorded inside settings.json and can differ when the being's name
+      // contains filesystem-hostile characters. Absent a settings file (a
+      // being that only exists as a bare beings/<name>/ dir), the directory
+      // name IS the name — mirrors the old logs-directory orphan-discovery.
+      let name = dir.name;
+      let settings: any = {};
+      try {
+        const data = await fs.readFile(beingSettingsFile(dir.name), 'utf-8');
+        const parsed = JSON.parse(data);
+        name = parsed.name || dir.name;
+        settings = parsed.settings || {};
+      } catch {}
+      // The .css theme file is the source of truth — overlay it onto
+      // settings.customCss so manual edits to the file are picked up.
+      const css = await readThemeCss(name);
+      if (css !== null) settings.customCss = css;
+      folders.push({ id: name, name, settings });
     }
     return folders;
   } catch (e) {
@@ -561,28 +554,38 @@ export async function listFolders() {
 
 export async function saveFolder(folderName: string, settings: any) {
   await ensureDirs();
-  // Split the CSS out into local_data/themes/<name>.css (the editable source of
-  // truth) and keep it out of the folder JSON to avoid a stale duplicate.
+  const dir = beingDir(folderName);
+  await fs.mkdir(dir, { recursive: true });
+  // Split the CSS out into beings/<name>/theme.css (the editable source of
+  // truth) and keep it out of the settings JSON to avoid a stale duplicate.
   const { customCss, ...rest } = settings || {};
   await writeThemeCss(folderName, customCss);
-  const filePath = path.join(FOLDERS_DIR, `${folderName}.json`);
-  await fs.writeFile(filePath, JSON.stringify({ name: folderName, settings: rest }, null, 2));
+  await fs.writeFile(beingSettingsFile(folderName), JSON.stringify({ name: folderName, settings: rest }, null, 2));
 }
 
 // ── Identity rename ─────────────────────────────────────────────────────────
-// An identity's name is its primary key on disk: it names a file or a directory
-// in nine separate places under local_data. This used to move three of them
-// (the folder JSON, the theme CSS, the logs directory) and silently orphan the
-// rest — the entity kept its conversations but lost its workspace, its system
-// prompt files, its summaries, its changelogs, its browser logins, its TTS
-// dictionary and its backups. Nothing failed loudly; the data was simply no
-// longer reachable under the new name.
+// An identity's name used to be its primary key in NINE separate places
+// scattered across local_data — the folder JSON, the theme CSS, the logs
+// directory, the workspace, the system prompt files, the summaries, the
+// changelogs, the browser profile, the backups — each with its own
+// sanitization rule, and a rename that missed even one of them silently
+// orphaned that entity's data (it kept its conversations but lost, say, its
+// browser login, with nothing failing loudly).
 //
-// `letters/` is deliberately left alone. A mailbox is a correspondence between
-// two names, both of which appear in the path, and the sender's copy of every
-// letter lives under a *different* identity's tree. Rewriting that coherently
-// is a larger job than all of the above combined, and a half-done rename there
-// loses mail. The old name keeps its mailbox.
+// Since the beings/<name>/ restructuring, all nine of those live under ONE
+// directory. A rename is now: move that one directory, patch the display
+// name recorded inside settings.json, and retitle the handful of filenames
+// that embed the OLD name as a stem (conversation logs' internal folderName +
+// title, and the soul's `<name>_<n>.md` files — summaries/changelogs are
+// named after the conversation TITLE, not the entity, so there is nothing to
+// retitle there).
+//
+// `letters/from/<sender>/` (a being's INBOX) is a subtree of its own folder
+// now, so it moves for free as part of the directory rename. The scattered
+// OUTBOX entries — letters this being SENT, stored inside other beings'
+// `letters/from/<this-being>/` folders — deliberately keep the OLD sender
+// name, exactly as the pre-restructuring design already excluded `letters/`
+// from rename entirely. No code changes needed to preserve that.
 
 /** What a rename actually did, so the caller can show it instead of guessing. */
 export interface RenameFolderReport {
@@ -596,46 +599,14 @@ function escapeForRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Mirrors `safeName` in browserTools.ts — that module pulls in Playwright, so
- *  the rule is repeated here rather than imported into every API route. */
-function browserProfileName(entity: string): string {
-  return String(entity || 'Default').replace(/[\\/:*?"<>|]/g, '_').slice(0, 64) || 'Default';
-}
-
 async function pathExists(p: string): Promise<boolean> {
   try { await fs.stat(p); return true; } catch { return false; }
 }
 
 /**
- * Move one path if it's there. Never overwrites: an existing target is reported
- * as a failure and left untouched, because the alternative is silently merging
- * or destroying another identity's data.
- */
-async function movePathIfPresent(
-  from: string,
-  to: string,
-  label: string,
-  report: RenameFolderReport
-): Promise<void> {
-  if (from === to) return;
-  if (!(await pathExists(from))) { report.skipped.push(label); return; }
-  if (await pathExists(to)) {
-    report.failed.push({ what: label, error: `target already exists: ${to}` });
-    return;
-  }
-  try {
-    await fs.mkdir(path.dirname(to), { recursive: true });
-    await fs.rename(from, to);
-    report.moved.push(label);
-  } catch (e: any) {
-    report.failed.push({ what: label, error: String(e?.message || e) });
-  }
-}
-
-/**
  * Rename `<oldStem>_<n>.md` → `<newStem>_<n>.md` inside one directory.
  * Files that don't match the pattern are left exactly as they are — a
- * hand-named summary keeps its name.
+ * hand-named file keeps its name.
  */
 async function retitleNumberedFiles(
   dir: string,
@@ -665,14 +636,14 @@ async function retitleNumberedFiles(
 }
 
 /**
- * Rewrite every conversation log in the (already moved) directory so its
- * internal `folderName` matches the new identity, and retitle the ones using
- * the `<identity>_<n>` convention.
+ * Rewrite every conversation log in a being's logs/ directory so its internal
+ * `folderName` matches the new identity, and retitle the ones using the
+ * `<identity>_<n>` convention.
  *
  * This is not cosmetic. `saveLog` deletes copies of a conversation id from
- * every logs directory whose name differs from the payload's `folderName`, so
- * a log left claiming the old name would, on its very next save, be moved back
- * into a freshly recreated directory under the old name.
+ * every being's logs directory whose name differs from the payload's
+ * `folderName`, so a log left claiming the old name would, on its very next
+ * save, be moved back into a freshly recreated directory under the old name.
  */
 async function rewriteLogsForRename(
   logDir: string,
@@ -715,95 +686,75 @@ export async function renameFolder(oldName: string, newName: string): Promise<Re
   if (/[\\/:*?"<>|]/.test(trimmed)) {
     throw new Error('A being name cannot contain \\ / : * ? " < > |');
   }
+
+  const oldDir = beingDir(oldName);
+  const newDir = beingDir(trimmed);
+
   // Refuse before touching anything, rather than half-merging two identities.
-  if (await pathExists(path.join(FOLDERS_DIR, `${trimmed}.json`))) {
+  if (await pathExists(newDir)) {
     throw new Error(`A being named "${trimmed}" already exists.`);
-  }
-  if (await pathExists(path.join(LOGS_DIR, trimmed))) {
-    throw new Error(`A conversation folder named "${trimmed}" already exists.`);
   }
 
   const report: RenameFolderReport = { moved: [], skipped: [], failed: [] };
 
-  // 1. The folder JSON — carries the name inside it as well as in its filename.
+  // The being's entire tree — logs, soul, workspace, backups, browser
+  // profile, computer control logs, theme, TTS dictionary, and its letters
+  // INBOX — lives under one directory now, so the rename is a single move.
+  if (!(await pathExists(oldDir))) {
+    // No on-disk being folder yet — legal (a being that only exists as a name
+    // typed into a conversation, with no settings/logs saved yet).
+    report.skipped.push('being folder');
+    return report;
+  }
   try {
-    const oldFilePath = path.join(FOLDERS_DIR, `${oldName}.json`);
-    const parsed = JSON.parse(await fs.readFile(oldFilePath, 'utf-8'));
-    parsed.name = trimmed;
-    await fs.writeFile(path.join(FOLDERS_DIR, `${trimmed}.json`), JSON.stringify(parsed, null, 2));
-    await fs.unlink(oldFilePath);
-    report.moved.push('being settings');
+    await fs.mkdir(path.dirname(newDir), { recursive: true });
+    await fs.rename(oldDir, newDir);
+    report.moved.push('being folder (logs, soul, workspace, backups, browser profile, letters inbox, theme, TTS dictionary)');
   } catch (e: any) {
-    // An identity with no settings file is legal — listFolders synthesizes one
-    // from the logs directory — so a missing file is "skipped", not "failed".
-    if (e?.code === 'ENOENT') report.skipped.push('being settings');
-    else report.failed.push({ what: 'being settings', error: String(e?.message || e) });
+    report.failed.push({ what: 'being folder', error: String(e?.message || e) });
+    return report; // nothing else can safely proceed
   }
 
-  // 2. Flat, raw-name files.
-  await fs.mkdir(THEMES_DIR, { recursive: true });
-  await movePathIfPresent(themeCssPath(oldName), themeCssPath(trimmed), 'CSS theme', report);
-  await movePathIfPresent(
-    path.join(DATA_DIR, 'tts_dict', `${oldName}.json`),
-    path.join(DATA_DIR, 'tts_dict', `${trimmed}.json`),
-    'TTS pronunciation dictionary', report
-  );
-
-  // 3. Conversations: move the directory, then fix what's inside it.
-  const newLogDir = path.join(LOGS_DIR, trimmed);
-  await movePathIfPresent(path.join(LOGS_DIR, oldName), newLogDir, 'conversations folder', report);
-  await rewriteLogsForRename(newLogDir, oldName, trimmed, report);
-
-  // 4. Per-identity directories. Most sanitize the name for the path; browser
-  //    profiles use their own slightly different rule.
-  const oldSafe = sanitizeFolderName(oldName);
-  const newSafe = sanitizeFolderName(trimmed);
-
-  await movePathIfPresent(
-    path.join(WORKSPACES_DIR, oldSafe), path.join(WORKSPACES_DIR, newSafe),
-    'workspace', report
-  );
-  await movePathIfPresent(
-    path.join(DATA_DIR, 'browser_profiles', browserProfileName(oldName)),
-    path.join(DATA_DIR, 'browser_profiles', browserProfileName(trimmed)),
-    'browser profile', report
-  );
-
-  // 5. Directories whose *contents* are also named after the identity.
-  const spDir = path.join(DATA_DIR, 'system_prompts', newSafe);
-  await movePathIfPresent(path.join(DATA_DIR, 'system_prompts', oldSafe), spDir, 'system prompts', report);
-  await retitleNumberedFiles(spDir, oldSafe, newSafe, 'system prompts', report);
-
-  const sumDir = path.join(DATA_DIR, 'summaries', newSafe);
-  await movePathIfPresent(path.join(DATA_DIR, 'summaries', oldSafe), sumDir, 'summaries', report);
-  await retitleNumberedFiles(sumDir, oldName, trimmed, 'summaries', report);
-
-  const clDir = path.join(DATA_DIR, 'changelogs', newSafe);
-  await movePathIfPresent(path.join(DATA_DIR, 'changelogs', oldSafe), clDir, 'changelogs', report);
-  await retitleNumberedFiles(clDir, oldName, trimmed, 'changelogs', report);
-
-  // 6. Backups. Not on the original list, but leaving them behind makes every
-  //    existing backup unreachable from the Backups window — the files survive
-  //    while the only way to open them does not.
-  await movePathIfPresent(
-    path.join(BACKUPS_DIR, oldName), path.join(BACKUPS_DIR, trimmed),
-    'backups', report
-  );
-  if (oldSafe !== oldName) {
-    await movePathIfPresent(
-      path.join(BACKUPS_DIR, oldSafe), path.join(BACKUPS_DIR, newSafe),
-      'backups (sanitized path)', report
-    );
+  // Patch the display name recorded inside settings.json (the directory name
+  // is the sanitized key; `name` is what the UI shows and what saveLog writes
+  // into conversation folderName fields).
+  try {
+    const settingsPath = beingSettingsFile(trimmed);
+    const parsed = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+    parsed.name = trimmed;
+    await fs.writeFile(settingsPath, JSON.stringify(parsed, null, 2));
+    report.moved.push('being settings (name field)');
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') report.skipped.push('being settings (name field)');
+    else report.failed.push({ what: 'being settings (name field)', error: String(e?.message || e) });
   }
+
+  // Conversation logs: rewrite each one's internal folderName + retitle.
+  await rewriteLogsForRename(beingLogsDir(trimmed), oldName, trimmed, report);
+
+  // The soul's numbered files (`<name>_<n>.md`) carry the old name in their
+  // filename stem even though they already moved with the directory.
+  // Summaries and changelogs are named after the conversation TITLE, not the
+  // entity — nothing to retitle there.
+  await retitleNumberedFiles(beingSoulDir(trimmed), oldName, trimmed, 'soul files', report);
 
   return report;
 }
 
 export async function deleteFolder(folderName: string) {
   await ensureDirs();
-  try { await fs.unlink(path.join(FOLDERS_DIR, `${folderName}.json`)); } catch (e) {}
-  try { await fs.rm(path.join(LOGS_DIR, folderName), { recursive: true, force: true }); } catch (e) {}
-  try { await fs.unlink(themeCssPath(folderName)); } catch (e) {}
+  // A being is now ONE directory — settings.json, logs, soul, workspace,
+  // backups, browser profile, computer control logs, theme.css, tts_dict.json,
+  // and its letters inbox all live under beings/<name>/. "Delete Being" removes
+  // that whole tree. The pre-restructuring version could only touch three of
+  // nine scattered locations (settings, logs, theme) and left the soul,
+  // workspace and backups orphaned on disk — which is exactly why the button
+  // appeared to do nothing while the being stayed in the sidebar.
+  //
+  // Deliberate consequences, matching recipient-owned mail: letters this being
+  // SENT live in OTHER beings' inboxes (beings/<to>/letters/from/<this-being>/)
+  // and survive; letters it RECEIVED are inside its own tree and go with it.
+  try { await fs.rm(beingDir(folderName), { recursive: true, force: true }); } catch (e) {}
 }
 
 export async function saveUserSettings(settings: any) {
@@ -818,23 +769,6 @@ export async function loadUserSettings() {
     return JSON.parse(data);
   } catch (e) {
     return { userName: '' };
-  }
-}
-
-export async function saveSettings(aiName: string, settings: any) {
-  await ensureDirs();
-  const filePath = path.join(SETTINGS_DIR, `${aiName}.json`);
-  await fs.writeFile(filePath, JSON.stringify(settings, null, 2));
-}
-
-export async function loadSettings(aiName: string) {
-  await ensureDirs();
-  const filePath = path.join(SETTINGS_DIR, `${aiName}.json`);
-  try {
-    const data = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(data);
-  } catch (e) {
-    return null;
   }
 }
 
@@ -992,16 +926,21 @@ export async function saveLog(convoId: string, logData: any) {
   // interleave bytes on disk. Both the main write and the backup write happen
   // under the same lock.
   return withWriteLock(`log:${convoId}`, async () => {
-    // Move-away cleanup: remove old copies of this convoId in any other folder
-    const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
-    for (const dir of logDirs) {
-      if (dir.isDirectory() && dir.name !== folderName) {
-        const oldPath = path.join(LOGS_DIR, dir.name, `${convoId}.json`);
+    // Move-away cleanup: remove old copies of this convoId under any OTHER
+    // being (compare by the sanitized on-disk key, since that's the actual
+    // directory identity — two display names that sanitize to the same key
+    // are the same being folder).
+    const thisSafe = sanitizeBeingName(folderName);
+    let beingDirs: any[] = [];
+    try { beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch {}
+    for (const dir of beingDirs) {
+      if (dir.isDirectory() && dir.name !== thisSafe) {
+        const oldPath = path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`);
         try { await fs.unlink(oldPath); } catch (e) {}
       }
     }
 
-    const targetDir = path.join(LOGS_DIR, folderName);
+    const targetDir = beingLogsDir(folderName);
     await fs.mkdir(targetDir, { recursive: true });
     const filePath = path.join(targetDir, `${convoId}.json`);
     logData.updatedAt = logData.updatedAt || Date.now();
@@ -1037,7 +976,7 @@ export async function saveLog(convoId: string, logData: any) {
     // --- Auto-Backup ---
     try {
       const currentDate = new Date().toISOString().split('T')[0];
-      const backupDir = path.join(BACKUPS_DIR, folderName);
+      const backupDir = beingBackupsDir(folderName);
       await fs.mkdir(backupDir, { recursive: true });
 
       const files = await fs.readdir(backupDir);
@@ -1095,15 +1034,16 @@ export async function saveLog(convoId: string, logData: any) {
 
 export async function loadLog(convoId: string) {
   await ensureDirs();
-  const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
-  for (const dir of logDirs) {
+  let beingDirs: any[] = [];
+  try { beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const dir of beingDirs) {
     if (!dir.isDirectory()) continue;
-    const filePath = path.join(LOGS_DIR, dir.name, `${convoId}.json`);
+    const filePath = path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`);
     let data: string;
     try {
       data = await fs.readFile(filePath, 'utf-8');
     } catch {
-      // Not in this folder (ENOENT) — keep scanning the others.
+      // Not in this being's logs (ENOENT) — keep scanning the others.
       continue;
     }
     // The file EXISTS in this folder. Strip a leading UTF-8 BOM if present:
@@ -1188,17 +1128,29 @@ async function readLogHeaderMetadata(fullPath: string): Promise<{ title?: string
 export async function listLogs() {
   await ensureDirs();
   try {
-    const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
+    const beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true });
 
-    // Phase 1: walk every folder in parallel, collecting (fullPath, folderName, file) tuples.
+    // Phase 1: walk every being's logs/ dir in parallel, collecting
+    // (fullPath, folderName, file) tuples. `folderName` here is the DISPLAY
+    // name (from settings.json), not the sanitized directory name — the UI
+    // groups conversations via `c.folderName === activeFolder.name`, and
+    // activeFolder.name is that same display name, so this must match it.
     const fileEntries: { fullPath: string; folderName: string; file: string }[] = [];
-    await Promise.all(logDirs.map(async (dir) => {
+    await Promise.all(beingDirs.map(async (dir) => {
       if (!dir.isDirectory()) return;
-      const folderName = dir.name;
-      const files = (await fs.readdir(path.join(LOGS_DIR, folderName)))
-        .filter(f => !f.startsWith('.') && f.endsWith('.json'));
+      let folderName = dir.name;
+      try {
+        const raw = await fs.readFile(beingSettingsFile(dir.name), 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed.name) folderName = parsed.name;
+      } catch {}
+      const logsDir = path.join(BEINGS_DIR, dir.name, 'logs');
+      let files: string[] = [];
+      try {
+        files = (await fs.readdir(logsDir)).filter(f => !f.startsWith('.') && f.endsWith('.json'));
+      } catch { return; }
       for (const file of files) {
-        fileEntries.push({ fullPath: path.join(LOGS_DIR, folderName, file), folderName, file });
+        fileEntries.push({ fullPath: path.join(logsDir, file), folderName, file });
       }
     }));
 
@@ -1259,10 +1211,11 @@ export async function listLogs() {
 
 export async function deleteLog(convoId: string) {
   await ensureDirs();
-  const logDirs = await fs.readdir(LOGS_DIR, { withFileTypes: true });
-  for (const dir of logDirs) {
+  let beingDirs: any[] = [];
+  try { beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch { return; }
+  for (const dir of beingDirs) {
     if (dir.isDirectory()) {
-      const filePath = path.join(LOGS_DIR, dir.name, `${convoId}.json`);
+      const filePath = path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`);
       try {
         await fs.unlink(filePath);
       } catch (e) {}
