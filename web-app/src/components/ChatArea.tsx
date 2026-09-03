@@ -88,6 +88,7 @@ Claude   | claude-sonnet-4-6            | on  | Claude Sonnet 4.6 Thinking
 Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
 
 # ── Gemini (Google) — 3.x always has thinking; level controls budget ──
+Gemini   | gemini-3.8-flash             | on  | Gemini 3.8 Flash
 Gemini   | gemini-3.7-flash             | on  | Gemini 3.7 Flash
 Gemini   | gemini-3.6-flash             | on  | Gemini 3.6 Flash
 Gemini   | gemini-3.5-flash             | on  | Gemini 3.5 Flash
@@ -4278,6 +4279,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
                           { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
                           { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
+                          { value: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Google key)' },
                           { value: 'gemini-3.7-flash', label: 'gemini-3.7-flash (Google key)' },
                           { value: 'gemini-3.6-flash', label: 'gemini-3.6-flash (Google key)' },
                           { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Google key)' },
@@ -4331,6 +4333,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       >
                         <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
                         <option value="qwen3.5-omni-plus">qwen3.5-omni-plus</option>
+                        <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                         <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
                         <option value="gemini-3.5-flash">gemini-3.5-flash</option>
@@ -4382,6 +4385,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         onChange={(e) => setWatcherModel(e.target.value)}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                       >
+                        <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                         <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
                         <option value="gemini-3.5-flash">gemini-3.5-flash</option>
@@ -4521,6 +4525,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                       <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                       <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
                       <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>

@@ -24,6 +24,8 @@
   "kimi-k2.6":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
   "kimi-k2.5":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
 
+  "_NOTE_gemini-3.8-flash": "Released 2026-09-02 (ai.google.dev/gemini-api/docs/latest-model). Introductory pricing $0.75/$3.75 (input/output per 1M) in effect through 2026-12-31; reverts to standard $1.50/$7.50 (same as 3.6 Flash) after that. Numbers below use the CURRENT introductory rate — revisit after the cutover date. cachedInput follows the same 25%-of-input convention used for its Gemini siblings (some third-party writeups say '90% discount', but that doesn't match the pattern Nexus already uses across 3.5/3.6/3.7 Flash, so the codebase convention was kept for consistency).",
+  "gemini-3.8-flash":       { "input": 0.75, "cachedInput": 0.1875, "cacheWrite": 0, "output": 3.75 },
   "_NOTE_gemini-3.7-flash": "Introductory pricing $0.75/$3.75 (input/output per 1M) in effect through 2026-12-31; reverts to standard $1.50/$7.50 (same as 3.6 Flash) after that. Numbers below use the CURRENT introductory rate — revisit after the cutover date.",
   "gemini-3.7-flash":       { "input": 0.75, "cachedInput": 0.1875, "cacheWrite": 0, "output": 3.75 },
   "gemini-3.6-flash":       { "input": 1.5,  "cachedInput": 0.375, "cacheWrite": 0, "output": 7.5 },

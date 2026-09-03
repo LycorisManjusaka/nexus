@@ -22,6 +22,7 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
 
   // ── Google Gemini ──────────────────────────────────────────────────────────
   // All current Gemini models support vision.
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -158,6 +159,7 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
 
 export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // Google Gemini — all current models handle audio inline.
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -194,6 +196,7 @@ export function isAudioCapable(specificModel: string | undefined | null): boolea
 // bridge.
 
 export const VIDEO_CAPABLE_MODELS = new Set<string>([
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -232,8 +235,11 @@ export function isVideoCapable(specificModel: string | undefined | null): boolea
 // it too as of its launch (Google has said minimal support is a planned fast
 // follow, not yet shipped) — this is a genuine model-specific gap, not a
 // naming-convention thing, so it's tracked explicitly rather than inferred
-// from a substring match on "flash".
+// from a substring match on "flash". Gemini 3.8 Flash inherits the same gap
+// (ai.google.dev/gemini-api/docs/latest-model: "the 'minimal' thinking level
+// is not supported for Gemini 3.8 Flash and will return an error").
 const GEMINI_NO_MINIMAL_THINKING = new Set<string>([
+  'gemini-3.8-flash',
   'gemini-3.7-flash',
 ]);
 
