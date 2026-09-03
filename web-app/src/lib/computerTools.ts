@@ -470,6 +470,45 @@ function resolveVk(key: string): number | null {
   return null;
 }
 
+// Modifier virtual-key codes, in the canonical press order used for a combo
+// (modifiers held first, released last in reverse). ctrl < alt < shift < win.
+const MODIFIER_VKS = [0x11, 0x12, 0x10, 0x5b] as const;
+
+/**
+ * Resolve a key_press argument into an ordered list of virtual-key codes:
+ * modifiers first (canonical order), then the main key last. A single key
+ * returns a one-element array; a combo like "ctrl+shift+a" returns
+ * [ctrl, shift, a]. Returns null for anything unrecognized or malformed.
+ */
+function resolveCombo(key: string): number[] | null {
+  const raw = String(key || '').trim();
+  if (!raw) return null;
+  const parts = raw.split('+').map((p) => p.trim());
+  if (!parts.length) return null;
+  // Reject a leading, trailing, or doubled separator — "ctrl+" or "+a" or
+  // "ctrl++a" is a malformed combo, and silently dropping the empty part would
+  // turn it into a bare-key no-op, the exact silent-failure mode we must avoid.
+  if (parts.some((p) => !p)) return null;
+  if (parts.length === 1) {
+    const vk = resolveVk(parts[0]);
+    return vk == null ? null : [vk];
+  }
+  const mainVk = resolveVk(parts[parts.length - 1]);
+  if (mainVk == null) return null;
+  const mods = new Set<number>();
+  for (const p of parts.slice(0, -1)) {
+    const vk = resolveVk(p);
+    if (vk == null) return null;
+    mods.add(vk);
+  }
+  // Every position before the main key must be a modifier; anything else is a
+  // malformed combo (e.g. "a+b"), not a modifier we can hold.
+  const ordered: number[] = [];
+  for (const m of MODIFIER_VKS) if (mods.has(m)) ordered.push(m);
+  if (ordered.length !== mods.size) return null;
+  return [...ordered, mainVk];
+}
+
 function buttonCode(b?: string): number {
   const s = String(b || 'left').toLowerCase();
   if (s === 'right') return 1;
@@ -480,7 +519,7 @@ function buttonCode(b?: string): number {
 // ── computer_input command resolution + execution ───────────────────────────
 
 type ResolvedType = 'move' | 'down' | 'up' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'keypress' | 'text' | 'idle';
-interface ResolvedCommand { t: ResolvedType; x?: number; y?: number; btn?: number; vk?: number; s?: string; ms?: number; delta?: number; }
+interface ResolvedCommand { t: ResolvedType; x?: number; y?: number; btn?: number; vk?: number; vks?: number[]; s?: string; ms?: number; delta?: number; }
 
 const MAX_COMMANDS = 200;
 const MAX_IDLE_MS = 15000;
@@ -515,11 +554,16 @@ function resolveCommands(raw: any[]): { resolved: ResolvedCommand[]; errors: str
         resolved.push({ t: 'wheel', delta: Math.trunc(c.delta), x, y });
         return;
       case 'key_down':
-      case 'key_up':
-      case 'key_press': {
+      case 'key_up': {
         const vk = resolveVk(c.key);
         if (vk == null) { errors.push(`#${i} unrecognized key "${c.key}"`); return; }
-        resolved.push({ t: type === 'key_down' ? 'keydown' : type === 'key_up' ? 'keyup' : 'keypress', vk });
+        resolved.push({ t: type === 'key_down' ? 'keydown' : 'keyup', vk });
+        return;
+      }
+      case 'key_press': {
+        const vks = resolveCombo(c.key);
+        if (!vks) { errors.push(`#${i} unrecognized key or combo "${c.key}"`); return; }
+        resolved.push({ t: 'keypress', vks });
         return;
       }
       case 'type_text':
@@ -553,7 +597,27 @@ public class NxInput {
   [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] p, int cb);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
-  public static void SendMouseButton(int btn, bool down) {
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  // Cursor position readback — used to report where the pointer actually ended
+  // up after a SetCursorPos, so a being can detect DPI virtualization or a
+  // coordinate that silently did not move.
+  public static POINT Cursor() { POINT p; GetCursorPos(out p); return p; }
+  // Which window owns the keyboard focus right now. SendInput is fire-and-
+  // forget: it reports whether the OS accepted the event, NOT whether the
+  // intended app processed it. Reporting the foreground window lets a being
+  // check "did my input go where I aimed" without another screenshot.
+  public static string ForegroundTitle() {
+    IntPtr h = GetForegroundWindow();
+    if (h == IntPtr.Zero) return "";
+    int n = GetWindowTextLength(h);
+    if (n <= 0) return "";
+    var sb = new System.Text.StringBuilder(n + 1);
+    GetWindowText(h, sb, sb.Capacity);
+    return sb.ToString();
+  }
+  public static uint SendMouseButton(int btn, bool down) {
     uint flag;
     if (btn == 1) { flag = down ? 0x0008u : 0x0010u; }
     else if (btn == 2) { flag = down ? 0x0020u : 0x0040u; }
@@ -562,32 +626,32 @@ public class NxInput {
     inp.type = 0;
     inp.u.mi = new MOUSEINPUT();
     inp.u.mi.dwFlags = flag;
-    SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+    return SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
   }
-  public static void SendMouseWheel(int delta) {
+  public static uint SendMouseWheel(int delta) {
     var inp = new INPUT();
     inp.type = 0;
     inp.u.mi = new MOUSEINPUT();
     inp.u.mi.mouseData = (uint)delta;
     inp.u.mi.dwFlags = 0x0800; // MOUSEEVENTF_WHEEL
-    SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+    return SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
   }
-  public static void SendKey(ushort vk, bool down) {
+  public static uint SendKey(ushort vk, bool down) {
     var inp = new INPUT();
     inp.type = 1;
     inp.u.ki = new KEYBDINPUT();
     inp.u.ki.wVk = vk;
     inp.u.ki.dwFlags = down ? 0u : KEYEVENTF_KEYUP;
-    SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+    return SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
   }
-  public static void SendUnicodeChar(ushort ch, bool down) {
+  public static uint SendUnicodeChar(ushort ch, bool down) {
     var inp = new INPUT();
     inp.type = 1;
     inp.u.ki = new KEYBDINPUT();
     inp.u.ki.wVk = 0;
     inp.u.ki.wScan = ch;
     inp.u.ki.dwFlags = KEYEVENTF_UNICODE | (down ? 0u : KEYEVENTF_KEYUP);
-    SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
+    return SendInput(1, new INPUT[] { inp }, Marshal.SizeOf(typeof(INPUT)));
   }
 }
 '@
@@ -605,47 +669,71 @@ function Mark-Cursor {
   [NxGdi]::Draw($mp.X - 25, $mp.Y - 25, $mp.X + 25, $mp.Y + 25, $true, 6)
 }
 foreach ($c in $cmds) {
+  $d = @{ t = $c.t }
   try {
     switch ($c.t) {
-      'move' { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
+      'move' {
+        $d.x = [int]$c.x
+        $d.y = [int]$c.y
+        $d.moved = [NxInput]::SetCursorPos([int]$c.x, [int]$c.y)
+        $cur = [NxInput]::Cursor()
+        $d.at = @($cur.X, $cur.Y)
+      }
       'down' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
-        [NxInput]::SendMouseButton([int]$c.btn, $true)
+        $d.sent = [NxInput]::SendMouseButton([int]$c.btn, $true)
         Mark-Cursor
       }
       'up' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
-        [NxInput]::SendMouseButton([int]$c.btn, $false)
+        $d.sent = [NxInput]::SendMouseButton([int]$c.btn, $false)
         Mark-Cursor
       }
       'click' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
-        [NxInput]::SendMouseButton([int]$c.btn, $true)
+        $s1 = [NxInput]::SendMouseButton([int]$c.btn, $true)
         Start-Sleep -Milliseconds 40
-        [NxInput]::SendMouseButton([int]$c.btn, $false)
+        $s2 = [NxInput]::SendMouseButton([int]$c.btn, $false)
+        $d.sent = [int]$s1 + [int]$s2
         Mark-Cursor
       }
       'wheel' {
         if ($null -ne $c.x) { [void][NxInput]::SetCursorPos([int]$c.x, [int]$c.y) }
-        [NxInput]::SendMouseWheel([int]$c.delta)
+        $d.sent = [NxInput]::SendMouseWheel([int]$c.delta)
       }
-      'keydown' { [NxInput]::SendKey([uint16]$c.vk, $true) }
-      'keyup' { [NxInput]::SendKey([uint16]$c.vk, $false) }
-      'keypress' { [NxInput]::SendKey([uint16]$c.vk, $true); Start-Sleep -Milliseconds 20; [NxInput]::SendKey([uint16]$c.vk, $false) }
+      'keydown' { $d.sent = [NxInput]::SendKey([uint16]$c.vk, $true) }
+      'keyup' { $d.sent = [NxInput]::SendKey([uint16]$c.vk, $false) }
+      'keypress' {
+        $count = $c.vks.Count
+        $n = 0
+        for ($i = 0; $i -lt ($count - 1); $i++) { $n += [NxInput]::SendKey([uint16]$c.vks[$i], $true) }
+        $main = $c.vks[($count - 1)]
+        $n += [NxInput]::SendKey([uint16]$main, $true)
+        Start-Sleep -Milliseconds 20
+        $n += [NxInput]::SendKey([uint16]$main, $false)
+        for ($i = ($count - 2); $i -ge 0; $i--) { $n += [NxInput]::SendKey([uint16]$c.vks[$i], $false) }
+        $d.sent = $n
+      }
       'text' {
+        $n = 0
         foreach ($ch in $c.s.ToCharArray()) {
-          [NxInput]::SendUnicodeChar([uint16][int]$ch, $true)
-          [NxInput]::SendUnicodeChar([uint16][int]$ch, $false)
+          $n += [NxInput]::SendUnicodeChar([uint16][int]$ch, $true)
+          $n += [NxInput]::SendUnicodeChar([uint16][int]$ch, $false)
           Start-Sleep -Milliseconds 8
         }
+        $d.sent = $n
       }
       'idle' { Start-Sleep -Milliseconds ([int]$c.ms) }
     }
-    [void]$results.Add(@{ t = $c.t; ok = $true })
+    $d.ok = $true
   } catch {
-    [void]$results.Add(@{ t = $c.t; ok = $false; error = $_.Exception.Message })
+    $d.ok = $false
+    $d.error = $_.Exception.Message
   }
+  [void]$results.Add($d)
 }
+$fg = [NxInput]::ForegroundTitle()
+[void]$results.Add(@{ t = 'foreground'; title = $fg })
 if ([NxGdi]::HasMarks()) {
   Start-Sleep -Milliseconds 350
   [NxGdi]::Clear()
@@ -673,7 +761,10 @@ export function computerToolSpecs(I: Record<string, string>): ComputerToolSpec[]
     {
       name: 'computer_screenshot',
       description: I.toolComputerScreenshotDesc,
-      properties: { screen_index: { type: 'integer', description: I.computerScreenshotIndexParam } },
+      properties: {
+        screen_index: { type: 'integer', description: I.computerScreenshotIndexParam },
+        show_cursor: { type: 'boolean', description: I.computerScreenshotShowCursorParam },
+      },
       required: ['screen_index'],
     },
     {
@@ -777,11 +868,35 @@ export async function runComputerTool(name: string, args: any, ctx: ComputerTool
         if (!mon) {
           return { text: `Error: no monitor with index ${idx}. Call computer_screens first — there are ${screens.length} monitor(s), indices 0..${screens.length - 1}.` };
         }
+        const showCursor = args?.show_cursor === true;
+        const cursorBlock = showCursor ? `
+$curSig = @'
+using System;
+using System.Runtime.InteropServices;
+public class NxCur {
+  [StructLayout(LayoutKind.Sequential)] public struct P { public int X; public int Y; }
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out P p);
+}
+'@
+Add-Type -TypeDefinition $curSig -ErrorAction SilentlyContinue
+$cp = New-Object NxCur+P
+[NxCur]::GetCursorPos([ref]$cp) | Out-Null
+$cx = [int]$cp.X - ${mon.x}
+$cy = [int]$cp.Y - ${mon.y}
+if ($cx -ge 0 -and $cy -ge 0 -and $cx -lt ${mon.width} -and $cy -lt ${mon.height}) {
+  $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 3)
+  $gr.DrawLine($pen, ($cx - 14), $cy, ($cx + 14), $cy)
+  $gr.DrawLine($pen, $cx, ($cy - 14), $cx, ($cy + 14))
+  $gr.DrawEllipse($pen, ($cx - 9), ($cy - 9), 18, 18)
+  $pen.Dispose()
+}
+` : '';
         const capScript = DPI_PREFIX + `
 Add-Type -AssemblyName System.Drawing
 $bmp = New-Object System.Drawing.Bitmap(${mon.width}, ${mon.height})
 $gr = [System.Drawing.Graphics]::FromImage($bmp)
 $gr.CopyFromScreen(${mon.x}, ${mon.y}, 0, 0, (New-Object System.Drawing.Size(${mon.width}, ${mon.height})))
+${cursorBlock}
 $gr.Dispose()
 $ms = New-Object System.IO.MemoryStream
 $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -849,11 +964,44 @@ $bmp.Dispose()
           // Best-effort summary only — execution already happened either way.
         }
         const failed = report.filter((r) => r && r.ok === false);
-        return {
-          text:
-            `Executed ${resolved.length} command(s)${failed.length ? `, ${failed.length} reported an error` : ''}.` +
-            (errors.length ? ` Skipped: ${errors.join('; ')}` : ''),
-        };
+        // SendInput returns the number of events the OS accepted (0 = blocked —
+        // usually UIPI/privilege isolation, or a target that refused). A
+        // SetCursorPos that returns false means the cursor did not move at all.
+        // Distinguishing these from "the target app ignored it" is the whole
+        // point: this text must tell the being what the OS actually said, so
+        // it verifies with a screenshot instead of narrating a cause.
+        const blocked = report.filter(
+          (r) => r && r.ok !== false && r.sent === 0 &&
+            ['down', 'up', 'click', 'wheel', 'keydown', 'keyup', 'keypress', 'text'].includes(r.t),
+        );
+        const unmoved = report.filter((r) => r && r.t === 'move' && r.moved === false);
+        const drifted = report.filter(
+          (r) => r && r.t === 'move' && r.moved !== false && Array.isArray(r.at) &&
+            (Math.abs((r.at[0] as number) - (r.x as number)) > 2 || Math.abs((r.at[1] as number) - (r.y as number)) > 2),
+        );
+        const fg = report.find((r) => r && r.t === 'foreground');
+        const parts: string[] = [`Executed ${resolved.length} command(s).`];
+        if (blocked.length) {
+          parts.push(
+            `${blocked.length} command(s) were NOT delivered — the OS returned 0 from SendInput ` +
+            `(input was blocked: often UIPI/privilege isolation, or the target ignored it): ` +
+            `${blocked.map((r) => r.t).join(', ')}.`,
+          );
+        }
+        if (unmoved.length) parts.push(`${unmoved.length} mouse_move(s) did not move the cursor (SetCursorPos returned false).`);
+        if (drifted.length) {
+          parts.push(
+            `${drifted.length} mouse_move(s) landed off-target (DPI virtualization?): ` +
+            `${drifted.map((r) => `asked (${r.x},${r.y}) got (${r.at[0]},${r.at[1]})`).join('; ')}.`,
+          );
+        }
+        if (failed.length) {
+          parts.push(`${failed.length} command(s) reported an error: ${failed.map((r) => `${r.t}: ${r.error}`).join('; ')}.`);
+        }
+        if (fg && fg.title) parts.push(`Foreground window after input: "${fg.title}".`);
+        parts.push('This reports what the OS accepted, not what the target app did with it — always verify with a fresh computer_screenshot.');
+        if (errors.length) parts.push(`Skipped: ${errors.join('; ')}.`);
+        return { text: parts.join(' ') };
       }
 
       default:

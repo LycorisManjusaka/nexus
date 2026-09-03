@@ -764,8 +764,11 @@ async function streamClaudeViaAgentSDK(args: {
                 return { content: [{ type: 'text' as const, text: r.text }] };
               }),
               sdk.tool('computer_screenshot', I.toolComputerScreenshotDesc,
-                { screen_index: z.number().describe(I.computerScreenshotIndexParam) },
-                async (a: { screen_index: number }) => {
+                {
+                  screen_index: z.number().describe(I.computerScreenshotIndexParam),
+                  show_cursor: z.boolean().optional().describe(I.computerScreenshotShowCursorParam),
+                },
+                async (a: { screen_index: number; show_cursor?: boolean }) => {
                   const r = await runComputerTool('computer_screenshot', a, computerCtx);
                   const content: any[] = [{ type: 'text' as const, text: r.text }];
                   if (r.image) content.push({ type: 'image' as const, data: r.image.base64, mimeType: r.image.mimeType });

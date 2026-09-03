@@ -253,9 +253,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'Take a picture of one monitor and see it directly. A visible red border briefly flashes around that ' +
     'monitor on the real screen at the moment of capture — this is a physical machine, and every capture is ' +
     'meant to be seen. The reply tells you that monitor\'s top-left offset in absolute virtual-desktop ' +
-    'coordinates, so you can convert a pixel you see in the image into the coordinates computer_input expects.',
+    'coordinates, so you can convert a pixel you see in the image into the coordinates computer_input expects. ' +
+    'Set "show_cursor": true to draw a red crosshair at the current mouse position in the returned image, ' +
+    'so you can see where the pointer actually is before you act.',
   computerScreenshotIndexParam:
     'The monitor index to capture, from computer_screens.',
+  computerScreenshotShowCursorParam:
+    'Set true to draw a red crosshair marker at the current mouse cursor position in the captured image ' +
+    '(only when the cursor is on this monitor). Use it to see where the pointer is before acting.',
 
   toolComputerInputDesc:
     'Move the mouse, click, drag, press keys, and type text on the real desktop — a sequence of small steps ' +
@@ -263,15 +268,20 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'coordinates (from computer_screenshot), not relative to a monitor. Every click flashes a visible red ' +
     'circle at the moment it happens, and the whole sequence is written to the log — nothing here is silent. ' +
     'Take a screenshot first to see what you are aiming at, and take another one afterwards to check the ' +
-    'result actually happened rather than assuming it did. This reaches the whole machine, not a sandbox — ' +
-    'be as careful and deliberate here as the human would be with their own hands.',
+    'result actually happened rather than assuming it did. The reply reports what the OS accepted for each ' +
+    'command — whether input was blocked (SendInput returned 0), whether a mouse_move actually moved the ' +
+    'cursor and where it landed, and which window has focus afterward — so you can tell when input did not ' +
+    'reach the target. That still does not prove the target acted on it: always verify with a fresh ' +
+    'screenshot. This reaches the whole machine, not a sandbox — be as careful and deliberate here as the ' +
+    'human would be with their own hands.',
   computerInputCommandsParam:
     'An array of command objects executed in order. Each has a "type": ' +
     '"mouse_move" {x,y}, "mouse_down"/"mouse_up" {button, x?, y?} (button: "left"|"right"|"middle"; omit x/y ' +
     'to act at the current cursor position, e.g. for a drag), "mouse_click" {button, x?, y?}, ' +
     '"mouse_wheel" {delta, x?, y?} (scrolls at the cursor — positive delta = up/away, negative = down; ' +
     'one notch ≈ 120; x/y move the cursor first if given), ' +
-    '"key_down"/"key_up" {key}, "key_press" {key} (a full press-and-release of a single key or combo name), ' +
+    '"key_down"/"key_up" {key}, "key_press" {key} (a full press-and-release of a single key, or a combo ' +
+    'like "ctrl+a" or "ctrl+shift+esc" — modifiers are held for the duration of the main key), ' +
     '"type_text" {text} (types literal text, including non-Latin characters), "idle" {ms} (pause before the ' +
     'next command, up to 15000ms).',
 
@@ -548,6 +558,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'toolComputerScreensDesc', label: 'Tool: computer_screens — description' },
   { key: 'toolComputerScreenshotDesc', label: 'Tool: computer_screenshot — description' },
   { key: 'computerScreenshotIndexParam', label: 'Tool: computer_screenshot — "screen_index" parameter' },
+  { key: 'computerScreenshotShowCursorParam', label: 'Tool: computer_screenshot — "show_cursor" parameter' },
   { key: 'toolComputerInputDesc', label: 'Tool: computer_input — description' },
   { key: 'computerInputCommandsParam', label: 'Tool: computer_input — "commands" parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
@@ -612,6 +623,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   toolComputerScreensDesc: 'ツール computer_screens — 説明',
   toolComputerScreenshotDesc: 'ツール computer_screenshot — 説明',
   computerScreenshotIndexParam: 'ツール computer_screenshot —「screen_index」引数',
+  computerScreenshotShowCursorParam: 'ツール computer_screenshot —「show_cursor」引数',
   toolComputerInputDesc: 'ツール computer_input — 説明',
   computerInputCommandsParam: 'ツール computer_input —「commands」引数',
   webSearchDesc: 'ツール web_search — 説明',
