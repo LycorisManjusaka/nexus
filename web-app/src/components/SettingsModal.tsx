@@ -61,6 +61,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
     lmStudioPath: '',
     diffViewerPath: '',
+    allowHostAnthropicEnv: false,
   });
   const [loading, setLoading] = useState(true);
 
@@ -396,6 +397,18 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   <div><Tx k="settings.keys.oauth.tools" /></div>
                   <div><Tx k="settings.keys.oauth.other" /></div>
                 </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none mt-2">
+                  <input
+                    type="checkbox"
+                    checked={!!keys.allowHostAnthropicEnv}
+                    onChange={e => setKeys({ ...keys, allowHostAnthropicEnv: e.target.checked })}
+                    className="w-4 h-4 accent-indigo-500"
+                  />
+                  <span className="text-xs text-foreground">{t('settings.allowHostAnthropicEnv.label')}</span>
+                </label>
+                <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                  <Tx k="settings.allowHostAnthropicEnv.help" />
+                </p>
               </div>
             </div>
 

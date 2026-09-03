@@ -263,8 +263,9 @@ async function callOAuthClaudeVision(params: {
   eyesPrompt: string;
   eyesModel: string;
   oauthToken: string;
+  allowHostAnthropicEnv?: boolean;
 }): Promise<EyesResult> {
-  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, oauthToken } = params;
+  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, oauthToken, allowHostAnthropicEnv } = params;
   const model = /claude/i.test(eyesModel) ? eyesModel : 'claude-haiku-4-5';
   try {
     const sdk = await import('@anthropic-ai/claude-agent-sdk');
@@ -289,7 +290,7 @@ async function callOAuthClaudeVision(params: {
         // Inherited environment + token — see claudeAgentEnv(). The SDK's
         // `env` replaces rather than merges, so a bare {TOKEN} object would
         // strip the child's Windows environment.
-        env: claudeAgentEnv(oauthToken),
+        env: claudeAgentEnv(oauthToken, !!allowHostAnthropicEnv),
         model,
         systemPrompt: 'You describe images. Output ONLY the description, no preamble, no follow-up.',
         // Pure single-turn description — block every tool so the SDK can't
@@ -358,8 +359,9 @@ export async function describeImage(params: {
   geminiKey?: string;
   mimoKey?: string;
   oauthToken?: string;
+  allowHostAnthropicEnv?: boolean;
 }): Promise<EyesResult> {
-  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, zaiKey, geminiKey, mimoKey, oauthToken } = params;
+  const { imageBase64, imageMimeType, eyesPrompt, eyesModel, zaiKey, geminiKey, mimoKey, oauthToken, allowHostAnthropicEnv } = params;
 
   if (!eyesPrompt || !eyesPrompt.trim()) {
     return {
@@ -402,7 +404,7 @@ export async function describeImage(params: {
           error: 'no_oauth',
         };
       }
-      result = await callOAuthClaudeVision({ imageBase64, imageMimeType, eyesPrompt, eyesModel, oauthToken });
+      result = await callOAuthClaudeVision({ imageBase64, imageMimeType, eyesPrompt, eyesModel, oauthToken, allowHostAnthropicEnv });
     } else if (lower.startsWith('gemini')) {
       if (!geminiKey) {
         return {

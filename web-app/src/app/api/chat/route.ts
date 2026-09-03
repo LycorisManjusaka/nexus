@@ -903,7 +903,7 @@ async function streamClaudeViaAgentSDK(args: {
                       // the child's whole environment (SDK contract), stripping
                       // APPDATA/PATHEXT/etc. and breaking hg, git and every
                       // native exe launched from PowerShell.
-                      env: claudeAgentEnv(oauthToken),
+                      env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv),
                       model: childModel,
                       systemPrompt: childSystem,
                       cwd: workspaceDir,
@@ -1189,7 +1189,7 @@ async function streamClaudeViaAgentSDK(args: {
           // (2026-09-01) to cause silent hard stops once the context genuinely
           // overflowed, because the same switch also disables the CLI's
           // emergency fallback. A visible compaction stall beats a silent break.
-          env: claudeAgentEnv(oauthToken),
+          env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv),
           model,
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
           // below (they're mutually exclusive — systemPrompt only applies when
@@ -3328,6 +3328,7 @@ export async function POST(req: Request) {
                   geminiKey: keys.gemini || '',
                   mimoKey: keys.mimo || '',
                   oauthToken: keys.claudeOAuthToken || '',
+                  allowHostAnthropicEnv: !!keys.allowHostAnthropicEnv,
                 });
                 contentStr +=
                   `\n\n<image_description filename="${att.name || 'image'}" via="${eyesModel}">\n` +
@@ -7201,6 +7202,7 @@ export async function POST(req: Request) {
                             geminiKey: keys.gemini || '',
                             mimoKey: keys.mimo || '',
                             oauthToken: keys.claudeOAuthToken || '',
+                            allowHostAnthropicEnv: !!keys.allowHostAnthropicEnv,
                           });
                           resultText =
                             `Image "${p}" (${bin.mimeType}, ${bin.data.length} bytes) — described via ${eyesModel}:\n\n` +
@@ -7406,6 +7408,7 @@ export async function POST(req: Request) {
                             geminiKey: keys.gemini || '',
                             mimoKey: keys.mimo || '',
                             oauthToken: keys.claudeOAuthToken || '',
+                            allowHostAnthropicEnv: !!keys.allowHostAnthropicEnv,
                           });
                           resultText = `${cr.text}\n\nDescribed via ${eyesModel}:\n\n${eyesResult.description}`;
                         } else {

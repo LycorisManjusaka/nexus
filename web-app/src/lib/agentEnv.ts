@@ -34,9 +34,23 @@
  * emergency fallback, so a genuine context overflow becomes a silent hard stop
  * instead of a visible compaction. A slow, lossy compaction beats a silent
  * break — and NEXUS already manages its own context budget.
+ *
+ * STRIPPING ANTHROPIC_* IS A PUBLICATION CONCERN, NOT JUST A SAFETY ONE
+ * -----------------------------------------------------------------------
+ * Anthropic's Commercial Terms condition third-party distribution on not
+ * "removing or restricting a built-in authentication method." Deleting
+ * ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL from the child's
+ * environment does exactly that: a user who deliberately set one of those
+ * variables at the OS level (their own valid auth method) would silently lose
+ * it every time NEXUS spawns Claude Code. For a self-hosted single-user
+ * install that is the safer default (see above — no accidental credential
+ * mixing). For a published build it has to be the user's own choice, visible
+ * and off by default. Hence `allowHostAnthropicEnv`: false (the historical,
+ * safe behavior) unless a Preferences checkbox explicitly opts in.
  */
 export function claudeAgentEnv(
   oauthToken: string,
+  allowHostAnthropicEnv: boolean = false,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
 
@@ -46,10 +60,14 @@ export function claudeAgentEnv(
   // child could authenticate with a DIFFERENT credential than the OAuth token
   // we were explicitly told to use — silently moving billing off the
   // subscription, or routing to another endpoint. Strip them so the token
-  // below remains the only credential, exactly as it was before.
-  delete env.ANTHROPIC_API_KEY;
-  delete env.ANTHROPIC_AUTH_TOKEN;
-  delete env.ANTHROPIC_BASE_URL;
+  // below remains the only credential, exactly as it was before — UNLESS the
+  // user has explicitly opted in to keeping their own host-level Anthropic
+  // env vars (Preferences → Other → "Allow host ANTHROPIC_* env vars").
+  if (!allowHostAnthropicEnv) {
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+    delete env.ANTHROPIC_BASE_URL;
+  }
 
   env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
 

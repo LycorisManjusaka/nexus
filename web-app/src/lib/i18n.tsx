@@ -194,6 +194,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.diffViewerPath.placeholder': 'e.g. C:\\Program Files\\WinMerge\\WinMergeU.exe',
   'settings.diffViewerPath.help':
     "Full path to your external diff tool (e.g. WinMerge). The Compare button in the System Prompt Updater opens it with the current and updated soul files; edits saved there flow back into Nexus. For tools that need flags, use {left} / {right} placeholders (e.g. code --diff {left} {right}). Saved with the API keys.",
+  'settings.allowHostAnthropicEnv.label': 'Allow ANTHROPIC_* environment variables from this machine',
+  'settings.allowHostAnthropicEnv.help':
+    "Off by default: Nexus removes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL from the environment it hands to Claude Code subprocesses, so a leftover value from another tool on this machine can't silently switch OAuth billing away from your subscription. Turn this on only if you deliberately rely on one of those variables as your own authentication method — Claude Code is required to let you keep any built-in auth method you choose.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
     "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
@@ -1510,6 +1513,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.diffViewerPath.placeholder': '例: C:\\Program Files\\WinMerge\\WinMergeU.exe',
   'settings.diffViewerPath.help':
     '外部の差分比較ツール（例: WinMerge）へのフルパスです。システムプロンプト更新画面の「差分ツールで比較」ボタンが、現行／更新後の魂のファイルを引数にこのツールを開き、ツール内で保存した編集はNexusへ同期されます。フラグが必要なツール向けに {left} / {right} プレースホルダーも使えます（例: code --diff {left} {right}）。APIキーと一緒に保存されます。',
+  'settings.allowHostAnthropicEnv.label': 'このPCの ANTHROPIC_* 環境変数を許可する',
+  'settings.allowHostAnthropicEnv.help':
+    '既定ではオフです。NexusはClaude Codeのサブプロセスに渡す環境から ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL を取り除きます。これにより、このPC上の他のツールが残した値がOAuthの課金先を無断であなたのサブスクリプションから切り替えてしまうことを防ぎます。これらの変数を自分の認証方法として意図的に使っている場合のみオンにしてください — Claude Codeは、利用者が選んだ既存の認証方法を維持できることを求めています。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
     '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',
