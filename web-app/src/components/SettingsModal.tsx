@@ -594,6 +594,39 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
             {/* ── Add further VRChat / audio-routing settings below this line ── */}
 
+            <div className="p-3 rounded-lg border border-border bg-muted/30">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={globalSettings.audioSessionHideOldAttachments ?? false}
+                  onChange={e => setGlobalSettings({ ...globalSettings, audioSessionHideOldAttachments: e.target.checked })}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">{t('settings.audioHideAttachments.label')}</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                <Tx k="settings.audioHideAttachments.help" />
+              </p>
+              <label className="block ml-6 mt-2">
+                <span className="text-xs font-medium text-muted-foreground">{t('settings.audioHideAttachments.keep')}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  disabled={!(globalSettings.audioSessionHideOldAttachments ?? false)}
+                  value={globalSettings.audioSessionKeepMessages ?? 15}
+                  onChange={e => {
+                    const n = parseInt(e.target.value, 10);
+                    setGlobalSettings({
+                      ...globalSettings,
+                      audioSessionKeepMessages: Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 15,
+                    });
+                  }}
+                  className="mt-1 w-28 px-2 py-1 rounded-md border border-border bg-background text-sm block disabled:opacity-50"
+                />
+              </label>
+            </div>
+
           </div>
           )}
 

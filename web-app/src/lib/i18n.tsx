@@ -125,6 +125,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.audio.permissionDenied': 'Permission denied or error: ',
   'settings.audio.permissionNeeded': "Microphone permission was not granted. Choosing an audio OUTPUT device requires it — that is the browser's rule, not ours. Without it, audio plays on the system default device.",
   'settings.audio.unsupported': 'This browser cannot route audio to a chosen output device (setSinkId is not implemented). The audio session needs a Chromium-based browser — Chrome, Edge or Brave. Settings below will still be saved, but all audio will play on the system default device.',
+  'settings.audioHideAttachments.label': 'Hide older attachments during an audio session',
+  'settings.audioHideAttachments.help':
+    'While "Enable Audio Session" is ON for a conversation, automatically exclude the attachments of every message older than the newest few, so long VRChat sessions do not keep re-sending old images. The number counts messages, not attachments — a message carrying ten screenshots is still one message. Only attachments hidden this way are restored when you turn the option off — attachments you excluded by hand stay excluded. Has no effect on conversations where the audio session is off.',
+  'settings.audioHideAttachments.keep': 'Keep attachments in the newest N messages',
   'settings.engines.heading': 'TTS Engine Executables',
   'settings.engines.refresh': 'Refresh status',
   'settings.engines.refresh.title': 'Re-check which engines are currently running',
@@ -1444,6 +1448,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.audio.permissionDenied': '権限が拒否されたか、エラーが発生しました：',
   'settings.audio.permissionNeeded': 'マイクの権限が許可されませんでした。音声の「出力先」デバイスを選ぶにはこの権限が必要です（ブラウザ側の仕様で、Nexus の都合ではありません）。権限がない場合、音声はシステム既定のデバイスから再生されます。',
   'settings.audio.unsupported': 'このブラウザは音声の出力先デバイスを指定できません（setSinkId が未実装です）。音声セッションには Chromium 系ブラウザ（Chrome・Edge・Brave）が必要です。以下の設定は保存されますが、音声はすべてシステム既定のデバイスから再生されます。',
+  'settings.audioHideAttachments.label': '音声セッション中は古い添付を隠す',
+  'settings.audioHideAttachments.help':
+    '会話で「オーディオセッションを有効にする」がONの間、新しい方からN件のメッセージだけを残して、それより古いメッセージの添付を自動的に除外します。長い VRChat セッションで古い画像を送り続けずに済みます。数えるのは添付ではなくメッセージです（スクリーンショットが10枚ついたメッセージも1件と数えます）。オプションをOFFにすると、この機能が隠した添付だけが元に戻ります（手動で除外した添付はそのままです）。オーディオセッションがOFFの会話には影響しません。',
+  'settings.audioHideAttachments.keep': '添付を残すメッセージ数（新しい方からN件）',
   'settings.engines.heading': 'TTSエンジンの実行ファイル',
   'settings.engines.refresh': '状態を再確認',
   'settings.engines.refresh.title': '各エンジンが現在起動しているか再確認します',

@@ -1302,6 +1302,63 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setConversationTokens(convoTotal);
   }, [messages, saveThinkingToLog, systemTokens, attachmentInstructionTokens, loading]);
 
+  // ── Auto-hide older attachments during an audio session ───────────────────
+  // A long VRChat session accumulates screenshots; every one of them is re-sent
+  // on every turn. When the Preferences option is on AND this conversation has
+  // the audio session enabled, keep the attachments carried by the newest N
+  // MESSAGES included and exclude everything older.
+  //
+  // N counts messages, not attachments: a message with ten screenshots is one
+  // message. "Older than N messages back" is the whole rule.
+  //
+  // This reuses the existing per-attachment `excluded` flag (same one the manual
+  // eye toggle writes), so nothing new has to be taught to the send path, the
+  // history filter or the token counter. The extra `autoHidden` marker is what
+  // makes it reversible: only attachments this effect hid are ever un-hidden.
+  // An attachment excluded by hand stays excluded, even if it falls inside the
+  // newest N — the automation never overrides a human decision.
+  const hideOldAttachments = globalSettings?.audioSessionHideOldAttachments === true;
+  const keepMessages = (() => {
+    const n = Number(globalSettings?.audioSessionKeepMessages);
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.floor(n))) : 3;
+  })();
+  useEffect(() => {
+    const active = vrchatMode && hideOldAttachments;
+    if (messages.length === 0) return;
+
+    // Everything before this message index is "older than N messages back".
+    const keepFrom = active ? Math.max(0, messages.length - keepMessages) : 0;
+
+    let changed = false;
+    const next = messages.map((m: any, mi: number) => {
+      if (!Array.isArray(m.attachments)) return m;
+      const isOld = active && mi < keepFrom;
+      let msgChanged = false;
+      const atts = m.attachments.map((a: any) => {
+        if (isOld) {
+          // Already excluded (manually or by us), or the user explicitly made
+          // this one visible again (autoHidden === false) → hands off.
+          if (a.excluded || a.autoHidden === false) return a;
+          msgChanged = true;
+          return { ...a, excluded: true, autoHidden: true };
+        }
+        // Inside the newest N messages, or the feature is off: undo only our
+        // own hiding.
+        if (a.autoHidden === true) {
+          msgChanged = true;
+          const { autoHidden, ...rest } = a;
+          return { ...rest, excluded: false };
+        }
+        return a;
+      });
+      if (!msgChanged) return m;
+      changed = true;
+      return { ...m, attachments: atts };
+    });
+
+    if (changed) setMessages(next);
+  }, [messages, vrchatMode, hideOldAttachments, keepMessages]);
+
   // Per-message tokens, split so the progress bar can show attachments as
   // their own layer and so the auto-trim threshold can ignore attachments.
   const computeMsgTextTokens = (m: any) => {
@@ -2582,7 +2639,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       if (m.id !== msgId) return m;
       return {
         ...m,
-        attachments: m.attachments.map((a: any) => a.id === attId ? { ...a, excluded: !a.excluded } : a)
+        // `autoHidden: false` marks this attachment as manually decided, so the
+        // audio-session auto-hide effect stops touching it — otherwise it would
+        // immediately re-hide anything the user un-hides by hand mid-session.
+        attachments: m.attachments.map((a: any) => a.id === attId ? { ...a, excluded: !a.excluded, autoHidden: false } : a)
       };
     }));
   };
