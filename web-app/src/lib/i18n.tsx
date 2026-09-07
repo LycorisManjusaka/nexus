@@ -204,6 +204,18 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.allowHostAnthropicEnv.label': 'Allow ANTHROPIC_* environment variables from this machine',
   'settings.allowHostAnthropicEnv.help':
     "Off by default: Nexus removes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL from the environment it hands to Claude Code subprocesses, so a leftover value from another tool on this machine can't silently switch OAuth billing away from your subscription. Turn this on only if you deliberately rely on one of those variables as your own authentication method — Claude Code is required to let you keep any built-in auth method you choose.",
+  'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
+  'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
+  'settings.obsWebSocketUrl.help':
+    "OBS Studio → Tools → WebSocket Server Settings. Used by any being's Camera toggle to push its current file into an OBS Media Source. Leave the default unless you changed OBS's port. Entirely optional: the in-app camera panel works with this unconfigured or OBS not running at all — this only controls the OBS push half.",
+  'settings.obsWebSocketPassword.label': 'OBS WebSocket password',
+  'settings.obsWebSocketPassword.placeholder': 'leave empty if OBS auth is disabled',
+  'settings.obsWebSocketPassword.help':
+    "Only needed if OBS's WebSocket Server Settings has \"Enable Authentication\" checked. Saved with the API keys.",
+  'settings.obsSourceName.label': 'OBS Media Source name',
+  'settings.obsSourceName.placeholder': 'e.g. NexusCamera',
+  'settings.obsSourceName.help':
+    "The exact name of a Media Source (ffmpeg_source) in OBS's current scene. Create one in OBS first — Nexus only points an existing source at files, it never creates scenes or sources.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
     "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
@@ -971,6 +983,11 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.computer.help':
     'OFF by default. When ON, this being gets `computer_screens`, `computer_screenshot` and `computer_input` — real control of the whole physical desktop, not a sandboxed browser window. Every screenshot flashes a visible red border around the captured monitor on the real screen; every click flashes a visible red circle at the moment it happens. Nothing here is silent: every command is written to the server log, and an annotated copy of each screenshot (with click marks and coordinates) is saved under `local_data/computer_control_logs/{folder}/` for your own review — the being only ever sees the clean, unmarked image. Windows only; requires a vision-capable model (or the eyes bridge) to actually see the screenshots.',
 
+  'id.camera.label': '📷 Camera (avatar panel + OBS Studio push)',
+  'id.camera.help':
+    'OFF by default. When ON, a panel appears in the top-right corner showing whichever image or video best matches what this being is doing right now (idle, thinking, writing, using a tool, or speaking — speaking always wins). Files come from `local_data/beings/{folder}/camera/`, named e.g. `Idle_1.mp4`, `Writing.png`, or `Idle_Writing.mp4` for a one-shot transition clip — add more any time, no restart needed for new numbered variants to be picked up on the next state change. The same toggle also pushes the current file into an OBS Studio Media Source over OBS WebSocket, if configured in Preferences → Other; the panel itself works with OBS unconfigured or not running at all.',
+  'camera.empty': 'No camera files yet — add images or videos to this being\'s camera/ folder.',
+
   'id.subagent.label': '🔍 Subagent tool (delegate investigation to a fresh-context helper)',
   'id.subagent.help':
     'OFF (default): the model investigates inline. ON: the model gets a `spawn_subagent` tool that hands a task to a **read-only** child agent with its own fresh context. The child reads files (Read/Glob/Grep) and returns only a distilled result — its file dumps never enter this conversation’s context. Ideal for tracing large codebases without flooding the main thread. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo) + local, and Gemini.*',
@@ -1551,6 +1568,18 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.allowHostAnthropicEnv.label': 'このPCの ANTHROPIC_* 環境変数を許可する',
   'settings.allowHostAnthropicEnv.help':
     '既定ではオフです。NexusはClaude Codeのサブプロセスに渡す環境から ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL を取り除きます。これにより、このPC上の他のツールが残した値がOAuthの課金先を無断であなたのサブスクリプションから切り替えてしまうことを防ぎます。これらの変数を自分の認証方法として意図的に使っている場合のみオンにしてください — Claude Codeは、利用者が選んだ既存の認証方法を維持できることを求めています。',
+  'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
+  'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
+  'settings.obsWebSocketUrl.help':
+    'OBS Studio → ツール → WebSocketサーバー設定で確認できます。各存在の「カメラ」トグルが、現在表示中のファイルをOBSのメディアソースへ送るのに使います。OBSのポートを変えていない限り既定値のままで構いません。完全に任意の設定です — この項目を未設定のまま、あるいはOBSを起動していなくても、アプリ内のカメラパネル自体は動作します（ここが担うのはOBSへの送信部分だけです）。',
+  'settings.obsWebSocketPassword.label': 'OBS WebSocket パスワード',
+  'settings.obsWebSocketPassword.placeholder': 'OBS側の認証がオフなら空欄のまま',
+  'settings.obsWebSocketPassword.help':
+    'OBSの「WebSocketサーバー設定」で「認証を有効にする」がオンの場合のみ必要です。APIキーと一緒に保存されます。',
+  'settings.obsSourceName.label': 'OBS メディアソース名',
+  'settings.obsSourceName.placeholder': '例: NexusCamera',
+  'settings.obsSourceName.help':
+    'OBSの現在のシーンにあるメディアソース（ffmpeg_source）の正確な名前です。先にOBS側でソースを作成しておいてください — Nexusは既存のソースにファイルを指し示すだけで、シーンやソース自体を作ることはありません。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
     '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',
@@ -2293,6 +2322,11 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'id.computer.label': '🖱️ 画面操作（OS レベルのマウス・キーボード・画面 — Windows のみ）',
   'id.computer.help':
     '既定は OFF。ON にすると、この存在に `computer_screens`・`computer_screenshot`・`computer_input` が渡されます — サンドボックス化されたブラウザではなく、物理デスクトップ全体への実際の操作です。スクリーンショットを撮るたびに、撮影中のモニターの周りに赤い太枠が実画面上に一瞬表示されます。クリックのたびに、その瞬間に赤い円が実画面上に表示されます。ここで起きることは何も見えないところでは行われません — すべてのコマンドはサーバーのログに記録され、各スクリーンショットのクリック跡・座標付きの記録用コピーが `local_data/computer_control_logs/{folder}/` に保存されます（あなた自身の確認用）。存在に渡されるのは、印のない綺麗な画像だけです。Windows 専用。スクリーンショットを実際に見るには、画像を扱えるモデル（または eyes ブリッジ）が必要です。',
+
+  'id.camera.label': '📷 カメラ（アバターパネル + OBS Studio 連携）',
+  'id.camera.help':
+    '既定は OFF。ON にすると、右上隅にパネルが現れ、この存在が今何をしているか（待機中・考え中・執筆中・ツール使用中・発話中 — 発話中は常に最優先）に最も合った画像や動画を表示します。ファイルは `local_data/beings/{folder}/camera/` から読み込まれ、`Idle_1.mp4`・`Writing.png`・（一度だけ再生される遷移クリップとしての）`Idle_Writing.mp4` のように命名します — 番号付きの追加ファイルはいつでも増やせて、再起動なしで次の状態変化から反映されます。同じトグルは、設定 → その他で OBS WebSocket を設定していれば、表示中のファイルを OBS Studio のメディアソースへも送信します。パネル自体は OBS が未設定・未起動でも動作します。',
+  'camera.empty': 'カメラ用のファイルがまだありません — この存在の camera/ フォルダーに画像や動画を追加してください。',
 
   'id.subagent.label': '🔍 サブエージェント（調査を文脈の新しい助手に委任）',
   'id.subagent.help':

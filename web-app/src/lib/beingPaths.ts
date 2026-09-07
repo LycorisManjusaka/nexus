@@ -95,6 +95,15 @@ export function beingComputerLogsDir(name: string): string {
   return path.join(beingDir(name), 'computer_control_logs');
 }
 
+/**
+ * Camera assets: local_data/beings/<name>/camera/<State>[_N].<ext> and
+ * <From>_<To>[_N].<ext> transition clips. See src/lib/cameraFiles.ts for the
+ * filename convention this directory is scanned under.
+ */
+export function beingCameraDir(name: string): string {
+  return path.join(beingDir(name), 'camera');
+}
+
 export function beingSettingsFile(name: string): string {
   return path.join(beingDir(name), 'settings.json');
 }

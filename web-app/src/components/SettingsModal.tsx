@@ -62,6 +62,9 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     lmStudioPath: '',
     diffViewerPath: '',
     allowHostAnthropicEnv: false,
+    obsWebSocketUrl: '',
+    obsWebSocketPassword: '',
+    obsSourceName: '',
   });
   const [loading, setLoading] = useState(true);
 
@@ -758,6 +761,59 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </label>
               <p className="text-xs text-muted-foreground mt-1">
                 <Tx k="settings.diffViewerPath.help" />
+              </p>
+            </div>
+
+            {/* ── OBS Studio (obs-websocket v5) — consumed by the per-being
+                "Camera" toggle (ChatArea Being tab) and CameraPanel.tsx. Best-
+                effort only: an unconfigured or unreachable OBS never blocks
+                the in-app camera panel, which renders independently of this. */}
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.obsWebSocketUrl.label')}</span>
+                <input
+                  type="text"
+                  value={keys.obsWebSocketUrl ?? ''}
+                  placeholder={t('settings.obsWebSocketUrl.placeholder')}
+                  onChange={e => setKeys({ ...keys, obsWebSocketUrl: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.obsWebSocketUrl.help" />
+              </p>
+            </div>
+
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.obsWebSocketPassword.label')}</span>
+                <input
+                  type="password"
+                  value={keys.obsWebSocketPassword ?? ''}
+                  placeholder={t('settings.obsWebSocketPassword.placeholder')}
+                  onChange={e => setKeys({ ...keys, obsWebSocketPassword: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                  autoComplete="new-password"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.obsWebSocketPassword.help" />
+              </p>
+            </div>
+
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.obsSourceName.label')}</span>
+                <input
+                  type="text"
+                  value={keys.obsSourceName ?? ''}
+                  placeholder={t('settings.obsSourceName.placeholder')}
+                  onChange={e => setKeys({ ...keys, obsSourceName: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.obsSourceName.help" />
               </p>
             </div>
 

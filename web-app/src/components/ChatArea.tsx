@@ -29,6 +29,7 @@ import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
 import { ensureAudioPermission } from '@/lib/audioSink';
+import type { CameraSignal } from '@/lib/cameraTypes';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -290,7 +291,7 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
   }
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, onCameraSignal }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -373,6 +374,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // same boundary discipline as browserEnabled — a wider reach than the
   // browser sandbox, so it gets its own separate flag rather than piggybacking.
   const [computerControlEnabled, setComputerControlEnabled] = useState(false);
+  // Being-camera / OBS push (see CameraPanel.tsx). OFF by default. Gates BOTH
+  // the OBS push AND the in-app mirror panel — one checkbox, not two, per spec.
+  const [cameraEnabled, setCameraEnabled] = useState(false);
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -406,6 +410,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // reports no SDK activity at all (stall_warning SSE) — the signal that the
   // turn may genuinely be stuck and a rerun is warranted. Display-only.
   const [liveToolActivity, setLiveToolActivity] = useState<string | null>(null);
+  // Same signal as liveToolActivity, but the RAW (untranslated, stable) tool
+  // key instead of the localized display phrase — camera-state filenames need
+  // a name that doesn't change with the UI language. OAuth-path only, same as
+  // liveToolActivity; other provider paths leave this null and the camera
+  // signal below falls through to 'writing'.
+  const [liveToolName, setLiveToolName] = useState<string | null>(null);
+  // Coarse phase of the CURRENT turn's streaming output, for the camera
+  // signal only (see CameraPanel.tsx). 'thinking' while extended-thinking
+  // text is arriving with no visible reply yet; 'writing' once the visible
+  // reply has started (text wins over thinking once it starts — the natural
+  // model->camera mapping). null outside an active turn.
+  const [streamPhase, setStreamPhase] = useState<'thinking' | 'writing' | null>(null);
   // True when the phrase in `liveToolActivity` came from the UI dictionary, so
   // it fits the localized sentence frame. False when we fell back to the
   // server's English label for a tool that has no key — then the sentence has
@@ -788,6 +804,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const isAudioPlaying = Object.values(audioPlayingStates).some(v => v);
   const [vrchatQueue, setVrchatQueue] = useState<{ text: string, attachment: any }[]>([]);
 
+  // Camera signal: reported to the parent on every relevant change, bundled
+  // with `enabled`/`folderName` rather than left for NexusApp to read off
+  // `activeFolder.settings.cameraEnabled` — that copy is stale until the next
+  // full folder refetch, since the checkbox below only persists via this
+  // component's own debounced auto-save. TTS-speaking wins over everything
+  // per the user's explicit priority rule; a live tool name (OAuth-path only)
+  // beats the coarser thinking/writing streamPhase; both fall back to 'idle'
+  // whenever no turn is in flight.
+  useEffect(() => {
+    if (typeof onCameraSignal !== 'function') return;
+    const phase: CameraSignal['phase'] = !loading
+      ? 'idle'
+      : liveToolName
+        ? 'tool'
+        : streamPhase === 'writing'
+          ? 'writing'
+          : 'thinking';
+    const signal: CameraSignal = {
+      speaking: isAudioPlaying,
+      phase,
+      toolName: phase === 'tool' ? liveToolName : null,
+    };
+    onCameraSignal({ enabled: cameraEnabled, folderName, signal });
+  }, [onCameraSignal, cameraEnabled, folderName, isAudioPlaying, loading, liveToolName, streamPhase]);
+
   // Stable identity (useCallback): this is passed to every MessageBubble and
   // used inside one of its effects' dependency arrays. As a fresh closure each
   // render it made that child effect re-run on every render — exactly the
@@ -1001,6 +1042,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserCompact(data.browserCompact === true);
         // Same `=== true` discipline as browserEnabled above.
         setComputerControlEnabled(data.computerControlEnabled === true);
+        setCameraEnabled(data.cameraEnabled === true);
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -1077,6 +1119,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
         setBrowserCompact(pick('browserCompact', false));
         setComputerControlEnabled(pick('computerControlEnabled', false));
+        setCameraEnabled(pick('cameraEnabled', false));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -1192,7 +1235,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1255,7 +1298,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1896,6 +1939,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setPendingAsk(null);
     setActiveSubagent(null);
     setLiveToolActivity(null);
+    setLiveToolName(null);
+    setStreamPhase(null);
     setLiveModel('');
     setStallIdleSeconds(null);
     setInjectTurnId(null);
@@ -1932,6 +1977,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const continueMsgId = opts?.continueMsgId;
     setLoading(true);
     setLiveToolActivity(null);
+    setLiveToolName(null);
+    setStreamPhase(null);
     setLiveModel('');
     setStallIdleSeconds(null);
     abortControllerRef.current = new AbortController();
@@ -2352,8 +2399,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 }
               } else if (data.type === 'thought') {
                 currentThought += data.content;
+                // Only set 'thinking' if the reply hasn't started yet — once
+                // text has begun, the camera signal should not fall back to
+                // thinking even if the model interleaves more thought chunks.
+                setStreamPhase(prev => (prev === 'writing' ? prev : 'thinking'));
               } else if (data.type === 'text') {
                 currentText += data.content;
+                setStreamPhase('writing');
                 // Strip "[YYYY-MM-DD HH:MM:SS]" tags CONTINUOUSLY as the reply
                 // streams in (gated on the global setting, default ON) — not just
                 // a leading stack but ANY tag, wherever it appears, including the
@@ -2428,9 +2480,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   const hit = !!localized && localized !== key;
                   setLiveToolActivity(hit ? localized : data.tool);
                   setLiveToolLocalized(hit);
+                  setLiveToolName(typeof data.name === 'string' && data.name ? data.name : null);
                 } else {
                   setLiveToolActivity(null);
                   setLiveToolLocalized(false);
+                  setLiveToolName(null);
                 }
               } else if (data.type === 'stall_warning') {
                 // Server-side watchdog: no SDK activity for this many seconds.
@@ -2553,6 +2607,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setPendingAsk(null);
     setActiveSubagent(null);
     setLiveToolActivity(null);
+    setLiveToolName(null);
+    setStreamPhase(null);
     setLiveModel('');
     setStallIdleSeconds(null);
     setInjectTurnId(null);
@@ -2758,6 +2814,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       browserAllowAnyHost,
       browserCompact,
       computerControlEnabled,
+      cameraEnabled,
       instructionOverrides,
       toolInstruction,
       toolImageInstruction,
@@ -4224,6 +4281,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 </p>
               </div>
 
+              {/* ── Camera (OBS Studio media-source push + in-app avatar panel)
+                  OFF by default. One toggle gates both: the right-side GUI
+                  panel and, if OBS WebSocket details are configured in
+                  Preferences, pushing the resolved file into an OBS Media
+                  Source. Works with the panel alone if OBS isn't running —
+                  the push is always best-effort. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={cameraEnabled}
+                    onChange={(e) => setCameraEnabled(e.target.checked)}
+                    className="accent-red-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('id.camera.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  <Tx k="id.camera.help" />
+                </p>
+              </div>
+
               {/* ── Subagent (context-firewall helper) — OAuth Claude only ───── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -5248,6 +5326,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       browserAllowAnyHost,
                       browserCompact,
                       computerControlEnabled,
+                      cameraEnabled,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,
