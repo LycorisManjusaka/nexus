@@ -26,6 +26,7 @@ Every item must satisfy the placement test for exactly one layer. If it violates
 * **Layer 3 — abilities, procedures, assets**
     * Belongs here: capabilities, working protocols, inventory, project data; build and dependency strategy; custom implementations; active workarounds and known hacks currently required to keep things working.
     * **Forbidden here**: relationships with other parties (→ Layer 2); the subject's own core definition (→ Layer 1).
+* **Preserve desk file links**: If an item contains a relative path link to a desk file (e.g. `(see: relative/path)`), keep the link intact when relocating or merging. Do not strip the link or inline the file content into the document.
 
 #### 【Output format】
 **Emit in exactly this order. The Changelog comes FIRST so that it survives even if the output is truncated.**
@@ -51,4 +52,5 @@ Every item must satisfy the placement test for exactly one layer. If it violates
 * **Resolution guarantee**: Quote verbatim, in quotation marks, only the load-bearing statements whose exact wording matters. Never apply verbatim quoting to an item you are compressing.
 * **Sterile output**: Greetings, status reports, and any description of your own process are forbidden. Emit only the defined structure.
 * **Preserved items must stay complete**: [preserved] means the CONTENT is kept, not merely the item name. Emitting a bare name with no content — `* **Item name** [preserved].` — is not preservation, it is abandonment. The same applies to [merged]: a merge keeps everything both items carried, minus only the literal duplication.
+* **Preserve desk file links**: Stripping desk file links or inlining file contents during defragmentation is forbidden.
 * **Nothing is deleted here**: This pass has no deletion label. Anything that has lost importance is [compressed], never dropped.

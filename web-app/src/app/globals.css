@@ -68,7 +68,32 @@
     --card: #09090b;
     --card-foreground: #fafafa;
   }
-  
+
+}
+
+/* The phrase TTS is currently pronouncing — coloured with the OTHER side's
+   bubble, not this message's own (see ttsHighlight.ts file header for why:
+   a being's own --card would nearly vanish into its own bubble). A being's
+   spoken phrase borrows the partner's --primary/--primary-foreground; the
+   partner's own spoken phrase (Read Aloud) borrows the being's
+   --card/--card-foreground. Foreground always travels with its matching
+   background, since some beings' --card-foreground is dark and would be
+   unreadable paired with the wrong background. Both pairs are already
+   per-being customizable in theme.css — no separate highlight variable to
+   maintain.
+   ::highlight() is paint-only: the browser accepts colour, background-color,
+   text-decoration, text-shadow and -webkit-text-stroke here and nothing else.
+   It cannot change font, weight or size, so the highlighted text can never
+   reflow — which is exactly why this approach was chosen over a bold/font one.
+   Not wrapped in @layer: highlight pseudo-elements are matched outside the
+   cascade layers that apply to the element itself. */
+::highlight(nexus-tts-current-assistant) {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+::highlight(nexus-tts-current-user) {
+  background-color: var(--card);
+  color: var(--card-foreground);
 }
 
 @layer base {

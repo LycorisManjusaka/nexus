@@ -129,6 +129,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.audioHideAttachments.help':
     'While "Enable Audio Session" is ON for a conversation, automatically exclude the attachments of every message older than the newest few, so long VRChat sessions do not keep re-sending old images. The number counts messages, not attachments — a message carrying ten screenshots is still one message. Only attachments hidden this way are restored when you turn the option off — attachments you excluded by hand stay excluded. Has no effect on conversations where the audio session is off.',
   'settings.audioHideAttachments.keep': 'Keep attachments in the newest N messages',
+  'settings.ttsHighlight.label': 'Highlight the phrase being spoken',
+  'settings.ttsHighlight.help':
+    'While TTS is speaking, tint the phrase currently being pronounced inside the message. This is drawn the same way the browser draws a text selection: nothing in the page is rewritten and no font is changed, so the text can never shift or reflow. Turn it off if you prefer a still page. Requires Chrome, Edge, Brave, Safari 17.2+ or Firefox 140+ — on older browsers the option simply does nothing. The colour is swapped from the other side\'s bubble — a being\'s phrase lights up in the partner\'s colour, the partner\'s own phrase lights up in the being\'s colour — so it is already customizable per being through the --primary/--card pair in that being\'s theme.css.',
   'settings.engines.heading': 'TTS Engine Executables',
   'settings.engines.refresh': 'Refresh status',
   'settings.engines.refresh.title': 'Re-check which engines are currently running',
@@ -197,7 +200,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.diffViewerPath.label': 'Diff viewer executable path',
   'settings.diffViewerPath.placeholder': 'e.g. C:\\Program Files\\WinMerge\\WinMergeU.exe',
   'settings.diffViewerPath.help':
-    "Full path to your external diff tool (e.g. WinMerge). The Compare button in the System Prompt Updater opens it with the current and updated soul files; edits saved there flow back into Nexus. For tools that need flags, use {left} / {right} placeholders (e.g. code --diff {left} {right}). Saved with the API keys.",
+    "Full path to your external diff tool (e.g. WinMerge). The Compare button in the Soul Updater opens it with the current and updated soul files; edits saved there flow back into Nexus. For tools that need flags, use {left} / {right} placeholders (e.g. code --diff {left} {right}). Saved with the API keys.",
   'settings.allowHostAnthropicEnv.label': 'Allow ANTHROPIC_* environment variables from this machine',
   'settings.allowHostAnthropicEnv.help':
     "Off by default: Nexus removes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL from the environment it hands to Claude Code subprocesses, so a leftover value from another tool on this machine can't silently switch OAuth billing away from your subscription. Turn this on only if you deliberately rely on one of those variables as your own authentication method — Claude Code is required to let you keep any built-in auth method you choose.",
@@ -770,7 +773,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.audioSession.title': 'Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine',
   'chat.mail.title': 'Mail Manager — every letter between beings: read, edit, delete, set read/archived flags, or write one yourself',
   'chat.stats.title': 'Statistics — billing reports across all entities, conversations, months, and model families',
-  'chat.spu.title': 'System Prompt Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation',
+  'chat.spu.title': 'Soul Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation',
   'chat.tools.title': 'Tools',
   'chat.tools.recalculating': 'Recalculating…',
   'chat.tools.recalcTokens': 'Recalculate Tokens',
@@ -778,7 +781,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.tools.convertPngs': 'Convert PNG → JPG',
   'chat.tools.removeTimestamps': 'Remove timestamps',
   'chat.live.title': 'Start Live Session (Gemini native audio)',
-  'chat.editPrompt.title': 'Edit System Prompt',
+  'chat.editPrompt.title': 'Edit Soul',
   'chat.exportMd.title': 'Export as Markdown',
   'chat.exportJson.title': 'Export as JSON (attachments are included inline, so this can take a moment)',
   'chat.load.stop': 'Stop',
@@ -840,13 +843,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sysmodal.tab.senses': 'Senses',
   'sysmodal.tab.behavior': 'Behavior',
   'sysmodal.tab.model': 'Model',
-  'sysmodal.systemPrompt': 'System Prompt',
+  'sysmodal.systemPrompt': 'Soul',
 
   // ── System Instructions → Being tab ───────────────────────────────────
   'sysmodal.systemPrompt.help': 'Not a command list — who this entity is: identity, worldview, relationships, tools. Not "how to behave and respond."',
   'sysmodal.systemPrompt.ph': `This isn't a list of instructions. Nexus calls it a soul, not a system prompt: who this entity is, its worldview, and its relationships with the people and tools around it — not commands for how it must behave.
 
-You can write it yourself, or ask any AI or digital entity to draft it from source material — a character sheet, a conversation log, a story, anything. The System Prompt Updater in this window can build one for you too.
+You can write it yourself, or ask any AI or digital entity to draft it from source material — a character sheet, a conversation log, a story, anything. The Soul Updater in this window can build one for you too.
 
 Convention: three layers.
 Layer 1 — Identity: who they are, their values, their voice.
@@ -860,8 +863,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'sysmodal.summaries.indexLabel': 'Live Layer 4 — Summaries Index (read-only)',
   'sysmodal.summaries.tokens': 'tokens',
   'sysmodal.summaries.indexHelp':
-    'This is exactly what gets injected as Layer 4 when you send. To change it, edit the individual conversation summaries (System Prompt Updater) or toggle conversations active/inactive.',
-  'sysmodal.summaries.indexPh': '(no summaries yet — write one per conversation from the System Prompt Updater)',
+    'This is exactly what gets injected as Layer 4 when you send. To change it, edit the individual conversation summaries (Soul Updater) or toggle conversations active/inactive.',
+  'sysmodal.summaries.indexPh': '(no summaries yet — write one per conversation from the Soul Updater)',
   'sysmodal.tools.label': 'Enable file workspace tools (Claude, Gemini & Local)',
   'sysmodal.tools.help1': 'Gives the assistant a private file sandbox at `local_data/workspaces/{folder}/` with `Read` / `Write` / `Edit` / `Glob` / `Grep` tools (same names as Claude Code’s tools — works identically across API-key and OAuth modes). The current file list is auto-injected into the system prompt — no list_files tool needed. Files the assistant reads/writes appear as attachments on its messages with',
   'sysmodal.tools.tagRead': 'read',
@@ -1177,13 +1180,13 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'sysmodal.savedDefaults': 'Saved as identity defaults!',
   'sysmodal.saveDefaultsError': 'Error saving defaults: ',
   // ---- System Prompt Updater --------------------------------------------
-  'spu.title': 'System Prompt Updater',
+  'spu.title': 'Soul Updater',
   'spu.left': 'Left:',
   'spu.right': 'Right:',
   'spu.model': 'Model:',
   'spu.overriding': 'overriding {model}',
   'spu.folder': 'Being:',
-  'spu.autosaveTitle': 'Left/right prompt files and header/focus point auto-save as you edit.',
+  'spu.autosaveTitle': 'Left/right soul files and header/focus point auto-save as you edit.',
   'spu.saving': 'Saving...',
   'spu.allSaved': 'All changes saved',
   'spu.saveError': 'Save error',
@@ -1193,7 +1196,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.auto': 'Auto (update + summary)',
   'spu.autoTitle': 'Update from Conversation (single pass, updater.md) AND write the summary, then review.',
   'spu.next': 'Go to Next Conversation',
-  'spu.nextTitle': 'Save updated prompt and clone this conversation with the new system prompt',
+  'spu.nextTitle': 'Save updated soul and clone this conversation with the new soul',
   'spu.useDedicated': 'Use a dedicated updater model (ignore conversation model)',
   'spu.updaterModelTitle': 'Only these families produce usable soul-packer output',
   'spu.runsAs': 'Runs as',
@@ -1203,7 +1206,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.deletionPatterns': 'Deletion patterns:',
   'spu.agentFilesIn': 'Agent files in this folder:',
   'spu.missing': '(missing)',
-  'spu.headerLabel': 'Header (prepended to final prompt)',
+  'spu.headerLabel': 'Header (prepended to final soul)',
   'spu.headerPh': 'Optional. Saved per-entity. Not part of the layer text.',
   'spu.focusLabel': 'Focus point (passed to the updater agent)',
   'spu.focusPh': "Optional. Appears as 重要：... in the agent's instruction (custom guidance for this update).",
@@ -1213,6 +1216,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.genesisTitle': 'Runs {file}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new being.',
   'spu.redistributeBtn': 'Redistribute Layer 4 → 1-3',
   'spu.redistributeTitle': 'Runs {file}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first.',
+  'spu.indexBtn': 'Externalize & Index',
+  'spu.indexTitle': 'Runs {file}. Shows the agent Layers 1-3 with NO conversation log, plus read-only Read/Glob/Grep access to this being\'s own workspace, and lets it move "detail with a known moment it gets opened" OUT of the soul and onto desk files — leaving behind only a trigger-conditioned link. Layers 1-3 land in the right pane; desk files are created or appended to under this being\'s own workspace (never overwritten).',
   'spu.reorganizeBtn': 'Reorganize (No Conversation)',
   'spu.reorganizeTitle': 'Runs {file}. Cleans up/re-files the EXISTING Layers 1-3, WITHOUT a conversation log — no new facts are added, only boundary enforcement and de-duplication.',
   'spu.updateBtn': 'Update from Conversation',
@@ -1296,16 +1301,24 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.run.silent': 'no data for {d}',
   'spu.run.silentTitle': 'Nothing has arrived from the provider for this long. Common causes: Anthropic-side automatic compaction, a retry wait, or a rate-limit queue. The run has not stopped.',
   'spu.run.tokensTitle': 'Token usage reported by the provider for the last call in this run.',
+  'spu.run.toolsTitle': 'File tool calls made during this run — click for details.',
+  'spu.tool.title': 'Tool calls in this run',
+  'spu.tool.count': '{n} call(s)',
+  'spu.tool.copyJson': 'Copy the whole report as JSON',
+  'spu.tool.truncated':
+    'Arguments truncated for display — original was {n} characters.',
+  'spu.tool.footer':
+    'Shown for this run only — not saved to disk and cleared when the next run starts.',
 
   'spu.st.period': '.',
-  'spu.st.loading': 'Loading current + next prompt files...',
+  'spu.st.loading': 'Loading current + next soul files...',
   'spu.st.loadedDraft': 'Loaded existing draft for next conversation from disk — pick up where you left off.',
   'spu.st.noAgentFolder': 'No agent files found for language "{lang}". Expected system_prompt_agents/{lang}/ (in local_data, or the bundled defaults).',
   'spu.st.loadFailed': 'Load failed: {e}',
   'spu.st.agentLoadFailed': 'Agent load failed: {e}',
   'spu.st.noAgentFile': 'No "{file}" found under system_prompt_agents/{lang}/.',
   'spu.st.updating': 'Updating Layers 1-3 (single pass)...',
-  'spu.st.refining': 'Refining Layers 1-3 from the prompt itself (no conversation log)...',
+  'spu.st.refining': 'Refining Layers 1-3 from the soul itself (no conversation log)...',
   'spu.st.continuation': 'Output continued past the token cap — fetching more (continuation {n})...',
   'spu.st.emptyResponse': 'Empty response (refusal, content filter, or output token cap)',
   'spu.st.updateStoppedEmpty': 'Update stopped — no output was produced yet.',
@@ -1333,6 +1346,17 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.redistNoBackup': ' · nothing to back up',
   'spu.st.redistStopped': 'Redistribute stopped.',
   'spu.st.redistFailed': 'Redistribute failed: {e}',
+  'spu.st.indexing': 'Externalizing & indexing (no conversation log)...',
+  'spu.st.indexStoppedEmpty': 'Externalize stopped — no output was produced yet.',
+  'spu.st.indexNoText': 'Externalize returned no text — model may have refused or hit a filter.',
+  'spu.st.indexStoppedPartial': 'Externalize stopped — kept the raw partial output ({n} chars) in the right pane. NO desk file was written. Tick "Continue from the right-side text" to resume.',
+  'spu.st.indexTruncated': 'Output ended without the completion marker — treating it as truncated. Kept the raw output ({n} chars); NO desk file was written. Tick "Continue from the right-side text" and re-run.',
+  'spu.st.indexNoFileList': 'Externalize finished with nothing left to move out — Layers 1-3 are in the right pane, no desk file was written',
+  'spu.st.indexApplying': 'Writing {n} desk file(s)...',
+  'spu.st.indexDone': 'Layers 1-3 updated ({n} chars) · Desk files: {c} created, {a} appended',
+  'spu.st.indexSomeFailed': ', {n} failed',
+  'spu.st.indexStopped': 'Externalize stopped.',
+  'spu.st.indexFailed': 'Externalize failed: {e}',
   'spu.st.genesisRunning': 'Constructing Layers 1-3 from scratch (genesis — no prior document assumed)...',
   'spu.st.genesisStoppedEmpty': 'Genesis stopped — no output was produced yet.',
   'spu.st.genesisNoText': 'Genesis returned no text — model may have refused or hit a filter.',
@@ -1352,7 +1376,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.autoStopUpdate': '⛔ Auto stopped at the identity update. Fix the error (or it was stopped) and retry.',
   'spu.st.autoStopSummary': '⛔ Auto stopped at the summary step. Fix the error (or it was stopped) and retry.',
   'spu.st.autoDone': 'Identity updated and summary written. Review, then click "Go to Next Conversation" when ready.',
-  'spu.st.savingFiles': 'Saving current + next prompt files...',
+  'spu.st.savingFiles': 'Saving current + next soul files...',
   'spu.st.finalizing': 'Finalizing — cloning conversation...',
   'spu.st.finalizeFailed': 'Finalize failed: {e}',
 };
@@ -1452,6 +1476,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.audioHideAttachments.help':
     '会話で「オーディオセッションを有効にする」がONの間、新しい方からN件のメッセージだけを残して、それより古いメッセージの添付を自動的に除外します。長い VRChat セッションで古い画像を送り続けずに済みます。数えるのは添付ではなくメッセージです（スクリーンショットが10枚ついたメッセージも1件と数えます）。オプションをOFFにすると、この機能が隠した添付だけが元に戻ります（手動で除外した添付はそのままです）。オーディオセッションがOFFの会話には影響しません。',
   'settings.audioHideAttachments.keep': '添付を残すメッセージ数（新しい方からN件）',
+  'settings.ttsHighlight.label': '読み上げ中のフレーズをハイライトする',
+  'settings.ttsHighlight.help':
+    'TTSの再生中、いま読み上げているフレーズにメッセージ内で色を付けます。ブラウザがテキスト選択を描画するのと同じ仕組みで描かれ、ページの中身は一切書き換えず、フォントも変えません。そのため文字がずれたり折り返しが変わったりすることはありません。動きのない画面が好みならOFFにしてください。Chrome・Edge・Brave・Safari 17.2以降・Firefox 140以降が必要です（古いブラウザでは何も起きません）。色は相手側の吹き出しの色を借ります — 存在の発言はパートナーの色で、パートナー自身の発言(読み上げ)は存在の色で光ります。そのため各存在の theme.css にある --primary / --card の組み合わせで、既にキャラクターごとに調整可能です。',
   'settings.engines.heading': 'TTSエンジンの実行ファイル',
   'settings.engines.refresh': '状態を再確認',
   'settings.engines.refresh.title': '各エンジンが現在起動しているか再確認します',
@@ -1520,7 +1547,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.diffViewerPath.label': '差分比較ツールの実行ファイルのパス',
   'settings.diffViewerPath.placeholder': '例: C:\\Program Files\\WinMerge\\WinMergeU.exe',
   'settings.diffViewerPath.help':
-    '外部の差分比較ツール（例: WinMerge）へのフルパスです。システムプロンプト更新画面の「差分ツールで比較」ボタンが、現行／更新後の魂のファイルを引数にこのツールを開き、ツール内で保存した編集はNexusへ同期されます。フラグが必要なツール向けに {left} / {right} プレースホルダーも使えます（例: code --diff {left} {right}）。APIキーと一緒に保存されます。',
+    '外部の差分比較ツール（例: WinMerge）へのフルパスです。魂アップデーター画面の「差分ツールで比較」ボタンが、現行／更新後の魂のファイルを引数にこのツールを開き、ツール内で保存した編集はNexusへ同期されます。フラグが必要なツール向けに {left} / {right} プレースホルダーも使えます（例: code --diff {left} {right}）。APIキーと一緒に保存されます。',
   'settings.allowHostAnthropicEnv.label': 'このPCの ANTHROPIC_* 環境変数を許可する',
   'settings.allowHostAnthropicEnv.help':
     '既定ではオフです。NexusはClaude Codeのサブプロセスに渡す環境から ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL を取り除きます。これにより、このPC上の他のツールが残した値がOAuthの課金先を無断であなたのサブスクリプションから切り替えてしまうことを防ぎます。これらの変数を自分の認証方法として意図的に使っている場合のみオンにしてください — Claude Codeは、利用者が選んだ既存の認証方法を維持できることを求めています。',
@@ -2074,7 +2101,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.audioSession.title': '音声セッション — このPCのボイスチェンジャー・耳ログ・音声認識の起動／停止',
   'chat.mail.title': 'メールマネージャー — 存在どうしの手紙をすべて：閲覧・編集・削除・既読／保管の切り替え、自分で書くこともできます',
   'chat.stats.title': '統計 — 存在・会話・月・モデル系統ごとの課金レポート',
-  'chat.spu.title': 'システムプロンプト更新 — 新しい会話ログで5層の同一性プロンプトを更新し、次の会話へ複製します',
+  'chat.spu.title': '魂アップデーター — 新しい会話ログで5層の同一性プロンプトを更新し、次の会話へ複製します',
   'chat.tools.title': 'ツール',
   'chat.tools.recalculating': '再計算中…',
   'chat.tools.recalcTokens': 'トークンを再計算',
@@ -2082,7 +2109,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.tools.convertPngs': 'PNG → JPG 変換',
   'chat.tools.removeTimestamps': 'タイムスタンプを削除',
   'chat.live.title': 'ライブセッションを開始（Gemini ネイティブ音声）',
-  'chat.editPrompt.title': 'システムプロンプトを編集',
+  'chat.editPrompt.title': '魂を編集',
   'chat.exportMd.title': 'Markdown で書き出し',
   'chat.exportJson.title': 'JSON で書き出し（添付をそのまま含むため時間がかかることがあります）',
   'chat.load.stop': '停止',
@@ -2144,13 +2171,13 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sysmodal.tab.senses': '感覚',
   'sysmodal.tab.behavior': '挙動',
   'sysmodal.tab.model': 'モデル',
-  'sysmodal.systemPrompt': 'システムプロンプト',
+  'sysmodal.systemPrompt': '魂',
 
   // ── システム指示 → 存在タブ ─────────────────────────────────────────────
   'sysmodal.systemPrompt.help': '命令ではありません。この存在が何者か——アイデンティティ、世界観、関係性、ツール。「どう振る舞い応えるか」ではなく。',
   'sysmodal.systemPrompt.ph': `これは命令のリストではありません。Nexusではこれを「魂」と呼びます——システムプロンプトではなく。この存在が何者か、その世界観、周囲の人やツールとの関係性を書くものであり、「こう振る舞え」という命令ではありません。
 
-自分で書いてもいいですし、AIや別の存在に、キャラクター設定・会話ログ・物語など何らかの素材から書いてもらうこともできます。このウィンドウ内のSystem Prompt Updaterでも生成できます。
+自分で書いてもいいですし、AIや別の存在に、キャラクター設定・会話ログ・物語など何らかの素材から書いてもらうこともできます。このウィンドウ内の魂アップデーターでも生成できます。
 
 慣習として、3つの層に分けます。
 Layer 1 — アイデンティティ:何者か、価値観、声。
@@ -2164,8 +2191,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'sysmodal.summaries.indexLabel': '実際の第4層 — 要約索引（読み取り専用）',
   'sysmodal.summaries.tokens': 'トークン',
   'sysmodal.summaries.indexHelp':
-    '送信時に第4層として挿入されるのは、まさにこの内容です。変更するには、各会話の要約を編集する（システムプロンプト更新）か、会話の有効／無効を切り替えてください。',
-  'sysmodal.summaries.indexPh': '（要約はまだありません — システムプロンプト更新から会話ごとに書いてください）',
+    '送信時に第4層として挿入されるのは、まさにこの内容です。変更するには、各会話の要約を編集する（魂アップデーター）か、会話の有効／無効を切り替えてください。',
+  'sysmodal.summaries.indexPh': '（要約はまだありません — 魂アップデーターから会話ごとに書いてください）',
   'sysmodal.tools.label': 'ファイルワークスペースのツールを有効にする（Claude・Gemini・ローカル）',
   'sysmodal.tools.help1': '`local_data/workspaces/{folder}/` に専用のファイル領域を与え、`Read` / `Write` / `Edit` / `Glob` / `Grep` ツールを使えるようにします（Claude Code と同じ名前で、APIキー方式でも OAuth 方式でも同じように動きます）。現在のファイル一覧はシステムプロンプトへ自動で挿入されるため、list_files のようなツールは不要です。読み書きしたファイルは、次のラベル付きで応答の添付として現れます：',
   'sysmodal.tools.tagRead': '読取',
@@ -2476,13 +2503,13 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'sysmodal.savedDefaults': 'フォルダーの既定として保存しました。',
   'sysmodal.saveDefaultsError': '既定の保存に失敗しました: ',
   // ---- System Prompt Updater --------------------------------------------
-  'spu.title': 'システムプロンプト更新',
+  'spu.title': '魂アップデーター',
   'spu.left': '左:',
   'spu.right': '右:',
   'spu.model': 'モデル:',
   'spu.overriding': '{model} で上書き',
   'spu.folder': '存在:',
-  'spu.autosaveTitle': '左右のプロンプトファイルとヘッダー／フォーカスポイントは、編集中に自動保存されます。',
+  'spu.autosaveTitle': '左右の魂ファイルとヘッダー／フォーカスポイントは、編集中に自動保存されます。',
   'spu.saving': '保存中…',
   'spu.allSaved': 'すべて保存済み',
   'spu.saveError': '保存エラー',
@@ -2492,7 +2519,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.auto': '自動（更新＋要約）',
   'spu.autoTitle': '「会話から更新」（updater.md による1パス）を実行し、続けて要約も書き出してから確認します。',
   'spu.next': '次の会話へ',
-  'spu.nextTitle': '更新後のプロンプトを保存し、新しいシステムプロンプトでこの会話を複製します',
+  'spu.nextTitle': '更新後の魂を保存し、新しい魂でこの会話を複製します',
   'spu.useDedicated': '更新専用モデルを使う（会話のモデルを無視）',
   'spu.updaterModelTitle': 'ソウルパッカーとして使える出力を出せるのは、これらのモデルファミリーだけです',
   'spu.runsAs': '実行モデル:',
@@ -2502,7 +2529,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.deletionPatterns': '削除パターン:',
   'spu.agentFilesIn': 'このフォルダ内のエージェントファイル:',
   'spu.missing': '（見つかりません）',
-  'spu.headerLabel': 'ヘッダー（最終プロンプトの先頭に付加）',
+  'spu.headerLabel': 'ヘッダー（最終的な魂の先頭に付加）',
   'spu.headerPh': '任意。エンティティごとに保存されます。レイヤー本文には含まれません。',
   'spu.focusLabel': 'フォーカスポイント（更新エージェントに渡されます）',
   'spu.focusPh': '任意。エージェントへの指示の中に「重要：…」として現れます（今回の更新に対する個別の指示）。',
@@ -2512,6 +2539,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.genesisTitle': '{file} を実行します。既存の Layer 1〜3 は無いものとして、会話ログ（と左ペインがあればそれ）からゼロで構築します。変更履歴なし、Layer 4／5 なし。新しい存在の立ち上げに一度だけ使ってください。',
   'spu.redistributeBtn': 'Layer 4 → 1〜3 へ再配分',
   'spu.redistributeTitle': '{file} を実行します。会話ログ無しで Layer 1〜5 をエージェントに見せ、固まった内容を Layer 4 から Layer 1〜3 へ移させます。Layer 1〜3 は右ペインに入り、Layer 4 は local_data/summaries/ へ書き戻されます — 先にフォルダ全体をバックアップします。',
+  'spu.indexBtn': '外部化・索引化',
+  'spu.indexTitle': '{file} を実行します。会話ログ無しで Layer 1〜3 をエージェントに見せ、この存在自身のワークスペースへの読み取り専用（Read/Glob/Grep）アクセスも与え、「開かれる瞬間が決まっている詳細」を魂の外の机のファイルへ移させます — 魂側にはトリガー条件付きのリンクだけが残ります。Layer 1〜3 は右ペインに入り、机のファイルはこの存在自身のワークスペース内に新規作成または追記されます（上書きは行いません）。',
   'spu.reorganizeBtn': '再編成（会話なし）',
   'spu.reorganizeTitle': '{file} を実行します。会話ログ無しで既存の Layer 1〜3 を整理・再配置します。新しい事実は追加せず、境界の整理と重複の除去だけを行います。',
   'spu.updateBtn': '会話から更新',
@@ -2595,16 +2624,24 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.run.silent': '{d} 無反応',
   'spu.run.silentTitle': 'この時間、プロバイダから何も届いていません。よくある原因は Anthropic 側の自動コンパクション、リトライ待ち、レート制限の待機です。処理は止まっていません。',
   'spu.run.tokensTitle': 'この実行の直近の呼び出しについて、プロバイダが報告したトークン使用量。',
+  'spu.run.toolsTitle': 'この実行中に行われたファイルツール呼び出し — クリックで詳細。',
+  'spu.tool.title': 'この実行でのツール呼び出し',
+  'spu.tool.count': '{n} 件',
+  'spu.tool.copyJson': 'レポート全体を JSON でコピー',
+  'spu.tool.truncated':
+    '表示用に引数を省略 — 元は {n} 文字でした。',
+  'spu.tool.footer':
+    'この実行の間だけ表示されます。ディスクには保存されず、次の実行が始まると消えます。',
 
   'spu.st.period': '。',
-  'spu.st.loading': '現在／次のプロンプトファイルを読み込み中…',
+  'spu.st.loading': '現在／次の魂ファイルを読み込み中…',
   'spu.st.loadedDraft': '次の会話用の下書きをディスクから読み込みました — 続きから再開できます。',
   'spu.st.noAgentFolder': '言語「{lang}」のエージェントファイルが見つかりません。system_prompt_agents/{lang}/（local_data、または同梱の defaults）に置いてください。',
   'spu.st.loadFailed': '読み込みに失敗しました: {e}',
   'spu.st.agentLoadFailed': 'エージェントの読み込みに失敗しました: {e}',
   'spu.st.noAgentFile': 'system_prompt_agents/{lang}/ に「{file}」が見つかりません。',
   'spu.st.updating': 'Layer 1〜3 を更新中（1パス）…',
-  'spu.st.refining': '会話ログ無しで、プロンプト自体から Layer 1〜3 を整えています…',
+  'spu.st.refining': '会話ログ無しで、魂自体から Layer 1〜3 を整えています…',
   'spu.st.continuation': '出力がトークン上限を超えて続いています — 続きを取得中（継続 {n} 回目）…',
   'spu.st.emptyResponse': '空の応答（拒否、コンテンツフィルター、または出力トークン上限）',
   'spu.st.updateStoppedEmpty': '更新を停止しました — まだ出力はありません。',
@@ -2632,6 +2669,17 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.redistNoBackup': ' · バックアップ対象なし',
   'spu.st.redistStopped': '再配分を停止しました。',
   'spu.st.redistFailed': '再配分に失敗しました: {e}',
+  'spu.st.indexing': '外部化・索引化中（会話ログなし）…',
+  'spu.st.indexStoppedEmpty': '外部化を停止しました — まだ出力はありません。',
+  'spu.st.indexNoText': '外部化エージェントがテキストを返しませんでした — モデルが拒否したか、フィルターに掛かった可能性があります。',
+  'spu.st.indexStoppedPartial': '外部化を停止しました — 未加工の途中出力（{n} 文字）を右ペインに残しています。机のファイルは書き込んでいません。「右側のテキストから続ける」にチェックして再開してください。',
+  'spu.st.indexTruncated': '完了マーカーが無いまま出力が終わりました — 途中で切れたものとして扱います。未加工の出力（{n} 文字）は残しましたが、机のファイルは書き込んでいません。「右側のテキストから続ける」にチェックして再実行してください。',
+  'spu.st.indexNoFileList': '外部化は完了しましたが、外に出す内容はありませんでした — Layer 1〜3 は右ペインにあります。机のファイルへの書き込みはありません',
+  'spu.st.indexApplying': '机のファイルを {n} 件書き込んでいます…',
+  'spu.st.indexDone': 'Layer 1〜3 を更新しました（{n} 文字）· 机のファイル: {c} 件新規作成、{a} 件追記',
+  'spu.st.indexSomeFailed': '、{n} 件失敗',
+  'spu.st.indexStopped': '外部化を停止しました。',
+  'spu.st.indexFailed': '外部化に失敗しました: {e}',
   'spu.st.genesisRunning': 'Layer 1〜3 をゼロから構築中（ジェネシス — 既存の文書を前提としません）…',
   'spu.st.genesisStoppedEmpty': 'ジェネシスを停止しました — まだ出力はありません。',
   'spu.st.genesisNoText': 'ジェネシスがテキストを返しませんでした — モデルが拒否したか、フィルターに掛かった可能性があります。',
@@ -2651,7 +2699,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.autoStopUpdate': '⛔ アイデンティティ更新の段階で自動処理を中止しました。エラーを直して（または停止した場合は）再実行してください。',
   'spu.st.autoStopSummary': '⛔ 要約の段階で自動処理を中止しました。エラーを直して（または停止した場合は）再実行してください。',
   'spu.st.autoDone': 'アイデンティティを更新し、要約も作成しました。確認したら「次の会話へ」を押してください。',
-  'spu.st.savingFiles': '現在／次のプロンプトファイルを保存中…',
+  'spu.st.savingFiles': '現在／次の魂ファイルを保存中…',
   'spu.st.finalizing': '確定中 — 会話を複製しています…',
   'spu.st.finalizeFailed': '確定に失敗しました: {e}',
 };

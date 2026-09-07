@@ -450,6 +450,7 @@ async function streamClaudeViaAgentSDK(args: {
   enableReadConversation: boolean; // expose the read_conversation MCP tool
   agentFullSystemAccess: boolean;  // per-Entity: file tools reach the whole PC
   agentDangerousTools: boolean;    // per-Entity: enable shell (Bash → delete/exec)
+  agentReadOnlyTools: boolean;     // non-Entity caller (SPU agents): Read/Glob/Grep only, never Write/Edit
   instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
   language?: string;               // 'en' | 'ja' — base dict for the instructions above
   askUserEnabled: boolean;         // per-Entity: expose the AskQuestion MCP tool
@@ -467,7 +468,7 @@ async function streamClaudeViaAgentSDK(args: {
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -1062,7 +1063,9 @@ async function streamClaudeViaAgentSDK(args: {
           ? []
           : ['WebFetch', 'WebSearch'];
         const fileToolsDisabledByToggle = toolUseEnabled
-          ? []
+          // Read-only mode (SPU agents): Read/Glob/Grep pass through, but
+          // Write/Edit are disallowed even though toolUseEnabled is on.
+          ? (agentReadOnlyTools ? ['Write', 'Edit'] : [])
           : ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
         // Claude Code's BUILT-IN AskUserQuestion is ALWAYS disabled: it can't be
         // answered through the SDK's public API (canUseTool only allows/denies),
@@ -2277,6 +2280,7 @@ async function streamViaAnthropicCompat(args: {
   enableReadConversation: boolean;
   agentFullSystemAccess: boolean;
   agentDangerousTools: boolean;
+  agentReadOnlyTools: boolean;
   instructionOverrides: Record<string, any>;
   language?: string;
   askUserEnabled: boolean;
@@ -2298,7 +2302,7 @@ async function streamViaAnthropicCompat(args: {
   const {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
     modelSelectedPayload, modelParams, folderName, senseEvents, toolUseEnabled,
-    enableReadConversation, agentFullSystemAccess, agentDangerousTools,
+    enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools,
     instructionOverrides, language, askUserEnabled, askUserTimeoutMs,
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
@@ -2332,8 +2336,16 @@ async function streamViaAnthropicCompat(args: {
   if (toolUseEnabled) {
     tools.push(
       { name: 'Read', description: `${I.toolReadDesc} ${pathRule}`, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc } }, required: ['path'] } },
-      { name: 'Write', description: I.toolWriteDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc }, content: { type: 'string', description: 'Full file contents to write' } }, required: ['path', 'content'] } },
-      { name: 'Edit', description: I.toolEditDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc }, old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' }, new_string: { type: 'string', description: 'Text to replace it with.' } }, required: ['path', 'old_string', 'new_string'] } },
+    );
+    // Read-only mode (SPU agents): Write/Edit are withheld even though
+    // toolUseEnabled is on — the desk is reference-only to these agents.
+    if (!agentReadOnlyTools) {
+      tools.push(
+        { name: 'Write', description: I.toolWriteDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc }, content: { type: 'string', description: 'Full file contents to write' } }, required: ['path', 'content'] } },
+        { name: 'Edit', description: I.toolEditDesc, input_schema: { type: 'object', properties: { path: { type: 'string', description: pathDesc }, old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' }, new_string: { type: 'string', description: 'Text to replace it with.' } }, required: ['path', 'old_string', 'new_string'] } },
+      );
+    }
+    tools.push(
       { name: 'Glob', description: I.toolGlobDesc, input_schema: { type: 'object', properties: { pattern: { type: 'string', description: 'Glob pattern. Use `**` to match all files.' } }, required: ['pattern'] } },
       { name: 'Grep', description: I.toolGrepDesc, input_schema: { type: 'object', properties: { pattern: { type: 'string', description: 'JavaScript regex (no surrounding slashes).' }, file_pattern: { type: 'string', description: 'Optional glob to restrict files.' }, flags: { type: 'string', description: 'Optional regex flags (e.g. "i").' } }, required: ['pattern'] } },
     );
@@ -2864,6 +2876,15 @@ export async function POST(req: Request) {
       //   path only) the Bash/shell family.
       agentFullSystemAccess = false,
       agentDangerousTools = false,
+      // Read-only file access for a non-Entity caller — currently only the
+      // System Prompt Updater's agent runs (Update/Reorganize/Redistribute/
+      // Genesis/Indexer). Grants Read/Glob/Grep against folderName's own
+      // workspace (same entry point and relative-path root the being itself
+      // uses) but NEVER Write/Edit/Delete/Bash — the desk is reference-only
+      // to these agents by design. Forces toolUseEnabled on below regardless
+      // of what the caller sent, and forces agentDangerousTools off so a
+      // stray true can't smuggle Delete/Bash in underneath it.
+      agentReadOnlyTools = false,
       // Per-Entity overrides for NEXUS's hidden/injected instruction strings
       // (tool descriptions, path rules, read_conversation + web tool text).
       // Empty/missing keys fall back to the English defaults.
@@ -2996,6 +3017,10 @@ export async function POST(req: Request) {
       // messages at its next model-call boundary. Empty = feature not used.
       injectTurnId = '',
     } = await req.json();
+    if (agentReadOnlyTools) {
+      toolUseEnabled = true;
+      agentDangerousTools = false;
+    }
     const keys = await loadKeys();
 
     // Rounds of tool use one turn may take, from Preferences → Other.
@@ -3557,6 +3582,7 @@ export async function POST(req: Request) {
           enableReadConversation,
           agentFullSystemAccess,
           agentDangerousTools,
+          agentReadOnlyTools,
           instructionOverrides,
           language,
           askUserEnabled,
@@ -3880,31 +3906,35 @@ export async function POST(req: Request) {
             required: ['path'],
           },
         });
-        claudeTools.push({
-          name: 'Write',
-          description: I.toolWriteDesc,
-          input_schema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: pathDesc },
-              content: { type: 'string', description: 'Full file contents to write' },
+        // Read-only mode (SPU agents): Write/Edit are withheld even though
+        // toolUseEnabled is on — the desk is reference-only to these agents.
+        if (!agentReadOnlyTools) {
+          claudeTools.push({
+            name: 'Write',
+            description: I.toolWriteDesc,
+            input_schema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: pathDesc },
+                content: { type: 'string', description: 'Full file contents to write' },
+              },
+              required: ['path', 'content'],
             },
-            required: ['path', 'content'],
-          },
-        });
-        claudeTools.push({
-          name: 'Edit',
-          description: I.toolEditDesc,
-          input_schema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: pathDesc },
-              old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' },
-              new_string: { type: 'string', description: 'Text to replace it with.' },
+          });
+          claudeTools.push({
+            name: 'Edit',
+            description: I.toolEditDesc,
+            input_schema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: pathDesc },
+                old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' },
+                new_string: { type: 'string', description: 'Text to replace it with.' },
+              },
+              required: ['path', 'old_string', 'new_string'],
             },
-            required: ['path', 'old_string', 'new_string'],
-          },
-        });
+          });
+        }
         claudeTools.push({
           name: 'Glob',
           description: I.toolGlobDesc,
@@ -4821,8 +4851,9 @@ export async function POST(req: Request) {
       if (toolUseEnabled) {
         // Same Read/Write/Edit/Glob/Grep tool surface as the Claude branch —
         // shapes are translated to Gemini's functionDeclarations schema.
-        geminiTools.push({
-          functionDeclarations: [
+        // Read-only mode (SPU agents): Write/Edit are withheld — built as a
+        // variable instead of one inline array literal so they can be skipped.
+        const fileFunctionDeclarations: any[] = [
             {
               name: 'Read',
               description: `${I.toolReadDesc} ${pathRule}`,
@@ -4834,6 +4865,9 @@ export async function POST(req: Request) {
                 required: ['path'],
               },
             },
+        ];
+        if (!agentReadOnlyTools) {
+          fileFunctionDeclarations.push(
             {
               name: 'Write',
               description: I.toolWriteDesc,
@@ -4859,6 +4893,9 @@ export async function POST(req: Request) {
                 required: ['path', 'old_string', 'new_string'],
               },
             },
+          );
+        }
+        fileFunctionDeclarations.push(
             {
               name: 'Glob',
               description: I.toolGlobDesc,
@@ -4883,8 +4920,8 @@ export async function POST(req: Request) {
                 required: ['pattern'],
               },
             },
-          ],
-        });
+        );
+        geminiTools.push({ functionDeclarations: fileFunctionDeclarations });
         // Dangerous tool: Bash/Shell — gated per-Entity, like Delete on the
         // other paths.
         if (agentDangerousTools) {
@@ -5812,6 +5849,7 @@ export async function POST(req: Request) {
         enableReadConversation,
         agentFullSystemAccess,
         agentDangerousTools,
+        agentReadOnlyTools,
         instructionOverrides,
         language,
         askUserEnabled,
@@ -6095,37 +6133,41 @@ export async function POST(req: Request) {
             },
           },
         });
-        localTools.push({
-          type: 'function',
-          function: {
-            name: 'Write',
-            description: I.toolWriteDesc,
-            parameters: {
-              type: 'object',
-              properties: {
-                path: { type: 'string', description: pathDesc },
-                content: { type: 'string', description: 'Full file contents to write' },
+        // Read-only mode (SPU agents): Write/Edit are withheld even though
+        // toolUseEnabled is on — the desk is reference-only to these agents.
+        if (!agentReadOnlyTools) {
+          localTools.push({
+            type: 'function',
+            function: {
+              name: 'Write',
+              description: I.toolWriteDesc,
+              parameters: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: pathDesc },
+                  content: { type: 'string', description: 'Full file contents to write' },
+                },
+                required: ['path', 'content'],
               },
-              required: ['path', 'content'],
             },
-          },
-        });
-        localTools.push({
-          type: 'function',
-          function: {
-            name: 'Edit',
-            description: I.toolEditDesc,
-            parameters: {
-              type: 'object',
-              properties: {
-                path: { type: 'string', description: pathDesc },
-                old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' },
-                new_string: { type: 'string', description: 'Text to replace it with.' },
+          });
+          localTools.push({
+            type: 'function',
+            function: {
+              name: 'Edit',
+              description: I.toolEditDesc,
+              parameters: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string', description: pathDesc },
+                  old_string: { type: 'string', description: 'Text to find. Must occur exactly once.' },
+                  new_string: { type: 'string', description: 'Text to replace it with.' },
+                },
+                required: ['path', 'old_string', 'new_string'],
               },
-              required: ['path', 'old_string', 'new_string'],
             },
-          },
-        });
+          });
+        }
         localTools.push({
           type: 'function',
           function: {

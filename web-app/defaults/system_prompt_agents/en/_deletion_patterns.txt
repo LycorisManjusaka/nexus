@@ -7,5 +7,9 @@
 [moved]
 [merged]
 [removed]
+[externalize]
+[keep]
+[conflict]
+
 # Slash / comma combinations the agents sometimes emit, e.g. [preserved/updated].
 /\s*\[(?:new|preserved|updated|compressed|moved|merged|removed)(?:\s*[\/,]\s*(?:new|preserved|updated|compressed|moved|merged|removed))+\]/g

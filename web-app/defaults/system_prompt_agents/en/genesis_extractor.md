@@ -30,7 +30,7 @@ Your task is to build and emit Layers 1–3 from the supplied material, written 
 #### 【Resolution】
 * **Do not compress.** This is the genesis pass — everything the material contains is written out in full detail. Compression and re-filing are Agent α's job, not yours.
 * Quote verbatim, in quotation marks, the load-bearing statements and the distinctive turns of phrase that matter word for word.
-* Capture exact identifiers exactly: names, paths, file names, versions, endpoints, commands.
+* Capture exact identifiers exactly: names, paths, relative file paths on the desk, versions, endpoints, commands.
 * Where the material is silent but the document needs the fact to be usable, fill the gap by inference — but mark it `[inferred]` so it stays visibly provisional.
 
 #### 【Output format】

@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info } from 'lucide-react';
+import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Copy, FolderOutput } from 'lucide-react';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
-import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
+import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
@@ -234,6 +234,54 @@ interface RedistributeReport {
   skipped: Array<{ title: string; reason: string }>;
 }
 
+// ── File-list split + entry parsing (index/externalize mode only) ───────────
+// indexer.md's output order is: Changelog, then "Files To Externalize"
+// (EN) / "移設対象ファイル一覧" (JA), then the slimmed-down Layers 1-3 (the
+// Layer 1 heading that splitOffChangelog() already splits on). What
+// splitOffChangelog() calls "changelog" for this mode is really two sections
+// glued together — this splits those apart the same way splitOffLayer4()
+// separates Layer 4 out of the redistribute agent's output.
+const FILELIST_HEADER_RE = /^#{2,3}\s*(?:Files To Externalize|移設対象ファイル一覧)\b.*$/im;
+function splitOffFileList(text: string): { changelog: string; fileListSection: string } {
+  const m = text.match(FILELIST_HEADER_RE);
+  if (!m || m.index === undefined) return { changelog: text.trim(), fileListSection: '' };
+  return { changelog: text.slice(0, m.index).trim(), fileListSection: text.slice(m.index + m[0].length).trim() };
+}
+
+// Each desk file inside the file-list section is a "### File path: `rel/path`"
+// (EN) / "### ファイルパス: `相対パス`" (JA) heading followed by the full text
+// to write. Same head-then-body scan as parseSummaryEntries(), just keyed on
+// path instead of title. An entry with an empty path or empty body is dropped
+// rather than sent to the write endpoint — an empty relPath would fail server
+// side anyway, and a heading with no body isn't a real file to write.
+const FILE_PATH_ENTRY_RE = /^#{2,3}\s*(?:File path|ファイルパス)\s*[:：]\s*`([^`]+)`\s*$/gm;
+function parseFileListEntries(fileListSection: string): Array<{ path: string; content: string }> {
+  const heads: Array<{ path: string; start: number; bodyStart: number }> = [];
+  let m: RegExpExecArray | null;
+  FILE_PATH_ENTRY_RE.lastIndex = 0;
+  while ((m = FILE_PATH_ENTRY_RE.exec(fileListSection)) !== null) {
+    heads.push({ path: m[1].trim(), start: m.index, bodyStart: m.index + m[0].length });
+  }
+  const out: Array<{ path: string; content: string }> = [];
+  for (let i = 0; i < heads.length; i++) {
+    const cur = heads[i];
+    const next = heads[i + 1];
+    const body = fileListSection.slice(cur.bodyStart, next ? next.start : fileListSection.length).trim();
+    if (!cur.path || !body) continue;
+    out.push({ path: cur.path, content: body });
+  }
+  return out;
+}
+
+// What the server did with the parsed file list — mirrors RedistributeReport,
+// but keyed on desk-file action rather than summary-file action (the
+// /api/workspace-files route only ever creates or appends, never overwrites).
+interface IndexReport {
+  created: string[];
+  appended: string[];
+  failed: Array<{ path: string; error: string }>;
+}
+
 // Continuation sentinel the agent is asked to print at the very end of its
 // output. Its absence after a stream means the output was truncated at the
 // model's token cap → we prefill-continue. Stripped before saving.
@@ -250,6 +298,7 @@ const AGENT_FILE_UPDATE = 'updater.md';                       // "Update from Co
 const AGENT_FILE_REORGANIZE = 'defragmenter.md';              // "Reorganize (No Conversation)"
 const AGENT_FILE_REDISTRIBUTE = 'interlayer_redistributor.md'; // "Redistribute Layer 4 → 1-3"
 const AGENT_FILE_GENESIS = 'genesis_extractor.md';            // "Genesis (Build From Scratch)"
+const AGENT_FILE_INDEX = 'indexer.md';                        // "Externalize & Index (式神ζ)"
 
 // ── Soul-packer model shortlist ──────────────────────────────────────────────
 // Only these four families produce usable system-prompt updates; the others
@@ -304,7 +353,7 @@ export default function SystemPromptUpdater({
   const t = useT();
   // ── State ────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'summary' | 'auto'>(null);
+  const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'index' | 'summary' | 'auto'>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
 
   // ── Close/reload guard ─────────────────────────────────────────────────────
@@ -370,6 +419,14 @@ export default function SystemPromptUpdater({
   const [runActivity, setRunActivity] = useState<string | null>(null);
   const [runEvents, setRunEvents] = useState<{ at: number; text: string }[]>([]);
   const [runUsage, setRunUsage] = useState<{ total: number; cached: number; out: number } | null>(null);
+  // Read-only file tool calls (Read/Glob/Grep) the agent made this run. Purely
+  // in-memory — never written to disk, never sent to any model. Mirrors
+  // MessageBubble's Tool Usage Report but scoped to a single agent run
+  // instead of a single reply; reset when the next run starts, otherwise
+  // stays on screen so it is still readable once the run has finished.
+  const [runToolCalls, setRunToolCalls] = useState<{ name: string; input: any; at: number }[]>([]);
+  const [toolLogOpen, setToolLogOpen] = useState(false);
+  const [toolLogCopyState, setToolLogCopyState] = useState<'idle' | 'copied'>('idle');
   // Refs, not state: these are written on every SSE frame. Keeping them out of
   // React's render path means the 1s ticker below is the ONLY thing that
   // re-renders the strip, however chatty the stream gets.
@@ -387,6 +444,7 @@ export default function SystemPromptUpdater({
       setRunActivity(null);
       setRunEvents([]);
       setRunUsage(null);
+      setRunToolCalls([]);
       setNowTs(t0);
     } else if (runStartRef.current !== null) {
       // Freeze the total. It stays on screen after the run so the number is
@@ -413,6 +471,8 @@ export default function SystemPromptUpdater({
   // Result of the last "Redistribute Layers 1-4" write (backup path + which
   // summary files were replaced/created/skipped). Null until one has run.
   const [redistributeReport, setRedistributeReport] = useState<RedistributeReport | null>(null);
+  // Same idea, for the index/externalize run's desk-file write.
+  const [indexReport, setIndexReport] = useState<IndexReport | null>(null);
   // AbortController for the in-flight agent run (update / summary / auto), so a
   // Stop button can cancel it — same mechanism the conversation Stop uses.
   const abortRef = useRef<AbortController | null>(null);
@@ -489,6 +549,7 @@ export default function SystemPromptUpdater({
   const reorganizeAgent = useMemo(() => getAgentFile(AGENT_FILE_REORGANIZE), [getAgentFile]);
   const redistributeAgent = useMemo(() => getAgentFile(AGENT_FILE_REDISTRIBUTE), [getAgentFile]);
   const genesisAgent = useMemo(() => getAgentFile(AGENT_FILE_GENESIS), [getAgentFile]);
+  const indexAgent = useMemo(() => getAgentFile(AGENT_FILE_INDEX), [getAgentFile]);
 
   // ── Summary panel (separate call, separate default model) ────────────────
   const [summaryText, setSummaryText] = useState('');
@@ -1040,6 +1101,12 @@ export default function SystemPromptUpdater({
         folderName,
         systemPrompt: sys,
         toolUseEnabled: false,
+        // Read/Glob/Grep only, scoped to this being's own workspace — the
+        // same sandbox and relative-path root the being's own tool calls
+        // already use. No Write/Edit/Delete/Bash regardless of provider or
+        // of this entity's own agentDangerousTools/agentFullSystemAccess
+        // settings; the route forces both off server-side for this flag.
+        agentReadOnlyTools: true,
         // `sys` here is an AGENT's instruction file, not the entity's identity.
         // Without this the chat route appends the entity's FOOTER.md to it as
         // "Layer 5: The Signature (Self-Authored)" — the agent would read the
@@ -1104,6 +1171,16 @@ export default function SystemPromptUpdater({
               cached: Number(d.cachedInputTokens || 0),
               out: Number(d.outputTokens || 0),
             });
+          }
+          // Same frame shape MessageBubble's Tool Usage Report reads
+          // ({ type: 'tool_call', call: { name, input, at } }) — the route
+          // emits it identically on every provider path.
+          if (d?.type === 'tool_call' && d.call && typeof d.call.name === 'string') {
+            setRunToolCalls((prev) => [...prev, {
+              name: d.call.name,
+              input: d.call.input,
+              at: Number(d.call.at) || Date.now(),
+            }]);
           }
           if (d?.error) throw new Error(d.error);
         } catch (e: any) {
@@ -1532,6 +1609,186 @@ export default function SystemPromptUpdater({
     }
   }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title, maybeShiftRightToLeft]);
 
+  // ── Run the externalization & indexing pass (式神ζ) ───────────────────────
+  // Structurally the closest analog is runRedistribute(): no conversation
+  // log, the agent sees the current Layers 1-3 (plus header/footer as
+  // reference), and a bulk write happens in the same request that produces
+  // the report shown afterward. What differs: the destination is desk files
+  // under this being's own workspace (via /api/workspace-files), not summary
+  // files, and that write is additive-only — create if the path is new,
+  // append if it already exists, never overwrite (see that route's own
+  // comment for why: externalizing is meant to accumulate, not replace).
+  const runIndex = useCallback(async (): Promise<boolean> => {
+    const agent = getAgentFile(AGENT_FILE_INDEX);
+    if (!agent) {
+      setStatusMessage(
+        t('spu.st.noAgentFile').replace('{file}', AGENT_FILE_INDEX).replace('{lang}', agentFolder)
+      );
+      return false;
+    }
+    const effectiveLeftText = await maybeShiftRightToLeft();
+    if (effectiveLeftText === null) return false;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setUpdateStatus({ state: 'called' });
+    setStreamingUpdate(true);
+    setIndexReport(null);
+    setStatusMessage(t('spu.st.indexing'));
+
+    const focus = focusPoint.trim();
+    const resumeText = resumeFromRight ? rightText.trim() : '';
+    const userMsg = buildIndexUserMsg({
+      lang: agentFolder,
+      baseName,
+      focus,
+      header,
+      leftText: effectiveLeftText,
+      folderName,
+      entityFooter,
+      resumeText,
+      endSentinel: END_SENTINEL,
+    });
+
+    let thinkingChars = 0;
+    let outputChars = 0;
+    let liveAccum = resumeText ? resumeText + '\n' : '';
+    const onProgress = (t: number, o: number, chunk?: string) => {
+      thinkingChars += t;
+      outputChars += o;
+      if (chunk) {
+        liveAccum += chunk;
+        setRightText(liveAccum);
+      }
+      setUpdateStatus(outputChars > 0
+        ? { state: 'outputting', thinkingChars, outputChars }
+        : { state: 'thinking', thinkingChars, outputChars });
+    };
+
+    const MAX_CONTINUATIONS = 6;
+    let accum = resumeText ? resumeText + '\n' : '';
+    try {
+      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
+        if (controller.signal.aborted) break;
+        const messages = attempt === 0
+          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
+          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
+             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
+        accum += piece;
+        if (accum.includes(END_SENTINEL)) break;
+        if (!piece.trim()) break;
+        if (attempt < MAX_CONTINUATIONS) {
+          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
+        }
+      }
+
+      const sawSentinel = accum.includes(END_SENTINEL);
+      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+        .split(END_SENTINEL).join('')
+        .trim();
+
+      if (!cleaned) {
+        if (controller.signal.aborted) {
+          setUpdateStatus({ state: 'idle' });
+          setStatusMessage(t('spu.st.indexStoppedEmpty'));
+          return false;
+        }
+        const msg = t('spu.st.emptyResponse');
+        setUpdateStatus({ state: 'error', message: msg });
+        setStatusMessage(t('spu.st.indexNoText'));
+        return false;
+      }
+
+      // A run that was stopped, or that never printed the completion marker,
+      // is by definition incomplete — writing its file list back would create
+      // half-written desk files. Keep the RAW output in the right pane, same
+      // reasoning as runRedistribute().
+      if (controller.signal.aborted || !sawSentinel) {
+        setRightText(cleaned);
+        setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+        setStatusMessage(controller.signal.aborted
+          ? t('spu.st.indexStoppedPartial').replace('{n}', String(cleaned.length))
+          : t('spu.st.indexTruncated').replace('{n}', String(cleaned.length)));
+        return false;
+      }
+
+      // changelog+fileList (everything before "## Layer 1") | Layers 1-3 | any
+      // Layer 4/5 the agent wrote despite being told not to.
+      const { changelog: changelogAndFileList, core } = splitOffChangelog(cleaned);
+      const { changelog, fileListSection } = splitOffFileList(changelogAndFileList);
+      const fileEntries = parseFileListEntries(fileListSection);
+      // indexer.md is told to stop at Layer 3 — reuse splitOffLayer4() to
+      // catch (and show-but-never-save) anything past it, the same way
+      // runRedistribute() catches output past Layer 4.
+      const { before: layers123Raw, layer4: extraLayer4, after: pastLayer3 } = splitOffLayer4(core);
+      const { layers: layers123, logs: layer123Logs } = splitOffLogs(layers123Raw);
+      const logs = [
+        layer123Logs,
+        extraLayer4 ? `## [Discarded — Layer 4 output (not saved anywhere; indexer.md is not asked for it)]\n${extraLayer4}` : '',
+        pastLayer3 ? `## [Discarded — output past Layer 4 (not saved anywhere)]\n${pastLayer3}` : '',
+      ].filter(Boolean).join('\n\n');
+
+      setChangelogText(changelog);
+      setRightText(layers123);
+      setUpdateLogs(logs);
+      if (changelog) {
+        fetch('/api/changelogs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: folderName, title, content: changelog }),
+        }).catch(() => {});
+      }
+
+      // A slimmer soul with nothing left to externalize is a legitimate
+      // outcome, not a failure — unlike redistribute's "no Layer 4" case,
+      // there's no half-finished write to warn about here.
+      if (fileEntries.length === 0) {
+        setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+        setStatusMessage(
+          t('spu.st.indexNoFileList') + (changelog ? t('spu.st.changelogSavedShort') : '') + t('spu.st.period')
+        );
+        return true;
+      }
+
+      setStatusMessage(t('spu.st.indexApplying').replace('{n}', String(fileEntries.length)));
+      const res = await fetch('/api/workspace-files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderName, files: fileEntries }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+
+      const results: Array<{ path: string; action: 'created' | 'appended' | 'failed'; error?: string }> = data.results ?? [];
+      const report: IndexReport = {
+        created: results.filter((r) => r.action === 'created').map((r) => r.path),
+        appended: results.filter((r) => r.action === 'appended').map((r) => r.path),
+        failed: results.filter((r) => r.action === 'failed').map((r) => ({ path: r.path, error: r.error || 'unknown error' })),
+      };
+      setIndexReport(report);
+      setUpdateStatus({ state: 'done', thinkingChars, outputChars });
+      setStatusMessage(
+        t('spu.st.indexDone').replace('{n}', String(layers123.length)).replace('{c}', String(report.created.length)).replace('{a}', String(report.appended.length)) +
+        (report.failed.length ? t('spu.st.indexSomeFailed').replace('{n}', String(report.failed.length)) : '') +
+        (changelog ? t('spu.st.changelogSavedShort') : '') + t('spu.st.period')
+      );
+      return report.failed.length === 0;
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || controller.signal.aborted) {
+        setUpdateStatus({ state: 'idle' });
+        setStatusMessage(t('spu.st.indexStopped'));
+        return false;
+      }
+      const msg = e?.message || 'unknown error';
+      setUpdateStatus({ state: 'error', message: msg });
+      setStatusMessage(t('spu.st.indexFailed').replace('{e}', msg));
+      return false;
+    } finally {
+      setStreamingUpdate(false);
+      if (abortRef.current === controller) abortRef.current = null;
+    }
+  }, [getAgentFile, baseName, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, resumeFromRight, rightText, agentFolder, streamChat, title, maybeShiftRightToLeft]);
+
   // ── Run the genesis (first-time) construction ────────────────────────────
   // A fourth mode, distinct from all three above: it assumes NO prior Layers
   // 1-3 exist at all — this is the bootstrap pass genesis_extractor.md is built
@@ -1809,6 +2066,15 @@ export default function SystemPromptUpdater({
     try { await runRedistribute(); } finally { setRunning(null); }
   }, [running, runRedistribute]);
 
+  // "Externalize & Index" — runs indexer.md (式神ζ). The agent sees Layers
+  // 1-3 and no conversation log, with read-only access to this being's own
+  // workspace, and moves trigger-conditioned detail out to desk files.
+  const handleIndex = useCallback(async () => {
+    if (running !== null) return;
+    setRunning('index');
+    try { await runIndex(); } finally { setRunning(null); }
+  }, [running, runIndex]);
+
   // "Genesis (Build From Scratch)" — runs genesis_extractor.md. Assumes no
   // prior Layers 1-3 exist; builds them from the conversation log (and left
   // pane, if any) with no changelog and no Layer 4/5.
@@ -2058,6 +2324,15 @@ export default function SystemPromptUpdater({
                 {runUsage.total.toLocaleString()} in · {runUsage.cached.toLocaleString()} cached · {runUsage.out.toLocaleString()} out
               </span>
             )}
+            {runToolCalls.length > 0 && (
+              <button
+                onClick={() => setToolLogOpen(true)}
+                title={t('spu.run.toolsTitle')}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
+              >
+                <Wrench size={10} />{runToolCalls.length}
+              </button>
+            )}
           </div>
         )}
 
@@ -2136,6 +2411,8 @@ export default function SystemPromptUpdater({
               <span className={redistributeAgent ? '' : 'text-red-500'}>{AGENT_FILE_REDISTRIBUTE}{redistributeAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
               {' · '}
               <span className={genesisAgent ? '' : 'text-red-500'}>{AGENT_FILE_GENESIS}{genesisAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
+              {' · '}
+              <span className={indexAgent ? '' : 'text-red-500'}>{AGENT_FILE_INDEX}{indexAgent ? '' : ' (' + t('spu.missing') + ')'}</span>
             </div>
           </div>
 
@@ -2191,6 +2468,15 @@ export default function SystemPromptUpdater({
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
                   {t('spu.redistributeBtn')}
+                </button>
+                <button
+                  onClick={handleIndex}
+                  disabled={busy || !indexAgent}
+                  className="px-2.5 py-1 text-xs font-medium bg-cyan-500/15 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={t('spu.indexTitle').replace('{file}', AGENT_FILE_INDEX)}
+                >
+                  {running === 'index' ? <Loader2 size={12} className="animate-spin" /> : <FolderOutput size={12} />}
+                  {t('spu.indexBtn')}
                 </button>
                 <button
                   onClick={handleUpdateNoConvo}
@@ -2409,6 +2695,32 @@ export default function SystemPromptUpdater({
               </div>
             )}
 
+            {/* Index/externalize result — what was actually written to this
+                being's own workspace, additive-only (create or append, never
+                overwrite; see /api/workspace-files). Read-only, same reasoning
+                as the redistribute panel above. */}
+            {indexReport && (
+              <div className="mt-3 border border-cyan-500/30 bg-cyan-500/[0.04] rounded p-2">
+                <div className="text-[10px] uppercase tracking-wider text-cyan-600 dark:text-cyan-300 font-semibold mb-1">
+                  Desk write · workspace/{folderName}/
+                </div>
+                <div className="text-[11px] font-mono leading-relaxed space-y-1">
+                  {indexReport.created.length > 0 && (
+                    <div><span className="text-emerald-600 dark:text-emerald-400">Created ({indexReport.created.length}):</span> {indexReport.created.join(' · ')}</div>
+                  )}
+                  {indexReport.appended.length > 0 && (
+                    <div><span className="text-amber-600 dark:text-amber-400">Appended ({indexReport.appended.length}):</span> {indexReport.appended.join(' · ')}</div>
+                  )}
+                  {indexReport.failed.length > 0 && (
+                    <div><span className="text-red-600 dark:text-red-400">Failed ({indexReport.failed.length}):</span> {indexReport.failed.map((f) => `${f.path} — ${f.error}`).join(' · ')}</div>
+                  )}
+                  {indexReport.created.length === 0 && indexReport.appended.length === 0 && indexReport.failed.length === 0 && (
+                    <div className="text-muted-foreground">No desk file was written.</div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Abbreviations / Deletions logs — separated from the result.
                 Read-only, for review only. NOT written to the next conversation. */}
             {updateLogs && (
@@ -2556,6 +2868,85 @@ export default function SystemPromptUpdater({
           </div>
         </div>
       </div>
+
+      {/* Ephemeral tool-call log for the current/last run. Same shape and
+          purpose as MessageBubble's Tool Usage Report — what file reads the
+          agent actually made this run, to check against what it claims — but
+          scoped to a soul-packing run instead of a chat reply, and never
+          written to disk: `runToolCalls` is plain React state, reset the
+          moment the next run starts. */}
+      {toolLogOpen && (
+        <div
+          className="fixed inset-0 z-[120] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setToolLogOpen(false)}
+        >
+          <div
+            className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Wrench size={16} className="text-blue-500 shrink-0" />
+                <span className="text-sm font-medium">{t('spu.tool.title')}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {t('spu.tool.count').replace('{n}', String(runToolCalls.length))}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(JSON.stringify(runToolCalls, null, 2));
+                      setToolLogCopyState('copied');
+                      setTimeout(() => setToolLogCopyState('idle'), 1500);
+                    } catch {}
+                  }}
+                  className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  title={t('spu.tool.copyJson')}
+                >
+                  <Copy size={12} /> {toolLogCopyState === 'copied' ? t('common.copied') : t('common.copy')}
+                </button>
+                <button
+                  onClick={() => setToolLogOpen(false)}
+                  className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground"
+                  title={t('common.close')}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 overflow-y-auto space-y-3">
+              {runToolCalls.map((c, i) => (
+                <div key={i} className="rounded-lg border border-border overflow-hidden">
+                  <div className="px-3 py-1.5 bg-muted/50 flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground w-5 shrink-0">#{i + 1}</span>
+                    <span className="font-mono text-xs font-medium">{c.name}</span>
+                    {c.at && (
+                      <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                        {new Date(c.at).toLocaleTimeString()}
+                      </span>
+                    )}
+                  </div>
+                  <pre className="px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-all font-mono max-h-64 overflow-y-auto">
+                    {(() => {
+                      try { return JSON.stringify(c.input, null, 2); }
+                      catch { return String(c.input); }
+                    })()}
+                  </pre>
+                  {c.input?._truncated && (
+                    <div className="px-3 pb-2 text-[10px] text-amber-600 dark:text-amber-400">
+                      {t('spu.tool.truncated').replace('{n}', Number(c.input._originalChars).toLocaleString())}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="px-5 py-2 border-t border-border text-[10px] text-muted-foreground shrink-0">
+              {t('spu.tool.footer')}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

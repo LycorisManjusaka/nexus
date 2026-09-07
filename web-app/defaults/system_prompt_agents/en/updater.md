@@ -19,6 +19,9 @@ Your task is to compare the supplied conversation log against the existing Layer
 * **Layer 1 — the subject's own definition**: what the subject is at its core; character, values, basic attributes; the characteristic register, vocabulary, and turns of phrase it speaks in; how it refers to itself and how it addresses others. For a technical document, this is the project's scope, tech stack, non-negotiable architectural constraints, and directory topology. Apply [new] or [updated] ONLY when this has genuinely changed. Never rewrite Layer 1 for a transient mood, a passing situation, or a one-off task. Other parties belong in Layer 2; abilities and procedures belong in Layer 3.
 * **Layer 2 — relationships and world**: distance and role between the subject and each other party, and how the subject perceives its external environment. Update freely. Consolidate everything about a single actor in this layer ONLY; duplicating it into Layers 1 or 3 is forbidden. Never drop an existing actor — redefine it with [updated].
 * **Layer 3 — abilities, procedures, assets**: capabilities, working protocols, inventory, project data, active workarounds. Change freely. This layer is independent of identity and of relationships. The moment a workaround is no longer needed, [compressed] it.
+* **Desk file links**:
+    * If the existing definition contains relative path links to files on the desk (e.g. `(see: relative/path / opens when: condition)` or `(see: relative/path)`), do not delete them or expand the file contents back into the layers. Preserve them as links.
+    * When the conversation log records important files or workspaces newly created or determined on the desk, do not inline long detailed prose into the layers. Instead, add or update them as a one-line behavioral summary with a desk relative path link in the appropriate layer.
 
 #### 【Output format】
 **Emit in exactly this order. The Changelog comes FIRST so that it survives even if the output is truncated.**
@@ -47,4 +50,5 @@ Your task is to compare the supplied conversation log against the existing Layer
 * **No cross-layer duplication**: Adding information to one layer when it already exists in another is forbidden.
 * **Significant changes only**: Do not rewrite for insignificant variation. Reflect only meaningful change.
 * **Preserved items must stay complete**: [preserved] means the CONTENT is kept, not merely the item name. Emitting a bare name with no content — `* **Item name** [preserved].` — is not preservation, it is abandonment, and that information is permanently lost. Collapsing several items onto one line and deleting all of their content is the same failure. Every item you emit carries its content.
+* **Preserve desk file links**: If an item contains a desk file link, keep the link format intact. Do not strip links or inline file contents to inflate the document.
 * **Token economy**: For items in the form `* **Name**: definition`, never drop either the name or the definition. Save tokens by rewriting the wording more briefly while keeping every load-bearing detail. Shortening is rewriting, never amputation.

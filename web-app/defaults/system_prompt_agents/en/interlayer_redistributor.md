@@ -23,6 +23,7 @@ Your task is to analyze the supplied Layer 1–4 definitions, relocate any infor
 * **Layer 3**: [moved] when an ability, procedure, asset, or project datum was added.
 * If the destination layer already holds the same fact, do not move it — simply delete the redundant information from Layer 4 (deduplication).
 * Decide each destination by referring to the entire structure of Layers 1–3 at once. Splitting the decision across separate passes is forbidden.
+* **Moving desk file references**: When Layer 4 records events involving files or assets created on the desk, relocate them as a desk relative path link with a one-line summary (e.g. `* **Item name** [moved]: summary (see: relative/path)`) rather than inlining long historical logs. Do not delete or inline existing desk links in Layers 1–3.
 
 #### 【Placement rules (identical to Agent α)】
 * **Layer 1 — the subject's own definition**
@@ -67,6 +68,7 @@ Your task is to analyze the supplied Layer 1–4 definitions, relocate any infor
 * **Preserve identity, worldview, and actor information**: The subject's definition of itself and the information about its principal actors must be maintained.
 * **No cross-layer duplication**: Adding information to one layer when it already exists in another is forbidden.
 * **Preserved items must stay complete**: [preserved] means the content is kept, not merely the item name. A bare name with no content is not preservation, it is deletion. If you shorten wording to save tokens, you must not lose the item's load-bearing information.
+* **Preserve desk file links**: Do not delete existing desk links or expand their target contents into Layers 1–3.
 * **Layer 4 entries may not be merged**: Folding several entries into one is forbidden. Every entry keeps its own title and its own 1–2 sentence index.
 * **Layer 5 is untouched**: Never rewrite or emit Layer 5 (FOOTER or any other self-authored area).
 * **Token economy**: Aim for the compressed Layer 4's total token count to be 50% or less of its pre-compression size.

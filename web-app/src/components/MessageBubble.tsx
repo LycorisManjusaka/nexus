@@ -12,6 +12,7 @@ import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
 import { useT } from '@/lib/i18n';
 import { applySinkId } from '@/lib/audioSink';
+import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
@@ -176,6 +177,11 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   // order they were dispatched — never in the order their async synthesis
   // happened to finish (which made short sentences jump ahead).
   const audioSlotsRef = React.useRef<Map<number, string | null>>(new Map());
+  // Parallel to audioSlotsRef: the TEXT each dispatch sequence speaks. The
+  // player knows only urls, so without this there is no way to say which
+  // phrase is currently sounding. Written at dispatch, consumed and dropped
+  // when its slot plays.
+  const segTextRef = React.useRef<Map<number, string>>(new Map());
   const nextDispatchSeqRef = React.useRef(0);
   const nextPlaySeqRef = React.useRef(0);
   const isCurrentlyPlayingRef = React.useRef(false);
@@ -275,19 +281,29 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // If the next slot hasn't synthesized yet, stop and wait — a completing
     // synthesis will call back in. This guarantees in-order playback.
     let url: string | null = null;
+    let playedSeq = -1;
     while (audioSlotsRef.current.has(nextPlaySeqRef.current)) {
-      const u = audioSlotsRef.current.get(nextPlaySeqRef.current) ?? null;
-      audioSlotsRef.current.delete(nextPlaySeqRef.current);
+      const seq = nextPlaySeqRef.current;
+      const u = audioSlotsRef.current.get(seq) ?? null;
+      audioSlotsRef.current.delete(seq);
       nextPlaySeqRef.current++;
-      if (u != null) { url = u; break; }
+      if (u != null) { url = u; playedSeq = seq; break; }
       // u === null → empty/skipped segment; keep scanning in order.
+      segTextRef.current.delete(seq);
     }
     if (url == null) {
       isCurrentlyPlayingRef.current = false;
+      clearTtsHighlight();
       maybeFinishStreaming();
       return;
     }
     isCurrentlyPlayingRef.current = true;
+    // Tint the phrase about to sound. Decoration only — never awaited, never
+    // able to throw into the player (the helper swallows its own failures).
+    if (globalSettings?.ttsHighlight !== false) {
+      highlightTtsPhrase(contentRef.current, segTextRef.current.get(playedSeq) || '', isUser);
+    }
+    segTextRef.current.delete(playedSeq);
     const audio1 = new Audio(url);
     currentAudioRef.current = audio1;
     // Advance-the-chain handler. It MUST be attached BEFORE play()/awaits: in
@@ -432,6 +448,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     if (ctx) {
       if (isOnlyTimestamps(textToSpeak) || !textToSpeak.trim()) return;
       const seq = nextDispatchSeqRef.current++;
+      segTextRef.current.set(seq, textToSpeak);
       synthesizeStreamingSegment({ text: textToSpeak, ...streamingVoiceRef.current }, signal, seq);
       return;
     }
@@ -442,6 +459,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       // timestamp. Never queue a segment that is only timestamp(s).
       if (isOnlyTimestamps(s)) continue;
       const seq = nextDispatchSeqRef.current++;
+      segTextRef.current.set(seq, s);
       synthesizeStreamingSegment({ text: s, ...streamingVoiceRef.current }, signal, seq);
     }
   };
@@ -507,6 +525,8 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     streamingDoneRef.current = !msgStreamingRef.current;
     streamingProcessedLenRef.current = 0;
     audioSlotsRef.current = new Map();
+    segTextRef.current = new Map();
+    clearTtsHighlight();
     nextDispatchSeqRef.current = 0;
     nextPlaySeqRef.current = 0;
     isCurrentlyPlayingRef.current = false;
@@ -524,6 +544,24 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       maybeFinishStreaming();
     }
   };
+
+  // A Range points at real text nodes. While a message is still streaming,
+  // react-markdown re-parses on every tick and React can replace the nodes of
+  // the block being appended to — which silently detaches the highlight. This
+  // costs one `isConnected` check per tick and only re-walks the text when the
+  // anchor has actually gone away.
+  React.useEffect(() => {
+    if (ttsStateRef.current === 'idle') return;
+    if (globalSettings?.ttsHighlight === false) return;
+    reapplyTtsHighlight(contentRef.current);
+  }, [msg.content]);
+
+  // Leaving the conversation mid-speech must not leave a stale tint behind.
+  // Guarded: an unrelated bubble unmounting must not clear a highlight that
+  // belongs to the bubble currently speaking.
+  React.useEffect(() => () => {
+    if (ttsStateRef.current !== 'idle') clearTtsHighlight();
+  }, []);
 
   // Process more sentences as the streaming message grows.
   React.useEffect(() => {
@@ -563,6 +601,8 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
 
   const stopTTS = () => {
     pushTtsDiag({ active: false });
+    clearTtsHighlight();
+    segTextRef.current = new Map();
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
@@ -649,6 +689,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     const ac = new AbortController();
     abortControllerRef.current = ac;
     const signal = ac.signal;
+    clearTtsHighlight();
 
     let segments: any[] = [];
     const defaultUserVoice = globalSettings?.userVoice || { engine: 0, char_idx: 1, style_idx: 0, speed: 1.0 };
@@ -796,14 +837,21 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     // State + AbortController already set up at the top of the function.
 
     let currentIndex = 0;
-    const audioQueue: string[] = [];
+    // The queue carries the spoken TEXT next to its url so the phrase
+    // highlight knows what is sounding. Positional association through
+    // `sentences` would break the moment a segment is skipped.
+    const audioQueue: { url: string; text: string }[] = [];
     let isCurrentlyPlaying = false;
 
     const playNext = async () => {
       if (signal.aborted) return;
       if (audioQueue.length > 0) {
         isCurrentlyPlaying = true;
-        const url = audioQueue.shift()!;
+        const item = audioQueue.shift()!;
+        const url = item.url;
+        if (globalSettings?.ttsHighlight !== false) {
+          highlightTtsPhrase(contentRef.current, item.text, isUser);
+        }
         const audio1 = new Audio(url);
         currentAudioRef.current = audio1;
         if (isVRChatMode && (globalSettings?.device1Id || globalSettings?.device1Label)) {
@@ -846,6 +894,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       } else {
         isCurrentlyPlaying = false;
         if (currentIndex >= sentences.length) {
+          clearTtsHighlight();
           setTtsState('idle');
         }
       }
@@ -896,7 +945,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           continue;
         }
         const url = URL.createObjectURL(blob);
-        audioQueue.push(url);
+        audioQueue.push({ url, text: sentences[i]?.text || '' });
         ttsDiagRef.current.done++;
         pushTtsDiag();
 

@@ -627,6 +627,21 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </label>
             </div>
 
+            <div className="p-3 rounded-lg border border-border bg-muted/30">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={globalSettings.ttsHighlight !== false}
+                  onChange={e => setGlobalSettings({ ...globalSettings, ttsHighlight: e.target.checked })}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">{t('settings.ttsHighlight.label')}</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                <Tx k="settings.ttsHighlight.help" />
+              </p>
+            </div>
+
           </div>
           )}
 

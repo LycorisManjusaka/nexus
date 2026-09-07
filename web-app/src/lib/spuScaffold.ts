@@ -262,6 +262,102 @@ export function buildRedistributeUserMsg(a: RedistributeScaffoldArgs): string {
   ].join('\n');
 }
 
+// ── index (indexer.md) ──────────────────────────────────────────────────────
+export interface IndexScaffoldArgs {
+  lang: ScaffoldLang;
+  baseName: string;
+  focus: string;
+  header: string;
+  leftText: string;
+  folderName: string;
+  entityFooter: string;
+  resumeText: string;
+  endSentinel: string;
+}
+
+export function buildIndexUserMsg(a: IndexScaffoldArgs): string {
+  const L = a.lang === 'en';
+
+  const headerBlock = a.header.trim()
+    ? [
+        L ? `=== Reference: Header (auto-prepended to the top of the final prompt) ===`
+          : `=== 参考：ヘッダー（最終プロンプトの先頭に自動付与） ===`,
+        L ? `*Reference-only. Do not rewrite or include it in your output.*`
+          : `※参照専用。書き換え・出力への含有は禁止。`,
+        a.header.trim(),
+        ``,
+      ]
+    : [];
+
+  const footerBlock = a.entityFooter.trim()
+    ? [
+        L ? `=== Reference: Layer 5 (the entity's own signature, FOOTER.md) ===`
+          : `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
+        L ? `*Reference-only. This is the only layer written by the subject itself — do not rewrite, regenerate, or include it in your output.*`
+          : `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
+        a.entityFooter.trim(),
+        ``,
+      ]
+    : [];
+
+  const resumeBlock = a.resumeText
+    ? [
+        L ? `=== Already-generated output (a previous run stopped partway) ===`
+          : `=== すでに生成済みの出力（前回の実行が途中で停止しました） ===`,
+        L ? `*The following is the completed portion that a previous run already produced.*`
+          : `※以下は前回の実行で既に生成された、完成済みの部分です。`,
+        L ? `Resume from where it left off. Never repeat what has already been output.`
+          : `この続きから再開してください。すでに出力済みの内容は絶対に繰り返さないでください。`,
+        a.resumeText,
+        ``,
+      ]
+    : [];
+
+  const toolsNote = L
+    ? `You have been given read-only Read/Glob/Grep tool access to this subject's own workspace (folder: "${a.folderName}"), rooted the same way the subject's own tools are. Use it to check what already exists on the desk before proposing a new file — you have NO write access; every write happens after this turn, from the "Files To Externalize" block you emit.`
+    : `この対象自身のワークスペース（フォルダ：「${a.folderName}」）に対する、読み取り専用の Read/Glob/Grep ツールアクセスが与えられています。対象自身のツールと同じ相対パスの起点で参照できます。新しいファイルを提案する前に、机に既に何があるかを確認するために使ってください。書き込み権限はありません — 実際の書き込みはすべてこのターンの後、あなたが出力する「移設対象ファイル一覧」から行われます。`;
+
+  const outputSpec = [
+    L ? `=== Output specification (NEXUS parses this mechanically) ===`
+      : `=== 出力仕様（NEXUSが機械的に解析します） ===`,
+    ...(a.resumeText
+      ? [L ? `Output ONLY the continuation of the "already-generated output" above. Do not rewrite from the start.`
+           : `上記「すでに生成済みの出力」の**続きのみ**を出力してください。最初から書き直さないこと。`, ``]
+      : []),
+    L ? `1. Changelog — write it before the "Files To Externalize" heading. It is not saved into the prompt; it is archived separately.`
+      : `1. 変更ログ — 「移設対象ファイル一覧」見出しより前に書くこと。プロンプトには保存されず、別途アーカイブされます。`,
+    L ? `2. Files To Externalize — one "### File path: \`relative/path\`" heading per desk file, each followed by the full text to write.`
+      : `2. 移設対象ファイル一覧 — 机のファイル1件につき「### ファイルパス: \`相対パス\`」見出しを1つ、その直後に書き込む全文を続けること。`,
+    L ? `3. Layers 1-3 — begin with a "## **Layer 1: …**" heading. This is the slimmed-down soul with links replacing what you externalized.`
+      : `3. 第1〜3層 — 「## **Layer 1: …**」形式の見出しから開始すること。これが、外部化した内容をリンクに置き換えた、軽量化後の魂です。`,
+    L ? `Do not output Layer 4 or Layer 5.`
+      : `Layer 4・Layer 5 は出力しないこと。`,
+    L ? `When all output is complete, end by writing exactly "${a.endSentinel}" (half-width) alone on the final line.`
+      : `すべての出力が完了したら、最後の行に必ず半角で「${a.endSentinel}」とだけ記述して終了してください。`,
+  ];
+
+  return [
+    L ? `[Instructions from the user]` : `[ユーザーからの指示]`,
+    L ? `Subject: ${a.baseName}` : `対象：${a.baseName}`,
+    L ? `Operation mode: externalization & indexing (no conversation log)` : `操作モード：外部化・索引化（会話ログなし）`,
+    ``,
+    L ? `Follow your own protocol for the work itself. Below are the materials and NEXUS's output specification.`
+      : `作業内容はあなた自身のプロトコルに従ってください。以下は材料と、NEXUS側の出力仕様です。`,
+    ...(a.focus ? [``, (L ? `IMPORTANT: ${a.focus}` : `重要：${a.focus}`)] : []),
+    ``,
+    toolsNote,
+    ``,
+    ...headerBlock,
+    L ? `=== Layers 1-3 (current, to be slimmed down) ===`
+      : `=== 第1〜3層（現行・軽量化対象） ===`,
+    a.leftText || (L ? `(none)` : `(なし)`),
+    ``,
+    ...footerBlock,
+    ...resumeBlock,
+    ...outputSpec,
+  ].join('\n');
+}
+
 // ── genesis (genesis_extractor.md) ─────────────────────────────────────────
 export interface GenesisScaffoldArgs {
   lang: ScaffoldLang;
