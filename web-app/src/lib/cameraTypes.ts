@@ -5,29 +5,35 @@
 
 /**
  * The coarse activity a being is in RIGHT NOW, as observed from the SSE
- * stream ChatArea already parses. Deliberately small — five states, not one
+ * stream ChatArea already parses. Deliberately small — six phases, not one
  * per tool — because the camera panel tolerates a 1-2s gap on every switch
  * (per spec) and because a state with no camera files just falls back to
- * Idle (see cameraFiles.ts resolveState). Add states by adding files, not by
- * widening this union: an unrecognized-but-plausible phase should degrade to
- * 'idle' rather than fail to compile.
+ * Idle (see cameraFiles.ts buildCameraManifest). Add states by adding files,
+ * not by widening this union: an unrecognized-but-plausible phase should
+ * degrade to 'idle' rather than fail to compile.
  *
  *  - 'idle'     nothing in flight (no active turn, no audio playing)
  *  - 'thinking' extended-thinking text is streaming in, no visible reply yet
- *  - 'writing'  the visible reply is streaming
+ *  - 'replying' the visible reply is streaming — maps to the 'Speaking'
+ *               camera state (outputting to the conversation, TTS on or off)
+ *  - 'waiting'  a turn is in flight but nothing has arrived yet — the model
+ *               was just called, OR it is waiting on something (compaction, an
+ *               AskQuestion answer, a subagent, a stall). Maps to 'Waiting'.
  *  - 'tool'     a tool call is in flight (OAuth path only — see ChatArea's
  *               liveToolName; other provider paths never populate a live
- *               tool name mid-turn, so they fall through to 'writing')
- *  - 'speaking' TTS audio is actually playing — see CameraSignal.speaking
+ *               tool name mid-turn, so they fall through to 'waiting')
+ *
+ * 'speaking' (TTS audio actually playing) is NOT a phase — it is
+ * CameraSignal.speaking, tracked separately so it can override every phase.
  */
-export type CameraPhase = 'idle' | 'thinking' | 'writing' | 'tool';
+export type CameraPhase = 'idle' | 'thinking' | 'replying' | 'waiting' | 'tool';
 
 /**
  * What ChatArea reports on every relevant change. `speaking` is tracked
  * separately from `phase` (rather than folded into the union) because it is
  * the one signal explicitly required to override every other state — see
- * cameraFiles.ts resolveDesiredState, which checks `speaking` first and
- * ignores `phase` entirely when it is true.
+ * resolveStateCandidates below, which checks `speaking` first and ignores
+ * `phase` entirely when it is true.
  */
 export interface CameraSignal {
   speaking: boolean;
@@ -72,17 +78,40 @@ export function cameraFileKind(filename: string): 'image' | 'video' | null {
 }
 
 /**
- * "web_search" -> "WebSearch". Turns a raw tool key into a filename-safe
- * state token with no underscores, so it can never collide with the `_N`
- * pool-numbering suffix or the `From_To` transition separator that
- * cameraFiles.ts parses on the other side.
+ * Which of the four "doing something" camera states a raw tool name maps to.
+ * The being's camera folders use seven coarse states — Idle / Speaking /
+ * Thinking / Writing / Reading / Acting / Waiting — and a tool call resolves
+ * to one of the four action groups here, then falls back to Idle in
+ * resolveStateCandidates below.
+ *
+ * This is the mapping that used to misroute: the old chain resolved a tool to
+ * a `Tool<Name>` token, then a generic 'Tool', then 'Thinking' — and since no
+ * being had files for `ToolBash`/`Tool`, every tool call silently showed as
+ * "Thinking". Now Bash → Acting, Read → Reading, Write → Writing, and
+ * anything that is the model WAITING (compaction, a rate-limit pause, an
+ * AskQuestion, a subagent) → Waiting.
+ *
+ * Unknown tool names degrade to 'Acting' — a tool we don't recognise is still
+ * an action being taken, not a reason to fall back to Idle mid-turn.
  */
-export function toolNameToStateToken(name: string): string {
-  return name
-    .split(/[_\-\s]+/)
-    .filter(Boolean)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join('');
+export type CameraToolGroup = 'Reading' | 'Writing' | 'Acting' | 'Waiting';
+
+const WRITING_TOOLS = new Set(['Write', 'Edit']);
+const READING_TOOLS = new Set([
+  'Read', 'Glob', 'Grep',
+  'read_conversation', 'search_conversations',
+  'web_search', 'web_fetch', 'WebSearch', 'WebFetch',
+  'browser_read', 'browser_snapshot', 'browser_screenshot',
+  'computer_screens', 'computer_screenshot',
+  'list_letters', 'read_letter',
+]);
+const WAITING_TOOLS = new Set(['AskQuestion', 'spawn_subagent', 'rate_limit_wait', 'compact']);
+
+export function toolNameToGroup(name: string): CameraToolGroup {
+  if (WRITING_TOOLS.has(name)) return 'Writing';
+  if (READING_TOOLS.has(name)) return 'Reading';
+  if (WAITING_TOOLS.has(name)) return 'Waiting';
+  return 'Acting';
 }
 
 /**
@@ -90,23 +119,28 @@ export function toolNameToStateToken(name: string): string {
  * first one with a non-empty pool wins, and the chain always ends at 'Idle'.
  * This is what makes "even a simple fallback should work" true: a being with
  * only Idle.mp4 and Writing.mp4 on disk still resolves something sensible for
- * every possible signal, and a video added for one specific tool later just
- * starts winning over the generic 'Tool' pool without any other change.
+ * every possible signal, and adding a file for one more state later just
+ * starts winning for that state without any other change.
  *
  * `speaking` overrides every phase per spec ("mostly prioritized, overriding
- * any other actions") — checked first, unconditionally.
+ * any other actions") — checked first, unconditionally. The visible reply
+ * also resolves to 'Speaking' (outputting to the conversation, TTS on or off).
  */
 export function resolveStateCandidates(signal: CameraSignal): string[] {
   if (signal.speaking) return ['Speaking', 'Idle'];
   switch (signal.phase) {
     case 'tool':
-      return signal.toolName
-        ? [`Tool${toolNameToStateToken(signal.toolName)}`, 'Tool', 'Thinking', 'Idle']
-        : ['Tool', 'Thinking', 'Idle'];
+      // A tool call resolves to its action GROUP (Reading / Writing / Acting /
+      // Waiting), then falls back to Idle. No 'Thinking' stop in the chain any
+      // more: a tool that isn't reading/writing/waiting is an action, not a
+      // reason to show the reasoning state.
+      return [signal.toolName ? toolNameToGroup(signal.toolName) : 'Acting', 'Idle'];
+    case 'replying':
+      return ['Speaking', 'Idle'];
     case 'thinking':
       return ['Thinking', 'Idle'];
-    case 'writing':
-      return ['Writing', 'Idle'];
+    case 'waiting':
+      return ['Waiting', 'Idle'];
     case 'idle':
     default:
       return ['Idle'];

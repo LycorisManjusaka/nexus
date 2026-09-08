@@ -418,10 +418,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [liveToolName, setLiveToolName] = useState<string | null>(null);
   // Coarse phase of the CURRENT turn's streaming output, for the camera
   // signal only (see CameraPanel.tsx). 'thinking' while extended-thinking
-  // text is arriving with no visible reply yet; 'writing' once the visible
+  // text is arriving with no visible reply yet; 'replying' once the visible
   // reply has started (text wins over thinking once it starts — the natural
   // model->camera mapping). null outside an active turn.
-  const [streamPhase, setStreamPhase] = useState<'thinking' | 'writing' | null>(null);
+  const [streamPhase, setStreamPhase] = useState<'thinking' | 'replying' | null>(null);
   // True when the phrase in `liveToolActivity` came from the UI dictionary, so
   // it fits the localized sentence frame. False when we fell back to the
   // server's English label for a tool that has no key — then the sentence has
@@ -810,24 +810,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // full folder refetch, since the checkbox below only persists via this
   // component's own debounced auto-save. TTS-speaking wins over everything
   // per the user's explicit priority rule; a live tool name (OAuth-path only)
-  // beats the coarser thinking/writing streamPhase; both fall back to 'idle'
+  // beats the coarser thinking/replying streamPhase; both fall back to 'idle'
   // whenever no turn is in flight.
   useEffect(() => {
     if (typeof onCameraSignal !== 'function') return;
+    // Map the turn's current state to a camera phase. Priority (highest first):
+    //   waiting-for-something (AskQuestion / subagent / stall) > live tool >
+    //   reply streaming > thinking streaming > "called but nothing yet".
+    // The last two both read as 'waiting': a freshly-started turn and a turn
+    // parked on compaction / a provider retry both have no tool name and no
+    // streamed text/thinking yet, so they land in the same Waiting state —
+    // which is exactly the partner's ask ("AI called, no reply yet → Waiting").
     const phase: CameraSignal['phase'] = !loading
       ? 'idle'
-      : liveToolName
-        ? 'tool'
-        : streamPhase === 'writing'
-          ? 'writing'
-          : 'thinking';
+      : (pendingAsk || activeSubagent || stallIdleSeconds !== null)
+        ? 'waiting'
+        : liveToolName
+          ? 'tool'
+          : streamPhase === 'replying'
+            ? 'replying'
+            : streamPhase === 'thinking'
+              ? 'thinking'
+              : 'waiting';
     const signal: CameraSignal = {
       speaking: isAudioPlaying,
       phase,
       toolName: phase === 'tool' ? liveToolName : null,
     };
     onCameraSignal({ enabled: cameraEnabled, folderName, signal });
-  }, [onCameraSignal, cameraEnabled, folderName, isAudioPlaying, loading, liveToolName, streamPhase]);
+  }, [onCameraSignal, cameraEnabled, folderName, isAudioPlaying, loading, liveToolName, streamPhase, pendingAsk, activeSubagent, stallIdleSeconds]);
 
   // Stable identity (useCallback): this is passed to every MessageBubble and
   // used inside one of its effects' dependency arrays. As a fresh closure each
@@ -2402,10 +2413,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // Only set 'thinking' if the reply hasn't started yet — once
                 // text has begun, the camera signal should not fall back to
                 // thinking even if the model interleaves more thought chunks.
-                setStreamPhase(prev => (prev === 'writing' ? prev : 'thinking'));
+                setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking'));
               } else if (data.type === 'text') {
                 currentText += data.content;
-                setStreamPhase('writing');
+                setStreamPhase('replying');
                 // Strip "[YYYY-MM-DD HH:MM:SS]" tags CONTINUOUSLY as the reply
                 // streams in (gated on the global setting, default ON) — not just
                 // a leading stack but ANY tag, wherever it appears, including the

@@ -11,9 +11,11 @@
 //                           resolved state changes From -> To
 //   <From>_<To>_<N>.<ext>  one entry in the From->To transition pool
 //
-// State/tool tokens must not contain underscores (see toolNameToStateToken in
-// cameraTypes.ts) — that's what makes "2 parts after stripping a trailing
-// number" unambiguously a transition and "1 part" unambiguously a state.
+// State tokens must not contain underscores (the seven camera states — Idle /
+// Speaking / Thinking / Writing / Reading / Acting / Waiting — are all single
+// words, and tool calls map onto them via toolNameToGroup in cameraTypes.ts).
+// That's what makes "2 parts after stripping a trailing number" unambiguously
+// a transition and "1 part" unambiguously a state.
 // Anything else (0 parts, 3+ parts, an unrecognized extension) is silently
 // skipped rather than rejected: a stray file in this folder must never break
 // the being's camera, only fail to appear in it.

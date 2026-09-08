@@ -42,6 +42,7 @@ export async function POST(req: Request) {
     // this fix) doesn't silently lose image pushes on upgrade.
     imageSourceName: (keys?.obsImageSourceName || keys?.obsSourceName || '').trim(),
     videoSourceName: (keys?.obsVideoSourceName || '').trim(),
+    underlaySourceName: (keys?.obsUnderlaySourceName || '下敷き').trim(),
   };
 
   const result = await pushCameraFile(cfg, fullPath);
