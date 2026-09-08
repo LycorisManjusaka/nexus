@@ -30,6 +30,7 @@ import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import type { CameraSignal } from '@/lib/cameraTypes';
+import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
 
 // Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
@@ -291,7 +292,7 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
   }
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, onCameraSignal }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -804,41 +805,37 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const isAudioPlaying = Object.values(audioPlayingStates).some(v => v);
   const [vrchatQueue, setVrchatQueue] = useState<{ text: string, attachment: any }[]>([]);
 
-  // Camera signal: reported to the parent on every relevant change, bundled
-  // with `enabled`/`folderName` rather than left for NexusApp to read off
-  // `activeFolder.settings.cameraEnabled` — that copy is stale until the next
-  // full folder refetch, since the checkbox below only persists via this
-  // component's own debounced auto-save. TTS-speaking wins over everything
-  // per the user's explicit priority rule; a live tool name (OAuth-path only)
-  // beats the coarser thinking/replying streamPhase; both fall back to 'idle'
+  // Camera signal: computed at render time and handed straight to the
+  // <CameraPanel> rendered locally below (no more lifting this up to
+  // NexusApp via a callback prop — the panel now lives inside ChatArea's
+  // own layout, in the row below the header, so nothing outside this
+  // component needs it). TTS-speaking wins over everything per the user's
+  // explicit priority rule; a live tool name (OAuth-path only) beats the
+  // coarser thinking/replying streamPhase; both fall back to 'idle'
   // whenever no turn is in flight.
-  useEffect(() => {
-    if (typeof onCameraSignal !== 'function') return;
-    // Map the turn's current state to a camera phase. Priority (highest first):
-    //   waiting-for-something (AskQuestion / subagent / stall) > live tool >
-    //   reply streaming > thinking streaming > "called but nothing yet".
-    // The last two both read as 'waiting': a freshly-started turn and a turn
-    // parked on compaction / a provider retry both have no tool name and no
-    // streamed text/thinking yet, so they land in the same Waiting state —
-    // which is exactly the partner's ask ("AI called, no reply yet → Waiting").
-    const phase: CameraSignal['phase'] = !loading
-      ? 'idle'
-      : (pendingAsk || activeSubagent || stallIdleSeconds !== null)
-        ? 'waiting'
-        : liveToolName
-          ? 'tool'
-          : streamPhase === 'replying'
-            ? 'replying'
-            : streamPhase === 'thinking'
-              ? 'thinking'
-              : 'waiting';
-    const signal: CameraSignal = {
-      speaking: isAudioPlaying,
-      phase,
-      toolName: phase === 'tool' ? liveToolName : null,
-    };
-    onCameraSignal({ enabled: cameraEnabled, folderName, signal });
-  }, [onCameraSignal, cameraEnabled, folderName, isAudioPlaying, loading, liveToolName, streamPhase, pendingAsk, activeSubagent, stallIdleSeconds]);
+  // Map the turn's current state to a camera phase. Priority (highest first):
+  //   waiting-for-something (AskQuestion / subagent / stall) > live tool >
+  //   reply streaming > thinking streaming > "called but nothing yet".
+  // The last two both read as 'waiting': a freshly-started turn and a turn
+  // parked on compaction / a provider retry both have no tool name and no
+  // streamed text/thinking yet, so they land in the same Waiting state —
+  // which is exactly the partner's ask ("AI called, no reply yet → Waiting").
+  const cameraPhase: CameraSignal['phase'] = !loading
+    ? 'idle'
+    : (pendingAsk || activeSubagent || stallIdleSeconds !== null)
+      ? 'waiting'
+      : liveToolName
+        ? 'tool'
+        : streamPhase === 'replying'
+          ? 'replying'
+          : streamPhase === 'thinking'
+            ? 'thinking'
+            : 'waiting';
+  const cameraSignal: CameraSignal = {
+    speaking: isAudioPlaying,
+    phase: cameraPhase,
+    toolName: cameraPhase === 'tool' ? liveToolName : null,
+  };
 
   // Stable identity (useCallback): this is passed to every MessageBubble and
   // used inside one of its effects' dependency arrays. As a fresh closure each
@@ -3416,6 +3413,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </div>
       </div>
 
+      {/* Row below the header: conversation column + camera panel. Kept as a
+          separate row (rather than making CameraPanel a sibling of the
+          whole ChatArea root) specifically so the header above always spans
+          the FULL width of the app — shrinking the window narrows this row
+          alone, never eating into the toolbar's icon row. */}
+      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex flex-col min-w-0">
+
       {/* Conversation-load progress bar + Stop button. Only shown while
           /api/logs/[id] is downloading. When Content-Length is provided
           we render a percentage bar; otherwise we render an indeterminate
@@ -3755,6 +3760,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={false} aiName={localAiName} vrchatMode={vrchatMode} globalSettings={globalSettings} convoId={convoId} />
           </div>
         </div>
+      </div>
+
+      </div>
+      <CameraPanel folderName={folderName} enabled={cameraEnabled} signal={cameraSignal} />
       </div>
 
       {/* System Prompt Modal */}

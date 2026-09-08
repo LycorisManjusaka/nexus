@@ -3,13 +3,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from '@/components/Sidebar';
 import ChatArea from '@/components/ChatArea';
-import CameraPanel from '@/components/CameraPanel';
 import SettingsModal from '@/components/SettingsModal';
 import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
-import type { CameraSignal } from '@/lib/cameraTypes';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -74,11 +72,6 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const [currentConvoId, setCurrentConvoId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
-  // Reported by ChatArea's onCameraSignal on every relevant change (see its
-  // own comment for why this is bundled rather than read off
-  // activeFolder.settings.cameraEnabled, which would be stale between
-  // saves). null before the first report — CameraPanel isn't rendered yet.
-  const [cameraState, setCameraState] = useState<{ enabled: boolean; folderName: string; signal: CameraSignal } | null>(null);
   // NOTE: maxRecommendedContext, autoTrimCopiedMessages, and
   // maxTokensPerLayer were moved out of globalSettings into per-folder
   // settings (Folder Settings → Context Management). Old user_settings.json
@@ -644,7 +637,6 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             plannedTitle={conversations.find(c => c.id === currentConvoId)?.title}
             fetchFolders={fetchFolders}
             onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
-            onCameraSignal={setCameraState}
           />
         ) : (
           // Empty state. The old "Welcome to NEXUS + New Chat" panel was a dead
@@ -669,24 +661,6 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           </div>
         )}
       </main>
-
-      {/* Third flex sibling, not an overlay — this is what makes "center
-          conversation log between left panel and video" happen for free via
-          flexbox (main is flex-1, shrinks naturally between two fixed-width
-          siblings) instead of needing manual margin math. Same width class as
-          Sidebar, mirrored to the right edge.
-          Gated on cameraState.folderName matching the CURRENTLY active
-          folder: ChatArea reports its signal asynchronously and has no
-          unmount cleanup, so switching identities/conversations could
-          otherwise leave the previous being's last-reported signal (and
-          camera file) on screen for a moment. */}
-      {cameraState && cameraState.folderName === activeFolder?.name && (
-        <CameraPanel
-          folderName={cameraState.folderName}
-          enabled={cameraState.enabled}
-          signal={cameraState.signal}
-        />
-      )}
 
       {isSettingsOpen && (
         <SettingsModal
