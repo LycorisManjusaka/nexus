@@ -4281,27 +4281,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 </p>
               </div>
 
-              {/* ── Camera (OBS Studio media-source push + in-app avatar panel)
-                  OFF by default. One toggle gates both: the right-side GUI
-                  panel and, if OBS WebSocket details are configured in
-                  Preferences, pushing the resolved file into an OBS Media
-                  Source. Works with the panel alone if OBS isn't running —
-                  the push is always best-effort. */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={cameraEnabled}
-                    onChange={(e) => setCameraEnabled(e.target.checked)}
-                    className="accent-red-500"
-                  />
-                  <span className="text-sm font-semibold text-foreground">{t('id.camera.label')}</span>
-                </label>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  <Tx k="id.camera.help" />
-                </p>
-              </div>
-
               {/* ── Subagent (context-firewall helper) — OAuth Claude only ───── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -4569,6 +4548,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     />
                   </div>
                 )}
+
+                {/* ── Camera (OBS Studio media-source push + in-app avatar panel)
+                    OFF by default. One toggle gates both: the right-side GUI
+                    panel and, if OBS WebSocket details are configured in
+                    Preferences, pushing the resolved file into an OBS Media
+                    Source. Works with the panel alone if OBS isn't running —
+                    the push is always best-effort. */}
+                <div className="mt-6">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={cameraEnabled}
+                      onChange={(e) => setCameraEnabled(e.target.checked)}
+                      className="accent-red-500"
+                    />
+                    <span className="text-sm font-semibold text-foreground">{t('id.camera.label')}</span>
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                    <Tx k="id.camera.help" />
+                  </p>
+                </div>
               </div>
               </>)}
 
