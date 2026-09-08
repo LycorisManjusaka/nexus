@@ -212,10 +212,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.obsWebSocketPassword.placeholder': 'leave empty if OBS auth is disabled',
   'settings.obsWebSocketPassword.help':
     "Only needed if OBS's WebSocket Server Settings has \"Enable Authentication\" checked. Saved with the API keys.",
-  'settings.obsSourceName.label': 'OBS Media Source name',
-  'settings.obsSourceName.placeholder': 'e.g. NexusCamera',
-  'settings.obsSourceName.help':
-    "The exact name of a Media Source (ffmpeg_source) in OBS's current scene. Create one in OBS first — Nexus only points an existing source at files, it never creates scenes or sources.",
+  'settings.obsImageSourceName.label': 'OBS image source name',
+  'settings.obsImageSourceName.placeholder': 'e.g. NexusCameraImage',
+  'settings.obsImageSourceName.help':
+    "Name of an Image Source in OBS's current scene, used for still images (png/jpg/webp/gif). Auto-created with this name if it doesn't exist yet — you don't need to create it in OBS first. A separate source from the video one below: OBS's Media Source (ffmpeg_source) failed to decode still images at all in testing, so images and video need different OBS source kinds.",
+  'settings.obsVideoSourceName.label': 'OBS video source name',
+  'settings.obsVideoSourceName.placeholder': 'e.g. NexusCameraVideo',
+  'settings.obsVideoSourceName.help':
+    "Name of a Media Source (ffmpeg_source) in OBS's current scene, used for video files (mp4/webm/mov/m4v). Auto-created with this name if it doesn't exist yet. Leave blank if this being's camera folder only has still images.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
     "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
@@ -1576,10 +1580,14 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.obsWebSocketPassword.placeholder': 'OBS側の認証がオフなら空欄のまま',
   'settings.obsWebSocketPassword.help':
     'OBSの「WebSocketサーバー設定」で「認証を有効にする」がオンの場合のみ必要です。APIキーと一緒に保存されます。',
-  'settings.obsSourceName.label': 'OBS メディアソース名',
-  'settings.obsSourceName.placeholder': '例: NexusCamera',
-  'settings.obsSourceName.help':
-    'OBSの現在のシーンにあるメディアソース（ffmpeg_source）の正確な名前です。先にOBS側でソースを作成しておいてください — Nexusは既存のソースにファイルを指し示すだけで、シーンやソース自体を作ることはありません。',
+  'settings.obsImageSourceName.label': 'OBS 画像ソース名',
+  'settings.obsImageSourceName.placeholder': '例: NexusCameraImage',
+  'settings.obsImageSourceName.help':
+    '静止画（png/jpg/webp/gif）用に、OBSの現在のシーンにある画像ソースの名前です。存在しなければこの名前で自動作成されるので、先にOBS側で作る必要はありません。下の動画用ソースとは別物です — テストの結果、OBSのメディアソース（ffmpeg_source）は静止画をまったくデコードできなかったため、画像と動画で異なるOBSソース種別が必要です。',
+  'settings.obsVideoSourceName.label': 'OBS 動画ソース名',
+  'settings.obsVideoSourceName.placeholder': '例: NexusCameraVideo',
+  'settings.obsVideoSourceName.help':
+    '動画ファイル（mp4/webm/mov/m4v）用に、OBSの現在のシーンにあるメディアソース（ffmpeg_source）の名前です。存在しなければこの名前で自動作成されます。カメラフォルダに静止画しかない場合は空欄のままで構いません。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
     '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',

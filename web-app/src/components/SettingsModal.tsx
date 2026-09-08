@@ -65,6 +65,8 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     obsWebSocketUrl: '',
     obsWebSocketPassword: '',
     obsSourceName: '',
+    obsImageSourceName: '',
+    obsVideoSourceName: '',
   });
   const [loading, setLoading] = useState(true);
 
@@ -803,17 +805,33 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
 
             <div>
               <label className="block">
-                <span className="text-sm text-foreground">{t('settings.obsSourceName.label')}</span>
+                <span className="text-sm text-foreground">{t('settings.obsImageSourceName.label')}</span>
                 <input
                   type="text"
-                  value={keys.obsSourceName ?? ''}
-                  placeholder={t('settings.obsSourceName.placeholder')}
-                  onChange={e => setKeys({ ...keys, obsSourceName: e.target.value })}
+                  value={keys.obsImageSourceName ?? ''}
+                  placeholder={t('settings.obsImageSourceName.placeholder')}
+                  onChange={e => setKeys({ ...keys, obsImageSourceName: e.target.value })}
                   className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
                 />
               </label>
               <p className="text-xs text-muted-foreground mt-1">
-                <Tx k="settings.obsSourceName.help" />
+                <Tx k="settings.obsImageSourceName.help" />
+              </p>
+            </div>
+
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.obsVideoSourceName.label')}</span>
+                <input
+                  type="text"
+                  value={keys.obsVideoSourceName ?? ''}
+                  placeholder={t('settings.obsVideoSourceName.placeholder')}
+                  onChange={e => setKeys({ ...keys, obsVideoSourceName: e.target.value })}
+                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
+                />
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.obsVideoSourceName.help" />
               </p>
             </div>
 

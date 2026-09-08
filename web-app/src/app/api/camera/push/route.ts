@@ -37,7 +37,11 @@ export async function POST(req: Request) {
   const cfg = {
     url: (keys?.obsWebSocketUrl || '').trim() || 'ws://127.0.0.1:4455',
     password: keys?.obsWebSocketPassword || '',
-    sourceName: (keys?.obsSourceName || '').trim(),
+    // obsSourceName is the pre-dual-source field name — kept as a fallback
+    // for the image slot only, so anyone who already configured it (before
+    // this fix) doesn't silently lose image pushes on upgrade.
+    imageSourceName: (keys?.obsImageSourceName || keys?.obsSourceName || '').trim(),
+    videoSourceName: (keys?.obsVideoSourceName || '').trim(),
   };
 
   const result = await pushCameraFile(cfg, fullPath);
