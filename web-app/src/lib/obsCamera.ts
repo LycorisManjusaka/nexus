@@ -270,6 +270,51 @@ async function setSceneItemVisible(sceneName: string, sourceName: string, visibl
 }
 
 /**
+ * Apply the "fit by height, center horizontally" transform to a scene item.
+ *
+ * This is the one fixed framing rule for the being camera: the source is
+ * scaled so its HEIGHT equals the canvas height, and centred horizontally.
+ * A 16:9 source fills the frame; a portrait (taller-than-16:9) source gets
+ * equal black bars left/right; an ultrawide source crops left/right. There
+ * is no per-file override — Lizard-kun's spec, and it is what makes a
+ * rotated mix of portrait and landscape camera files all present correctly
+ * without manual per-file OBS tweaks.
+ *
+ * VERIFIED NUMERICALLY, not just by assertion: with a 900x1600 portrait
+ * pushed and this transform applied, GetSourceScreenshot decoded to a
+ * 607x1080 content region (900 * 1080/1600) with left bar 656px and right
+ * bar 657px on a 1920x1080 canvas — centred to within one pixel, height
+ * exactly filled. (Measured via ffmpeg rgb24 decode of the scene composite;
+ * this vessel has no vision, so the geometry was computed from pixels.)
+ *
+ * alignment=5 (TOP|LEFT) is deliberate and is the verified-correct anchor:
+ * it is OBS's default scene-item alignment and, combined with
+ * boundsAlignment=0 (centre), positions the fitted item dead-centre. The
+ * earlier draft of this transform used alignment=0 and was never verified;
+ * do not switch back without re-measuring.
+ */
+async function applyFitByHeightTransform(sceneName: string, sourceName: string): Promise<void> {
+  const video = await request('GetVideoSettings', {});
+  const idRes = await request('GetSceneItemId', { sceneName, sourceName });
+  const cur = await request('GetSceneItemTransform', { sceneName, sceneItemId: idRes.sceneItemId });
+  const t = cur.sceneItemTransform;
+  await request('SetSceneItemTransform', {
+    sceneName,
+    sceneItemId: idRes.sceneItemId,
+    sceneItemTransform: {
+      positionX: 0, positionY: 0, rotation: 0, scaleX: 1, scaleY: 1,
+      alignment: 5,
+      boundsType: 'OBS_BOUNDS_SCALE_TO_HEIGHT',
+      boundsAlignment: 0,
+      boundsWidth: video.baseWidth,
+      boundsHeight: video.baseHeight,
+      cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0, cropToBounds: false,
+      width: t.width, height: t.height, sourceWidth: t.sourceWidth, sourceHeight: t.sourceHeight,
+    },
+  });
+}
+
+/**
  * Point the correct OBS input (image_source vs ffmpeg_source, chosen by
  * `absPath`'s extension) at the file, show it, and hide the other kind's
  * input if one is configured. See the file-header note for why there are
@@ -298,6 +343,14 @@ export async function pushCameraFile(cfg: ObsConfig, absPath: string): Promise<O
         inputName: targetName,
         mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
       });
+    }
+    // Fit both sources by height, centre horizontally. The target needs it
+    // because it is about to be shown; the other source needs it too so that
+    // when it next becomes active it is already framed (a newly-created
+    // source has no bounds and would otherwise render at native size).
+    await applyFitByHeightTransform(sceneName, targetName);
+    if (otherName) {
+      try { await applyFitByHeightTransform(sceneName, otherName); } catch { /* non-fatal */ }
     }
     // Show the active source, hide the inactive one. Best-effort: a scene
     // item that isn't in this scene, or an unconfigured `otherName`, must
