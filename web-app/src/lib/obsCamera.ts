@@ -41,6 +41,29 @@
  * the "never fails quietly" contract audioSink.ts set for output-device
  * routing.
  *
+ * PING-PONG SLOTS PER KIND, to fix a reported black-screen "blink" on
+ * switching. Root cause, found by reading this file's own push sequence
+ * rather than by pixel measurement (OBS's GetSourceScreenshot on an
+ * ffmpeg_source proved unreliable under rapid repeated polling on this OBS
+ * build — see workspace notes): when two consecutive pushes are the SAME
+ * kind (e.g. a being's Idle_1.mp4 -> Idle_2.mp4 video pool), the old code
+ * called SetInputSettings on the one-and-only source of that kind while it
+ * was already the visible scene item — reloading an on-screen ffmpeg/image
+ * source's decoder in place, which is a well-documented cause of a brief
+ * black frame. Cross-kind switches (image<->video) never had this problem;
+ * they already show-then-hide two *different* sources.
+ * Fix: each kind (image, video) now has two physical OBS inputs, slot A
+ * (the exact configured name, so a pre-existing manually-created OBS source
+ * keeps working with zero migration) and slot B (auto-created as
+ * "<name>__alt"). Every push loads into whichever slot is NOT currently
+ * visible, waits a short settle delay for video (decoder warm-up — well
+ * within the 1-2s gap already accepted elsewhere in this pipeline), then
+ * reveals the new slot and hides the old one. The visible source is never
+ * the one being mutated. Known accepted gap: `activeSlot` resets to null on
+ * server restart, so the very first push after a restart can still land on
+ * whatever was already on screen from the prior session — a one-off,
+ * not the repeated-flicker case that was reported.
+ *
  * obs-websocket v5 auth (only when OBS has "Enable Authentication" checked):
  *   secret    = base64(sha256(password + salt))
  *   response  = base64(sha256(secret + challenge))
@@ -88,6 +111,24 @@ const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) 
 
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 const IDLE_CLOSE_MS = 5 * 60 * 1000; // close after 5 minutes of no pushes — cheap to reopen
+
+type CameraKind = 'image' | 'video';
+type Slot = 'A' | 'B';
+
+// Which physical slot is currently the *visible* one, per kind. null = no
+// push of this kind has happened yet this process lifetime (see file-header
+// note on the accepted post-restart edge case).
+const activeSlot: Record<CameraKind, Slot | null> = { image: null, video: null };
+
+/** Slot A keeps the exact configured name; slot B is the auto-created buddy. */
+function slotInputName(logicalName: string, slot: Slot): string {
+  return slot === 'A' ? logicalName : `${logicalName}__alt`;
+}
+
+const VIDEO_REVEAL_DELAY_MS = 150; // best-effort ffmpeg decoder warm-up before reveal
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function armIdleTimer() {
   if (idleTimer) clearTimeout(idleTimer);
@@ -259,7 +300,19 @@ async function ensureInputExists(
     }
     return sceneName;
   }
-  await request('CreateInput', { sceneName, inputName: name, inputKind: kind, inputSettings: initialSettings });
+  // sceneItemEnabled explicitly false: obs-websocket defaults a freshly
+  // created input to visible when this param is omitted, which would let a
+  // brand-new ping-pong "__alt" slot (created once, the first time a kind is
+  // ever pushed twice in a row) flash on screen before pushCameraFile's own
+  // controlled reveal step runs. Starting hidden makes creation itself
+  // invisible, matching the same guarantee an already-existing slot gets.
+  await request('CreateInput', {
+    sceneName,
+    inputName: name,
+    inputKind: kind,
+    inputSettings: initialSettings,
+    sceneItemEnabled: false,
+  });
   return sceneName;
 }
 
@@ -322,9 +375,11 @@ async function applyFitByHeightTransform(sceneName: string, sourceName: string):
  */
 export async function pushCameraFile(cfg: ObsConfig, absPath: string): Promise<ObsPushResult> {
   const video = isVideoPath(absPath);
-  const targetName = video ? cfg.videoSourceName : cfg.imageSourceName;
-  const otherName = video ? cfg.imageSourceName : cfg.videoSourceName;
-  if (!cfg.url || !targetName) {
+  const kind: CameraKind = video ? 'video' : 'image';
+  const otherKind: CameraKind = video ? 'image' : 'video';
+  const logicalName = video ? cfg.videoSourceName : cfg.imageSourceName;
+  const otherLogicalName = video ? cfg.imageSourceName : cfg.videoSourceName;
+  if (!cfg.url || !logicalName) {
     return {
       ok: false,
       reason: video
@@ -334,31 +389,57 @@ export async function pushCameraFile(cfg: ObsConfig, absPath: string): Promise<O
   }
   try {
     await ensureConnected(cfg);
-    const kind = video ? 'ffmpeg_source' : 'image_source';
+    const obsKind = video ? 'ffmpeg_source' : 'image_source';
     const settings = video ? { local_file: absPath, is_local_file: true } : { file: absPath };
-    const sceneName = await ensureInputExists(targetName, kind, settings);
+
+    // Always load into the slot that is NOT currently visible (see file-
+    // header note). prevSlot null/'B' both resolve to nextSlot 'A', which is
+    // exactly right for the very first push of this kind (nothing visible
+    // yet, so land on the plain configured name, no migration surprise).
+    const prevSlot = activeSlot[kind];
+    const nextSlot: Slot = prevSlot === 'A' ? 'B' : 'A';
+    const targetName = slotInputName(logicalName, nextSlot);
+    const prevSameKindName = prevSlot ? slotInputName(logicalName, prevSlot) : null;
+
+    const sceneName = await ensureInputExists(targetName, obsKind, settings);
     await request('SetInputSettings', { inputName: targetName, inputSettings: settings, overlay: true });
     if (video) {
       await request('TriggerMediaInputAction', {
         inputName: targetName,
         mediaAction: 'OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART',
       });
+      // Give ffmpeg a moment to actually open/decode the new file before it
+      // goes on screen — this slot is hidden right now, so the wait costs
+      // nothing visible; it only reduces the chance of revealing a source
+      // whose first frame isn't ready yet.
+      await sleep(VIDEO_REVEAL_DELAY_MS);
     }
-    // Fit both sources by height, centre horizontally. The target needs it
-    // because it is about to be shown; the other source needs it too so that
-    // when it next becomes active it is already framed (a newly-created
-    // source has no bounds and would otherwise render at native size).
+
+    // Fit the target by height, centred. Also best-effort-fit the other
+    // kind's currently-active physical name (if one has ever been pushed),
+    // so it is already framed the next time it becomes visible.
     await applyFitByHeightTransform(sceneName, targetName);
-    if (otherName) {
-      try { await applyFitByHeightTransform(sceneName, otherName); } catch { /* non-fatal */ }
+    const otherActiveSlot = activeSlot[otherKind];
+    const otherPhysicalName = otherLogicalName
+      ? slotInputName(otherLogicalName, otherActiveSlot ?? 'A')
+      : null;
+    if (otherPhysicalName) {
+      try { await applyFitByHeightTransform(sceneName, otherPhysicalName); } catch { /* non-fatal */ }
     }
-    // Show the active source, hide the inactive one. Best-effort: a scene
-    // item that isn't in this scene, or an unconfigured `otherName`, must
-    // never fail the push — the file is already showing correctly either way.
+
+    // Reveal the new slot, then hide whatever was showing before — the
+    // previous slot of this same kind (if any), and the other kind's active
+    // source. Best-effort: a scene item that isn't in this scene, or a slot
+    // that was never created, must never fail the push.
     try { await setSceneItemVisible(sceneName, targetName, true); } catch { /* non-fatal */ }
-    if (otherName) {
-      try { await setSceneItemVisible(sceneName, otherName, false); } catch { /* non-fatal */ }
+    if (prevSameKindName && prevSameKindName !== targetName) {
+      try { await setSceneItemVisible(sceneName, prevSameKindName, false); } catch { /* non-fatal */ }
     }
+    if (otherPhysicalName) {
+      try { await setSceneItemVisible(sceneName, otherPhysicalName, false); } catch { /* non-fatal */ }
+    }
+
+    activeSlot[kind] = nextSlot;
     armIdleTimer();
     return { ok: true };
   } catch (e: any) {
