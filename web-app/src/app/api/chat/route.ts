@@ -1179,16 +1179,6 @@ async function streamClaudeViaAgentSDK(args: {
           return { behavior: 'allow', updatedInput: input } as any;
         };
 
-        // Opt-in override, Preferences > Other. Bounds match the shipped
-        // binary's own zod validator (autoCompactWindow: number().int()
-        // .min(1e5).max(1e6)) — clamping here too so a stray value in
-        // keys.json can't be silently dropped by the SDK's own .catch(void 0)
-        // and fall back to default without anyone noticing.
-        const rawAutoCompactWindow = Number(keys?.autoCompactWindow);
-        const autoCompactWindowSetting = Number.isFinite(rawAutoCompactWindow) && rawAutoCompactWindow > 0
-          ? Math.round(Math.min(1000000, Math.max(100000, rawAutoCompactWindow)))
-          : undefined;
-
         const queryOptions: any = {
           // env passes CLAUDE_CODE_OAUTH_TOKEN to the spawned Claude Code
           // binary WITHOUT mutating process.env (which would race across
@@ -1206,25 +1196,13 @@ async function streamClaudeViaAgentSDK(args: {
           // overflowed, because the same switch also disables the CLI's
           // emergency fallback. A visible compaction stall beats a silent break.
           //
-          // `settings.autoCompactWindow` (opt-in, 2026-09-08) delays the
-          // trigger point instead of removing it — read directly from the
-          // shipped binary's zod schema: integer, 1e5-1e6, clamped again by
-          // jc() to Math.min(realModelContextWindow, configuredValue). Since
-          // Sonnet 5 / Opus 5 report a real window of 200000 (O5q) on this
-          // OAuth path (no 1M beta), any value >= 200000 already reaches the
-          // ceiling — the effective trigger becomes
-          // ~200000 - min(maxOutputTokens, 20000) ≈ 180000, versus the
-          // ~167000 default. Confirmed cost, not a free win: YtH() reads
-          // whether the resolved window's source is "env" or "settings", and
-          // ZH (GWH() && $G() && !YtH(...)) — the CLI's own emergency
-          // reactive-fallback flag for genuine overflow — is unconditionally
-          // false whenever a custom window is configured this way, same as
-          // DISABLE_AUTO_COMPACT's finding above. So this trades a few more
-          // tokens of headroom for the same fallback loss, just smaller.
-          // Left OFF by default (undefined = Anthropic's own "auto" sizing,
-          // fallback intact); only applied when the operator sets it
-          // explicitly in Preferences > Other.
-          ...(autoCompactWindowSetting ? { settings: { autoCompactWindow: autoCompactWindowSetting } } : {}),
+          // autoCompactWindow (tried 2026-09-08, removed): the trigger is
+          // min(modelWindow, configuredValue) - 33000 (20000 output reserve +
+          // 13000 additional), and the model window on this OAuth path is
+          // 200000 — so any value >= 200000 is a no-op, the trigger never
+          // moves past ~167000, and configuring it also disables the CLI's
+          // emergency reactive fallback (YtH() -> ZH false). Cannot extend
+          // working past the 200K wall; do not re-add.
           env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv),
           model,
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()

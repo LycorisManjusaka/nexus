@@ -67,7 +67,6 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     obsSourceName: '',
     obsImageSourceName: '',
     obsVideoSourceName: '',
-    autoCompactWindow: '',
   });
   const [loading, setLoading] = useState(true);
 
@@ -833,30 +832,6 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </label>
               <p className="text-xs text-muted-foreground mt-1">
                 <Tx k="settings.obsVideoSourceName.help" />
-              </p>
-            </div>
-
-            {/* Compaction trigger delay (opt-in). Empty = Anthropic's own "auto"
-                sizing with the reactive fallback intact. Any set value (clamped
-                1e5–1e6 in route.ts) delays the trigger toward the model's real
-                context window, but disables the CLI's emergency reactive
-                fallback — same loss as DISABLE_AUTO_COMPACT, just smaller. */}
-            <div>
-              <label className="block">
-                <span className="text-sm text-foreground">{t('settings.autoCompactWindow.label')}</span>
-                <input
-                  type="number"
-                  min={100000}
-                  max={1000000}
-                  step={10000}
-                  value={keys.autoCompactWindow ?? ''}
-                  placeholder={t('settings.autoCompactWindow.placeholder')}
-                  onChange={e => setKeys({ ...keys, autoCompactWindow: e.target.value })}
-                  className="mt-1 w-full px-2 py-1.5 rounded-md border border-border bg-background text-sm font-mono"
-                />
-              </label>
-              <p className="text-xs text-muted-foreground mt-1">
-                <Tx k="settings.autoCompactWindow.help" />
               </p>
             </div>
 

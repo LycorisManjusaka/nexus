@@ -220,10 +220,6 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.obsVideoSourceName.placeholder': 'e.g. NexusCameraVideo',
   'settings.obsVideoSourceName.help':
     "Name of a Media Source (ffmpeg_source) in OBS's current scene, used for video files (mp4/webm/mov/m4v). Auto-created with this name if it doesn't exist yet. Leave blank if this being's camera folder only has still images.",
-  'settings.autoCompactWindow.label': 'Compaction trigger delay (tokens, opt-in)',
-  'settings.autoCompactWindow.placeholder': 'empty = keep default',
-  'settings.autoCompactWindow.help':
-    "Leave empty to keep Claude Code's default compaction timing. Setting a value (clamped 100000–1000000) delays when automatic compaction fires — toward the model's real context window (~200K on this OAuth path) — but also disables Claude Code's own emergency fallback for genuine overflow, the same loss as fully disabling auto-compact. Only set this if you prefer a later stall over an earlier one; a visible compaction stall is still better than a silent hard stop.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
     "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
@@ -1592,10 +1588,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.obsVideoSourceName.placeholder': '例: NexusCameraVideo',
   'settings.obsVideoSourceName.help':
     '動画ファイル（mp4/webm/mov/m4v）用に、OBSの現在のシーンにあるメディアソース（ffmpeg_source）の名前です。存在しなければこの名前で自動作成されます。カメラフォルダに静止画しかない場合は空欄のままで構いません。',
-  'settings.autoCompactWindow.label': 'コンパクション発動の遅延（トークン、任意）',
-  'settings.autoCompactWindow.placeholder': '空欄 = 既定のまま',
-  'settings.autoCompactWindow.help':
-    '空欄のままだとClaude Codeの既定の発動タイミングのままです。値を設定すると（100000〜1000000に自動クランプ）、自動コンパクションの発動をモデル実質の文脈ウィンドウ（このOAuth経路では約200K）方向へ遅らせます。ただし、文脈が本当に溢れたときのClaude Code側の緊急救済フォールバックが無効になります — 自動コンパクションを完全OFFにしたのと同じ代償です。発動を先延ばしにしたい場合のみ設定してください。見える形のコンパクション停止は、無音のハードストップよりはまだマシです。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
     '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',
