@@ -1223,6 +1223,42 @@ async function streamClaudeViaAgentSDK(args: {
           return { behavior: 'allow', updatedInput: input } as any;
         };
 
+        // Mid-turn note / interjection delivery via a PreToolUse hook. The
+        // canUseTool callback above ALSO drains these, but it is only consulted
+        // for tools that REQUIRE permission (Bash/Write/Edit) — the SDK
+        // auto-allows read-only tools (Read/Glob/Grep) without ever calling it.
+        // That was the gap: a note queued while the entity was reading files
+        // was never drained until a Bash happened to come along, and if the
+        // whole turn was reads, the note was discarded at turn end without ever
+        // reaching the entity (the 2026-09-09 12:16 compaction test hit exactly
+        // this — 4 compactions, 4 first-tools-were-Read, zero notes delivered).
+        // A PreToolUse hook, by contrast, fires before EVERY tool call. It
+        // drains the same queues and injects the text via `systemMessage`,
+        // which reaches the model's context WITHOUT pausing the tool (no deny-
+        // and-reissue dance). Gated on pausedForRendezvous === 0 exactly like
+        // canUseTool, so a running subagent's calls don't swallow a note meant
+        // for the parent entity.
+        const deliverMidTurnNote = async () => {
+          try {
+            if (injectTurnId && pausedForRendezvous === 0) {
+              const injected = drainInjections(injectTurnId);
+              const sysNotes = drainSystemNotes(injectTurnId);
+              if (injected.length || sysNotes.length) {
+                const parts: string[] = [];
+                if (injected.length) {
+                  parts.push(frameInjection(injected, I.injectionFraming));
+                  try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+                }
+                if (sysNotes.length) parts.push(sysNotes.join('\n'));
+                return { continue: true, systemMessage: parts.join('\n\n') };
+              }
+            }
+          } catch (e) {
+            console.warn('[oauth] mid-turn note hook failed:', e);
+          }
+          return { continue: true };
+        };
+
         const queryOptions: any = {
           // env passes CLAUDE_CODE_OAUTH_TOKEN to the spawned Claude Code
           // binary WITHOUT mutating process.env (which would race across
@@ -1310,6 +1346,12 @@ async function streamClaudeViaAgentSDK(args: {
           // no interactive prompt to hang the headless stream.
           permissionMode: 'default',
           canUseTool,
+          // Register the PreToolUse hook (above) so notes/interjections reach
+          // the entity on the NEXT tool call regardless of tool type — the
+          // canUseTool path only fires for permission-requiring tools.
+          hooks: {
+            PreToolUse: [{ hooks: [deliverMidTurnNote] }],
+          },
           // Lets the Stop key/button and the auto-compaction stall watchdog
           // (above) actually kill the spawned `claude` subprocess instead of
           // only detaching NEXUS's own SSE stream from it.
