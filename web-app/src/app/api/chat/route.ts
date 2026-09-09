@@ -623,6 +623,9 @@ async function streamClaudeViaAgentSDK(args: {
               enqueue({ type: 'notice', content: language === 'ja'
                 ? `会話の自動要約を実行中… 再開まで残り約${remainingMin}分（推定）。`
                 : `Summarizing this conversation to make room (automatic compaction)… roughly ${remainingMin} min remaining (estimated).` });
+              enqueue({ type: 'tool_activity', tool: 'summarize this conversation', name: 'compact', detail: language === 'ja'
+                ? `残り約${remainingMin}分（推定）`
+                : `~${remainingMin} min remaining (estimated)` });
             } catch {}
           }
           return;
@@ -1508,7 +1511,7 @@ async function streamClaudeViaAgentSDK(args: {
                   compacting = true;
                   compactStartAt = Date.now();
                   lastCompactionMinEmitted = 7;
-                  enqueue({ type: 'tool_activity', tool: 'summarize this conversation', name: 'compact' });
+                  enqueue({ type: 'tool_activity', tool: 'summarize this conversation', name: 'compact', detail: language === 'ja' ? '残り約7分（推定）' : '~7 min remaining (estimated)' });
                   enqueue({ type: 'notice', content: language === 'ja'
                     ? 'この会話は長くなったため、続きのための空きを作るべく内容を自動で要約しています（コンパクション）。再開まで通常約7分かかります。'
                     : 'This conversation has gotten long, so it is being summarized automatically to make room for more (compaction). This usually takes about 7 minutes before the turn resumes.' });

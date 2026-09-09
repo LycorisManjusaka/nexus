@@ -428,6 +428,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // server's English label for a tool that has no key — then the sentence has
   // to be built with a frame that can carry a foreign phrase.
   const [liveToolLocalized, setLiveToolLocalized] = useState(false);
+  // Optional suffix on the loading chip (e.g. the compaction countdown
+  // "~6 min remaining"), carried alongside tool_activity. Only the compaction
+  // path emits it; every other tool clears it to null.
+  const [liveToolDetail, setLiveToolDetail] = useState<string | null>(null);
   // The model the SERVER reports for the current turn. Auto-selection can pick a
   // different model than the conversation is configured with, and the loading
   // line should name the one actually doing the work.
@@ -2489,10 +2493,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   setLiveToolActivity(hit ? localized : data.tool);
                   setLiveToolLocalized(hit);
                   setLiveToolName(typeof data.name === 'string' && data.name ? data.name : null);
+                  setLiveToolDetail(typeof data.detail === 'string' && data.detail ? data.detail : null);
                 } else {
                   setLiveToolActivity(null);
                   setLiveToolLocalized(false);
                   setLiveToolName(null);
+                  setLiveToolDetail(null);
                 }
               } else if (data.type === 'stall_warning') {
                 // Server-side watchdog: no SDK activity for this many seconds.
@@ -3598,6 +3604,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       .replace('{action}', liveToolActivity);
                   })()}
                 </span>
+                {liveToolDetail !== null && (
+                  <span className="text-xs text-amber-500 font-medium"> · {liveToolDetail}</span>
+                )}
                 {stallIdleSeconds !== null && (
                   <span className="text-xs text-amber-500 font-medium">
                     {t('chat.stall.notice').replace('{duration}',
