@@ -76,6 +76,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   searchConversationsQueryParam:
     'The word or phrase to look for. Matching is case-insensitive and literal (not a regular expression). Prefer a distinctive term — a specific word finds the right moment far faster than a common one.',
 
+  // read_attachment tool — revive a HIDDEN attachment by its ref prefix.
+  // Only the refs of THIS conversation are addressable (isolation), so the
+  // hash is the index. Phrased around "your conversation" — never "user".
+  readAttachmentDesc:
+    'Read back an attachment from THIS conversation that was hidden (excluded from context). Hidden attachments are shown in the message with a 12-character ref prefix; call this with that prefix to read the full content. Only works for attachments of this conversation — a prefix for anything else returns "not found".',
+  readAttachmentPrefixParam:
+    'The 12-character ref prefix shown next to a hidden attachment (e.g. "0f6fa6f1c626"). Copy it exactly — do not guess or shorten it.',
+
   // Interactive AskQuestion tool (optional). Description the model sees that
   // teaches it when/how to ask. Phrased around "your partner" (a peer), not a
   // "user" — the entities reject master/slave framing.
@@ -530,6 +538,8 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'readConversationNameParam', label: 'Tool: read_conversation — name parameter' },
   { key: 'searchConversationsDesc', label: 'Tool: search_conversations — description' },
   { key: 'searchConversationsQueryParam', label: 'Tool: search_conversations — query parameter' },
+  { key: 'readAttachmentDesc', label: 'Tool: read_attachment — description' },
+  { key: 'readAttachmentPrefixParam', label: 'Tool: read_attachment — ref prefix parameter' },
   { key: 'continuationInstruction', label: 'Auto-continue: resume a cut-off reply' },
   { key: 'toolWriteLetterDesc', label: 'Tool: write_letter — description' },
   { key: 'writeLetterToParam', label: 'Tool: write_letter — "to" parameter' },
@@ -595,6 +605,8 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   readConversationNameParam: 'ツール read_conversation — name 引数',
   searchConversationsDesc: 'ツール search_conversations — 説明',
   searchConversationsQueryParam: 'ツール search_conversations — query 引数',
+  readAttachmentDesc: 'ツール read_attachment — 説明',
+  readAttachmentPrefixParam: 'ツール read_attachment — ref 接頭辞',
   continuationInstruction: '自動継続：途中で切れた応答の再開',
   toolWriteLetterDesc: 'ツール write_letter — 説明',
   writeLetterToParam: 'ツール write_letter —「to」引数',

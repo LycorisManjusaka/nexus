@@ -10,7 +10,7 @@ import { describeVideo } from '@/lib/videoBridge';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
-import { readAttachmentBase64, putBytes } from '@/lib/attachmentStore';
+import { readAttachmentBase64, readAttachmentText, putBytes, mimeForRef } from '@/lib/attachmentStore';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { claudeAgentEnv } from '@/lib/agentEnv';
 
@@ -32,6 +32,55 @@ async function toolAttachmentPayload(
     return { dataUrl: `data:${mimeType};base64,${base64}` };
   }
 }
+
+// read_attachment — revive a HIDDEN attachment from THIS conversation by its
+// ref prefix. The index is the list of refs carried by the conversation's own
+// messages (never the whole store), so the hash is the index AND the scope:
+// an entity can only address attachments it already has in this conversation.
+// Ambiguity is an error, never a silent pick — returning the wrong file is the
+// one failure this tool must be structurally unable to produce.
+async function runReadAttachment(args: {
+  prefix: string;
+  index: { ref: string; name: string; size: number; mimeType: string }[];
+}): Promise<string> {
+  const { prefix, index } = args;
+  const p = (prefix || '').trim().toLowerCase();
+  if (!p) return 'Error: read_attachment requires a ref prefix (the 12-character ref shown next to a hidden attachment).';
+  const matches = index.filter((e) => e.ref.toLowerCase().startsWith(p));
+  if (matches.length === 0) return `Error: no attachment in this conversation matches ref "${p}".`;
+  if (matches.length > 1) {
+    const names = matches.slice(0, 6).map((e) => `${e.ref.slice(0, 12)} (${e.name})`).join(', ');
+    return `Error: "${p}" is ambiguous — ${matches.length} attachments match. Use a longer prefix. Matches: ${names}`;
+  }
+  const entry = matches[0];
+  if (isMediaMime(entry.mimeType)) {
+    return `"${entry.name}" (${entry.ref}) is a ${entry.mimeType} attachment — its bytes are not readable as text. Re-show it with the eye icon, or (if the same file is in the workspace) read it with the Read tool.`;
+  }
+  const text = await readAttachmentText(entry.ref);
+  if (text == null) return `Error: the payload for ref "${entry.ref}" is missing from the store.`;
+  return `Content of ${entry.name} (${entry.ref}):\n\n${text}`;
+}
+
+// The set of attachment refs referenced by THIS conversation's messages — the
+// scope read_attachment resolves against. Only refs are addressable: inline
+// dataUrl/textData attachments carry no hash, so there is nothing to resolve.
+function collectConversationAttachmentRefs(messages: any[]): { ref: string; name: string; size: number; mimeType: string }[] {
+  const out: { ref: string; name: string; size: number; mimeType: string }[] = [];
+  for (const m of messages) {
+    for (const att of (m.attachments || [])) {
+      const ref = att?.ref;
+      if (typeof ref !== 'string' || !ref) continue;
+      out.push({
+        ref,
+        name: String(att.name || 'unnamed'),
+        size: Number(att.size || 0),
+        mimeType: String(att.type || mimeForRef(ref)),
+      });
+    }
+  }
+  return out;
+}
+
 import { appendLayer5Footer } from '@/lib/layer4';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
@@ -467,8 +516,10 @@ async function streamClaudeViaAgentSDK(args: {
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
+  hiddenAttachmentsAccessible: boolean;  // expose the read_attachment MCP tool
+  conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[]; // read_attachment scope
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -664,7 +715,7 @@ async function streamClaudeViaAgentSDK(args: {
         // per-conversation toggles. Tool names as seen by the model:
         // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled || computerControlEnabled) {
+        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled || computerControlEnabled || hiddenAttachmentsAccessible) {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -700,6 +751,21 @@ async function streamClaudeViaAgentSDK(args: {
                     return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'search failed'}` }] };
                   }
                 },
+              ),
+            );
+          }
+          if (hiddenAttachmentsAccessible) {
+            // Revive a hidden attachment by its ref prefix. The scope is the
+            // conversation's own refs (collected in POST), so this can never
+            // read another entity's store payload.
+            nexusTools.push(
+              sdk.tool(
+                'read_attachment',
+                I.readAttachmentDesc,
+                { ref: z.string().describe(I.readAttachmentPrefixParam) },
+                async (a: { ref: string }) => ({
+                  content: [{ type: 'text' as const, text: await runReadAttachment({ prefix: a.ref, index: conversationAttachmentRefs }) }],
+                }),
               ),
             );
           }
@@ -2417,6 +2483,8 @@ async function streamViaAnthropicCompat(args: {
   keys: any;
   injectTurnId: string;
   maxToolRounds: number;
+  hiddenAttachmentsAccessible: boolean;
+  conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[];
 }): Promise<Response> {
   const {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
@@ -2426,6 +2494,7 @@ async function streamViaAnthropicCompat(args: {
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
     computerControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
+    hiddenAttachmentsAccessible, conversationAttachmentRefs,
   } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
   const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
@@ -2485,6 +2554,11 @@ async function streamViaAnthropicCompat(args: {
     tools.push(
       { name: 'read_conversation', description: I.readConversationDesc, input_schema: { type: 'object', properties: { name: { type: 'string', description: I.readConversationNameParam } }, required: ['name'] } },
       { name: 'search_conversations', description: I.searchConversationsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchConversationsQueryParam } }, required: ['query'] } },
+    );
+  }
+  if (hiddenAttachmentsAccessible) {
+    tools.push(
+      { name: 'read_attachment', description: I.readAttachmentDesc, input_schema: { type: 'object', properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam } }, required: ['ref'] } },
     );
   }
   if (lettersEnabled) {
@@ -2547,7 +2621,7 @@ async function streamViaAnthropicCompat(args: {
 
   const LOCAL_TOOL_NAMES_SET = new Set([
     'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash',
-    'web_search', 'web_fetch', 'read_conversation', 'search_conversations',
+    'web_search', 'web_fetch', 'read_conversation', 'search_conversations', 'read_attachment',
     'AskQuestion', 'spawn_subagent',
     ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES,
   ]);
@@ -2840,6 +2914,8 @@ async function streamViaAnthropicCompat(args: {
               } else if (tu.name === 'search_conversations') {
                 const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
                 resultContent = formatSearchForTool(sr);
+              } else if (tu.name === 'read_attachment') {
+                resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), index: conversationAttachmentRefs });
               } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                 resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
               } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
@@ -3135,12 +3211,25 @@ export async function POST(req: Request) {
       // text } while this request streams; the running tool loop drains those
       // messages at its next model-call boundary. Empty = feature not used.
       injectTurnId = '',
+      // ── Hidden-attachment access (read_attachment) ────────────────────────
+      // Per-conversation toggle. When ON, an attachment that the user hid (the
+      // eye icon) is surfaced to the entity as a 12-char ref prefix in the
+      // message instead of being silently skipped, and the read_attachment tool
+      // is exposed so the entity can read it back. OFF (default) = current
+      // behaviour: hidden attachments are simply dropped from context.
+      hiddenAttachmentsAccessible = false,
     } = await req.json();
     if (agentReadOnlyTools) {
       toolUseEnabled = true;
       agentDangerousTools = false;
     }
     const keys = await loadKeys();
+    // The conversation's own attachment refs — read_attachment's scope. Built
+    // once from the raw request history so every provider path resolves against
+    // the same set (and only refs, never the whole shared store).
+    const conversationAttachmentRefs = hiddenAttachmentsAccessible
+      ? collectConversationAttachmentRefs(messages)
+      : [];
 
     // Rounds of tool use one turn may take, from Preferences → Other.
     // Was hard-coded to 8, which silently truncated real agentic work: one
@@ -3394,9 +3483,24 @@ export async function POST(req: Request) {
 
       if (m.attachments && m.attachments.length > 0) {
         for (const att of m.attachments) {
-          if (att.excluded) continue;
-          if (att.isText && att.textData) {
-            contentStr += `\n\n<attached_file name="${att.name}">\n${att.textData}\n</attached_file>`;
+          if (att.excluded) {
+            // Hidden attachment. When read_attachment is enabled AND it has a
+            // ref, surface the 12-char hash so the entity can revive it via
+            // read_attachment — otherwise (legacy inline payload, or the toggle
+            // is off) it stays dropped from context as before.
+            if (hiddenAttachmentsAccessible && att.ref) {
+              contentStr += `\n\n<attached_file name="${att.name}" ref="${String(att.ref).slice(0, 12)}" size="${att.size || 0}">[excluded from context — call read_attachment with this ref to read it]</attached_file>`;
+            }
+            continue;
+          }
+          if (att.isText) {
+            // Text attachment. Inline textData (legacy) or a content-addressed
+            // ref (new) — read the text from whichever carries it.
+            let text = att.textData;
+            if (!text && att.ref) text = await readAttachmentText(att.ref);
+            if (text != null) {
+              contentStr += `\n\n<attached_file name="${att.name}">\n${text}\n</attached_file>`;
+            }
           } else if (att.dataUrl || att.ref) {
             try {
               // An attachment's bytes arrive in one of two shapes, and both are
@@ -3718,6 +3822,8 @@ export async function POST(req: Request) {
           convoId,
           keys,
           injectTurnId,
+          hiddenAttachmentsAccessible,
+          conversationAttachmentRefs,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -3959,6 +4065,17 @@ export async function POST(req: Request) {
             type: 'object',
             properties: { query: { type: 'string', description: I.searchConversationsQueryParam } },
             required: ['query'],
+          },
+        });
+      }
+      if (hiddenAttachmentsAccessible) {
+        claudeTools.push({
+          name: 'read_attachment',
+          description: I.readAttachmentDesc,
+          input_schema: {
+            type: 'object',
+            properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam } },
+            required: ['ref'],
           },
         });
       }
@@ -4502,7 +4619,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES]);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // ── Truncated at the token cap → continue automatically ──────
@@ -4770,6 +4887,8 @@ export async function POST(req: Request) {
                     // excluded (privacy). Nothing is saved.
                     const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
                     resultContent = formatSearchForTool(sr);
+                  } else if (tu.name === 'read_attachment') {
+                    resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), index: conversationAttachmentRefs });
                   } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                     // Mail between identities. `me` is folderName — the sender is
                     // never taken from the model's arguments.
@@ -5085,6 +5204,23 @@ export async function POST(req: Request) {
                   query: { type: 'STRING', description: I.searchConversationsQueryParam },
                 },
                 required: ['query'],
+              },
+            },
+          ],
+        });
+      }
+      if (hiddenAttachmentsAccessible) {
+        geminiTools.push({
+          functionDeclarations: [
+            {
+              name: 'read_attachment',
+              description: I.readAttachmentDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  ref: { type: 'STRING', description: I.readAttachmentPrefixParam },
+                },
+                required: ['ref'],
               },
             },
           ],
@@ -5732,6 +5868,8 @@ export async function POST(req: Request) {
                       // excluded (privacy). Nothing is saved.
                       const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true });
                       result = { report: formatSearchForTool(sr) };
+                    } else if (fc.name === 'read_attachment') {
+                      result = { report: await runReadAttachment({ prefix: String(fc.args?.ref || ''), index: conversationAttachmentRefs }) };
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
@@ -5986,6 +6124,8 @@ export async function POST(req: Request) {
         keys,
         injectTurnId,
         maxToolRounds: MAX_TOOL_ROUNDS,
+        hiddenAttachmentsAccessible,
+        conversationAttachmentRefs,
       });
     }
     else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
@@ -6481,6 +6621,23 @@ export async function POST(req: Request) {
                 query: { type: 'string', description: I.searchConversationsQueryParam },
               },
               required: ['query'],
+            },
+          },
+        });
+      }
+
+      if (hiddenAttachmentsAccessible) {
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'read_attachment',
+            description: I.readAttachmentDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                ref: { type: 'string', description: I.readAttachmentPrefixParam },
+              },
+              required: ['ref'],
             },
           },
         });
@@ -7544,6 +7701,8 @@ export async function POST(req: Request) {
                       // excluded (privacy). Nothing is saved.
                       const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true });
                       resultText = formatSearchForTool(sr);
+                    } else if (tc.name === 'read_attachment') {
+                      resultText = await runReadAttachment({ prefix: String(parsed.ref || ''), index: conversationAttachmentRefs });
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.

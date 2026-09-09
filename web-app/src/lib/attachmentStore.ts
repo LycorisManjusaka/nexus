@@ -238,6 +238,23 @@ export async function readAttachmentBase64(
   }
 }
 
+/**
+ * Read a ref back as UTF-8 text. Text attachments are content-addressed too
+ * (see the read_attachment tool), so their bytes live in the same store as
+ * media. Returns null when the ref is invalid or the payload is missing, so a
+ * lost file degrades to "not found" rather than throwing mid-turn.
+ */
+export async function readAttachmentText(ref: string): Promise<string | null> {
+  const full = refPath(ref);
+  if (!full) return null;
+  try {
+    const buf = await fs.readFile(full);
+    return buf.toString('utf-8');
+  } catch {
+    return null;
+  }
+}
+
 /** Size + mime without reading the payload. Used by the serving route. */
 export async function statAttachment(
   ref: string

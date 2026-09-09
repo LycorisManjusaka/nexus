@@ -341,6 +341,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   //   agentDangerousTools:    enables Delete (all paths) + shell (OAuth path).
   const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(false);
   const [agentDangerousTools, setAgentDangerousTools] = useState(false);
+  // Hidden-attachment access (read_attachment). When ON, an attachment the user
+  // hid with the eye icon is surfaced to the entity as a 12-char ref prefix
+  // (instead of being silently dropped) and the read_attachment tool is exposed
+  // so the entity can read it back. OFF (default) = current behaviour.
+  const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(false);
   // Optional interactive "ask the user a multiple-choice question" tool. When
   // ON, the model can pause a turn to ask and wait for the user's selection.
   const [askUserEnabled, setAskUserEnabled] = useState(false);
@@ -1042,6 +1047,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setToolUseEnabled(data.toolUseEnabled === true);
         setAgentFullSystemAccess(data.agentFullSystemAccess === true);
         setAgentDangerousTools(data.agentDangerousTools === true);
+        setHiddenAttachmentsAccessible(data.hiddenAttachmentsAccessible === true);
         setAskUserEnabled(data.askUserEnabled === true);
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setSubagentEnabled(data.subagentEnabled === true);
@@ -1122,6 +1128,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setToolUseEnabled(pick('toolUseEnabled', false));
         setAgentFullSystemAccess(pick('agentFullSystemAccess', false));
         setAgentDangerousTools(pick('agentDangerousTools', false));
+        setHiddenAttachmentsAccessible(pick('hiddenAttachmentsAccessible', false));
         setAskUserEnabled(pick('askUserEnabled', false));
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setSubagentEnabled(pick('subagentEnabled', false));
@@ -1247,7 +1254,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1310,7 +1317,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2177,7 +2184,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
+      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
         browserEnabled,
         // Text in the UI, array on the wire. Split on newlines and commas so the
         // box accepts whichever way the host list was typed.
@@ -4048,6 +4055,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </label>
                       <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
                         <Tx k="sysmodal.dangerous.help" />
+                      </p>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={hiddenAttachmentsAccessible}
+                          onChange={(e) => setHiddenAttachmentsAccessible(e.target.checked)}
+                          className="accent-amber-500"
+                        />
+                        <span className="text-sm font-semibold text-foreground">{t('sysmodal.hiddenAttach.label')}</span>
+                      </label>
+                      <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
+                        <Tx k="sysmodal.hiddenAttach.help" />
                       </p>
                     </div>
 

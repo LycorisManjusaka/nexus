@@ -509,17 +509,25 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         } catch { /* fall through and return the original, unsplit video */ }
       }
 
-      // Externalize the payload. Text attachments are deliberately excluded:
-      // `textData` is small, is injected into the prompt verbatim every turn,
-      // and externalizing it would buy a disk read per turn and a fetch per
-      // preview in exchange for nothing.
+      // Externalize the payload. Text attachments are NOW content-addressed too:
+      // the ref is what lets a HIDDEN text attachment be revived later via the
+      // read_attachment tool (the hash is the index). `textData` is kept
+      // alongside for the inline preview + the visible inline injection, so
+      // nothing about the visible path regresses. Upload the EXACT text that
+      // would be injected inline — so a read_attachment returns the same bytes
+      // the model sees when the attachment is visible.
       //
       // Uploading the original File streams the bytes with no conversion at
       // all. The one exception is a canvas-converted PNG→JPEG, which exists
       // only as a data URL — but it's already downscaled, so turning it back
       // into bytes is cheap.
       let ref: string | null = null;
-      if (!isText) {
+      if (isText) {
+        if (textData) {
+          const stored = await uploadAttachment(new Blob([textData], { type: 'text/plain' }), 'text/plain');
+          if (stored) { ref = stored.ref; if (stored.size) finalSize = stored.size; }
+        }
+      } else {
         const payload: Blob | null = dataUrl ? dataUrlToBlob(dataUrl) : file;
         if (payload) {
           const stored = await uploadAttachment(payload, finalType);
