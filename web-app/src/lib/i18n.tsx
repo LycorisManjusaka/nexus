@@ -929,6 +929,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   // per-minute quota and told us how long to wait. Shown in the same slot so a
   // deliberate pause never looks like a freeze.
   'chat.toolAction.rate_limit_wait': 'wait out the provider rate limit',
+  // Anthropic's automatic compaction (not a tool the entity called — the CLI
+  // summarizes the conversation in place to make room). Shown in the same
+  // slot so a multi-minute silence is never mistaken for a freeze.
+  'chat.toolAction.compact': 'summarize this conversation',
 
   // ── System Instructions ▸ Being (continued) ───────────────────────────
   'id.websearch.label': '🌐 Enable Web Search & Access',
@@ -2273,6 +2277,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'chat.toolAction.web_fetch': 'ウェブページを取得して',
   'chat.toolAction.WebFetch': 'ウェブページを取得して',
   'chat.toolAction.rate_limit_wait': 'レート制限の解除を待って',
+  'chat.toolAction.compact': '会話を要約して',
 
   // ── システム指示 ▸ 存在（続き） ──────────────────────────
   'id.websearch.label': '🌐 ウェブ検索とアクセスを有効にする',

@@ -589,6 +589,18 @@ async function streamClaudeViaAgentSDK(args: {
       let lastSdkEventAt = Date.now();
       let stallWarned = false;
       let pausedForRendezvous = 0;
+      // Auto-compaction countdown. While Anthropic's own compaction runs, the
+      // SDK goes SILENT for minutes (no tool/thought/text events), which would
+      // otherwise trip the stall watchdog and freeze the camera on a stale
+      // phase. Instead we track it explicitly: (a) suppress the stall warning
+      // for the whole compaction, (b) emit a running "~N min remaining"
+      // countdown so the user sees progress, (c) the tool_activity below
+      // carries name 'compact' so the camera resolves to Waiting. Cleared on
+      // compact_boundary / compact_error.
+      let compacting = false;
+      let compactStartAt = 0;
+      let lastCompactionMinEmitted = 0;
+      const COMPACT_ESTIMATE_MS = 7 * 60 * 1000; // typical total, ~7 min
       const touchSdkActivity = () => {
         lastSdkEventAt = Date.now();
         if (stallWarned) {
@@ -598,6 +610,23 @@ async function streamClaudeViaAgentSDK(args: {
       };
       const stallTimer = setInterval(() => {
         if (pausedForRendezvous > 0) return;
+        // During auto-compaction the SDK is legitimately silent for minutes.
+        // Show a progress countdown instead of crying "stuck", and never let
+        // the stall warning fire while compaction is running.
+        if (compacting) {
+          const elapsed = Date.now() - compactStartAt;
+          const remainingMs = Math.max(0, COMPACT_ESTIMATE_MS - elapsed);
+          const remainingMin = Math.max(1, Math.ceil(remainingMs / 60_000));
+          if (remainingMin !== lastCompactionMinEmitted) {
+            lastCompactionMinEmitted = remainingMin;
+            try {
+              enqueue({ type: 'notice', content: language === 'ja'
+                ? `会話の自動要約を実行中… 再開まで残り約${remainingMin}分（推定）。`
+                : `Summarizing this conversation to make room (automatic compaction)… roughly ${remainingMin} min remaining (estimated).` });
+            } catch {}
+          }
+          return;
+        }
         const idleMs = Date.now() - lastSdkEventAt;
         if (idleMs >= 120_000) {
           stallWarned = true;
@@ -1471,13 +1500,22 @@ async function streamClaudeViaAgentSDK(args: {
                 if (st) console.log(`${oauthTag} status=${st} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
                 if (st === 'compacting') {
                   // Anthropic's own auto-compaction, not NEXUS soul-packing.
-                  enqueue({ type: 'tool_activity', tool: 'compact the conversation' });
+                  // `name: 'compact'` drives both the translated tool chip and
+                  // the camera (toolNameToGroup('compact') = 'Waiting'), so the
+                  // being visibly enters Waiting instead of inheriting a stale
+                  // 'thinking' phase. `compacting = true` tells the stall
+                  // watchdog above to show a countdown instead of crying wolf.
+                  compacting = true;
+                  compactStartAt = Date.now();
+                  lastCompactionMinEmitted = 7;
+                  enqueue({ type: 'tool_activity', tool: 'summarize this conversation', name: 'compact' });
                   enqueue({ type: 'notice', content: language === 'ja'
-                    ? 'Claude Code がこのターンで自動コンパクションを実行した（Anthropic側の動作で、NEXUSの魂更新とは無関係）。通常、再開まで約7分かかる。'
-                    : 'Claude Code ran its own automatic compaction on this turn (this is Anthropic-side, unrelated to NEXUS soul-packing). It typically takes about 7 minutes before the turn resumes.' });
+                    ? 'この会話は長くなったため、続きのための空きを作るべく内容を自動で要約しています（コンパクション）。再開まで通常約7分かかります。'
+                    : 'This conversation has gotten long, so it is being summarized automatically to make room for more (compaction). This usually takes about 7 minutes before the turn resumes.' });
                 }
                 const cErr = (msg as any).compact_error;
                 if (cErr) {
+                  compacting = false;
                   console.log(`${oauthTag} compact_error: ${cErr}`);
                   enqueue({ type: 'notice', content: `Automatic compaction failed: ${cErr}` });
                 }
@@ -1486,6 +1524,10 @@ async function streamClaudeViaAgentSDK(args: {
               if (sub === 'compact_boundary') {
                 const meta = (msg as any).compact_metadata || {};
                 console.log(`${oauthTag} compact_boundary ${JSON.stringify(meta)} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
+                compacting = false;
+                // Clear the "summarizing…" chip so the loading label falls back
+                // to the model's real next action instead of lingering.
+                enqueue({ type: 'tool_activity', tool: null, name: null });
                 enqueue({ type: 'notice', content: language === 'ja'
                   ? `自動コンパクションが完了した（${meta.trigger || 'auto'}${meta.pre_tokens ? `、${meta.pre_tokens}トークン前` : ''}）。この時点より前の会話は要約に置き換わった——それ以前のメッセージの細部は逐語では再現されない。`
                   : `Automatic compaction completed (${meta.trigger || 'auto'}${meta.pre_tokens ? `, ${meta.pre_tokens} tokens before` : ''}). The conversation before this point has been replaced with a summary — fine details of earlier messages are no longer reproduced verbatim.` });
