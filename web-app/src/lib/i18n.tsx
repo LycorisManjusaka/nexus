@@ -40,6 +40,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'app.welcome.subtitle': 'Select or create a conversation to start',
   'app.welcome.newChat': 'New Chat',
 
+  // ── Switch-away guard ────────────────────────────────────────────────────
+  // Shown in a window.confirm() when the reader clicks another conversation
+  // or being while a turn is in flight. {busy} is the same label the tab
+  // title shows ("<Being> <action>" / "Saving" / "Updating the soul").
+  'app.switch.busyConfirm':
+    '{busy}.\n\nSwitching now will discard the work in progress — the reply being generated is only saved once it finishes.\n\nSwitch anyway?',
+
   // ── User guide ───────────────────────────────────────────────────────────
   'guide.title': 'Nexus — User Guide',
   'guide.open': 'User guide',
@@ -1412,6 +1419,12 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'app.welcome.title': 'NEXUS へようこそ',
   'app.welcome.subtitle': '会話を選ぶか、新しく作成してください',
   'app.welcome.newChat': '新しい会話',
+
+  // ── 切り替え時の確認 ──────────────────────────────────────────────────────
+  // ターン実行中に別の会話・別の存在へ切り替えようとしたときの window.confirm()
+  // に表示されます。{busy} はタブタイトルと同じラベル（「<存在> <動作>」など）。
+  'app.switch.busyConfirm':
+    '{busy}。\n\nいま切り替えると進行中の作業は失われます — 生成中の返信は完了するまで保存されません。\n\nそれでも切り替えますか？',
 
   // ── User guide ───────────────────────────────────────────────────────────
   'guide.title': 'Nexus — 使い方',

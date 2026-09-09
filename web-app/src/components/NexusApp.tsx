@@ -8,6 +8,7 @@ import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
+import { describeBusy } from '@/lib/unloadGuard';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -250,8 +251,48 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     }
   }, [currentConvoId, activeFolder]);
 
+  // ── Switch-away guard ────────────────────────────────────────────────────
+  // Clicking another conversation or another being while a turn is in flight
+  // remounts ChatArea and silently destroys the in-progress reply (the
+  // auto-save deliberately skips the POST while streaming, so the reply lives
+  // only in memory until it completes). The tab-close guard already blocks the
+  // browser's own leave-dialog; this is the in-app equivalent — a confirm()
+  // before any USER-initiated switch. Internal/programmatic navigation (deep
+  // links, the selection effect) stays unguarded because it is not a choice
+  // the reader made mid-turn.
+  //
+  // `describeBusy()` is the same registry the tab-close guard reads: non-null
+  // while a generation, save, or Soul Updater run is in flight. Its value is a
+  // human label (e.g. "Cairn read a file") so the dialog names who is working.
+  const switchConfirmedAtRef = useRef<number>(0);
+  const confirmSwitchIfBusy = () => {
+    const busy = describeBusy();
+    if (!busy) return true;
+    // One user intent can navigate through two setters back-to-back (creating
+    // a being calls setActiveFolderId then onSelectConvo in the same tick).
+    // A confirm within half a second is treated as already answered so a
+    // single action never prompts twice.
+    if (Date.now() - switchConfirmedAtRef.current < 500) return true;
+    const ok = window.confirm(
+      translate('app.switch.busyConfirm', globalSettings.language).replace('{busy}', busy)
+    );
+    if (ok) switchConfirmedAtRef.current = Date.now();
+    return ok;
+  };
+  const guardedSelectConvo = (id: string) => {
+    if (id === currentConvoId) return;
+    if (!confirmSwitchIfBusy()) return;
+    setCurrentConvoId(id);
+  };
+  const guardedSetActiveFolderId = (id: string) => {
+    if (id === activeFolderId) return;
+    if (!confirmSwitchIfBusy()) return;
+    setActiveFolderId(id);
+  };
+
   const createNewChat = () => {
     if (!activeFolder) return;
+    if (!confirmSwitchIfBusy()) return;
     const newId = uuidv4();
     // `<identity>_<n>` — n is one past the highest number already in use here.
     const title = nextConversationTitle(
@@ -585,7 +626,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         conversations={conversations}
         conversationsLoading={conversationsLoading}
         currentConvoId={currentConvoId}
-        onSelectConvo={setCurrentConvoId}
+        onSelectConvo={guardedSelectConvo}
         onNewChat={createNewChat}
         onDeleteChat={deleteChat}
         onRenameChat={renameChat}
@@ -596,7 +637,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         folders={folders}
         setFolders={setFolders}
         activeFolderId={activeFolderId}
-        setActiveFolderId={setActiveFolderId}
+        setActiveFolderId={guardedSetActiveFolderId}
         fetchFolders={fetchFolders}
         fetchLogs={fetchLogs}
         setConversations={setConversations}
