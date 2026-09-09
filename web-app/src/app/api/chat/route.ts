@@ -47,6 +47,18 @@ async function toolAttachmentPayload(
 // Scope never crosses beings — only the widening from "this conversation" to
 // "this being's conversations" is new.
 //
+// A revived attachment's outcome. `media` is present only when the payload is
+// image/audio/video AND both (a) the active model is registered as capable of
+// that modality (isVisionCapable/isAudioCapable/isVideoCapable) and (b) the
+// calling provider path's wire format has a way to attach that modality to a
+// tool result at all (see `nativeMediaKinds` below) — callers turn `media`
+// into their own native content-block shape (mirroring how computer_screenshot
+// already delivers `cr.image` at every one of these same call sites).
+interface ReadAttachmentOutcome {
+  text: string;
+  media?: { base64: string; mimeType: string; kind: 'image' | 'audio' | 'video' };
+}
+
 // Ambiguity is an error, never a silent pick — returning the wrong file is the
 // one failure this tool must be structurally unable to produce.
 async function runReadAttachment(args: {
@@ -54,10 +66,21 @@ async function runReadAttachment(args: {
   pattern?: string;
   folderName: string;
   index: { ref: string; name: string; size: number; mimeType: string }[];
-}): Promise<string> {
-  const { prefix, pattern, folderName, index } = args;
+  // The model actually running this turn — gates whether media is restored
+  // natively (real bytes) or reported as a capability limit (honest, not a
+  // blanket refusal: a vision-capable model reading an image gets the image).
+  specificModel?: string;
+  // Which media kinds THIS provider path's wire format can even carry inside
+  // a tool result, independent of whether the model itself could understand
+  // them. Anthropic's content-block spec has no audio/video block type at
+  // all, for instance, so those sites pass only {'image'} regardless of model.
+  // Omitted = image only (the conservative default for any future caller).
+  nativeMediaKinds?: Set<'image' | 'audio' | 'video'>;
+}): Promise<ReadAttachmentOutcome> {
+  const { prefix, pattern, folderName, index, specificModel, nativeMediaKinds } = args;
+  const nativeKinds = nativeMediaKinds || new Set<'image' | 'audio' | 'video'>(['image']);
   const p = (prefix || '').trim().toLowerCase();
-  if (!p) return 'Error: read_attachment requires a ref prefix (the 12-character ref shown next to a hidden attachment).';
+  if (!p) return { text: 'Error: read_attachment requires a ref prefix (the 12-character ref shown next to a hidden attachment).' };
 
   let matches: { ref: string; name: string; size: number; mimeType: string; convoTitle?: string }[] =
     index.filter((e) => e.ref.toLowerCase().startsWith(p));
@@ -71,33 +94,55 @@ async function runReadAttachment(args: {
     }
   }
   if (matches.length === 0) {
-    return `Error: no attachment matching ref "${p}" was found in this conversation or elsewhere in your other conversations.`;
+    return { text: `Error: no attachment matching ref "${p}" was found in this conversation or elsewhere in your other conversations.` };
   }
   if (matches.length > 1) {
     const names = matches.slice(0, 6).map((e) => `${e.ref.slice(0, 12)} (${e.name}${e.convoTitle ? ` — "${e.convoTitle}"` : ''})`).join(', ');
-    return `Error: "${p}" is ambiguous — ${matches.length} attachments match. Use a longer prefix. Matches: ${names}`;
+    return { text: `Error: "${p}" is ambiguous — ${matches.length} attachments match. Use a longer prefix. Matches: ${names}` };
   }
   const entry = matches[0];
   if (isMediaMime(entry.mimeType)) {
-    return `"${entry.name}" (${entry.ref}) is a ${entry.mimeType} attachment — its bytes are not readable as text. Re-show it with the eye icon, or (if the same file is in the workspace) read it with the Read tool.`;
+    const kind: 'image' | 'audio' | 'video' =
+      entry.mimeType.startsWith('image/') ? 'image' :
+      entry.mimeType.startsWith('audio/') ? 'audio' : 'video';
+    const modelCapable =
+      kind === 'image' ? isVisionCapable(specificModel) :
+      kind === 'audio' ? isAudioCapable(specificModel) :
+      isVideoCapable(specificModel);
+    if (modelCapable && nativeKinds.has(kind)) {
+      const stored = await readAttachmentBase64(entry.ref);
+      if (!stored) return { text: `Error: the payload for ref "${entry.ref}" is missing from the store.` };
+      const noun = kind === 'image' ? 'an image' : kind === 'audio' ? 'audio' : 'a video';
+      return {
+        text: `Content of "${entry.name}" (${entry.ref}) follows as ${noun}.`,
+        media: { base64: stored.base64, mimeType: stored.mimeType, kind },
+      };
+    }
+    const reason = !modelCapable
+      ? `the current model isn't registered as able to accept ${kind} input`
+      : `this connection can't attach ${kind} to a tool result`;
+    const suggestion = kind === 'image'
+      ? 'Re-show it with the eye icon, or (if the same file is in the workspace) read it with the Read tool.'
+      : `Unhide it in the conversation instead — the ${kind === 'audio' ? 'ears' : 'watcher'} bridge will describe it as text on the next turn.`;
+    return { text: `"${entry.name}" (${entry.ref}) is a ${entry.mimeType} attachment — ${reason}. ${suggestion}` };
   }
   const text = await readAttachmentText(entry.ref);
-  if (text == null) return `Error: the payload for ref "${entry.ref}" is missing from the store.`;
+  if (text == null) return { text: `Error: the payload for ref "${entry.ref}" is missing from the store.` };
 
   if (!pattern || !pattern.trim()) {
-    return `Content of ${entry.name} (${entry.ref}):\n\n${text}`;
+    return { text: `Content of ${entry.name} (${entry.ref}):\n\n${text}` };
   }
 
   // Optional grep-within-this-file mode: return only matching lines instead of
   // the whole content. Useful once an attachment is too long to want in full.
   const compiled = compileSafeRegex(pattern);
-  if (!compiled.ok) return `Error: ${compiled.error}`;
+  if (!compiled.ok) return { text: `Error: ${compiled.error}` };
   const hits = grepLines(text, compiled.regex);
-  if (hits.length === 0) return `No lines in ${entry.name} (${entry.ref}) match pattern "${pattern}".`;
+  if (hits.length === 0) return { text: `No lines in ${entry.name} (${entry.ref}) match pattern "${pattern}".` };
   const shown = hits.slice(0, 200);
   const body = shown.map((h) => `${h.line}: ${h.text}`).join('\n');
   const more = hits.length > shown.length ? `\n…and ${hits.length - shown.length} more matching line(s).` : '';
-  return `${hits.length} line(s) in ${entry.name} (${entry.ref}) match "${pattern}":\n\n${body}${more}`;
+  return { text: `${hits.length} line(s) in ${entry.name} (${entry.ref}) match "${pattern}":\n\n${body}${more}` };
 }
 
 // search_attachments — grep across every TEXT attachment of THIS being's own
@@ -816,9 +861,14 @@ async function streamClaudeViaAgentSDK(args: {
                 'read_attachment',
                 I.readAttachmentDesc,
                 { ref: z.string().describe(I.readAttachmentPrefixParam), pattern: z.string().optional().describe(I.readAttachmentPatternParam) },
-                async (a: { ref: string; pattern?: string }) => ({
-                  content: [{ type: 'text' as const, text: await runReadAttachment({ prefix: a.ref, pattern: a.pattern, folderName, index: conversationAttachmentRefs }) }],
-                }),
+                async (a: { ref: string; pattern?: string }) => {
+                  // Anthropic's content-block spec has no audio/video block type,
+                  // so only image can ever be native here regardless of the model.
+                  const r = await runReadAttachment({ prefix: a.ref, pattern: a.pattern, folderName, index: conversationAttachmentRefs, specificModel: model, nativeMediaKinds: new Set(['image']) });
+                  const content: any[] = [{ type: 'text' as const, text: r.text }];
+                  if (r.media?.kind === 'image') content.push({ type: 'image' as const, data: r.media.base64, mimeType: r.media.mimeType });
+                  return { content };
+                },
               ),
             );
             // Grep across every text attachment of this being's own conversations.
@@ -2980,7 +3030,15 @@ async function streamViaAnthropicCompat(args: {
                 const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
                 resultContent = formatSearchForTool(sr);
               } else if (tu.name === 'read_attachment') {
-                resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), pattern: tu.input?.pattern, folderName, index: conversationAttachmentRefs });
+                // Anthropic content-block shape has no audio/video block type,
+                // so only image can ever be native here regardless of the model.
+                const r = await runReadAttachment({ prefix: String(tu.input?.ref || ''), pattern: tu.input?.pattern, folderName, index: conversationAttachmentRefs, specificModel: model, nativeMediaKinds: new Set(['image']) });
+                resultContent = r.media?.kind === 'image'
+                  ? [
+                      { type: 'text', text: r.text },
+                      { type: 'image', source: { type: 'base64', media_type: r.media.mimeType, data: r.media.base64 } },
+                    ]
+                  : r.text;
               } else if (tu.name === 'search_attachments') {
                 resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex);
               } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
@@ -4964,7 +5022,15 @@ export async function POST(req: Request) {
                     const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
                     resultContent = formatSearchForTool(sr);
                   } else if (tu.name === 'read_attachment') {
-                    resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), pattern: tu.input?.pattern, folderName, index: conversationAttachmentRefs });
+                    // Anthropic content-block shape has no audio/video block
+                    // type, so only image can ever be native here.
+                    const r = await runReadAttachment({ prefix: String(tu.input?.ref || ''), pattern: tu.input?.pattern, folderName, index: conversationAttachmentRefs, specificModel: claudeModel, nativeMediaKinds: new Set(['image']) });
+                    resultContent = r.media?.kind === 'image'
+                      ? [
+                          { type: 'text', text: r.text },
+                          { type: 'image', source: { type: 'base64', media_type: r.media.mimeType, data: r.media.base64 } },
+                        ]
+                      : r.text;
                   } else if (tu.name === 'search_attachments') {
                     resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex);
                   } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
@@ -5961,7 +6027,15 @@ export async function POST(req: Request) {
                       const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true, regex: !!fc.args?.regex });
                       result = { report: formatSearchForTool(sr) };
                     } else if (fc.name === 'read_attachment') {
-                      result = { report: await runReadAttachment({ prefix: String(fc.args?.ref || ''), pattern: fc.args?.pattern, folderName, index: conversationAttachmentRefs }) };
+                      // Gemini's inlineData part carries image/audio/video
+                      // natively, so all three kinds are restorable here —
+                      // unlike the Anthropic wire format, which only has an
+                      // image block type.
+                      const r = await runReadAttachment({ prefix: String(fc.args?.ref || ''), pattern: fc.args?.pattern, folderName, index: conversationAttachmentRefs, specificModel: geminiModelId, nativeMediaKinds: new Set(['image', 'audio', 'video']) });
+                      result = { report: r.text };
+                      if (r.media) {
+                        extraInlineParts.push({ inlineData: { mimeType: r.media.mimeType, data: r.media.base64 } });
+                      }
                     } else if (fc.name === 'search_attachments') {
                       result = { report: await runSearchAttachments(folderName, String(fc.args?.query || '').trim(), !!fc.args?.regex) };
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
@@ -7813,7 +7887,17 @@ export async function POST(req: Request) {
                       const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true, regex: !!parsed.regex });
                       resultText = formatSearchForTool(sr);
                     } else if (tc.name === 'read_attachment') {
-                      resultText = await runReadAttachment({ prefix: String(parsed.ref || ''), pattern: parsed.pattern, folderName, index: conversationAttachmentRefs });
+                      // OpenAI `tool`-role messages can't carry media directly,
+                      // so a restored image is delivered through the follow-up
+                      // user-message injection (the same path computer_screenshot
+                      // uses). Audio/video have no clean OpenAI-compat tool-result
+                      // wire shape, so runReadAttachment reports them as text only.
+                      const r = await runReadAttachment({ prefix: String(parsed.ref || ''), pattern: parsed.pattern, folderName, index: conversationAttachmentRefs, specificModel: localModel, nativeMediaKinds: new Set(['image']) });
+                      resultText = r.text;
+                      if (r.media?.kind === 'image') {
+                        resultText += ' Image content follows in the next user message.';
+                        pendingImageInjects.push({ name: `attachment_${r.media.mimeType.replace('/', '_')}`, dataUrl: `data:${r.media.mimeType};base64,${r.media.base64}` });
+                      }
                     } else if (tc.name === 'search_attachments') {
                       resultText = await runSearchAttachments(folderName, String(parsed.query || '').trim(), !!parsed.regex);
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {

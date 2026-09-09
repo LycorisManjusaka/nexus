@@ -30,9 +30,15 @@ import mimeTable from './attachmentMime.json';
 // mode (an orphan wastes disk) is far safer than the alternative (deleting a
 // conversation silently breaks the media in its copies).
 //
-// TEXT ATTACHMENTS ARE DELIBERATELY NOT STORED HERE. `textData` is plain text,
-// small, and is injected directly into the prompt each turn; externalizing it
-// would add a disk read per turn and a fetch per preview to save nothing.
+// TEXT ATTACHMENTS ALSO GET A REF, ADDITIVELY. `textData` stays inline — it's
+// small and is injected directly into the prompt each turn, and externalizing
+// display would add a disk read per turn and a fetch per preview to save
+// nothing. But when an attachment is hidden from the prompt (auto-hide, or an
+// entity's "hidden attachments accessible via tool" setting), its `ref` is
+// what makes read_attachment/search_attachments able to reach it at all — so
+// text attachments are dual-field: `textData` for display, `ref` for the same
+// bytes addressable by hash. See migrate-text-attachments.mjs, which backfilled
+// every pre-existing text attachment that predated this.
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
