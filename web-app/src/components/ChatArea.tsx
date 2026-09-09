@@ -2143,9 +2143,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         };
         if (m.attachments?.length) {
           const kept = m.attachments
-            .filter((a: any) => !a.excluded)
+            .filter((a: any) => !a.excluded || (hiddenAttachmentsAccessible && a.ref))
             .map((a: any) => {
               const { fileObj, ...rest } = a;
+              if (rest.excluded) return { ...rest, textData: null, dataUrl: null };
               return rest;
             });
           if (kept.length) slim.attachments = kept;

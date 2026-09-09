@@ -35,7 +35,8 @@
     "audio/x-m4a": "m4a",
     "audio/webm": "weba",
     "audio/flac": "flac",
-    "application/pdf": "pdf"
+    "application/pdf": "pdf",
+    "text/plain": "txt"
   },
   "extToMime": {
     "jpg": "image/jpeg",
@@ -55,6 +56,7 @@
     "weba": "audio/webm",
     "flac": "audio/flac",
     "pdf": "application/pdf",
+    "txt": "text/plain",
     "bin": "application/octet-stream"
   }
 }
