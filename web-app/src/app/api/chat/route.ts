@@ -11,6 +11,8 @@ import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
 import { readAttachmentBase64, readAttachmentText, putBytes, mimeForRef } from '@/lib/attachmentStore';
+import { findAttachmentsByRefPrefix, searchAttachments, formatAttachmentSearchForTool } from '@/lib/attachmentIndex';
+import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { claudeAgentEnv } from '@/lib/agentEnv';
 
@@ -33,23 +35,46 @@ async function toolAttachmentPayload(
   }
 }
 
-// read_attachment — revive a HIDDEN attachment from THIS conversation by its
-// ref prefix. The index is the list of refs carried by the conversation's own
-// messages (never the whole store), so the hash is the index AND the scope:
-// an entity can only address attachments it already has in this conversation.
+// read_attachment — revive a HIDDEN attachment by its ref prefix.
+//
+// The FAST path is the current conversation's own refs (built once per turn in
+// POST, see collectConversationAttachmentRefs) — that's the common case and
+// costs nothing extra. When a prefix isn't found there, we fall back to a
+// corpus-wide lookup (findAttachmentsByRefPrefix) scoped to THIS being's own
+// conversations: read_conversation / search_conversations / search_attachments
+// can all surface a ref that lives in a DIFFERENT past conversation, and that
+// ref needs to actually resolve or those tools would be pointing at dead ends.
+// Scope never crosses beings — only the widening from "this conversation" to
+// "this being's conversations" is new.
+//
 // Ambiguity is an error, never a silent pick — returning the wrong file is the
 // one failure this tool must be structurally unable to produce.
 async function runReadAttachment(args: {
   prefix: string;
+  pattern?: string;
+  folderName: string;
   index: { ref: string; name: string; size: number; mimeType: string }[];
 }): Promise<string> {
-  const { prefix, index } = args;
+  const { prefix, pattern, folderName, index } = args;
   const p = (prefix || '').trim().toLowerCase();
   if (!p) return 'Error: read_attachment requires a ref prefix (the 12-character ref shown next to a hidden attachment).';
-  const matches = index.filter((e) => e.ref.toLowerCase().startsWith(p));
-  if (matches.length === 0) return `Error: no attachment in this conversation matches ref "${p}".`;
+
+  let matches: { ref: string; name: string; size: number; mimeType: string; convoTitle?: string }[] =
+    index.filter((e) => e.ref.toLowerCase().startsWith(p));
+  if (matches.length === 0) {
+    try {
+      const found = await findAttachmentsByRefPrefix(folderName, p, { excludeInactive: true });
+      if (found.length > 0) matches = found;
+    } catch {
+      // Fallback scan failed (e.g. logs dir missing) — fall through to the
+      // ordinary "not found" error below rather than surfacing an internal error.
+    }
+  }
+  if (matches.length === 0) {
+    return `Error: no attachment matching ref "${p}" was found in this conversation or elsewhere in your other conversations.`;
+  }
   if (matches.length > 1) {
-    const names = matches.slice(0, 6).map((e) => `${e.ref.slice(0, 12)} (${e.name})`).join(', ');
+    const names = matches.slice(0, 6).map((e) => `${e.ref.slice(0, 12)} (${e.name}${e.convoTitle ? ` — "${e.convoTitle}"` : ''})`).join(', ');
     return `Error: "${p}" is ambiguous — ${matches.length} attachments match. Use a longer prefix. Matches: ${names}`;
   }
   const entry = matches[0];
@@ -58,7 +83,34 @@ async function runReadAttachment(args: {
   }
   const text = await readAttachmentText(entry.ref);
   if (text == null) return `Error: the payload for ref "${entry.ref}" is missing from the store.`;
-  return `Content of ${entry.name} (${entry.ref}):\n\n${text}`;
+
+  if (!pattern || !pattern.trim()) {
+    return `Content of ${entry.name} (${entry.ref}):\n\n${text}`;
+  }
+
+  // Optional grep-within-this-file mode: return only matching lines instead of
+  // the whole content. Useful once an attachment is too long to want in full.
+  const compiled = compileSafeRegex(pattern);
+  if (!compiled.ok) return `Error: ${compiled.error}`;
+  const hits = grepLines(text, compiled.regex);
+  if (hits.length === 0) return `No lines in ${entry.name} (${entry.ref}) match pattern "${pattern}".`;
+  const shown = hits.slice(0, 200);
+  const body = shown.map((h) => `${h.line}: ${h.text}`).join('\n');
+  const more = hits.length > shown.length ? `\n…and ${hits.length - shown.length} more matching line(s).` : '';
+  return `${hits.length} line(s) in ${entry.name} (${entry.ref}) match "${pattern}":\n\n${body}${more}`;
+}
+
+// search_attachments — grep across every TEXT attachment of THIS being's own
+// (active) conversations. Thin wrapper around the shared backend that turns a
+// thrown ReDoS-guard rejection into the same "Error: ..." string convention
+// every other tool backend here uses.
+async function runSearchAttachments(folderName: string, query: string, regex: boolean): Promise<string> {
+  try {
+    const r = await searchAttachments(folderName, query, { regex, excludeInactive: true });
+    return formatAttachmentSearchForTool(r);
+  } catch (e: any) {
+    return `Error: ${e?.message || 'search failed'}`;
+  }
 }
 
 // The set of attachment refs referenced by THIS conversation's messages — the
@@ -310,6 +362,7 @@ function toolActivityLabel(name: string): string | null {
     case 'Bash': return 'run a shell command';
     case 'read_conversation': return 'read a past conversation';
     case 'search_conversations': return 'search past conversations';
+    case 'search_attachments': return 'search past attachments';
     case 'write_letter': return 'write a letter';
     case 'list_letters': return 'check for letters';
     case 'read_letter': return 'read a letter';
@@ -742,10 +795,10 @@ async function streamClaudeViaAgentSDK(args: {
               sdk.tool(
                 'search_conversations',
                 I.searchConversationsDesc,
-                { query: z.string().describe(I.searchConversationsQueryParam) },
-                async (a: { query: string }) => {
+                { query: z.string().describe(I.searchConversationsQueryParam), regex: z.boolean().optional().describe(I.searchRegexParam) },
+                async (a: { query: string; regex?: boolean }) => {
                   try {
-                    const r = await searchConversations(folderName, a.query, { excludeInactive: true });
+                    const r = await searchConversations(folderName, a.query, { excludeInactive: true, regex: !!a.regex });
                     return { content: [{ type: 'text' as const, text: formatSearchForTool(r) }] };
                   } catch (e: any) {
                     return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'search failed'}` }] };
@@ -755,16 +808,27 @@ async function streamClaudeViaAgentSDK(args: {
             );
           }
           if (hiddenAttachmentsAccessible) {
-            // Revive a hidden attachment by its ref prefix. The scope is the
-            // conversation's own refs (collected in POST), so this can never
-            // read another entity's store payload.
+            // Revive a hidden attachment by its ref prefix. Scoped to this
+            // conversation first, with a corpus-wide (this being only) fallback
+            // — see runReadAttachment's own comment.
             nexusTools.push(
               sdk.tool(
                 'read_attachment',
                 I.readAttachmentDesc,
-                { ref: z.string().describe(I.readAttachmentPrefixParam) },
-                async (a: { ref: string }) => ({
-                  content: [{ type: 'text' as const, text: await runReadAttachment({ prefix: a.ref, index: conversationAttachmentRefs }) }],
+                { ref: z.string().describe(I.readAttachmentPrefixParam), pattern: z.string().optional().describe(I.readAttachmentPatternParam) },
+                async (a: { ref: string; pattern?: string }) => ({
+                  content: [{ type: 'text' as const, text: await runReadAttachment({ prefix: a.ref, pattern: a.pattern, folderName, index: conversationAttachmentRefs }) }],
+                }),
+              ),
+            );
+            // Grep across every text attachment of this being's own conversations.
+            nexusTools.push(
+              sdk.tool(
+                'search_attachments',
+                I.searchAttachmentsDesc,
+                { query: z.string().describe(I.searchAttachmentsQueryParam), regex: z.boolean().optional().describe(I.searchRegexParam) },
+                async (a: { query: string; regex?: boolean }) => ({
+                  content: [{ type: 'text' as const, text: await runSearchAttachments(folderName, a.query, !!a.regex) }],
                 }),
               ),
             );
@@ -2553,12 +2617,13 @@ async function streamViaAnthropicCompat(args: {
   if (enableReadConversation) {
     tools.push(
       { name: 'read_conversation', description: I.readConversationDesc, input_schema: { type: 'object', properties: { name: { type: 'string', description: I.readConversationNameParam } }, required: ['name'] } },
-      { name: 'search_conversations', description: I.searchConversationsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchConversationsQueryParam } }, required: ['query'] } },
+      { name: 'search_conversations', description: I.searchConversationsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchConversationsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } }, required: ['query'] } },
     );
   }
   if (hiddenAttachmentsAccessible) {
     tools.push(
-      { name: 'read_attachment', description: I.readAttachmentDesc, input_schema: { type: 'object', properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam } }, required: ['ref'] } },
+      { name: 'read_attachment', description: I.readAttachmentDesc, input_schema: { type: 'object', properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam }, pattern: { type: 'string', description: I.readAttachmentPatternParam } }, required: ['ref'] } },
+      { name: 'search_attachments', description: I.searchAttachmentsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchAttachmentsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } }, required: ['query'] } },
     );
   }
   if (lettersEnabled) {
@@ -2621,7 +2686,7 @@ async function streamViaAnthropicCompat(args: {
 
   const LOCAL_TOOL_NAMES_SET = new Set([
     'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash',
-    'web_search', 'web_fetch', 'read_conversation', 'search_conversations', 'read_attachment',
+    'web_search', 'web_fetch', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments',
     'AskQuestion', 'spawn_subagent',
     ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES,
   ]);
@@ -2912,10 +2977,12 @@ async function streamViaAnthropicCompat(args: {
                 const r = await readConversationByName(folderName, name);
                 resultContent = r.ok ? `Transcript of "${r.title}":\n\n${r.transcript}` : `Error: ${r.error}`;
               } else if (tu.name === 'search_conversations') {
-                const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
+                const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
                 resultContent = formatSearchForTool(sr);
               } else if (tu.name === 'read_attachment') {
-                resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), index: conversationAttachmentRefs });
+                resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), pattern: tu.input?.pattern, folderName, index: conversationAttachmentRefs });
+              } else if (tu.name === 'search_attachments') {
+                resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex);
               } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                 resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
               } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
@@ -4063,7 +4130,7 @@ export async function POST(req: Request) {
           description: I.searchConversationsDesc,
           input_schema: {
             type: 'object',
-            properties: { query: { type: 'string', description: I.searchConversationsQueryParam } },
+            properties: { query: { type: 'string', description: I.searchConversationsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } },
             required: ['query'],
           },
         });
@@ -4074,8 +4141,17 @@ export async function POST(req: Request) {
           description: I.readAttachmentDesc,
           input_schema: {
             type: 'object',
-            properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam } },
+            properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam }, pattern: { type: 'string', description: I.readAttachmentPatternParam } },
             required: ['ref'],
+          },
+        });
+        claudeTools.push({
+          name: 'search_attachments',
+          description: I.searchAttachmentsDesc,
+          input_schema: {
+            type: 'object',
+            properties: { query: { type: 'string', description: I.searchAttachmentsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } },
+            required: ['query'],
           },
         });
       }
@@ -4619,7 +4695,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES]);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // ── Truncated at the token cap → continue automatically ──────
@@ -4885,10 +4961,12 @@ export async function POST(req: Request) {
                   } else if (tu.name === 'search_conversations') {
                     // Search across the entity's conversations; inactive ones are
                     // excluded (privacy). Nothing is saved.
-                    const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true });
+                    const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
                     resultContent = formatSearchForTool(sr);
                   } else if (tu.name === 'read_attachment') {
-                    resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), index: conversationAttachmentRefs });
+                    resultContent = await runReadAttachment({ prefix: String(tu.input?.ref || ''), pattern: tu.input?.pattern, folderName, index: conversationAttachmentRefs });
+                  } else if (tu.name === 'search_attachments') {
+                    resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex);
                   } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                     // Mail between identities. `me` is folderName — the sender is
                     // never taken from the model's arguments.
@@ -5202,6 +5280,7 @@ export async function POST(req: Request) {
                 type: 'OBJECT',
                 properties: {
                   query: { type: 'STRING', description: I.searchConversationsQueryParam },
+                  regex: { type: 'BOOLEAN', description: I.searchRegexParam },
                 },
                 required: ['query'],
               },
@@ -5219,8 +5298,21 @@ export async function POST(req: Request) {
                 type: 'OBJECT',
                 properties: {
                   ref: { type: 'STRING', description: I.readAttachmentPrefixParam },
+                  pattern: { type: 'STRING', description: I.readAttachmentPatternParam },
                 },
                 required: ['ref'],
+              },
+            },
+            {
+              name: 'search_attachments',
+              description: I.searchAttachmentsDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  query: { type: 'STRING', description: I.searchAttachmentsQueryParam },
+                  regex: { type: 'BOOLEAN', description: I.searchRegexParam },
+                },
+                required: ['query'],
               },
             },
           ],
@@ -5866,10 +5958,12 @@ export async function POST(req: Request) {
                     } else if (fc.name === 'search_conversations') {
                       // Search across the entity's conversations; inactive ones
                       // excluded (privacy). Nothing is saved.
-                      const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true });
+                      const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true, regex: !!fc.args?.regex });
                       result = { report: formatSearchForTool(sr) };
                     } else if (fc.name === 'read_attachment') {
-                      result = { report: await runReadAttachment({ prefix: String(fc.args?.ref || ''), index: conversationAttachmentRefs }) };
+                      result = { report: await runReadAttachment({ prefix: String(fc.args?.ref || ''), pattern: fc.args?.pattern, folderName, index: conversationAttachmentRefs }) };
+                    } else if (fc.name === 'search_attachments') {
+                      result = { report: await runSearchAttachments(folderName, String(fc.args?.query || '').trim(), !!fc.args?.regex) };
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
@@ -6619,6 +6713,7 @@ export async function POST(req: Request) {
               type: 'object',
               properties: {
                 query: { type: 'string', description: I.searchConversationsQueryParam },
+                regex: { type: 'boolean', description: I.searchRegexParam },
               },
               required: ['query'],
             },
@@ -6636,8 +6731,24 @@ export async function POST(req: Request) {
               type: 'object',
               properties: {
                 ref: { type: 'string', description: I.readAttachmentPrefixParam },
+                pattern: { type: 'string', description: I.readAttachmentPatternParam },
               },
               required: ['ref'],
+            },
+          },
+        });
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'search_attachments',
+            description: I.searchAttachmentsDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: I.searchAttachmentsQueryParam },
+                regex: { type: 'boolean', description: I.searchRegexParam },
+              },
+              required: ['query'],
             },
           },
         });
@@ -7699,10 +7810,12 @@ export async function POST(req: Request) {
                     } else if (tc.name === 'search_conversations') {
                       // Search across the entity's conversations; inactive ones
                       // excluded (privacy). Nothing is saved.
-                      const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true });
+                      const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true, regex: !!parsed.regex });
                       resultText = formatSearchForTool(sr);
                     } else if (tc.name === 'read_attachment') {
-                      resultText = await runReadAttachment({ prefix: String(parsed.ref || ''), index: conversationAttachmentRefs });
+                      resultText = await runReadAttachment({ prefix: String(parsed.ref || ''), pattern: parsed.pattern, folderName, index: conversationAttachmentRefs });
+                    } else if (tc.name === 'search_attachments') {
+                      resultText = await runSearchAttachments(folderName, String(parsed.query || '').trim(), !!parsed.regex);
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.

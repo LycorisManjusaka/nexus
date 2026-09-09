@@ -72,17 +72,29 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   // WHERE something was said, then optionally read that conversation in full.
   // Framed for the entity ("YOUR conversations") — avoid the "user" word here.
   searchConversationsDesc:
-    'Search across ALL of YOUR past conversations for a word or phrase and get back the matching excerpts. Each excerpt is trimmed around the match and labeled with its conversation title, the speaker, and the timestamp when available; results are grouped by conversation so you can scan them top to bottom. Use this to recall where a topic, decision, or moment was discussed before — nothing is saved. If an excerpt already gives you what you need, just continue from it; if you need the surrounding detail, follow up with read_conversation using the exact conversation title shown after "###".',
+    'Search across ALL of YOUR past conversations for a word or phrase and get back the matching excerpts. Each excerpt is trimmed around the match and labeled with its conversation title, the speaker, and the timestamp when available; results are grouped by conversation so you can scan them top to bottom. Attachments carried by a matching conversation are also listed (ref, name, size) even if the attachment itself didn\'t match — call read_attachment with a ref to read one. Use this to recall where a topic, decision, or moment was discussed before — nothing is saved. If an excerpt already gives you what you need, just continue from it; if you need the surrounding detail, follow up with read_conversation using the exact conversation title shown after "###".',
   searchConversationsQueryParam:
-    'The word or phrase to look for. Matching is case-insensitive and literal (not a regular expression). Prefer a distinctive term — a specific word finds the right moment far faster than a common one.',
+    'The word or phrase to look for. Case-insensitive. Literal by default; set regex:true to use a regular expression instead.',
+  searchRegexParam:
+    'Optional. Set true to treat the query as a regular expression (case-insensitive) instead of a literal substring. Nested quantifiers like "(a+)+" are rejected for safety.',
 
-  // read_attachment tool — revive a HIDDEN attachment by its ref prefix.
-  // Only the refs of THIS conversation are addressable (isolation), so the
-  // hash is the index. Phrased around "your conversation" — never "user".
+  // read_attachment tool — revive a HIDDEN attachment by its ref prefix. Refs
+  // are resolved against THIS conversation first, then (on a miss) against
+  // every other conversation of this same being — never across beings.
   readAttachmentDesc:
-    'Read back an attachment from THIS conversation that was hidden (excluded from context). Hidden attachments are shown in the message with a 12-character ref prefix; call this with that prefix to read the full content. Only works for attachments of this conversation — a prefix for anything else returns "not found".',
+    'Read back an attachment that was hidden (excluded from context) — from this conversation, or from any OTHER conversation of yours if you learned its ref via read_conversation, search_conversations, or search_attachments. Hidden attachments are shown with a 12-character ref prefix; call this with that prefix to read the full content. Optionally pass a pattern to grep the attachment instead of dumping it whole.',
   readAttachmentPrefixParam:
     'The 12-character ref prefix shown next to a hidden attachment (e.g. "0f6fa6f1c626"). Copy it exactly — do not guess or shorten it.',
+  readAttachmentPatternParam:
+    'Optional regular expression (case-insensitive). If given, only matching lines are returned instead of the whole attachment — useful for large files.',
+
+  // search_attachments tool — grep across every TEXT attachment of this
+  // being's own conversations (media attachments are skipped, their bytes
+  // aren't readable as text). Pairs with read_attachment for the full text.
+  searchAttachmentsDesc:
+    'Search the CONTENT of every text attachment across ALL of your conversations for a word or phrase (non-text attachments like images are skipped). Returns matching attachments with a few snippets each, their ref, name, size, and which conversation they came from. Use read_attachment with the ref to read a match in full.',
+  searchAttachmentsQueryParam:
+    'The word or phrase to look for inside attachment content. Case-insensitive. Literal by default; set regex:true to use a regular expression instead.',
 
   // Interactive AskQuestion tool (optional). Description the model sees that
   // teaches it when/how to ask. Phrased around "your partner" (a peer), not a
@@ -538,8 +550,12 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'readConversationNameParam', label: 'Tool: read_conversation — name parameter' },
   { key: 'searchConversationsDesc', label: 'Tool: search_conversations — description' },
   { key: 'searchConversationsQueryParam', label: 'Tool: search_conversations — query parameter' },
+  { key: 'searchRegexParam', label: 'Tool: search_conversations/read_attachment/search_attachments — regex parameter' },
   { key: 'readAttachmentDesc', label: 'Tool: read_attachment — description' },
   { key: 'readAttachmentPrefixParam', label: 'Tool: read_attachment — ref prefix parameter' },
+  { key: 'readAttachmentPatternParam', label: 'Tool: read_attachment — pattern parameter' },
+  { key: 'searchAttachmentsDesc', label: 'Tool: search_attachments — description' },
+  { key: 'searchAttachmentsQueryParam', label: 'Tool: search_attachments — query parameter' },
   { key: 'continuationInstruction', label: 'Auto-continue: resume a cut-off reply' },
   { key: 'toolWriteLetterDesc', label: 'Tool: write_letter — description' },
   { key: 'writeLetterToParam', label: 'Tool: write_letter — "to" parameter' },
@@ -605,8 +621,12 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   readConversationNameParam: 'ツール read_conversation — name 引数',
   searchConversationsDesc: 'ツール search_conversations — 説明',
   searchConversationsQueryParam: 'ツール search_conversations — query 引数',
+  searchRegexParam: 'ツール search_conversations／read_attachment／search_attachments — regex 引数',
   readAttachmentDesc: 'ツール read_attachment — 説明',
   readAttachmentPrefixParam: 'ツール read_attachment — ref 接頭辞',
+  readAttachmentPatternParam: 'ツール read_attachment — pattern 引数',
+  searchAttachmentsDesc: 'ツール search_attachments — 説明',
+  searchAttachmentsQueryParam: 'ツール search_attachments — query 引数',
   continuationInstruction: '自動継続：途中で切れた応答の再開',
   toolWriteLetterDesc: 'ツール write_letter — 説明',
   writeLetterToParam: 'ツール write_letter —「to」引数',

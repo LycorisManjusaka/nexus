@@ -20,6 +20,8 @@ import { createReadStream } from 'fs';
 import path from 'path';
 import { compareConvoTitles } from './convoSort';
 import { DATA_DIR, BEINGS_DIR, beingLogsDir, beingSettingsFile } from './beingPaths';
+import { compileSafeRegex } from './safeRegex';
+import { AttachmentIndexEntry, formatAttachmentEntry } from './attachmentIndex';
 
 const CHARACTER_MAP = path.join(DATA_DIR, 'character_map.json');
 const USER_SETTINGS = path.join(DATA_DIR, 'user_settings.json');
@@ -45,6 +47,11 @@ export interface SearchGroup {
   convoTitle: string;
   active: boolean;
   matches: SearchSnippet[];
+  /** Every attachment (with a ref — legacy inline ones are omitted) carried by
+   * this conversation's ORIGINAL messages, regardless of which message the
+   * text match landed in. Lets a search result double as an attachment index
+   * without a separate read_conversation round trip. */
+  attachments: AttachmentIndexEntry[];
 }
 export interface SearchResult {
   query: string;
@@ -72,6 +79,16 @@ export interface SearchOptions {
   /** Inclusive epoch-ms bounds on message timestamps. */
   from?: number | null;
   to?: number | null;
+  /**
+   * Interpret `query` as a regular expression instead of a literal substring.
+   * Backward compatible: defaults to false, so every existing caller is
+   * unaffected. Regex mode can't use the streaming literal pre-filter (a
+   * pattern like "cat|dog" never appears verbatim in the file), so it costs a
+   * full read+parse per non-skipped conversation instead of one per MATCHING
+   * conversation — acceptable for an occasional, deliberate tool call, not run
+   * on any hot path.
+   */
+  regex?: boolean;
 }
 
 // Stream a file in 1MB chunks looking for `needleLower` (case-insensitive),
@@ -196,6 +213,38 @@ function snippetsForMessage(content: string, lowerContent: string, needle: strin
   return out;
 }
 
+// Regex sibling of snippetsForMessage above — same trimming/dedup rules, but
+// walks `regex.exec` matches instead of a literal `indexOf`. Kept as a
+// separate function rather than a shared core: the literal path is the hot,
+// common case and stays exactly as it was (no regex object allocation, no
+// lastIndex bookkeeping) for every caller that never opts into regex mode.
+function regexSnippetsForMessage(content: string, regex: RegExp): { text: string; matchIdx: number }[] {
+  const out: { text: string; matchIdx: number }[] = [];
+  let coveredUntil = -1;
+  regex.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while (out.length < MAX_SNIPPETS_PER_MESSAGE && (m = regex.exec(content))) {
+    const idx = m.index;
+    const matchLen = Math.max(1, m[0].length);
+    if (regex.lastIndex === idx) regex.lastIndex++; // guard zero-width patterns
+    if (idx <= coveredUntil) continue;
+
+    const lineStart = content.lastIndexOf('\n', idx - 1) + 1;
+    let lineEnd = content.indexOf('\n', idx + matchLen);
+    if (lineEnd < 0) lineEnd = content.length;
+
+    const start = Math.max(lineStart, idx - MAX_BEFORE);
+    const end = Math.min(lineEnd, idx + matchLen + MAX_AFTER);
+    coveredUntil = end;
+
+    let text = content.slice(start, end).trim();
+    if (start > 0) text = '…' + text;
+    if (end < content.length) text = text + '…';
+    out.push({ text, matchIdx: idx });
+  }
+  return out;
+}
+
 export async function searchConversations(
   folderName: string,
   query: string,
@@ -220,6 +269,15 @@ export async function searchConversations(
   try { files = (await fs.readdir(dir)).filter((f) => !f.startsWith('.') && f.endsWith('.json')); }
   catch { return empty; }
 
+  const useRegex = !!opts?.regex;
+  let regex: RegExp | null = null;
+  if (useRegex) {
+    // Compiled once, up front, with the 'g' flag so scanFile's per-message
+    // regexSnippetsForMessage can walk repeated matches via exec()/lastIndex.
+    const compiled = compileSafeRegex(q, 'gim');
+    if (!compiled.ok) throw new Error(compiled.error);
+    regex = compiled.regex;
+  }
   const needle = q.toLowerCase();
   const validNameKeys = await loadValidNameKeys();
   let searched = 0;
@@ -266,9 +324,12 @@ export async function searchConversations(
     searched++;
 
     // (2) Streaming pre-filter — bail without ever loading the file whole.
-    if (!(await rawFileContains(fp, needle))) return null;
+    // Skipped in regex mode: a pattern like "cat|dog" never appears verbatim
+    // in the file, so there's no literal substring to pre-check against.
+    if (!useRegex && !(await rawFileContains(fp, needle))) return null;
 
-    // (3) Only matching files pay the full read + parse cost.
+    // (3) Only matching (or, in regex mode, every non-skipped) files pay the
+    // full read + parse cost.
     let raw: string;
     try { raw = await fs.readFile(fp, 'utf-8'); } catch { return null; }
     if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
@@ -279,12 +340,29 @@ export async function searchConversations(
     const messages: any[] = Array.isArray(log.messages) ? log.messages : [];
     const isOriginal = makeIsOriginal(log, messages);
     const snippets: SearchSnippet[] = [];
+    const attachments: AttachmentIndexEntry[] = [];
     messages.forEach((m, idx) => {
       if (!isOriginal(idx)) return; // skip copied (carried-over) messages
+
+      // Attachment index — collected from every ORIGINAL message regardless of
+      // whether ITS text matched, so a search result doubles as this
+      // conversation's attachment index without a separate read_conversation
+      // call. Legacy attachments with no ref carry no hash and are omitted —
+      // there is nothing read_attachment could resolve them by.
+      for (const att of (m.attachments || [])) {
+        const ref = att?.ref;
+        if (typeof ref !== 'string' || !ref) continue;
+        attachments.push({
+          ref, name: String(att.name || 'unnamed'), size: Number(att.size || 0),
+          mimeType: String(att.type || ''),
+        });
+      }
+
       const content = typeof m.content === 'string' ? m.content : '';
       if (!content) return;
       const lower = content.toLowerCase();
-      if (!lower.includes(needle)) return;
+      if (!useRegex && !lower.includes(needle)) return;
+      if (useRegex) { regex!.lastIndex = 0; if (!regex!.test(content)) return; }
 
       // Date filter applied AFTER the term test, so the "no timestamp" tally
       // counts only messages that would otherwise have been results — not every
@@ -301,7 +379,8 @@ export async function searchConversations(
       const storedName: string | null =
         typeof m.name === 'string' && nameKey(m.name) && nameKey(m.name) !== 'user' && nameKey(m.name) !== 'anonymous' ? m.name : null;
 
-      for (const s of snippetsForMessage(content, lower, needle)) {
+      const found = useRegex ? regexSnippetsForMessage(content, regex!) : snippetsForMessage(content, lower, needle);
+      for (const s of found) {
         let author: string;
         if (isUser) author = governingSpeaker(tags, s.matchIdx, validNameKeys) || storedName || 'Anonymous';
         else author = m.name || m.role || 'assistant';
@@ -322,6 +401,7 @@ export async function searchConversations(
       convoTitle: log.title || 'Untitled',
       active,
       matches: snippets, // already top-to-bottom by message order
+      attachments,
     };
   };
 
@@ -438,6 +518,7 @@ export async function searchFolders(
 // ISO-ish slice of the locale string).
 const TOOL_MAX_CONVOS = 25;
 const TOOL_MAX_SNIPPETS_PER_CONVO = 8;
+const TOOL_MAX_ATTACHMENTS_PER_CONVO = 8;
 
 function fmtTs(ts: number | null): string {
   if (ts == null) return '';
@@ -468,6 +549,14 @@ export function formatSearchForTool(r: SearchResult): string {
     if (g.matches.length > shown.length) {
       lines.push(`- …and ${g.matches.length - shown.length} more in this conversation.`);
     }
+    if (g.attachments.length > 0) {
+      const shownAtts = g.attachments.slice(0, TOOL_MAX_ATTACHMENTS_PER_CONVO);
+      const rest = g.attachments.length - shownAtts.length;
+      lines.push(
+        `  attachments: ${shownAtts.map(formatAttachmentEntry).join(', ')}` +
+        (rest > 0 ? `, …and ${rest} more` : ''),
+      );
+    }
   }
   if (r.results.length > shownConvos.length) {
     lines.push('');
@@ -475,7 +564,8 @@ export function formatSearchForTool(r: SearchResult): string {
   }
   lines.push('');
   lines.push(
-    'To pull any of these into full context, call read_conversation with the exact title shown after "###".',
+    'To pull any of these into full context, call read_conversation with the exact title shown after "###". ' +
+    'To read an attachment listed above in full, call read_attachment with its ref prefix.',
   );
   return lines.join('\n');
 }

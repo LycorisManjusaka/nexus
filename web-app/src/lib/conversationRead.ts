@@ -10,6 +10,7 @@
 // ───────────────────────────────────────────────────────────────────────────
 
 import { listLogs, loadLog } from './fsStorage';
+import { formatAttachmentEntry } from './attachmentIndex';
 
 export interface ReadConversationResult {
   ok: boolean;
@@ -43,6 +44,20 @@ function cleanContent(content: any): string {
     .replace(/!\[[^\]]*\]\(data:[^)]*\)/g, '[image]')
     // Bare data URIs
     .replace(/data:[a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g, '[binary]');
+}
+
+// Render a message's attachment list as `[<ref> "name" (size), …]`, using the
+// same rendering as read_attachment's own error text so the two stay
+// consistent. Legacy attachments (no ref — inline dataUrl/textData predating
+// content-addressing) are still listed by name/size so the transcript doesn't
+// silently drop them, but flagged as unreadable via the tool.
+function formatMessageAttachments(attachments: any): string {
+  if (!Array.isArray(attachments) || attachments.length === 0) return '';
+  const parts = attachments.map((a) => {
+    if (typeof a?.ref === 'string' && a.ref) return formatAttachmentEntry(a);
+    return `"${String(a?.name || 'unnamed')}" (no ref — not readable via read_attachment)`;
+  });
+  return ` [${parts.join(', ')}]`;
 }
 
 export async function readConversationByName(
@@ -102,11 +117,9 @@ export async function readConversationByName(
   for (const m of full.messages) {
     const speaker = m.role === 'user' ? (m.name || 'Anonymous') : (m.name || folderName || 'Assistant');
     const text = cleanContent(m.content || '').trim();
-    const atts = Array.isArray(m.attachments) && m.attachments.length > 0
-      ? ` [${m.attachments.length} attachment(s)]`
-      : '';
+    const atts = formatMessageAttachments(m.attachments);
     if (!text && !atts) continue;
-    lines.push(`[${speaker}]:${atts ? atts : ''}\n${text}`.trimEnd());
+    lines.push(`[${speaker}]:${atts}\n${text}`.trimEnd());
   }
 
   // Framing legend so the reading model parses speakers unambiguously and
@@ -114,7 +127,11 @@ export async function readConversationByName(
   const legend =
     'This is a past conversation transcript. Each turn begins with its speaker ' +
     'in square brackets, e.g. "[Name]:". Any line starting with "##" inside a ' +
-    'turn is that message\'s own markdown heading — NOT a new speaker.';
+    'turn is that message\'s own markdown heading — NOT a new speaker. Attachments ' +
+    'are listed as "<ref> \\"name\\" (size)" right after the speaker tag; a ref can ' +
+    'be read in full with the read_attachment tool (it works across ALL of your ' +
+    'conversations, not just this one). Attachments with no ref are legacy inline ' +
+    'payloads and cannot be read that way.';
 
   return {
     ok: true,
