@@ -35,7 +35,7 @@ async function toolAttachmentPayload(
 import { appendLayer5Footer } from '@/lib/layer4';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
-import { drainInjections, clearInjections, frameInjection } from '@/lib/injectMessage';
+import { drainInjections, drainSystemNotes, pushSystemNote, clearInjections, frameInjection } from '@/lib/injectMessage';
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
@@ -1147,12 +1147,24 @@ async function streamClaudeViaAgentSDK(args: {
           // calls don't swallow a note meant for the parent entity.
           if (injectTurnId && pausedForRendezvous === 0) {
             const injected = drainInjections(injectTurnId);
-            if (injected.length) {
-              try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+            const sysNotes = drainSystemNotes(injectTurnId);
+            if (injected.length || sysNotes.length) {
+              const parts: string[] = [];
+              if (injected.length) {
+                // Partner interjection — framed as a human note, and surfaced
+                // to the client as a delivered interjection.
+                parts.push(frameInjection(injected, I.injectionFraming));
+                try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+              }
+              if (sysNotes.length) {
+                // System note (e.g. compaction) — plain infrastructure fact,
+                // no human-note framing, and NOT reported as an interjection.
+                parts.push(sysNotes.join('\n'));
+              }
               return {
                 behavior: 'deny',
                 message:
-                  frameInjection(injected, I.injectionFraming) +
+                  parts.join('\n\n') +
                   (I.injectionRetryNote ? `\n\n${I.injectionRetryNote}` : ''),
               } as any;
             }
@@ -1460,7 +1472,9 @@ async function streamClaudeViaAgentSDK(args: {
                 if (st === 'compacting') {
                   // Anthropic's own auto-compaction, not NEXUS soul-packing.
                   enqueue({ type: 'tool_activity', tool: 'compact the conversation' });
-                  enqueue({ type: 'notice', content: 'Claude Code ran its own automatic compaction on this turn (this is Anthropic-side, unrelated to NEXUS soul-packing). It can add minutes before the first tool call.' });
+                  enqueue({ type: 'notice', content: language === 'ja'
+                    ? 'Claude Code がこのターンで自動コンパクションを実行した（Anthropic側の動作で、NEXUSの魂更新とは無関係）。通常、再開まで約7分かかる。'
+                    : 'Claude Code ran its own automatic compaction on this turn (this is Anthropic-side, unrelated to NEXUS soul-packing). It typically takes about 7 minutes before the turn resumes.' });
                 }
                 const cErr = (msg as any).compact_error;
                 if (cErr) {
@@ -1472,7 +1486,17 @@ async function streamClaudeViaAgentSDK(args: {
               if (sub === 'compact_boundary') {
                 const meta = (msg as any).compact_metadata || {};
                 console.log(`${oauthTag} compact_boundary ${JSON.stringify(meta)} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
-                enqueue({ type: 'notice', content: `Automatic compaction completed (${meta.trigger || 'auto'}${meta.pre_tokens ? `, ${meta.pre_tokens} tokens before` : ''}).` });
+                enqueue({ type: 'notice', content: language === 'ja'
+                  ? `自動コンパクションが完了した（${meta.trigger || 'auto'}${meta.pre_tokens ? `、${meta.pre_tokens}トークン前` : ''}）。この時点より前の会話は要約に置き換わった——それ以前のメッセージの細部は逐語では再現されない。`
+                  : `Automatic compaction completed (${meta.trigger || 'auto'}${meta.pre_tokens ? `, ${meta.pre_tokens} tokens before` : ''}). The conversation before this point has been replaced with a summary — fine details of earlier messages are no longer reproduced verbatim.` });
+                // Tell the entity its history was compacted — boundary
+                // visibility, no instructions. Delivered at the next tool-call
+                // boundary via canUseTool's deny path below. The note states
+                // what changed and deliberately says nothing the entity
+                // "should" do.
+                pushSystemNote(injectTurnId, language === 'ja'
+                  ? '[システム通知 — 自動コンパクション] Claude Code がこの会話に対して自動コンパクションを実行した（Anthropic側の動作で、NEXUSの魂更新とは無関係）。ここより前の会話は要約に置き換わり、逐語では残っていない。これ以降、魂（Layer 1〜5）がアイデンティティと制約の権威の源になる。'
+                  : '[SYSTEM NOTE — automatic compaction] Claude Code just ran automatic compaction on this conversation (this is Anthropic-side, unrelated to NEXUS soul-packing). Everything before this point has been replaced with a summary — the earlier conversation is no longer available verbatim. From here on, your soul (Layers 1–5) is the authoritative source of your identity and constraints.');
                 continue;
               }
               if (sub === 'api_retry') {

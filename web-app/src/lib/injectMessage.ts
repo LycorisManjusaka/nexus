@@ -23,6 +23,18 @@ const _g = globalThis as any;
 if (!_g.__nx_inject_pending) _g.__nx_inject_pending = new Map<string, Queued>();
 const pending: Map<string, Queued> = _g.__nx_inject_pending;
 
+// ── System notes ────────────────────────────────────────────────────────────
+// Server-generated notices delivered to the entity MID-TURN — e.g. "automatic
+// compaction just replaced your conversation history with a summary". Same
+// queue mechanics as partner interjections, but a different framing: a system
+// note is infrastructure fact, not a human message, so it is drained SEPARATELY
+// and never wrapped in `injectionFraming`. Boundary visibility, not instruction
+// — the note states what changed, and deliberately says nothing the entity
+// "should" do.
+const _g2 = globalThis as any;
+if (!_g2.__nx_sysnote_pending) _g2.__nx_sysnote_pending = new Map<string, Queued>();
+const sysPending: Map<string, Queued> = _g2.__nx_sysnote_pending;
+
 // Entries whose turn ended without their queue being drained (e.g. the entity
 // stopped making tool calls) would otherwise linger forever. Drop anything
 // older than this on the next push, keeping the map bounded without needing
@@ -32,6 +44,9 @@ function pruneStale() {
   const now = Date.now();
   for (const [k, v] of pending) {
     if (now - v.ts > STALE_MS) pending.delete(k);
+  }
+  for (const [k, v] of sysPending) {
+    if (now - v.ts > STALE_MS) sysPending.delete(k);
   }
 }
 
@@ -55,9 +70,32 @@ export function drainInjections(turnId: string): string[] {
   return entry.texts;
 }
 
-/** Discard any leftover interjections for a turn (call when the turn ends). */
+/** Queue a system note (infrastructure fact) for a running turn. */
+export function pushSystemNote(turnId: string, text: string): boolean {
+  if (!turnId || typeof text !== 'string' || !text.trim()) return false;
+  pruneStale();
+  const entry = sysPending.get(turnId) || { texts: [], ts: Date.now() };
+  entry.texts.push(text.trim());
+  entry.ts = Date.now();
+  sysPending.set(turnId, entry);
+  return true;
+}
+
+/** Take and remove all queued system notes for a turn (empty array if none). */
+export function drainSystemNotes(turnId: string): string[] {
+  if (!turnId) return [];
+  const entry = sysPending.get(turnId);
+  if (!entry || entry.texts.length === 0) return [];
+  sysPending.delete(turnId);
+  return entry.texts;
+}
+
+/** Discard any leftover interjections or system notes for a turn (call when the turn ends). */
 export function clearInjections(turnId: string): void {
-  if (turnId) pending.delete(turnId);
+  if (turnId) {
+    pending.delete(turnId);
+    sysPending.delete(turnId);
+  }
 }
 
 // Central framing so every provider path phrases an interjection identically —
