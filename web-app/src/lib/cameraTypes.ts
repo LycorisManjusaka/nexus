@@ -14,8 +14,9 @@
  *
  *  - 'idle'     nothing in flight (no active turn, no audio playing)
  *  - 'thinking' extended-thinking text is streaming in, no visible reply yet
- *  - 'replying' the visible reply is streaming — maps to the 'Speaking'
- *               camera state (outputting to the conversation, TTS on or off)
+ *  - 'replying' the visible reply is streaming — maps to the 'Writing'
+ *               camera state (outputting to the conversation; 'Speaking' is
+ *               reserved for TTS audio that is actually playing right now)
  *  - 'waiting'  a turn is in flight but nothing has arrived yet — the model
  *               was just called, OR it is waiting on something (compaction, an
  *               AskQuestion answer, a subagent, a stall). Maps to 'Waiting'.
@@ -124,7 +125,8 @@ export function toolNameToGroup(name: string): CameraToolGroup {
  *
  * `speaking` overrides every phase per spec ("mostly prioritized, overriding
  * any other actions") — checked first, unconditionally. The visible reply
- * also resolves to 'Speaking' (outputting to the conversation, TTS on or off).
+ * resolves to 'Writing' (outputting to the conversation); 'Speaking' is
+ * reserved for TTS audio that is actually playing right now.
  */
 export function resolveStateCandidates(signal: CameraSignal): string[] {
   if (signal.speaking) return ['Speaking', 'Idle'];
@@ -136,7 +138,7 @@ export function resolveStateCandidates(signal: CameraSignal): string[] {
       // reason to show the reasoning state.
       return [signal.toolName ? toolNameToGroup(signal.toolName) : 'Acting', 'Idle'];
     case 'replying':
-      return ['Speaking', 'Idle'];
+      return ['Writing', 'Idle'];
     case 'thinking':
       return ['Thinking', 'Idle'];
     case 'waiting':

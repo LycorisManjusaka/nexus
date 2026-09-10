@@ -170,9 +170,36 @@ export default function CameraPanel({ folderName, enabled, signal }: CameraPanel
   const handleEnded = useCallback(() => {
     if (transitioningRef.current) {
       transitioningRef.current = false;
-      settledStateRef.current = pendingTargetRef.current;
+      const intended = pendingTargetRef.current;
       pendingTargetRef.current = null;
-      evaluate();
+      // Re-resolve against the LATEST signal rather than blindly settling on
+      // the state the clip was aimed at when it started — the signal may have
+      // moved again while the transition played. This closes the old bug where
+      // the code first assigned settledStateRef = pendingTargetRef and then
+      // called evaluate(): evaluate saw from === target and returned early,
+      // so settleIntoState(target) never ran and the loop=false transition
+      // clip stayed parked on its last frame forever.
+      const m = manifestRef.current;
+      if (!m) {
+        settledStateRef.current = null;
+        clearFile();
+        return;
+      }
+      const target = pickResolvedState(m, signal);
+      if (!target) {
+        settledStateRef.current = null;
+        clearFile();
+        return;
+      }
+      if (target === intended || target === settledStateRef.current) {
+        // Still heading where we were going, or the signal reverted to the
+        // state we were transitioning FROM — land on it directly (no loop).
+        settleIntoState(target);
+      } else {
+        // Moved to a third state — evaluate() sees from(old) !== target(new)
+        // and plays the right follow-on transition (or settles straight in).
+        evaluate();
+      }
       return;
     }
     // A multi-entry pool video finished — cycle to another random entry from
@@ -184,7 +211,7 @@ export default function CameraPanel({ folderName, enabled, signal }: CameraPanel
       const next = randomPick(pool, currentFileRef.current || undefined);
       showFile(next, cameraFileKind(next) === 'video' && pool.length === 1);
     }
-  }, [evaluate, showFile]);
+  }, [evaluate, showFile, settleIntoState, clearFile]);
 
   if (!enabled) return null;
 

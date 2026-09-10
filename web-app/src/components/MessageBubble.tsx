@@ -14,12 +14,20 @@ import { useT } from '@/lib/i18n';
 import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 
-export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
+export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(msg.content);
   const [ttsState, setTtsState] = useState<'idle' | 'playing' | 'paused'>('idle');
+  // Precise "audio is actually sounding RIGHT NOW" flag, distinct from
+  // `ttsState`. `ttsState` goes 'playing' the instant TTS is triggered (the
+  // synchronous lock in handleTTS/handleStreamingTTS), which still includes
+  // the synthesis/engine-cold-start window where nothing is audible yet — and
+  // it stays non-'idle' while paused. The camera's "Speaking" state must mean
+  // "voice is audible", so it keys off THIS flag, which is only true between
+  // an audio element's actual play() and its end/pause/stop.
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [isZoomedIn, setIsZoomedIn] = useState(false);
   // Full-content modal for text attachments. Holds {name, textData} or null.
@@ -144,6 +152,20 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       if (onAudioStateChange) onAudioStateChange(msg.id, false);
     };
   }, [ttsState, msg.id, onAudioStateChange]);
+
+  // Report the precise "actually sounding" flag up to ChatArea for the camera
+  // (separate channel from onAudioStateChange above, which stays broad so the
+  // VRChat send queue keeps gating on "any TTS activity" — synthesis, playing,
+  // or paused — rather than only on audible playback). Cleanup reports false so
+  // a bubble that unmounts mid-playback can't leave the camera stuck Speaking.
+  React.useEffect(() => {
+    if (onSpeakingChange) {
+      onSpeakingChange(msg.id, isSpeaking);
+    }
+    return () => {
+      if (onSpeakingChange) onSpeakingChange(msg.id, false);
+    };
+  }, [isSpeaking, msg.id, onSpeakingChange]);
 
   // Keep editContent in sync with msg.content (e.g. after streaming finishes)
   React.useEffect(() => {
@@ -293,11 +315,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     }
     if (url == null) {
       isCurrentlyPlayingRef.current = false;
+      setIsSpeaking(false);
       clearTtsHighlight();
       maybeFinishStreaming();
       return;
     }
     isCurrentlyPlayingRef.current = true;
+    setIsSpeaking(true);
     // Tint the phrase about to sound. Decoration only — never awaited, never
     // able to throw into the player (the helper swallows its own failures).
     if (globalSettings?.ttsHighlight !== false) {
@@ -601,6 +625,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
 
   const stopTTS = () => {
     pushTtsDiag({ active: false });
+    setIsSpeaking(false);
     clearTtsHighlight();
     segTextRef.current = new Map();
     if (currentAudioRef.current) {
@@ -642,10 +667,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     if (ttsStateRef.current === 'playing') {
       if (currentAudioRef.current) currentAudioRef.current.pause();
       if (currentAudioRef2.current) currentAudioRef2.current.pause();
+      setIsSpeaking(false);
       setTtsState('paused');
     } else if (ttsStateRef.current === 'paused') {
       if (currentAudioRef.current) currentAudioRef.current.play().catch(e => console.error("Resume error", e));
       if (currentAudioRef2.current) currentAudioRef2.current.play().catch(e => console.error("Resume error 2", e));
+      setIsSpeaking(true);
       setTtsState('playing');
     }
   };
@@ -847,6 +874,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
       if (signal.aborted) return;
       if (audioQueue.length > 0) {
         isCurrentlyPlaying = true;
+        setIsSpeaking(true);
         const item = audioQueue.shift()!;
         const url = item.url;
         if (globalSettings?.ttsHighlight !== false) {
@@ -893,6 +921,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         };
       } else {
         isCurrentlyPlaying = false;
+        setIsSpeaking(false);
         if (currentIndex >= sentences.length) {
           clearTtsHighlight();
           setTtsState('idle');

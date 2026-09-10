@@ -812,6 +812,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (localAiName === 'Local') refreshLocalModels();
   }, [localAiName]);
   const isAudioPlaying = Object.values(audioPlayingStates).some(v => v);
+  // Precise "audio is actually sounding RIGHT NOW" flag, for the camera only.
+  // Distinct from isAudioPlaying above: that one is "any TTS state other than
+  // idle" (synthesis in-flight, playing, OR paused) and keeps gating the VRChat
+  // send queue so a message isn't sent while TTS is still mid-synthesis. This
+  // one is true only during real audible playback, reported up by MessageBubble's
+  // separate onSpeakingChange channel — the camera's "Speaking" state must mean
+  // "voice is audible", not "TTS was just triggered or is paused".
+  const [speakingStates, setSpeakingStates] = useState<Record<string, boolean>>({});
+  const isSpeaking = Object.values(speakingStates).some(v => v);
+  const handleSpeakingChange = useCallback((msgId: string, speaking: boolean) => {
+    setSpeakingStates(prev => {
+      if (prev[msgId] === speaking) return prev;
+      return { ...prev, [msgId]: speaking };
+    });
+  }, []);
   const [vrchatQueue, setVrchatQueue] = useState<{ text: string, attachment: any }[]>([]);
 
   // Camera signal: computed at render time and handed straight to the
@@ -841,7 +856,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             ? 'thinking'
             : 'waiting';
   const cameraSignal: CameraSignal = {
-    speaking: isAudioPlaying,
+    speaking: isSpeaking,
     phase: cameraPhase,
     toolName: cameraPhase === 'tool' ? liveToolName : null,
   };
@@ -3537,6 +3552,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 onToggleAttachment={(attId: string) => handleToggleAttachment(msg.id, attId)}
                 onDeleteAttachment={(attId: string) => handleDeleteAttachment(msg.id, attId)}
                 onAudioStateChange={handleAudioStateChange}
+                onSpeakingChange={handleSpeakingChange}
                 globalSettings={globalSettings}
                 folders={folders}
                 folderName={folderName}
