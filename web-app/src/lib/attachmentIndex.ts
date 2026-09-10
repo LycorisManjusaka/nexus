@@ -60,7 +60,7 @@ export function formatAttachmentEntry(a: AttachmentIndexEntry): string {
 // it came from. Not used on the per-turn hot path — see file header.
 async function collectFolderAttachments(
   folderName: string,
-  opts?: { excludeInactive?: boolean },
+  opts?: { excludeInactive?: boolean; refless?: { count: number } },
 ): Promise<AttachmentOccurrence[]> {
   const dir = beingLogsDir(folderName);
   let files: string[] = [];
@@ -103,7 +103,13 @@ async function collectFolderAttachments(
         const ts = typeof m.timestamp === 'number' ? m.timestamp : null;
         for (const att of (m.attachments || [])) {
           const ref = att?.ref;
-          if (typeof ref !== 'string' || !ref) continue;
+          if (typeof ref !== 'string' || !ref) {
+            // Pre-migration attachment: inline data only, never written to the
+            // content-addressed store. Invisible to every ref-keyed lookup
+            // below — count it so callers can say so instead of going silent.
+            if (opts?.refless) opts.refless.count++;
+            continue;
+          }
           out.push({
             ref,
             name: String(att.name || 'unnamed'),
@@ -161,6 +167,10 @@ export interface AttachmentSearchResult {
   hits: AttachmentSearchHit[];
   attachmentsScanned: number;
   attachmentsSkippedMedia: number;
+  /** Attachments with no stored ref at all — invisible to this scan, not just
+   * skipped as non-text. Almost always pre-migration text attachments that
+   * still carry only inline `textData`. See collectFolderAttachments. */
+  attachmentsWithoutRef: number;
 }
 
 const MAX_SNIPPETS = 3;
@@ -183,7 +193,7 @@ export async function searchAttachments(
 ): Promise<AttachmentSearchResult> {
   const q = String(query || '').trim();
   const useRegex = !!opts?.regex;
-  const empty: AttachmentSearchResult = { query: q, regex: useRegex, hits: [], attachmentsScanned: 0, attachmentsSkippedMedia: 0 };
+  const empty: AttachmentSearchResult = { query: q, regex: useRegex, hits: [], attachmentsScanned: 0, attachmentsSkippedMedia: 0, attachmentsWithoutRef: 0 };
   if (!folderName || !q) return empty;
 
   let compiled: RegExp | null = null;
@@ -194,7 +204,8 @@ export async function searchAttachments(
   }
   const needle = q.toLowerCase();
 
-  const all = await collectFolderAttachments(folderName, { excludeInactive: opts?.excludeInactive });
+  const refless = { count: 0 };
+  const all = await collectFolderAttachments(folderName, { excludeInactive: opts?.excludeInactive, refless });
   // One physical read per distinct ref, even if it's referenced from several
   // conversations/messages — re-scanning identical bytes twice would only
   // duplicate work. Keeps the FIRST occurrence's title/timestamp for display.
@@ -236,7 +247,7 @@ export async function searchAttachments(
       convoTitle: a.convoTitle, timestamp: a.timestamp, snippets,
     });
   }
-  return { query: q, regex: useRegex, hits, attachmentsScanned: scanned, attachmentsSkippedMedia: skippedMedia };
+  return { query: q, regex: useRegex, hits, attachmentsScanned: scanned, attachmentsSkippedMedia: skippedMedia, attachmentsWithoutRef: refless.count };
 }
 
 function fmtTs(ts: number | null): string {
@@ -247,13 +258,16 @@ function fmtTs(ts: number | null): string {
 }
 
 export function formatAttachmentSearchForTool(r: AttachmentSearchResult): string {
+  const relessNote = r.attachmentsWithoutRef
+    ? ` (${r.attachmentsWithoutRef} more attachment(s) have no stored reference yet and could not be scanned at all — likely pre-migration text attachments; ask your steward to run the text-attachment migration)`
+    : '';
   if (r.hits.length === 0) {
     const modeNote = r.regex ? ' (regex mode)' : '';
     return `No attachment content matches "${r.query}"${modeNote} — searched ${r.attachmentsScanned} text attachment(s)` +
-      `${r.attachmentsSkippedMedia ? `, skipped ${r.attachmentsSkippedMedia} non-text attachment(s)` : ''}.`;
+      `${r.attachmentsSkippedMedia ? `, skipped ${r.attachmentsSkippedMedia} non-text attachment(s)` : ''}${relessNote}.`;
   }
   const lines: string[] = [];
-  lines.push(`${r.hits.length} attachment(s) match "${r.query}"${r.regex ? ' (regex mode)' : ''}:`);
+  lines.push(`${r.hits.length} attachment(s) match "${r.query}"${r.regex ? ' (regex mode)' : ''}${relessNote}:`);
   for (const h of r.hits) {
     lines.push('');
     lines.push(`- ${formatAttachmentEntry(h)} — ${fmtTs(h.timestamp)}, from "${h.convoTitle}"`);
