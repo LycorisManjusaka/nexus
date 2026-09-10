@@ -1413,11 +1413,31 @@ async function streamClaudeViaAgentSDK(args: {
         // reaching the entity (the 2026-09-09 12:16 compaction test hit exactly
         // this — 4 compactions, 4 first-tools-were-Read, zero notes delivered).
         // A PreToolUse hook, by contrast, fires before EVERY tool call. It
-        // drains the same queues and injects the text via `systemMessage`,
-        // which reaches the model's context WITHOUT pausing the tool (no deny-
-        // and-reissue dance). Gated on pausedForRendezvous === 0 exactly like
-        // canUseTool, so a running subagent's calls don't swallow a note meant
-        // for the parent entity.
+        // drains the same queues and injects the text via
+        // hookSpecificOutput.additionalContext, WITHOUT pausing the tool (no
+        // deny-and-reissue dance). Gated on pausedForRendezvous === 0 exactly
+        // like canUseTool, so a running subagent's calls don't swallow a note
+        // meant for the parent entity.
+        //
+        // 2026-09-10 regression + fix: this originally returned a top-level
+        // `systemMessage` field, which LOOKS right per SyncHookJSONOutput's
+        // type but is a dead end for PreToolUse — confirmed by reading the
+        // compiled CLI (claude-agent-sdk-win32-x64/claude.exe): `systemMessage`
+        // only ever produces a `hook_system_message` transcript attachment
+        // (CLI's own "<hookName> says: <content>" UI line), it is never folded
+        // into the model's context. Only `hookSpecificOutput.additionalContext`
+        // becomes a `hook_additional_context` message that's actually threaded
+        // into the conversation the model sees (confirmed by the same
+        // decompiled logic, and by the CLI's own runtime warning "Hook JSON
+        // output had unrecognized keys... Did you mean
+        // hookSpecificOutput.additionalContext (with a hookEventName)?" for a
+        // bare top-level additionalContext). Net effect of the bug: since this
+        // hook fires before EVERY tool call including Bash, it was destructively
+        // draining the SAME queue canUseTool used to deliver notes on Bash —
+        // and then silently discarding the drained text into a CLI-only
+        // display line. That's why notes stopped arriving even on Bash once
+        // this hook was added: the hook, not canUseTool, won the race, and the
+        // hook's delivery channel was a no-op.
         const deliverMidTurnNote = async () => {
           try {
             if (injectTurnId && pausedForRendezvous === 0) {
@@ -1430,7 +1450,13 @@ async function streamClaudeViaAgentSDK(args: {
                   try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
                 }
                 if (sysNotes.length) parts.push(sysNotes.join('\n'));
-                return { continue: true, systemMessage: parts.join('\n\n') };
+                return {
+                  continue: true,
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    additionalContext: parts.join('\n\n'),
+                  },
+                };
               }
             }
           } catch (e) {
