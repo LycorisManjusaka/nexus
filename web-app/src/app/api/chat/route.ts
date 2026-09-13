@@ -8,7 +8,7 @@ import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
 import { webSearch, webFetch } from '@/lib/webTools';
-import { readConversationByName } from '@/lib/conversationRead';
+import { readConversationByName, formatReadConversationResult } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
 import { readAttachmentBase64, readAttachmentText, putBytes, mimeForRef } from '@/lib/attachmentStore';
 import { findAttachmentsByRefPrefix, searchAttachments, formatAttachmentSearchForTool } from '@/lib/attachmentIndex';
@@ -824,9 +824,11 @@ async function streamClaudeViaAgentSDK(args: {
                 { name: z.string().describe(I.readConversationNameParam) },
                 async (a: { name: string }) => {
                   try {
-                    const r = await readConversationByName(folderName, a.name);
-                    if (!r.ok) return { content: [{ type: 'text' as const, text: `Error: ${r.error || 'not found'}` }] };
-                    return { content: [{ type: 'text' as const, text: `# ${r.title}\n\n${r.transcript || '(empty conversation)'}` }] };
+                    const r = await readConversationByName(folderName, a.name, {
+                      fileTools: toolUseEnabled,
+                      currentConvoId: convoId,
+                    });
+                    return { content: [{ type: 'text' as const, text: formatReadConversationResult(r) }] };
                   } catch (e: any) {
                     return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'read failed'}` }] };
                   }
@@ -3050,8 +3052,11 @@ async function streamViaAnthropicCompat(args: {
                 }
               } else if (tu.name === 'read_conversation') {
                 const name = String(tu.input?.name || tu.input?.title || '').trim();
-                const r = await readConversationByName(folderName, name);
-                resultContent = r.ok ? `Transcript of "${r.title}":\n\n${r.transcript}` : `Error: ${r.error}`;
+                const r = await readConversationByName(folderName, name, {
+                  fileTools: toolUseEnabled,
+                  currentConvoId: convoId,
+                });
+                resultContent = formatReadConversationResult(r);
               } else if (tu.name === 'search_conversations') {
                 const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
                 resultContent = formatSearchForTool(sr);
@@ -5034,14 +5039,16 @@ export async function POST(req: Request) {
                       resultContent = sh.output;
                     }
                   } else if (tu.name === 'read_conversation') {
-                    // Pull a past conversation by name for this turn only.
-                    // Inactive ("non-public") conversations are refused inside
-                    // readConversationByName — nothing is saved.
+                    // Pull a past conversation by name. Inactive ("non-public")
+                    // conversations are refused inside readConversationByName.
+                    // Large transcripts are mirrored to the being's workspace
+                    // and only a path is returned — see conversationRead.ts.
                     const name = String(tu.input?.name || tu.input?.title || '').trim();
-                    const r = await readConversationByName(folderName, name);
-                    resultContent = r.ok
-                      ? `Transcript of "${r.title}":\n\n${r.transcript}`
-                      : `Error: ${r.error}`;
+                    const r = await readConversationByName(folderName, name, {
+                      fileTools: toolUseEnabled,
+                      currentConvoId: convoId,
+                    });
+                    resultContent = formatReadConversationResult(r);
                   } else if (tu.name === 'search_conversations') {
                     // Search across the entity's conversations; inactive ones are
                     // excluded (privacy). Nothing is saved.
@@ -6039,14 +6046,16 @@ export async function POST(req: Request) {
                         result = { output: sh.output };
                       }
                     } else if (fc.name === 'read_conversation') {
-                      // Pull a past conversation by name for this turn only.
-                      // Inactive ("non-public") conversations are refused inside
-                      // readConversationByName — nothing is saved.
+                      // Pull a past conversation by name. Inactive ("non-public")
+                      // conversations are refused inside readConversationByName.
+                      // Large transcripts are mirrored to the being's workspace
+                      // and only a path is returned — see conversationRead.ts.
                       const name = String(fc.args?.name || fc.args?.title || '').trim();
-                      const r = await readConversationByName(folderName, name);
-                      result = r.ok
-                        ? { title: r.title, transcript: r.transcript }
-                        : { error: r.error };
+                      const r = await readConversationByName(folderName, name, {
+                        fileTools: toolUseEnabled,
+                        currentConvoId: convoId,
+                      });
+                      result = { report: formatReadConversationResult(r) };
                     } else if (fc.name === 'search_conversations') {
                       // Search across the entity's conversations; inactive ones
                       // excluded (privacy). Nothing is saved.
@@ -7899,14 +7908,16 @@ export async function POST(req: Request) {
                           (page.truncated ? `\n\n[...content truncated...]` : '');
                       }
                     } else if (tc.name === 'read_conversation') {
-                      // Pull a past conversation by name into context for this
-                      // turn only. Inactive ("non-public") conversations are
-                      // refused inside readConversationByName — nothing is saved.
+                      // Pull a past conversation by name. Inactive ("non-public")
+                      // conversations are refused inside readConversationByName.
+                      // Large transcripts are mirrored to the being's workspace
+                      // and only a path is returned — see conversationRead.ts.
                       const name = String(parsed.name || parsed.title || '').trim();
-                      const r = await readConversationByName(folderName, name);
-                      resultText = r.ok
-                        ? `Transcript of "${r.title}":\n\n${r.transcript}`
-                        : `Error: ${r.error}`;
+                      const r = await readConversationByName(folderName, name, {
+                        fileTools: toolUseEnabled,
+                        currentConvoId: convoId,
+                      });
+                      resultText = formatReadConversationResult(r);
                     } else if (tc.name === 'search_conversations') {
                       // Search across the entity's conversations; inactive ones
                       // excluded (privacy). Nothing is saved.
