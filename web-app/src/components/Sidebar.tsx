@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
 import { useT, Tx } from '@/lib/i18n';
+import { confirmIfBusy, markBusyConfirmAnswered } from '@/lib/unloadGuard';
 
 interface SidebarProps {
   conversations: any[];
@@ -62,6 +63,21 @@ export default function Sidebar({
   fetchLogs
 }: SidebarProps) {
   const t = useT();
+
+  // ── Busy guard for the actions below ──────────────────────────────────────
+  // `onSelectConvo` / `setActiveFolderId` arrive here ALREADY guarded, which is
+  // enough for a plain click on a row. It is not enough for the actions in this
+  // file that do their work FIRST and navigate at the end (import, restore,
+  // create/rename/delete identity): by the time the guarded setter asks, the
+  // files are already written, so "no" would leave a half-done job. Those ask
+  // up front instead, then call markBusyConfirmAnswered() just before
+  // navigating so the same intent is not questioned twice.
+  //
+  // See src/lib/unloadGuard.ts for why the gate and its de-dupe window are
+  // shared module state rather than props.
+  const confirmActionIfBusy = () =>
+    confirmIfBusy(busy => t('app.action.busyConfirm').replace('{busy}', busy));
+
   const activeFolder = folders.find(f => f.id === activeFolderId);
   const convoOrder = activeFolder?.settings?.convoOrder || [];
   
@@ -209,6 +225,8 @@ export default function Sidebar({
 
   const handleRestoreBackup = async (backupFile: string) => {
     if (!activeFolder) return;
+    // Restoring writes a conversation and then opens it — ask before the write.
+    if (!confirmActionIfBusy()) return;
     try {
       const res = await fetch('/api/backups', {
         method: 'POST',
@@ -218,6 +236,7 @@ export default function Sidebar({
       const data = await res.json();
       if (data.success && data.newConvoId) {
         fetchLogs();
+        markBusyConfirmAnswered();
         onSelectConvo(data.newConvoId);
         setBackupsModalOpen(false);
       }
@@ -295,6 +314,9 @@ export default function Sidebar({
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0 || !activeFolder) return;
+    // An import opens the first file it imported. Ask before any POST lands, so
+    // declining leaves the folder exactly as it was.
+    if (!confirmActionIfBusy()) { if (importJsonRef.current) importJsonRef.current.value = ''; return; }
     const filesArray = Array.from(files);
 
     // Process sequentially so the convoOrder update at the end sees all new
@@ -352,6 +374,7 @@ export default function Sidebar({
       fetchLogs();
       fetchFolders();
       // Auto-open the FIRST imported file (= the topmost after prepend).
+      markBusyConfirmAnswered();
       onSelectConvo(newIds[0]);
     })();
 
@@ -369,6 +392,15 @@ export default function Sidebar({
     if (!activeFolder) {
       console.warn('[md-import] Refused: no active folder selected. Open/select a Digital Being first, then import.');
       alert(t('sidebar.import.noFolder'));
+      return;
+    }
+    // Same as handleImportJson: this ends on onSelectConvo, so ask up front.
+    // Clear the input on the way out too — leaving the old value in place means
+    // picking the same file again fires no change event, and the reader would
+    // read that silence as the import being broken rather than declined.
+    if (!confirmActionIfBusy()) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (importMdRef.current) importMdRef.current.value = '';
       return;
     }
 
@@ -509,6 +541,7 @@ export default function Sidebar({
       fetchLogs();
       fetchFolders();
       // Auto-open the first imported file (= the topmost after prepend).
+      markBusyConfirmAnswered();
       onSelectConvo(newIds[0]);
     })();
 
@@ -519,6 +552,10 @@ export default function Sidebar({
   const createFolder = async () => {
     const name = prompt(t('sidebar.prompt.newFolder'))?.trim();
     if (!name) return;
+    // Asked after the name prompt, not before it: two dialogs in a row before
+    // the reader has said what they want is noise. Still before the POST, so
+    // declining creates no being.
+    if (!confirmActionIfBusy()) return;
     await fetch('/api/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -530,6 +567,8 @@ export default function Sidebar({
     await Promise.all([fetchFolders(), fetchLogs()]);
 
     // A folder's id is its filename stem, which is its name — see listFolders.
+    // The onSelectConvo below rides the same 500ms window as this setter.
+    markBusyConfirmAnswered();
     setActiveFolderId(name);
 
     // A brand-new identity opens on its own first conversation rather than an
@@ -553,6 +592,10 @@ export default function Sidebar({
     const oldName = activeFolder.name;
     const newName = prompt(t('sidebar.prompt.renameFolder'), oldName)?.trim();
     if (!newName || newName === oldName) return;
+    // A rename moves nine things on disk under a being that may be mid-turn —
+    // the in-flight save would land under the old name. Ask before touching any
+    // of it, and after the name prompt for the same reason as createFolder.
+    if (!confirmActionIfBusy()) return;
     const res = await fetch('/api/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -572,16 +615,21 @@ export default function Sidebar({
       );
     }
     await Promise.all([fetchFolders(), fetchLogs()]);
-    if (res.ok) setActiveFolderId(newName);
+    if (res.ok) { markBusyConfirmAnswered(); setActiveFolderId(newName); }
     setFolderMenuOpen(false);
   };
 
   const handleDeleteFolder = async () => {
     if (!deleteFolderModal) return;
+    // The modal only ever targets the ACTIVE being (see where it is opened), so
+    // this always lands the reader somewhere else. Its own confirm modal is
+    // about losing the being's files; this one is about losing the current turn.
+    if (!confirmActionIfBusy()) return;
     await fetch(`/api/folders?name=${encodeURIComponent(deleteFolderModal)}`, { method: 'DELETE' });
     setDeleteFolderModal(null);
     fetchFolders();
     fetchLogs();
+    markBusyConfirmAnswered();
     setActiveFolderId(folders[0]?.id || null);
   };
 

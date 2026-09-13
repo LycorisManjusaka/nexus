@@ -103,6 +103,62 @@ export function describeBusy(): string | null {
   return Array.from(reasons.values()).join(' / ');
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// In-app guard (the same question, asked inside the app)
+//
+// `beforeunload` only covers leaving the PAGE. Inside the app, anything that
+// moves away from the current conversation is just as destructive: ChatArea
+// remounts and the streaming reply — deliberately not written to disk until it
+// finishes — is gone with no trace. So those actions ask first, off the same
+// registry, and the reader sees the same label they would see in the tab.
+//
+// The gate lives here and not in NexusApp for the reason the registry itself
+// is here: the call sites are in different components (NexusApp owns the
+// selection; Sidebar owns import / restore / folder actions), and the de-dupe
+// window below has to be SHARED or a single intent prompts twice.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** How long one answered confirm keeps covering follow-up navigation. */
+const ANSWER_TTL_MS = 500;
+let answeredAt = 0;
+
+/**
+ * Ask before an action that would destroy work in progress.
+ *
+ * @param render builds the dialog text from the busy label. The caller owns
+ *               the wording and its translation; this file owns the gate.
+ * @returns true to proceed — idle, already answered, or the reader said yes.
+ */
+export function confirmIfBusy(render: (busy: string) => string): boolean {
+  const busy = describeBusy();
+  if (!busy) return true;
+  // One intent can navigate through two setters back-to-back (creating a being
+  // calls setActiveFolderId then onSelectConvo in the same tick), so a confirm
+  // answered a moment ago counts as answered for what follows it.
+  if (Date.now() - answeredAt < ANSWER_TTL_MS) return true;
+  if (typeof window === 'undefined') return true;
+  const ok = window.confirm(render(busy));
+  if (ok) answeredAt = Date.now();
+  return ok;
+}
+
+/**
+ * Re-open the "already answered" window.
+ *
+ * For actions that ask FIRST and navigate LATER: an import or a backup restore
+ * spends seconds of awaited disk work between the confirm and its
+ * `onSelectConvo`, far past ANSWER_TTL_MS, and that switch then runs through
+ * the guarded setter and would ask again about the same intent. Call this
+ * immediately before the navigation.
+ *
+ * Deliberately a re-stamp and not a held lock: forgetting it costs one
+ * redundant dialog, while a lock leaked on an error path would silently
+ * disable the guard for the rest of the session. The cheaper failure wins.
+ */
+export function markBusyConfirmAnswered(): void {
+  answeredAt = Date.now();
+}
+
 function subscribe(fn: () => void): () => void {
   subscribers.add(fn);
   return () => { subscribers.delete(fn); };

@@ -46,6 +46,12 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // title shows ("<Being> <action>" / "Saving" / "Updating the soul").
   'app.switch.busyConfirm':
     '{busy}.\n\nSwitching now will discard the work in progress — the reply being generated is only saved once it finishes.\n\nSwitch anyway?',
+  // Same guard, for actions that MOVE you rather than being a switch: cloning,
+  // importing, restoring a backup, creating/renaming/deleting an identity.
+  // Worded as "continue" because the click was not "go there" — the jump is a
+  // side effect the reader may not have expected.
+  'app.action.busyConfirm':
+    '{busy}.\n\nThis action leaves the current conversation, which will discard the work in progress — the reply being generated is only saved once it finishes.\n\nContinue anyway?',
 
   // ── User guide ───────────────────────────────────────────────────────────
   'guide.title': 'Nexus — User Guide',
@@ -1428,6 +1434,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
   // に表示されます。{busy} はタブタイトルと同じラベル（「<存在> <動作>」など）。
   'app.switch.busyConfirm':
     '{busy}。\n\nいま切り替えると進行中の作業は失われます — 生成中の返信は完了するまで保存されません。\n\nそれでも切り替えますか？',
+  // 同じ防御を、切り替えではなく「移動してしまう」操作に使うためのもの：複製・
+  // インポート・バックアップ復元・存在の作成／改名／削除。押した本人は「移動する」
+  // つもりがないので、「切り替える」ではなく「続ける」と訊く。
+  'app.action.busyConfirm':
+    '{busy}。\n\nこの操作は現在の会話から移動するため、進行中の作業は失われます — 生成中の返信は完了するまで保存されません。\n\nそれでも続けますか？',
 
   // ── User guide ───────────────────────────────────────────────────────────
   'guide.title': 'Nexus — 使い方',

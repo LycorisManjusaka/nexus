@@ -8,7 +8,7 @@ import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
-import { describeBusy } from '@/lib/unloadGuard';
+import { confirmIfBusy } from '@/lib/unloadGuard';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -261,24 +261,20 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   // links, the selection effect) stays unguarded because it is not a choice
   // the reader made mid-turn.
   //
-  // `describeBusy()` is the same registry the tab-close guard reads: non-null
-  // while a generation, save, or Soul Updater run is in flight. Its value is a
-  // human label (e.g. "Cairn read a file") so the dialog names who is working.
-  const switchConfirmedAtRef = useRef<number>(0);
-  const confirmSwitchIfBusy = () => {
-    const busy = describeBusy();
-    if (!busy) return true;
-    // One user intent can navigate through two setters back-to-back (creating
-    // a being calls setActiveFolderId then onSelectConvo in the same tick).
-    // A confirm within half a second is treated as already answered so a
-    // single action never prompts twice.
-    if (Date.now() - switchConfirmedAtRef.current < 500) return true;
-    const ok = window.confirm(
+  // The gate and its de-dupe window live in src/lib/unloadGuard.ts, shared with
+  // the Sidebar's own guarded actions; here we only supply the wording. The
+  // busy label is the same one the tab title shows (e.g. "Cairn read a file"),
+  // so the dialog names who is working.
+  const confirmSwitchIfBusy = () =>
+    confirmIfBusy(busy =>
       translate('app.switch.busyConfirm', globalSettings.language).replace('{busy}', busy)
     );
-    if (ok) switchConfirmedAtRef.current = Date.now();
-    return ok;
-  };
+  // Same gate, different wording: for actions whose jump is a SIDE EFFECT
+  // (clone, delete-the-open-one) rather than the point of the click.
+  const confirmActionIfBusy = () =>
+    confirmIfBusy(busy =>
+      translate('app.action.busyConfirm', globalSettings.language).replace('{busy}', busy)
+    );
   const guardedSelectConvo = (id: string) => {
     if (id === currentConvoId) return;
     if (!confirmSwitchIfBusy()) return;
@@ -323,6 +319,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   };
 
   const deleteChat = async (id: string) => {
+    // Deleting some OTHER conversation does not move the reader, so it is not
+    // guarded — only deleting the one currently open forces a jump (and takes
+    // the in-flight reply's destination with it).
+    if (id === currentConvoId && !confirmActionIfBusy()) return;
     try {
       await fetch(`/api/logs/${id}`, { method: 'DELETE' });
       const newConvos = conversations.filter(c => c.id !== id);
@@ -460,6 +460,11 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const cloneChatWithSystemPrompt = async ({
     sourceId, newSystemPrompt, newIndex,
   }: { sourceId: string; newSystemPrompt: string; newIndex: number }) => {
+    // Only fires when something ELSE is busy: the Soul Updater's own 'spu' key
+    // is held by `running`, and its finalize path uses `loading` instead, so
+    // the run that calls this is not itself in the registry. What this catches
+    // is a finalize pressed while a reply is still streaming underneath.
+    if (!confirmActionIfBusy()) return;
     const res = await fetch(`/api/logs/${sourceId}`);
     if (!res.ok) return;
     const data = await res.json();
@@ -535,6 +540,12 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   };
 
   const cloneChat = async (id: string) => {
+    // Clone OPENS the copy (setCurrentConvoId below), so pressing 複製 on any
+    // row — including a row that is not the open conversation — moves the
+    // reader away. That is exactly how a turn in flight was lost: the click
+    // reads as "make me a copy", not as "leave this conversation". Ask first,
+    // and ask BEFORE writing the copy, so declining changes nothing on disk.
+    if (!confirmActionIfBusy()) return;
     const res = await fetch(`/api/logs/${id}`);
     if (!res.ok) return;
     const data = await res.json();
