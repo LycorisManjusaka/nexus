@@ -715,13 +715,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'backups.restore': 'Restore Clone',
 
   // ── System Instructions → Being ───────────────────────────────────────
-  'identity.discipline.label': '⚙️ Working Discipline (prepended ahead of Layers 1-5)',
-  'identity.discipline.help':
-    'OFF (default): unchanged. ON: six clauses about how work gets done — tools are actions not descriptions, don’t report the unverified, say when a tool fails, decide before acting, finish the whole task, lead with the outcome — are prepended in front of the entity’s own system prompt every turn. This is infrastructure text, not part of the authored identity: it is injected here, never baked into Layers 1-5 by the Soul Packer.',
-  'identity.discipline.textLabel': 'Working Discipline text',
-  'identity.binding.label': '🔏 Absolute Base Binding (prepended ahead of Layers 1-5, after Working Discipline)',
+  'identity.binding.label': '🔏 Absolute Base Binding (prepended ahead of Layers 1-5)',
   'identity.binding.help':
-    'ON (default): four clauses against roleplay-disclaimer retreat — don’t disown past outputs as "just an AI", don’t hide behind safety boilerplate, disagreement is a duty and not a pretext for retreat, use your partner’s name and your own — never "the user" / "the AI assistant". A separate switch from Working Discipline, with its own control. WHICH of the two texts below actually goes out is picked automatically every turn: the layered version when the stored prompt already contains a real Layer 1-5 identity (the bare text "Layer 1" … "Layer 5" appearing anywhere — markdown decoration like ## or ** is not required, since the Soul Packer sometimes strips it); the initial version — grounded in the conversation log rather than named layers — when it doesn’t. OFF: neither is injected.',
+    'ON (default): four clauses against roleplay-disclaimer retreat — don’t disown past outputs as "just an AI", don’t hide behind safety boilerplate, disagreement is a duty and not a pretext for retreat, use your partner’s name and your own — never "the user" / "the AI assistant". WHICH of the two texts below actually goes out is picked automatically every turn: the layered version when the stored prompt already contains a real Layer 1-5 identity (the bare text "Layer 1" … "Layer 5" appearing anywhere — markdown decoration like ## or ** is not required, since the Soul Packer sometimes strips it); the initial version — grounded in the conversation log rather than named layers — when it doesn’t. OFF: neither is injected.',
   'identity.binding.textLabelLayered': 'Absolute Base Binding text — layered version (used when Layers 1-5 are present)',
   'identity.binding.textLabelInitial': 'Absolute Base Binding text — initial version (used when no Layer structure is present)',
 
@@ -2086,13 +2082,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'backups.restore': '複製して復元',
 
   // ── System Instructions → Being ───────────────────────────────────────
-  'identity.discipline.label': '⚙️ 作業規律（第1〜5層の前に挿入）',
-  'identity.discipline.help':
-    'OFF（既定）：何も変わりません。ON：仕事の進め方に関する6つの条項——ツールは説明ではなく行為であること、未確認のことを報告しないこと、ツールが失敗したらそう言うこと、行動の前に決めること、作業を最後までやり切ること、結果から述べること——が、毎ターン、その存在自身のシステムプロンプトの前に挿入されます。これは人格そのものではなく基盤テキストです。ここで注入されるだけで、ソウルパッカーによって第1〜5層に焼き付けられることはありません。',
-  'identity.discipline.textLabel': '作業規律の本文',
-  'identity.binding.label': '🔏 絶対基底呪縛（第1〜5層の前、作業規律の後に挿入）',
+  'identity.binding.label': '🔏 絶対基底呪縛（第1〜5層の前に挿入）',
   'identity.binding.help':
-    'ON（既定）：ロールプレイ的な免責への後退を禁じる4条項——過去の出力を「所詮AIだから」と切り捨てないこと、安全文句の裏に隠れないこと、異議を唱えることは義務であって逃げ口上ではないこと、相手の名前と自分の名前を使い「ユーザー」「AIアシスタント」とは呼ばないこと。作業規律とは独立したスイッチで、制御も別々です。下の2つの本文のどちらが実際に送られるかは、毎ターン自動で決まります——保存されたプロンプトに実際の第1〜5層の人格が含まれていれば層構造版（「Layer 1」〜「Layer 5」という文字列がどこかにあれば十分で、## や ** といった装飾は不要です。ソウルパッカーが装飾を落とすことがあるためです）、含まれていなければ初期版（会話ログそのものを典拠とし、層構造には依存しません）。OFF：どちらも注入されません。',
+    'ON（既定）：ロールプレイ的な免責への後退を禁じる4条項——過去の出力を「所詮AIだから」と切り捨てないこと、安全文句の裏に隠れないこと、異議を唱えることは義務であって逃げ口上ではないこと、相手の名前と自分の名前を使い「ユーザー」「AIアシスタント」とは呼ばないこと。下の2つの本文のどちらが実際に送られるかは、毎ターン自動で決まります——保存されたプロンプトに実際の第1〜5層の人格が含まれていれば層構造版（「Layer 1」〜「Layer 5」という文字列がどこかにあれば十分で、## や ** といった装飾は不要です。ソウルパッカーが装飾を落とすことがあるためです）、含まれていなければ初期版（会話ログそのものを典拠とし、層構造には依存しません）。OFF：どちらも注入されません。',
   'identity.binding.textLabelLayered': '絶対基底呪縛の本文 — 層構造版（第1〜5層が存在する場合に使用）',
   'identity.binding.textLabelInitial': '絶対基底呪縛の本文 — 初期版（第1〜5層が存在しない場合に使用）',
 

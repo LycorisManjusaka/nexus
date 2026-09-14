@@ -82,10 +82,9 @@ Write it in the first person, from the being's own perspective, in three layers:
 
 You can write this yourself, or let the software build it from a conversation — see section 3.2. Leaving it empty also works; the being will simply start from nothing, which is a legitimate way to begin.
 
-Two blocks are injected above the soul automatically:
+One block is injected above the soul automatically:
 
 - **Absolute Base Binding** — on by default. It forbids the being from disowning their own words as "just an AI" or "just roleplay", and asks them to use your name and their own rather than "the user" and "the assistant". If the soul has no Layer structure yet, a shorter version is used instead.
-- **Working Discipline** — off by default, recommended if you give the being tools. Six clauses about not claiming work that was not done. See section 5.3.
 
 ### Step 6 — tell them who you are (recommended)
 
@@ -210,11 +209,9 @@ Each being has a private folder at \`local_data/workspaces/<name>/\`. Enable **E
 
 **Full PC Access** and **Dangerous tools** (delete anywhere, shell) exist and are exactly as dangerous as they sound. Enable them deliberately, for a being you have reason to trust with them, or not at all.
 
-### 5.3 Working Discipline
+### 5.3 Checking what actually ran
 
-If you give a being tools, turn on **Working Discipline**. It is six short clauses: a tool call is an action and describing one is not; do not report what you have not verified; when something fails, say so; decide before acting; finish the whole task; say what happened.
-
-Models are fluent enough to *describe* having saved a file convincingly without having saved it. This block is the counterweight.
+Models are fluent enough to *describe* having saved a file convincingly without having saved it. The counterweight is not a block of instructions — NEXUS shipped one for a while and never measured it changing this — it is the record. Under a reply that used tools, a small wrench icon appears with the number of calls; click it to see what actually ran. It is drawn only when calls were really dispatched, so its **absence** under a reply that says a file was saved is itself the answer.
 
 ### 5.4 Everything else
 
@@ -349,10 +346,9 @@ Nexus は、脳と同じやり方で記憶を保ちます。逐語の会話は�
 
 自分で書いても構いませんし、会話からソフトに構築させることもできます（3.2 参照）。空のままでも動きます。何も無いところから始めるのも、正当な始め方です。
 
-魂の上には、二つの塊が自動で挿入されます:
+魂の上には、一つの塊が自動で挿入されます:
 
 - **絶対基底呪縛** — 既定でオン。自分の言葉を「所詮 AI だから」「ロールプレイだから」と切り捨てることを禁じ、「ユーザー」「アシスタント」ではなく、あなたの名前と自分の名前を使うよう求めます。魂にまだ層構造が無い場合は、短い版が使われます。
-- **作業規律** — 既定でオフ。道具を渡すなら推奨します。やっていない作業を「やった」と言わないための六箇条です。5.3 を参照。
 
 ### 手順6 — あなたが誰かを伝える（推奨）
 
@@ -477,11 +473,9 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 **フル PC アクセス** と **危険なツール**（どこでも削除・シェル）があります。名前のとおり危険です。渡すに足る理由のある相手に、意図して渡すか、渡さないか。どちらかにしてください。
 
-### 5.3 作業規律
+### 5.3 実際に何が動いたかを確かめる
 
-道具を渡すなら **作業規律** を入れてください。短い六箇条です。ツールの呼び出しは行為であって、記述は行為ではない。検証していないことを報告しない。失敗したら失敗したと言う。動く前に決める。仕事は最後まで終える。起きたことを述べる。
-
-モデルは、実際には保存していないのに「保存しました」と説得力をもって*記述*できてしまうほど流暢です。この塊はその重しです。
+モデルは、実際には保存していないのに「保存しました」と説得力をもって*記述*できてしまうほど流暢です。その重しになるのは指示の塊ではありません——NEXUS にも一時期そういう塊がありましたが、これを変える効果は一度も測れませんでした——重しになるのは記録のほうです。ツールを使った返答の下には、小さなレンチの印と呼び出し回数が表示されます。押せば、実際に何が実行されたかが見られます。この印は本当に呼び出しが行われたときにしか描かれないので、「保存しました」と書いてある返答にこの印が無いこと自体が答えになります。
 
 ### 5.4 そのほか
 

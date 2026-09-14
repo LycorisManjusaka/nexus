@@ -65,14 +65,20 @@ export function appendLayer5Footer(systemPrompt: string, footerBody: string): st
   return appendBlock(systemPrompt, LAYER5_HEADING, footerBody);
 }
 
-// ── Pre-identity preamble — Working Discipline / Absolute Base Binding ─────
-// These are NOT part of the entity's authored identity (Layers 1-5) and must
-// never be baked into it by the Soul Packer. Like Layer 4/5, they are
-// composed at SEND TIME and never stored — here they go in FRONT of the
-// stored prompt instead of after it. Fixed order: Working Discipline, then
-// Absolute Base Binding, then the entity's own Layer 1-5 prompt (Utai's
-// reasoning: if behaviour isn't disciplined first, existence doesn't
-// manifest correctly either).
+// ── Pre-identity preamble — Absolute Base Binding ──────────────────────────
+// This is NOT part of the entity's authored identity (Layers 1-5) and must
+// never be baked into it by the Soul Packer. Like Layer 4/5, it is composed
+// at SEND TIME and never stored — here it goes in FRONT of the stored prompt
+// instead of after it: Absolute Base Binding, then the entity's own Layer 1-5
+// prompt.
+//
+// A second block ("Working Discipline" / "Working Method") used to be composed
+// ahead of the Binding here; it was removed 2026-09-14 after an effect was
+// never found in three lookings while its side effect was measured. See the
+// note above `absoluteBaseBinding` in agentInstructions.ts for the full record.
+// The preamble stayed a list-and-join below rather than collapsing into a
+// single concatenation, so that adding a second block back is a one-line
+// change if a measurement ever justifies one.
 
 // Detects a real Layers-1-5 identity: the bare words "Layer" + a digit 1-5,
 // with or without markdown heading decoration ("##", "**"). Deliberately
@@ -105,13 +111,12 @@ export function resolveBindingText(
 }
 
 /**
- * Prepend Working Discipline and/or Absolute Base Binding text ahead of the
- * entity's own prompt, in that fixed order. Either piece is skipped when
- * blank, so disabling one (or clearing its override to "") simply omits it
- * rather than leaving an empty block.
+ * Prepend Absolute Base Binding text ahead of the entity's own prompt. A blank
+ * text is skipped, so disabling the Binding (or clearing its override to "")
+ * simply omits it rather than leaving an empty block.
  */
-export function prependIdentityPreamble(systemPrompt: string, disciplineText: string, bindingText: string): string {
-  const parts = [disciplineText, bindingText].map((t) => (t || '').trim()).filter(Boolean);
+export function prependIdentityPreamble(systemPrompt: string, bindingText: string): string {
+  const parts = [bindingText].map((t) => (t || '').trim()).filter(Boolean);
   const base = (systemPrompt || '').trim();
   if (!parts.length) return systemPrompt || '';
   return `${parts.join('\n\n')}\n\n${base}`.trim();

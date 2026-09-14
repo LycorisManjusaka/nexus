@@ -515,19 +515,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [fatigueInstruction, setFatigueInstruction] = useState(
     "(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. Elapsed context, not condition: capacity and tool access are identical at 5% and at 95%. Near and past 100%, the oldest exchanges consolidate — leaving the verbatim transcript, remaining as summary in your layers. Written-down material survives in full; if something here must be kept verbatim, record it now.)"
   );
-  // ── Working Discipline / Absolute Base Binding — pre-identity preamble ────
+  // ── Absolute Base Binding — pre-identity preamble ─────────────────────────
   // Composed IN FRONT of the entity's own Layer 1-5 prompt (see
-  // prependIdentityPreamble), never baked into it. workingDisciplineEnabled is
-  // a plain off/on toggle (default off — opt-in, since this decouples text
-  // that used to be hand-baked into a handful of prompts). baseBindingMode is
-  // also a plain off/on toggle (default on). When on, resolveBindingText picks
-  // WHICH text to inject: the layers-focused `absoluteBaseBinding` when the
-  // stored prompt already has a real Layer 1-5 structure (hasLayerStructure),
-  // or Utai's original `absoluteBaseBindingInitial` when it doesn't — never
-  // both, never neither, as long as the switch is on. Legacy folder JSONs may
-  // still carry the old three-state 'auto' value; every read site below
-  // coerces anything other than 'off' to 'on'.
-  const [workingDisciplineEnabled, setWorkingDisciplineEnabled] = useState(false);
+  // prependIdentityPreamble), never baked into it. baseBindingMode is a plain
+  // off/on toggle (default on). When on, resolveBindingText picks WHICH text to
+  // inject: the layers-focused `absoluteBaseBinding` when the stored prompt
+  // already has a real Layer 1-5 structure (hasLayerStructure), or Utai's
+  // original `absoluteBaseBindingInitial` when it doesn't — never both, never
+  // neither, as long as the switch is on. Legacy folder JSONs may still carry
+  // the old three-state 'auto' value; every read site below coerces anything
+  // other than 'off' to 'on'.
+  //
+  // A `workingDisciplineEnabled` toggle used to sit beside this one (removed
+  // 2026-09-14 — see agentInstructions.ts). Folder JSONs and conversation logs
+  // written before then still carry the field; nothing reads it now, and it is
+  // left in place rather than migrated out, since an unread field costs nothing
+  // and rewriting stored data to drop it would cost a pass over local_data.
   const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on'>('on');
   // Initialize OFF (not the folder default). The real value is always set by
   // the conversation-load effect below — data.vrchatMode for an existing convo,
@@ -910,7 +913,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (vrchatMode) p = `${p}\n\n${audioSessionRuleText}`.trim();
     p = prependIdentityPreamble(
       p,
-      workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
       resolveBindingText(
         baseBindingMode === 'on',
         systemPrompt,
@@ -919,7 +921,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       ),
     );
     return p;
-  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, workingDisciplineEnabled, baseBindingMode, instructionOverrides, langDefaults]);
+  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, baseBindingMode, instructionOverrides, langDefaults]);
 
   useEffect(() => {
     // `cancelled` guards against an async race: on load this effect fires once
@@ -1084,7 +1086,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSaveThinkingToLog(data.saveThinkingToLog || false);
         setShowFatigueToEntity(data.showFatigueToEntity || false);
         if (typeof data.fatigueInstruction === 'string') setFatigueInstruction(data.fatigueInstruction);
-        setWorkingDisciplineEnabled(data.workingDisciplineEnabled === true);
         // Legacy folders may still carry the old three-state 'auto' value; anything other than 'off' coerces to 'on'.
         setBaseBindingMode(data.baseBindingMode === 'off' ? 'off' : 'on');
         setVrchatMode(data.vrchatMode !== undefined ? data.vrchatMode : defaultVrchatMode);
@@ -1181,7 +1182,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSaveThinkingToLog(pick('saveThinkingToLog', false));
         setShowFatigueToEntity(pick('showFatigueToEntity', false));
         if (typeof folderSettings.fatigueInstruction === 'string') setFatigueInstruction(folderSettings.fatigueInstruction);
-        setWorkingDisciplineEnabled(pick('workingDisciplineEnabled', false));
         // Legacy folders may still carry the old three-state 'auto' value; anything other than 'off' coerces to 'on'.
         setBaseBindingMode(pick<'off' | 'on'>('baseBindingMode', 'on') === 'off' ? 'off' : 'on');
         // Sense bridges — default OFF; folder-saved defaults override.
@@ -1267,7 +1267,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1330,7 +1330,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, workingDisciplineEnabled, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2084,8 +2084,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         console.warn('[summaries] failed to assemble Layer-4 index, sending prompt as-is', e);
       }
     }
-    // Prepend Working Discipline / Absolute Base Binding AHEAD of the entity's
-    // own prompt (Layers 1-3 + the Layer 4 index just appended above). Layer-
+    // Prepend the Absolute Base Binding AHEAD of the entity's own prompt
+    // (Layers 1-3 + the Layer 4 index just appended above). Layer-
     // structure detection (which of the two Binding texts to use) runs on the
     // RAW stored `systemPrompt`, not `baseSystemPrompt` — the Layer 4 heading
     // appended just above ("## **Layer 4: ...") would otherwise false-trigger
@@ -2094,7 +2094,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     {
       baseSystemPrompt = prependIdentityPreamble(
         baseSystemPrompt,
-        workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
         resolveBindingText(
           baseBindingMode === 'on',
           systemPrompt,
@@ -3852,10 +3851,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 />
               </div>
 
-              {/* ── Absolute Base Binding — SIBLING of Working Discipline, not nested.
-                  These are two independent injections with independent controls;
-                  indenting this one under Discipline's checkbox made it read as a
-                  sub-option of Discipline, which it has never been. Plain on/off
+              {/* ── Absolute Base Binding — now the only pre-identity injection
+                  (the Working Discipline block that used to sit above it was
+                  removed 2026-09-14). Plain on/off
                   switch (default on) — WHICH of the two texts below actually goes
                   out is decided automatically per-send by resolveBindingText,
                   based on whether the stored prompt has a Layer 1-5 structure. */}
@@ -3924,33 +3922,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       value={summaryIndexBody}
                       className="w-full min-h-[140px] p-3 bg-muted/40 border border-border rounded-xl text-xs font-mono resize-none outline-none text-muted-foreground"
                       placeholder={t('sysmodal.summaries.indexPh')}
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* ── Working Discipline / Absolute Base Binding — pre-identity preamble ── */}
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={workingDisciplineEnabled}
-                    onChange={(e) => setWorkingDisciplineEnabled(e.target.checked)}
-                    className="accent-sky-500"
-                  />
-                  <span className="text-sm font-semibold text-foreground">{t('identity.discipline.label')}</span>
-                </label>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  {t('identity.discipline.help')}
-                </p>
-                {workingDisciplineEnabled && (
-                  <div className="mt-3 ml-6">
-                    <label className="text-xs font-semibold text-foreground mb-1 block">{t('identity.discipline.textLabel')}</label>
-                    <textarea
-                      value={instructionOverrides['workingDiscipline'] || ''}
-                      placeholder={langDefaults.workingDiscipline}
-                      onChange={(e) => setInstructionOverrides((prev) => ({ ...prev, workingDiscipline: e.target.value }))}
-                      className="w-full min-h-[100px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
                     />
                   </div>
                 )}
@@ -5409,7 +5380,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       saveThinkingToLog,
                       showFatigueToEntity,
                       fatigueInstruction,
-                      workingDisciplineEnabled,
                       baseBindingMode,
                       autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels,
                     };
@@ -5447,7 +5417,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         onClose={() => setLiveOpen(false)}
         systemPrompt={prependIdentityPreamble(
           vrchatMode ? `${systemPrompt}\n\n${audioSessionRuleText}`.trim() : (systemPrompt || ''),
-          workingDisciplineEnabled ? (instructionOverrides['workingDiscipline'] || langDefaults.workingDiscipline || '') : '',
           resolveBindingText(
             baseBindingMode === 'on',
             systemPrompt,
