@@ -98,7 +98,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'Get one at Alibaba Cloud Model Studio. Used for Qwen 3.6 Plus / 3.6 Max / 3.7 Max / 3.8 Max and DeepSeek V3.2 via the OpenAI-compatible DashScope endpoint.',
   'settings.keys.deepseek.label': 'DeepSeek API Key',
   'settings.keys.deepseek.help':
-    'Get one at `platform.deepseek.com`. Required for DeepSeek V4 Flash 0731 / V4 Pro / V4 Flash and the legacy `deepseek-chat` / `deepseek-reasoner` aliases. Globally accessible — no regional restrictions.',
+    'Get one at `platform.deepseek.com`. Required for DeepSeek V4 Pro / V4.1 Flash and the legacy `deepseek-chat` / `deepseek-reasoner` aliases. Globally accessible — no regional restrictions.',
   'settings.keys.glm.label': 'Z.AI (GLM) API Key',
   'settings.keys.glm.help':
     'Get one at `z.ai` → API Console. Required for the GLM family (GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air).',
@@ -927,6 +927,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'chat.toolAction.Bash': 'run a shell command',
   'chat.toolAction.read_conversation': 'read a past conversation',
   'chat.toolAction.search_conversations': 'search past conversations',
+  'chat.toolAction.read_attachment': 'open an attachment',
   'chat.toolAction.write_letter': 'write a letter',
   'chat.toolAction.list_letters': 'check for letters',
   'chat.toolAction.read_letter': 'read a letter',
@@ -1102,7 +1103,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.deepseek.help2':
     '• `deepseek-v3.2` → Alibaba DashScope. Uses the Qwen/DashScope key. The only DeepSeek model available on the international Singapore DashScope endpoint.',
   'model.deepseek.help3':
-    '• All other models → `api.deepseek.com` directly. Requires a separate DeepSeek API key (add it in Preferences). V4 is current; `deepseek-chat`/`deepseek-reasoner` are legacy aliases for V4 Flash non-thinking / thinking modes (deprecated 2026-07-24).',
+    '• All other models → `api.deepseek.com` directly. Requires a separate DeepSeek API key (add it in Preferences). Two live models: **V4 Pro** (text only — it silently ignores images, so NEXUS routes them through the Eyes bridge) and **V4.1 Flash** (`deepseek-flash`, 1M context, accepts images directly, ~4x cheaper than Pro). `deepseek-chat` / `deepseek-reasoner` are legacy aliases now served by V4.1 Flash. Retired Flash ids saved in older conversations are remapped to `deepseek-flash` automatically.',
   'model.deepseek.help4': 'The Thinking Mode toggle below applies to both routes.',
 
   'model.minimax.label': 'MiniMax Model',
@@ -1485,7 +1486,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'Alibaba Cloud Model Studio で取得します。OpenAI互換の DashScope エンドポイント経由で Qwen 3.6 Plus / 3.6 Max / 3.7 Max / 3.8 Max および DeepSeek V3.2 に使用します。',
   'settings.keys.deepseek.label': 'DeepSeek APIキー',
   'settings.keys.deepseek.help':
-    '`platform.deepseek.com` で取得します。DeepSeek V4 Flash 0731 / V4 Pro / V4 Flash、および旧来の `deepseek-chat` / `deepseek-reasoner` 別名に必要です。地域制限はなく、どこからでも利用できます。',
+    '`platform.deepseek.com` で取得します。DeepSeek V4 Pro / V4.1 Flash、および旧来の `deepseek-chat` / `deepseek-reasoner` 別名に必要です。地域制限はなく、どこからでも利用できます。',
   'settings.keys.glm.label': 'Z.AI（GLM）APIキー',
   'settings.keys.glm.help':
     '`z.ai` → API Console で取得します。GLMファミリー（GLM-5.2 / GLM-5.1 / GLM-5 / GLM-4.7 / GLM-4.6 / GLM-4.6V / GLM-4.5 Air）に必要です。',
@@ -2292,6 +2293,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'chat.toolAction.Bash': 'シェルコマンドを実行して',
   'chat.toolAction.read_conversation': '過去の会話を読んで',
   'chat.toolAction.search_conversations': '過去の会話を検索して',
+  'chat.toolAction.read_attachment': '添付ファイルを開いて',
   'chat.toolAction.write_letter': '手紙を書いて',
   'chat.toolAction.list_letters': '手紙を確認して',
   'chat.toolAction.read_letter': '手紙を読んで',
@@ -2461,7 +2463,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.deepseek.help2':
     '• `deepseek-v3.2` → Alibaba DashScope。Qwen/DashScope のキーを使います。国際版シンガポール DashScope エンドポイントで使える唯一の DeepSeek モデルです。',
   'model.deepseek.help3':
-    '• それ以外のモデル → `api.deepseek.com` へ直接。別途 DeepSeek の API キーが必要です（設定で追加してください）。現行は V4 で、`deepseek-chat` / `deepseek-reasoner` は V4 Flash の非思考／思考モードに対する旧来のエイリアスです（2026-07-24 に非推奨）。',
+    '• それ以外のモデル → `api.deepseek.com` へ直接。別途 DeepSeek の API キーが必要です（設定で追加してください）。現行は2つ: **V4 Pro**（テキスト専用——画像を黙って無視するため、NEXUS は Eyes 経路に回します）と **V4.1 Flash**（`deepseek-flash`、1M 文脈、画像を直接受け取れる、Pro の約1/4の価格）。`deepseek-chat` / `deepseek-reasoner` は旧来のエイリアスで、現在は V4.1 Flash が応答します。古い会話に保存された廃止済みの Flash ID は自動的に `deepseek-flash` へ読み替えます。',
   'model.deepseek.help4': '下の「思考モード」の切り替えは両方の経路に適用されます。',
 
   'model.minimax.label': 'MiniMax モデル',

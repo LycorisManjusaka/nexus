@@ -14,6 +14,7 @@ import { readAttachmentBase64, readAttachmentText, putBytes, mimeForRef } from '
 import { findAttachmentsByRefPrefix, searchAttachments, formatAttachmentSearchForTool } from '@/lib/attachmentIndex';
 import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
+import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { claudeAgentEnv } from '@/lib/agentEnv';
 
 // Payload field for an attachment the AI produced by reading an image from the
@@ -408,6 +409,10 @@ function toolActivityLabel(name: string): string | null {
     case 'read_conversation': return 'read a past conversation';
     case 'search_conversations': return 'search past conversations';
     case 'search_attachments': return 'search past attachments';
+    // Without a label here, the API-key paths emit NO tool_activity at all
+    // (they guard on `if (actLabel)`) — so the camera never learns this is a
+    // read, and the being sits in Waiting instead of Reading.
+    case 'read_attachment': return 'open an attachment';
     case 'write_letter': return 'write a letter';
     case 'list_letters': return 'check for letters';
     case 'read_letter': return 'read a letter';
@@ -2487,22 +2492,20 @@ async function runModelSelectorPreflight(args: {
     isGrok     ? 'grok-4.5' :
     isCohere   ? 'command-a-plus-05-2026' :
     isMinimax  ? 'MiniMax-M3' :
-    isDeepSeek ? 'deepseek-v4-flash' :
+    isDeepSeek ? DEEPSEEK_FLASH :
     isQwen     ? 'qwen3.6-plus' :
     isOpenAI   ? 'gpt-5.6-terra' :
     isMimo     ? 'mimo-v2.5' :
     isBytedance ? 'seed-2-0-pro-260328' :
                  'local-model'
   ));
-  // api.deepseek.com only accepts 'deepseek-v4-flash' / 'deepseek-v4-pro' —
-  // not date-versioned snapshot ids like the UI alias 'deepseek-v4-flash-0731'.
-  // Same mapping as the main request-building path (see useDeepSeekDirect
-  // below, ~line 4716) — without it, THIS preflight call 400s, gets caught,
-  // and silently falls back to the user's un-mapped current model, which is
-  // exactly the "picked model isn't even in the allowed list" bug.
-  if (useDeepSeekDirect && selectorModel === 'deepseek-v4-flash-0731') {
-    selectorModel = 'deepseek-v4-flash';
-  }
+  // api.deepseek.com serves a tiny, frequently-renamed catalog; retired Flash
+  // ids (deepseek-v4-flash-0731 and friends) now hard-400. Normalise via the
+  // single table in lib/deepseekModels.ts — same mapping as the main
+  // request-building path below. Without it, THIS preflight call 400s, gets
+  // caught, and silently falls back to the user's un-mapped current model,
+  // which is exactly the "picked model isn't even in the allowed list" bug.
+  if (useDeepSeekDirect) selectorModel = deepseekWireModel(selectorModel);
 
   const body: any = {
     model: selectorModel,
@@ -6463,18 +6466,18 @@ export async function POST(req: Request) {
         isCohere   ? 'command-a-plus-05-2026' :
         // Case-sensitive per MiniMax docs: capital M's, lowercase i, hyphen.
         isMinimax  ? 'MiniMax-M3' :
-        isDeepSeek ? 'deepseek-v4-flash' :
+        isDeepSeek ? DEEPSEEK_FLASH :
         isQwen     ? 'qwen3.6-plus' :
         isOpenAI   ? 'gpt-5.6-terra' :
         isMimo     ? 'mimo-v2.5' :
         isBytedance ? 'seed-2-0-pro-260328' :
                      'local-model'
       ));
-      // DeepSeek's direct API (api.deepseek.com) only accepts 'deepseek-v4-flash' or 'deepseek-v4-pro'.
-      // Map the UI snapshot alias 'deepseek-v4-flash-0731' to 'deepseek-v4-flash' when calling api.deepseek.com.
-      if (useDeepSeekDirect && localModel === 'deepseek-v4-flash-0731') {
-        localModel = 'deepseek-v4-flash';
-      }
+      // DeepSeek's direct API (api.deepseek.com) serves only 'deepseek-flash'
+      // and 'deepseek-v4-pro' plus a few still-accepted legacy aliases.
+      // Retired ids saved in old conversations are normalised here — single
+      // table in lib/deepseekModels.ts.
+      if (useDeepSeekDirect) localModel = deepseekWireModel(localModel);
       // DigitalOcean Inference: the `digitalocean/` prefix is a NEXUS routing
       // marker (same bare model id exists on Z.AI at a different price, so the
       // prefix disambiguates for routing + pricing). The wire API wants the

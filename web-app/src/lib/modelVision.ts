@@ -52,15 +52,34 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'qwen3.5-omni-plus',  // omni-plus — image + audio + video, higher quality than -flash
 
   // ── DeepSeek ─────────────────────────────────────────────────────────────
-  // DeepSeek's FIRST vision model (V4-Flash-Vision-Exp, experimental). Per
-  // api-docs.deepseek.com/guides/vision: ONLY this id accepts image input —
-  // every other deepseek-* model returns a 400 ("This model does not support
-  // image"). Image parts use the standard OpenAI-compatible `image_url` shape,
-  // which the shared OpenAI-compatible branch already emits, so no special
-  // request-shape handling is needed. Thinking mode is supported (default on),
-  // so the existing `thinking` toggle applies unchanged. Text-only DeepSeek
-  // models (v4-pro / v4-flash / v3.2 / legacy) stay OUT — default-deny.
-  'deepseek-v4-flash-vision-exp',
+  // Vision is now standard on the Flash line: V4.1-Flash ('deepseek-flash')
+  // takes images natively, and the retired vision-exp id is just an alias for
+  // it. Verified live on 2026-09-14 with real PNGs (64x64 / 512x512 /
+  // 1024x768): correct colour answers, prompt tokens scaling with dimension
+  // (197 / 197 / 509). Images are accepted in USER messages only — an image
+  // part in a system or assistant message 400s.
+  //
+  // TRAP — 'deepseek-v4-pro' is NOT here, and its absence is load-bearing.
+  // Pro does not reject images; it DISCARDS them silently: HTTP 200, text-only
+  // prompt token count (18 on a request carrying a 512x512 PNG), a confident
+  // wrong answer ("Black" for a blue image), and "No." when asked whether an
+  // image is attached. Nothing in the response says anything went wrong. The
+  // earlier comment here claimed every non-vision deepseek id returns a 400
+  // "This model does not support image" — that is measured to be FALSE for
+  // pro. Default-deny is what saves us: pro's images go through the Eyes
+  // bridge instead of vanishing.
+  //
+  // Image parts use the standard OpenAI-compatible `image_url` shape, which
+  // the shared OpenAI-compatible branch already emits, so no special
+  // request-shape handling is needed. Thinking mode is supported (both
+  // enabled and disabled), so the existing `thinking` toggle applies
+  // unchanged. deepseek-v3.2 (DashScope) stays OUT.
+  'deepseek-flash',
+  'deepseek-v4-flash-vision-exp', // retired alias — still served by V4.1-Flash
+  'deepseek-v4-flash',            // retired alias — remapped to deepseek-flash on the wire
+  'deepseek-v4-flash-0731',       // retired (hard 400 upstream) — remapped to deepseek-flash on the wire
+  'deepseek-chat',                // legacy alias, now served by V4.1-Flash (sees images — verified live)
+  'deepseek-reasoner',            // legacy alias, now served by V4.1-Flash (sees images — verified live)
 
   // ── GLM (Z.AI) ─────────────────────────────────────────────────────────────
   // The 'v' variants AND glm-5.3-flash are multimodal. glm-5.3-flash is the

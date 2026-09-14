@@ -323,6 +323,7 @@ const UPDATER_MODELS: UpdaterModelDef[] = [
   { key: 'glm-5.2',             label: 'GLM 5.2',                    aiName: 'GLM',      model: 'glm-5.2' },
   { key: 'glm-5.2-digitalocean', label: 'GLM 5.2 (DigitalOcean)',    aiName: 'GLM',      model: 'digitalocean/glm-5.2' },
   { key: 'deepseek-v4-pro',     label: 'DeepSeek V4 Pro',            aiName: 'DeepSeek', model: 'deepseek-v4-pro' },
+  { key: 'deepseek-flash',      label: 'DeepSeek V4.1 Flash',        aiName: 'DeepSeek', model: 'deepseek-flash' },
 ];
 const DEFAULT_UPDATER_MODEL_KEY = 'deepseek-v4-pro';
 const DEFAULT_UPDATER_MODEL =

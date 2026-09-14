@@ -20,6 +20,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import { readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, globWorkspaceFiles, grepWorkspaceFiles } from './fsStorage';
 import { webSearch as runWebSearch, webFetch as runWebFetch } from './webTools';
+import { deepseekWireModel } from './deepseekModels';
 
 export interface SubagentUsage { input: number; output: number; cacheRead: number; cacheCreate: number }
 // `via` records WHERE the request actually went: the provider label, the exact
@@ -325,10 +326,9 @@ function resolveOpenAIRoute(family: string, model: string, keys: any): { url: st
   if (f.includes('deepseek')) {
     // deepseek-v3.2 is only served via DashScope (keys.qwen); others go direct.
     if (model === 'deepseek-v3.2') return { url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions', headers: bearer(keys.qwen), model, label: 'DeepSeek (DashScope)' };
-    // api.deepseek.com only accepts 'deepseek-v4-flash' / 'deepseek-v4-pro' —
-    // not date-versioned snapshot ids like the UI alias 'deepseek-v4-flash-0731'.
-    const wireModel = model === 'deepseek-v4-flash-0731' ? 'deepseek-v4-flash' : model;
-    return { url: 'https://api.deepseek.com/v1/chat/completions', headers: bearer(keys.deepseek), model: wireModel, label: 'DeepSeek' };
+    // Retired Flash ids (deepseek-v4-flash-0731 and friends) now hard-400 on
+    // api.deepseek.com — normalise via the single table in ./deepseekModels.
+    return { url: 'https://api.deepseek.com/v1/chat/completions', headers: bearer(keys.deepseek), model: deepseekWireModel(model), label: 'DeepSeek' };
   }
   if (f.includes('glm')) {
     // `digitalocean/` prefix routes GLM open weights through DigitalOcean

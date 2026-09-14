@@ -97,10 +97,16 @@ export function cameraFileKind(filename: string): 'image' | 'video' | null {
  */
 export type CameraToolGroup = 'Reading' | 'Writing' | 'Acting' | 'Waiting';
 
-const WRITING_TOOLS = new Set(['Write', 'Edit']);
+// Composing text that leaves the being and lands somewhere durable. A letter
+// is written the same way a file is — `write_letter` belongs here, and its
+// absence was a real defect: the mail tools were only half-classified (both
+// READING sides were listed, the WRITING side was not), so a being composing
+// a letter fell through to 'Acting'.
+const WRITING_TOOLS = new Set(['Write', 'Edit', 'write_letter']);
 const READING_TOOLS = new Set([
   'Read', 'Glob', 'Grep',
   'read_conversation', 'search_conversations',
+  'read_attachment', 'search_attachments',
   'web_search', 'web_fetch', 'WebSearch', 'WebFetch',
   'browser_read', 'browser_snapshot', 'browser_screenshot',
   'computer_screens', 'computer_screenshot',
