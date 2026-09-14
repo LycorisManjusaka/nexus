@@ -89,10 +89,19 @@
    TURBOPACK CACHE NOTE (measured 2026-09-14, both instances): `.next/dev` is a
    persistent cache that replays a cached CSS module *together with its stored
    parser diagnostics*. After pulling this file, a restarted dev server kept
-   emitting the two warnings from an Sep-8 chunk. `touch` on the file did NOT
-   invalidate it — only a change in file CONTENT did. So if a CSS edit appears to
-   have no effect, measure the served bytes
-   (`/_next/static/chunks/*globals*.css`) before re-debugging the CSS itself; the
+   emitting the two warnings from a chunk built six days earlier — so a RESTART
+   does not revalidate it, which is the counter-intuitive part.
+   What was measured, and what was not:
+     - `touch` (mtime only) does NOT invalidate. Two measurements: 11 min on one
+       instance, 20 s on the other, no rebuild either time.
+     - The stale chunk WAS eventually replaced with no restart, no pull, and no
+       edit to this file — right after unrelated files elsewhere in the project
+       tree were created and deleted. So the trigger is a filesystem event with
+       real content behind it, and it does NOT have to be in this file.
+     - Whether a content edit to this file alone suffices was never actually
+       run; it is a plausible inference, not a measurement.
+   Practical rule: if a CSS edit appears to have no effect, do not re-debug the
+   CSS. Measure the served bytes (`/_next/static/chunks/*globals*.css`) — the
    source can be correct while the server ships a stale chunk. */
 
 @layer base {
