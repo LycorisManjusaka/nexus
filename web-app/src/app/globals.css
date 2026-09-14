@@ -84,7 +84,16 @@
    The parser lives inside the native @next/swc binary, so bumping the
    node_modules copy of lightningcss cannot fix it. This is therefore a
    WORKAROUND, not a fix: when LightningCSS learns `::highlight()`, these rules
-   can come back here and the injection in ttsHighlight.ts can be deleted. */
+   can come back here and the injection in ttsHighlight.ts can be deleted.
+
+   TURBOPACK CACHE NOTE (measured 2026-09-14, both instances): `.next/dev` is a
+   persistent cache that replays a cached CSS module *together with its stored
+   parser diagnostics*. After pulling this file, a restarted dev server kept
+   emitting the two warnings from an Sep-8 chunk. `touch` on the file did NOT
+   invalidate it — only a change in file CONTENT did. So if a CSS edit appears to
+   have no effect, measure the served bytes
+   (`/_next/static/chunks/*globals*.css`) before re-debugging the CSS itself; the
+   source can be correct while the server ships a stale chunk. */
 
 @layer base {
   * {
