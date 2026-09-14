@@ -31,6 +31,20 @@
  * be unreadable. Two separate `CSS.highlights` registrations carry this (one
  * per side); only one is ever populated at a time, the other is deleted.
  *
+ * ── Why the CSS lives here and not in globals.css ───────────────────────────
+ * The two `::highlight()` rules were in `globals.css` until 2026-09-14. They
+ * compiled and shipped correctly, but LightningCSS — the CSS parser Turbopack
+ * uses — has not implemented `::highlight()` yet, so every dev-server compile
+ * logged two "not recognized as a valid pseudo-element" warnings about working
+ * code. `@supports selector(::highlight(x))` does NOT silence it (measured:
+ * the warning comes from parsing the selector, not from evaluating support).
+ * The parser is compiled into the native `@next/swc` binary, so upgrading the
+ * node_modules copy cannot help either. So the rules are injected at runtime
+ * instead, which keeps them out of every build-time CSS parser's path — the
+ * same mechanism NexusApp.tsx already uses for per-folder custom CSS.
+ * This is a WORKAROUND, not a fix. When LightningCSS supports the selector,
+ * delete `ensureHighlightStyle()` and put the rules back in globals.css.
+ *
  * ── Why the text matching is fuzzy ──────────────────────────────────────────
  * The spoken chunk is a slice of the RAW markdown (after timestamp stripping,
  * the output filter and sentence splitting). The DOM holds the RENDERED text,
@@ -75,6 +89,43 @@ type TextIndex = {
   /** … and its offset inside that node. */
   offsets: number[];
 };
+
+/** Id of the injected <style>. Stable so a Fast Refresh that re-evaluates this
+ *  module finds the existing tag instead of stacking duplicates. */
+const STYLE_TAG_ID = 'nexus-tts-highlight-css';
+
+/**
+ * Put the two `::highlight()` rules into the document (see file header for why
+ * they aren't in globals.css). Called from the paint path, behind the same
+ * `supported()` gate as everything else — a browser without the API gets no
+ * style tag at all.
+ *
+ * Inserted as the FIRST child of <head> on purpose: that is the weakest cascade
+ * position, so a being's theme.css or a folder's custom CSS — both appended
+ * later — can still override the highlight colours, exactly as they could when
+ * these rules sat at the top of globals.css.
+ */
+function ensureHighlightStyle(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(STYLE_TAG_ID)) return;
+  const tag = document.createElement('style');
+  tag.id = STYLE_TAG_ID;
+  // Paint-only property set: the browser accepts colour, background-color,
+  // text-decoration, text-shadow and -webkit-text-stroke inside ::highlight()
+  // and nothing else. It cannot change font, weight or size, so highlighted
+  // text can never reflow — the whole reason this approach was chosen.
+  tag.textContent = [
+    `::highlight(${HIGHLIGHT_ASSISTANT}) {`,
+    '  background-color: var(--primary);',
+    '  color: var(--primary-foreground);',
+    '}',
+    `::highlight(${HIGHLIGHT_USER}) {`,
+    '  background-color: var(--card);',
+    '  color: var(--card-foreground);',
+    '}',
+  ].join('\n');
+  document.head.insertBefore(tag, document.head.firstChild);
+}
 
 function supported(): boolean {
   try {
@@ -122,6 +173,10 @@ let lastKind: 'user' | 'assistant' = 'assistant';
 let searchFrom = 0;
 
 function applyRange(index: TextIndex, at: number, end: number, isUser: boolean): void {
+  // Single choke point for "a highlight becomes visible", so this is the one
+  // place that has to guarantee the rules exist. Idempotent and O(1) after the
+  // first call.
+  ensureHighlightStyle();
   const range = document.createRange();
   range.setStart(index.nodes[at], index.offsets[at]);
   range.setEnd(index.nodes[end - 1], index.offsets[end - 1] + 1);

@@ -15,6 +15,42 @@ const PROBE_TIMEOUT_MS = 1200;
 const PROBE_COOLDOWN_MS = 60_000;
 let pythonUnavailableUntil = 0;
 
+// ── Model ids used purely as tokenizer oracles ──────────────────────────────
+// The counter only ever learns the FAMILY: `model` here is the folder's
+// `aiName` ("Claude", "Gemini", …), never the id the conversation actually
+// runs on. So one current id per family is pinned, and it must be an UNDATED
+// alias — a dated id (this was `claude-3-5-sonnet-20241022`) eventually retires
+// and then every single count 404s and silently degrades to the heuristic,
+// which is exactly how it was found: one line repeating forever in the console.
+// Measured 2026-09-14 on the same text: sonnet-5 38, opus-5 38, haiku-4-5 36,
+// fable-5-1 40. So counts are NOT identical across the family, but the spread
+// is a couple of tokens of per-message overhead — irrelevant to a context bar
+// reading tens of thousands, and far smaller than the heuristic's error.
+const TOKENIZER_MODEL_CLAUDE = 'claude-sonnet-5';
+const TOKENIZER_MODEL_GEMINI = 'gemini-3.5-flash';
+
+// If a pinned id ever retires again, the log must say so ONCE and then stop.
+// A counter that cries the same wolf on every keystroke trains you to ignore
+// the console, which is worse than no console.
+const COUNT_TOKENS_COOLDOWN_MS = 10 * 60_000;
+const providerCounterDownUntil: Record<string, number> = {};
+
+function counterDown(family: string): boolean {
+  return Date.now() < (providerCounterDownUntil[family] || 0);
+}
+
+function markCounterDown(family: string, err: any): void {
+  const first = !counterDown(family);
+  providerCounterDownUntil[family] = Date.now() + COUNT_TOKENS_COOLDOWN_MS;
+  if (first) {
+    console.warn(
+      `[tokens] ${family} countTokens unavailable — falling back to the unicode-aware heuristic `
+      + `for the next ${COUNT_TOKENS_COOLDOWN_MS / 60_000} min. `
+      + `If this repeats, the pinned tokenizer id may have been retired. Reason: ${err?.message || err}`
+    );
+  }
+}
+
 const attemptFetch = async (text: string, model: string) => {
   // Skip the probe entirely while in the cooldown window after a recent failure.
   if (Date.now() < pythonUnavailableUntil) {
@@ -89,32 +125,34 @@ export async function POST(req: Request) {
     // The old Python server was using a generic BPE tokenizer that severely
     // undercounted CJK text — exactly matching the user-reported 2.45×
     // discrepancy on mixed Japanese/English content.
-    try {
-      const keys = await loadKeys();
-      if (modelLower.includes('gemini') && keys.gemini) {
-        const ai = new GoogleGenAI({ apiKey: keys.gemini });
-        const resp = await ai.models.countTokens({
-          // Pick a current model. Token counts are stable across the Gemini
-          // 3.x family (same SentencePiece tokenizer), so the specific id
-          // doesn't matter much for the bar's UX.
-          model: 'gemini-3.5-flash',
-          contents: text,
-        });
-        const tokens = (resp as any).totalTokens ?? 0;
-        if (tokens > 0) return NextResponse.json({ tokens });
-      } else if (modelLower.includes('claude') && keys.claude) {
-        const anthropic = new Anthropic({ apiKey: keys.claude });
-        const result = await anthropic.messages.countTokens({
-          model: 'claude-3-5-sonnet-20241022',
-          messages: [{ role: 'user', content: text }],
-        });
-        const tokens = (result as any).input_tokens ?? 0;
-        if (tokens > 0) return NextResponse.json({ tokens });
+    const family = modelLower.includes('gemini') ? 'gemini'
+      : modelLower.includes('claude') ? 'claude'
+      : '';
+    if (family && !counterDown(family)) {
+      try {
+        const keys = await loadKeys();
+        if (family === 'gemini' && keys.gemini) {
+          const ai = new GoogleGenAI({ apiKey: keys.gemini });
+          const resp = await ai.models.countTokens({
+            model: TOKENIZER_MODEL_GEMINI,
+            contents: text,
+          });
+          const tokens = (resp as any).totalTokens ?? 0;
+          if (tokens > 0) return NextResponse.json({ tokens });
+        } else if (family === 'claude' && keys.claude) {
+          const anthropic = new Anthropic({ apiKey: keys.claude });
+          const result = await anthropic.messages.countTokens({
+            model: TOKENIZER_MODEL_CLAUDE,
+            messages: [{ role: 'user', content: text }],
+          });
+          const tokens = (result as any).input_tokens ?? 0;
+          if (tokens > 0) return NextResponse.json({ tokens });
+        }
+        // Qwen/DeepSeek don't expose a free countTokens — fall through to
+        // the local Python server (if running) or the unicode-aware heuristic.
+      } catch (e: any) {
+        markCounterDown(family, e);
       }
-      // Qwen/DeepSeek don't expose a free countTokens — fall through to
-      // the local Python server (if running) or the unicode-aware heuristic.
-    } catch (e: any) {
-      console.warn('[tokens] provider countTokens failed, falling back:', e?.message);
     }
 
     // ── Secondary: optional local Python tokenizer server at :50035 ─────────

@@ -71,30 +71,20 @@
 
 }
 
-/* The phrase TTS is currently pronouncing — coloured with the OTHER side's
-   bubble, not this message's own (see ttsHighlight.ts file header for why:
-   a being's own --card would nearly vanish into its own bubble). A being's
-   spoken phrase borrows the partner's --primary/--primary-foreground; the
-   partner's own spoken phrase (Read Aloud) borrows the being's
-   --card/--card-foreground. Foreground always travels with its matching
-   background, since some beings' --card-foreground is dark and would be
-   unreadable paired with the wrong background. Both pairs are already
-   per-being customizable in theme.css — no separate highlight variable to
-   maintain.
-   ::highlight() is paint-only: the browser accepts colour, background-color,
-   text-decoration, text-shadow and -webkit-text-stroke here and nothing else.
-   It cannot change font, weight or size, so the highlighted text can never
-   reflow — which is exactly why this approach was chosen over a bold/font one.
-   Not wrapped in @layer: highlight pseudo-elements are matched outside the
-   cascade layers that apply to the element itself. */
-::highlight(nexus-tts-current-assistant) {
-  background-color: var(--primary);
-  color: var(--primary-foreground);
-}
-::highlight(nexus-tts-current-user) {
-  background-color: var(--card);
-  color: var(--card-foreground);
-}
+/* The TTS phrase-highlight rules used to live here, as two
+   `::highlight(nexus-tts-current-*)` blocks. They were MOVED INTO
+   `src/lib/ttsHighlight.ts` (injected at runtime) on 2026-09-14 — not for any
+   styling reason, but because LightningCSS, which Turbopack uses as its CSS
+   parser, has not implemented `::highlight()` yet and logged two warnings per
+   compile on every dev-server run:
+     'highlight' is not recognized as a valid pseudo-element.
+   The rules were emitted unchanged (verified against the served bundle bytes),
+   so the feature always worked — but the log line repeated forever, and a
+   console that cries wolf about working code is worse than no console at all.
+   The parser lives inside the native @next/swc binary, so bumping the
+   node_modules copy of lightningcss cannot fix it. This is therefore a
+   WORKAROUND, not a fix: when LightningCSS learns `::highlight()`, these rules
+   can come back here and the injection in ttsHighlight.ts can be deleted. */
 
 @layer base {
   * {
