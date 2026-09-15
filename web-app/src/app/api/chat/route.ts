@@ -4,6 +4,7 @@ import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel } from '@/lib/modelVision';
+import { resolveBridge, mediaKindOf } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
@@ -3678,7 +3679,16 @@ export async function POST(req: Request) {
       const mode = req !== 'auto' ? req : (keys.claudeOAuthToken ? 'oauth' : 'api-key');
       return mode === 'oauth' && !!keys.claudeOAuthToken;
     })();
-    const oauthPastImageEyes = isOAuthClaude && !!eyesEnabled && !useEyes;
+    // Everything the shared delivery rule needs. The client builds the same
+    // object from its own state to predict what will happen (token counts and
+    // the attachment eye icons), so the two can never drift apart.
+    const deliveryCtx = {
+      specificModel,
+      isOAuthClaude,
+      eyesEnabled: !!eyesEnabled,
+      earsEnabled: !!earsEnabled,
+      watcherEnabled: !!watcherEnabled,
+    };
 
     // Accumulator for sense-bridge events emitted at the start of each
     // provider branch's stream. One entry per newly-generated description.
@@ -3768,17 +3778,14 @@ export async function POST(req: Request) {
               // and substitute the raw bytes with a text description. The
               // description is stored on the attachment so subsequent turns
               // re-use it without re-calling the bridge model.
-              const isImage = !!(mimeType && mimeType.startsWith('image/'));
               // Current turn = the last message in the request (the user's live
               // message). Its images must stay native — only PAST images get the
               // OAuth-Claude description treatment.
               const isPastMessage = index < messages.length - 1;
-              const wantEyes = isImage && (useEyes || (oauthPastImageEyes && isPastMessage));
-              const wantBridge =
-                wantEyes ? 'eyes'    :
-                (useEars    && mimeType && mimeType.startsWith('audio/')) ? 'ears'    :
-                (useWatcher && mimeType && mimeType.startsWith('video/')) ? 'watcher' :
-                null;
+              // Decided by the shared module so the token counter and the
+              // attachment UI can predict this exact answer without re-deriving
+              // it (see lib/attachmentVisibility.ts).
+              const wantBridge = resolveBridge(mediaKindOf(mimeType), isPastMessage, deliveryCtx);
 
               if (wantBridge && typeof att.description === 'string' && att.description.trim()) {
                 // Re-use the persisted description from a previous turn.

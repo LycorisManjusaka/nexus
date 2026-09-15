@@ -13,8 +13,9 @@ import { attachmentSrc } from '@/lib/attachmentUrl';
 import { useT } from '@/lib/i18n';
 import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
+import { attachmentTokens } from '@/lib/attachmentVisibility';
 
-export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
+export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
@@ -608,9 +609,20 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     maybeFinishStreaming();
   }, [msg.streaming]);
 
+  // What an attachment costs on the path that will actually run. `att.tokens`
+  // is the raw media size measured at attach time, and it is only the truth
+  // when the bytes themselves reach the model. A bridged attachment arrives as
+  // a text description (so it costs the description), and an attachment the
+  // path cannot carry costs nothing. Showing the media figure regardless is how
+  // an image the entity never received still looked like it was included.
+  const attachTokens = (att: any): number => {
+    if (!deliveryCtx) return att.excluded ? 0 : (att.tokens || 0);  // no context → old behavior
+    return attachmentTokens(att, !!isPastMessage, deliveryCtx);
+  };
+
   if (msg.attachments) {
     msg.attachments.forEach((att: any) => {
-      if (!att.excluded) displayTokens += (att.tokens || 0);
+      displayTokens += attachTokens(att);
     });
   }
 
@@ -1283,7 +1295,7 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                     {att.toolAction}
                   </span>
                 )}
-                {att.tokens > 0 && <span className="text-muted-foreground bg-muted px-1.5 py-0.5 rounded text-[10px]">{att.tokens} t</span>}
+                {attachTokens(att) > 0 && <span className="text-muted-foreground bg-muted px-1.5 py-0.5 rounded text-[10px]">{attachTokens(att)} t</span>}
                 {att.isText && att.textData && (
                   <button
                     onClick={() => setViewTextAttachment({ name: att.name, textData: att.textData })}

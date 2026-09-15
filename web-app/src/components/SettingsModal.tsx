@@ -7,6 +7,7 @@ import UserIdentityEditor from './UserIdentityEditor';
 import { useT, Tx } from '@/lib/i18n';
 import { ensureAudioPermission, supportsSinkId, invalidateDeviceCache } from '@/lib/audioSink';
 import { buildTag, loadBuildTag } from '@/lib/buildVersion';
+import { AUDIO_SESSION_KEEP_MESSAGES_DEFAULT, resolveKeepMessages } from '@/lib/attachmentVisibility';
 
 // Preferences is split into tabs because the three groups have nothing to do
 // with each other and the API-key list alone is twelve providers long. Add a
@@ -636,12 +637,11 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                   min={0}
                   max={100}
                   disabled={!(globalSettings.audioSessionHideOldAttachments ?? false)}
-                  value={globalSettings.audioSessionKeepMessages ?? 15}
+                  value={globalSettings.audioSessionKeepMessages ?? AUDIO_SESSION_KEEP_MESSAGES_DEFAULT}
                   onChange={e => {
-                    const n = parseInt(e.target.value, 10);
                     setGlobalSettings({
                       ...globalSettings,
-                      audioSessionKeepMessages: Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 15,
+                      audioSessionKeepMessages: resolveKeepMessages(e.target.value),
                     });
                   }}
                   className="mt-1 w-28 px-2 py-1 rounded-md border border-border bg-background text-sm block disabled:opacity-50"

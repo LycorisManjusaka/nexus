@@ -28,6 +28,7 @@ import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
+import { applyAutoHide, attachmentTokens, resolveKeepMessages } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
@@ -1357,11 +1358,46 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     return m.thinkingTokens || 0;
   };
 
+  // ── Delivery prediction ───────────────────────────────────────────────────
+  // What the send path will do with an attachment, computed from the same
+  // shared rule the server uses (lib/attachmentVisibility.ts) so the two can't
+  // drift. `isOAuthClaude` is exact rather than a guess: the client picks the
+  // billing mode explicitly ('api-key' | 'oauth', never 'auto'), and a turn
+  // marked 'oauth' with no token configured is rejected outright by the server
+  // — it never silently falls back to the API-key path. So "the UI says OAuth"
+  // and "the request ran on OAuth" are the same statement.
+  //
+  // Automatic model selection is the one case that cannot be predicted: a
+  // helper model picks the family per request, so no static marker could be
+  // honest. There the display is left alone.
+  const deliveryCtx = useMemo(() => ({
+    specificModel,
+    // Same family test the server applies to `aiName` (substring, not equality).
+    isOAuthClaude: String(localAiName || '').toLowerCase().includes('claude')
+      && claudeAuthMode === 'oauth'
+      && !autoModelSelectEnabled,
+    eyesEnabled,
+    earsEnabled,
+    watcherEnabled,
+  }), [specificModel, localAiName, claudeAuthMode, autoModelSelectEnabled, eyesEnabled, earsEnabled, watcherEnabled]);
+
+  // Index of the last USER message. On the OAuth path only this message's
+  // images become native image blocks; every earlier image is dropped, because
+  // the history is replayed as text. It is the LAST USER message rather than
+  // simply the last message because a rerun re-sends exactly that one — hiding
+  // its attachments would break rerun, not describe it.
+  const lastUserMsgIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if ((messages[i] as any)?.role === 'user') return i;
+    }
+    return -1;
+  }, [messages]);
+
   useEffect(() => {
     if (loading) return;
     let total = 0;
     let convoTotal = 0;
-    messages.forEach(m => {
+    messages.forEach((m, mi) => {
       const textTokens = (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
       total += textTokens;
       convoTotal += textTokens;
@@ -1373,16 +1409,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         total += msgThinkingTokens(m);
       }
       if (m.attachments) {
+        // Counts what the entity will actually be given, not what was attached
+        // — an image routed through a bridge costs its description, and an
+        // image the path cannot carry costs nothing. See
+        // attachmentEffectiveTokens below.
+        const isPastMessage = mi < lastUserMsgIndex;
         m.attachments.forEach((att: any) => {
-          if (!att.excluded) {
-            total += (att.tokens || 0);
-          }
+          total += attachmentEffectiveTokens(att, isPastMessage);
         });
       }
     });
     setTotalTokens(total + systemTokens + attachmentInstructionTokens);
     setConversationTokens(convoTotal);
-  }, [messages, saveThinkingToLog, systemTokens, attachmentInstructionTokens, loading]);
+  }, [messages, saveThinkingToLog, systemTokens, attachmentInstructionTokens, loading, deliveryCtx, lastUserMsgIndex]);
 
   // ── Auto-hide older attachments during an audio session ───────────────────
   // A long VRChat session accumulates screenshots; every one of them is re-sent
@@ -1400,56 +1439,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // An attachment excluded by hand stays excluded, even if it falls inside the
   // newest N — the automation never overrides a human decision.
   const hideOldAttachments = globalSettings?.audioSessionHideOldAttachments === true;
-  const keepMessages = (() => {
-    const n = Number(globalSettings?.audioSessionKeepMessages);
-    return Number.isFinite(n) ? Math.min(100, Math.max(0, Math.floor(n))) : 3;
-  })();
+  const keepMessages = resolveKeepMessages(globalSettings?.audioSessionKeepMessages);
+
   useEffect(() => {
-    const active = vrchatMode && hideOldAttachments;
-    if (messages.length === 0) return;
-
-    // Everything before this message index is "older than N messages back".
-    const keepFrom = active ? Math.max(0, messages.length - keepMessages) : 0;
-
-    let changed = false;
-    const next = messages.map((m: any, mi: number) => {
-      if (!Array.isArray(m.attachments)) return m;
-      const isOld = active && mi < keepFrom;
-      let msgChanged = false;
-      const atts = m.attachments.map((a: any) => {
-        if (isOld) {
-          // Already excluded (manually or by us), or the user explicitly made
-          // this one visible again (autoHidden === false) → hands off.
-          if (a.excluded || a.autoHidden === false) return a;
-          msgChanged = true;
-          return { ...a, excluded: true, autoHidden: true };
-        }
-        // Inside the newest N messages, or the feature is off: undo only our
-        // own hiding.
-        if (a.autoHidden === true) {
-          msgChanged = true;
-          const { autoHidden, ...rest } = a;
-          return { ...rest, excluded: false };
-        }
-        return a;
-      });
-      if (!msgChanged) return m;
-      changed = true;
-      return { ...m, attachments: atts };
+    const { changed, next } = applyAutoHide(messages as any[], {
+      sessionActive: vrchatMode && hideOldAttachments,
+      keepMessages,
+      lastUserMsgIndex,
+      ctx: deliveryCtx,
     });
-
-    if (changed) setMessages(next);
-  }, [messages, vrchatMode, hideOldAttachments, keepMessages]);
+    if (changed) setMessages(next as any);
+  }, [messages, vrchatMode, hideOldAttachments, keepMessages, deliveryCtx, lastUserMsgIndex]);
 
   // Per-message tokens, split so the progress bar can show attachments as
   // their own layer and so the auto-trim threshold can ignore attachments.
   const computeMsgTextTokens = (m: any) => {
     return (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
   };
-  const computeMsgAttachTokens = (m: any) => {
+  const attachmentEffectiveTokens = (a: any, isPastMessage: boolean) =>
+    attachmentTokens(a, isPastMessage, deliveryCtx);
+  const computeMsgAttachTokens = (m: any, msgIndex?: number) => {
     let t = 0;
     if (m.attachments) {
-      for (const a of m.attachments) if (!a.excluded) t += (a.tokens || 0);
+      const mi = msgIndex !== undefined ? msgIndex : messages.indexOf(m);
+      const isPastMessage = mi >= 0 && mi < lastUserMsgIndex;
+      for (const a of m.attachments) t += attachmentEffectiveTokens(a, isPastMessage);
     }
     // Reusable thinking is bucketed with attachments: it shows in the "Att"
     // segment and (like attachments) is excluded from the auto-trim threshold,
@@ -1480,7 +1494,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const allCopied = markerIdx < 0 && firstOriginalIsNext;
     messages.forEach((m, i) => {
       const textT = computeMsgTextTokens(m);
-      const attT = computeMsgAttachTokens(m);
+      const attT = computeMsgAttachTokens(m, i);
       attach += attT;
       // allCopied -> the whole pending carry-over history counts as copied.
       // No marker (and not pending) -> everything is "original" (safe default).
@@ -2573,6 +2587,36 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     }),
                   };
                 }));
+                // Measure what the description ACTUALLY costs, because from now
+                // on this is what the entity receives in place of the media —
+                // and the token counter must charge for that, not for pixels
+                // the model never sees. Measured through the same /api/tokens
+                // tokenizer the rest of the UI uses, on the exact wrapper text
+                // the send path injects. Fire-and-forget: a failure leaves the
+                // count at 0 (under-reports) rather than blocking the stream.
+                (async () => {
+                  const tag =
+                    data.kind === 'ears'    ? 'audio_description' :
+                    data.kind === 'watcher' ? 'video_description' :
+                                              'image_description';
+                  const injected =
+                    `\n\n<${tag} filename="${data.attachmentName || tag}" via="${data.model || 'cached'}">\n` +
+                    `${data.description || ''}\n` +
+                    `</${tag}>`;
+                  const tk = await fetchTokensForText(injected, localAiName);
+                  if (!tk) return;
+                  setMessages(prev => prev.map(mm => {
+                    if (mm.id !== targetMsgId) return mm;
+                    if (!Array.isArray(mm.attachments)) return mm;
+                    return {
+                      ...mm,
+                      attachments: mm.attachments.map((a: any) => {
+                        const matches = targetAttId ? a.id === targetAttId : a.name === targetAttName;
+                        return matches ? { ...a, descriptionTokens: tk } : a;
+                      }),
+                    };
+                  }));
+                })();
               }
             } catch (e: any) {
               // Re-throw API errors so the outer catch can display them
@@ -3563,6 +3607,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 folders={folders}
                 folderName={folderName}
                 isVRChatMode={vrchatMode}
+                deliveryCtx={deliveryCtx}
+                isPastMessage={msgIdx < lastUserMsgIndex}
                 isOriginal={isMessageOriginal(msg.id)}
                 isFirstOriginal={firstOriginalMessageId === msg.id}
                 onSetFirstOriginal={() => handleSetFirstOriginal(msg.id)}
