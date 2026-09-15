@@ -60,6 +60,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
 
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': 'Preferences',
+  'settings.build.title': 'Build of NEXUS running here (commit, branch, last update). Include this in any bug report.',
   'settings.tab.keys': 'API Keys',
   'settings.tab.vrchat': 'VRChat & Audio',
   'settings.tab.identity': 'User Identity',
@@ -254,6 +255,12 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.noHistory': 'No history in {folder}.',
   'sidebar.thisFolder': 'this being',
   'sidebar.inactive': '(inactive)',
+  // Shown only when a summary file matches no conversation title. Layer 4 is
+  // built by walking conversations, so such a file is never read and would
+  // otherwise vanish in silence.
+  'sidebar.orphanSummaries.title': 'Summaries with no conversation ({count})',
+  'sidebar.orphanSummaries.body':
+    'These summary files are NOT part of Layer 4: no conversation in this Digital Being has a matching title. Rename a conversation to match the file, or delete the file.',
   'sidebar.menu.rename': 'Rename',
   'sidebar.menu.folderSettings': 'Being Settings',
   'sidebar.menu.autoImportMd': 'Auto-Import .md',
@@ -271,6 +278,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.prompt.renameFolder': 'New name for this Digital Being:',
   'sidebar.import.noFolder': 'Select a Digital Being first, then import.',
   'sidebar.import.notNexusJson': 'is not a valid Nexus log JSON.',
+  // Prefix for the verbatim first ~200 characters of a file NEXUS could not
+  // read. Copying this back is what makes a parser writable for the format.
+  'sidebar.import.head': 'Start of the file (copy this into a bug report):',
   'sidebar.import.failed': 'Failed to import',
   'sidebar.import.nothing': 'Import added nothing — see the browser console for details.',
   'sidebar.import.nothingWithReasons':
@@ -1452,6 +1462,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': '設定',
+  'settings.build.title': 'この環境で動いている NEXUS のビルド（コミット・ブランチ・最終更新）。不具合報告にはこれを添えてください。',
   'settings.tab.keys': 'APIキー',
   'settings.tab.vrchat': 'VRChat・音声',
   'settings.tab.identity': 'ユーザーの識別',
@@ -1645,6 +1656,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.noHistory': '{folder} には会話がありません。',
   'sidebar.thisFolder': 'この存在',
   'sidebar.inactive': '（非アクティブ）',
+  'sidebar.orphanSummaries.title': '対応する会話がない要約（{count}件）',
+  'sidebar.orphanSummaries.body':
+    'これらの要約ファイルは Layer 4 に入りません。この存在の会話に、同じ題名のものが無いためです。会話の題名をファイル名に合わせるか、ファイルを削除してください。',
   'sidebar.menu.rename': '名前を変更',
   'sidebar.menu.folderSettings': '存在設定',
   'sidebar.menu.autoImportMd': '.md を自動読み込み',
@@ -1661,6 +1675,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.prompt.renameFolder': 'このデジタル存在の新しい名前を入力してください：',
   'sidebar.import.noFolder': '先にデジタル存在を選択してから読み込んでください。',
   'sidebar.import.notNexusJson': 'は Nexus のログJSONとして正しくありません。',
+  'sidebar.import.head': 'ファイルの先頭（不具合報告にそのまま貼ってください）:',
   'sidebar.import.failed': '読み込みに失敗しました',
   'sidebar.import.nothing': '読み込まれたものはありません。詳細はブラウザのコンソールを確認してください。',
   'sidebar.import.nothingWithReasons':

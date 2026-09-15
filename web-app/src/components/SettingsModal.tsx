@@ -6,6 +6,7 @@ import VoiceSelector from './VoiceSelector';
 import UserIdentityEditor from './UserIdentityEditor';
 import { useT, Tx } from '@/lib/i18n';
 import { ensureAudioPermission, supportsSinkId, invalidateDeviceCache } from '@/lib/audioSink';
+import { buildTag, loadBuildTag } from '@/lib/buildVersion';
 
 // Preferences is split into tabs because the three groups have nothing to do
 // with each other and the API-key list alone is twelve providers long. Add a
@@ -50,6 +51,12 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const [activeTab, setActiveTabState] = React.useState<'keys'|'audio'|'identity'|'other'>('keys');
   const setActiveTab = (tab: 'keys'|'audio'|'identity'|'other') => setActiveTabState(tab);
   const t = useT();
+  // Which build is this install running? Shown here because this is the one
+  // screen every user opens at least once, and because a bug report from a
+  // machine we cannot reach is unreadable without it. Selectable text, not an
+  // icon — the whole point is that it can be copied into a message.
+  const [buildLabel, setBuildLabel] = React.useState<string>(buildTag());
+  React.useEffect(() => { loadBuildTag().then(setBuildLabel); }, []);
   // claudeAuthMode + claudeOAuthToken are OPT-IN additions for using your
   // Claude Pro/Max subscription billing instead of pay-per-token API billing.
   // Default is 'api-key' so existing setups keep working exactly as before.
@@ -309,7 +316,17 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
-          <h2 className="text-lg font-bold">{t('settings.title')}</h2>
+          <div className="flex items-baseline gap-2 min-w-0">
+            <h2 className="text-lg font-bold">{t('settings.title')}</h2>
+            {buildLabel && (
+              <span
+                className="text-[10px] font-mono text-muted-foreground truncate select-all"
+                title={t('settings.build.title')}
+              >
+                {buildLabel}
+              </span>
+            )}
+          </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
             <X size={20} />
           </button>

@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
 import { confirmIfBusy } from '@/lib/unloadGuard';
+import { loadBuildTag } from '@/lib/buildVersion';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -103,6 +104,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     }
     fetchFolders();
     fetchLogs();
+    // Warm the build identifier once. Failure paths (import diagnostics) read
+    // it synchronously from the module cache, so it has to be in flight before
+    // the first thing can go wrong.
+    loadBuildTag();
   }, []);
 
   useEffect(() => {

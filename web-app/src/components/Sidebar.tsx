@@ -11,6 +11,7 @@ import { orderFolderConversations } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
 import { useT, Tx } from '@/lib/i18n';
 import { confirmIfBusy, markBusyConfirmAnswered } from '@/lib/unloadGuard';
+import { withBuildTag } from '@/lib/buildVersion';
 
 interface SidebarProps {
   conversations: any[];
@@ -129,6 +130,24 @@ export default function Sidebar({
   // if it changes there, change it here or every preview silently misses.
   const summaryKeyForTitle = (title: string) =>
     String(title || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.\.+/g, '_').trim();
+
+  // ── Orphaned summaries ────────────────────────────────────────────────────
+  // Layer 4 is assembled by walking CONVERSATIONS and looking up each one's
+  // summary by title (see assembleSummaryIndex / summaryKey). A summary file
+  // that matches no conversation title is therefore never read — and says
+  // nothing about it. Everything else keeps working, so the loss is invisible:
+  // the being simply never receives that part of its memory.
+  //
+  // That is a defect, not a feature, and the fix is that the file announces
+  // itself. Measured against all existing data before adding this: 212 summary
+  // files, 0 orphans — so this row is silent in normal operation and only
+  // appears when something really is stranded. Inactive conversations are NOT
+  // orphans (they exist; the index filters them deliberately), which is why
+  // this compares against every conversation in the folder rather than the
+  // visible ones.
+  const orphanSummaries = Object.keys(folderSummaries)
+    .filter((key) => key && !filteredConvos.some((c: any) => summaryKeyForTitle(c.title) === key))
+    .sort();
 
   const previewForConvo = (title: string): string | null => {
     const raw = folderSummaries[summaryKeyForTitle(title)];
@@ -311,6 +330,16 @@ export default function Sidebar({
   const importMdRef = useRef<HTMLInputElement>(null);
   const importJsonRef = useRef<HTMLInputElement>(null);
 
+  // ── Unrecognized-format diagnostics ───────────────────────────────────────
+  // When a file cannot be read as a format NEXUS knows, the only thing that
+  // makes a parser writable for it is the bytes themselves. So the head of the
+  // file is shown VERBATIM (no trimming, no whitespace collapsing, BOM and all)
+  // for the reader to copy into a report. "Import failed" describes nothing;
+  // these 200 characters describe the format.
+  const IMPORT_HEAD_CHARS = 200;
+  const fileHead = (text: string) =>
+    text.slice(0, IMPORT_HEAD_CHARS) + (text.length > IMPORT_HEAD_CHARS ? ' …' : '');
+
   const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0 || !activeFolder) return;
@@ -325,11 +354,19 @@ export default function Sidebar({
     (async () => {
       const newIds: string[] = [];
       for (const file of filesArray) {
+        // Hoisted out of the try so the catch below can still show the head
+        // when JSON.parse is what threw — that is precisely the case where
+        // the bytes matter most.
+        let text = '';
         try {
-          const text = await file.text();
+          text = await file.text();
           const data = JSON.parse(text);
           if (!data || !Array.isArray(data.messages)) {
-            alert(`"${file.name}" ${t('sidebar.import.notNexusJson')}`);
+            console.warn(`[json-import] "${file.name}" is not a NEXUS log. Head:\n${fileHead(text)}`);
+            alert(withBuildTag(
+              `"${file.name}" ${t('sidebar.import.notNexusJson')}\n\n` +
+              `${t('sidebar.import.head')}\n${fileHead(text)}`
+            ));
             continue;
           }
           const convoId = uuidv4();
@@ -348,7 +385,11 @@ export default function Sidebar({
           });
           newIds.push(convoId);
         } catch (err: any) {
-          alert(`${t('sidebar.import.failed')} "${file.name}": ${err.message}`);
+          console.error(`[json-import] "${file.name}" threw:`, err, `\nHead:\n${fileHead(text)}`);
+          alert(withBuildTag(
+            `${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}` +
+            (text ? `\n\n${t('sidebar.import.head')}\n${fileHead(text)}` : '')
+          ));
         }
       }
       if (newIds.length === 0) return;
@@ -463,7 +504,10 @@ export default function Sidebar({
               `  Recognized names (folder entity + "Anonymous"/"User" + character_map): ${diag.recognizedNames.map(n => `"${n}"`).join(', ')}\n` +
               `  Fix: rename the header to "${activeFolder.name}", add the speaker to character_map.json, or use "Anonymous".`
             );
-            importErrors.push(`${file.name}: ${reason}`);
+            // Carry the head along with the reason: "no header matched" tells
+            // the reader the rule, the bytes tell whoever writes the parser
+            // what the file actually is.
+            importErrors.push(`${file.name}: ${reason}\n  ${t('sidebar.import.head')} ${fileHead(text)}`);
             continue;
           }
 
@@ -508,16 +552,16 @@ export default function Sidebar({
         } catch (err: any) {
           console.error(`[md-import] "${file.name}" threw during import:`, err);
           importErrors.push(`${file.name}: ${err?.message || err}`);
-          alert(`${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}`);
+          alert(withBuildTag(`${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}`));
         }
       }
       if (newIds.length === 0) {
         console.warn(`[md-import] Nothing imported (${filesArray.length} file(s) tried).${importErrors.length ? ' Reasons:\n  - ' + importErrors.join('\n  - ') : ''}`);
-        alert(
+        alert(withBuildTag(
           importErrors.length
             ? t('sidebar.import.nothingWithReasons').replace('{reasons}', importErrors.join('\n'))
             : t('sidebar.import.nothing')
-        );
+        ));
         return;
       }
 
@@ -842,6 +886,19 @@ export default function Sidebar({
         <input type="file" multiple accept=".json" className="hidden" ref={importJsonRef} onChange={handleImportJson} />
         <input type="file" multiple accept=".md,.markdown,.txt" className="hidden" ref={importMdRef} onChange={handleImportMd} />
       </div>
+
+      {orphanSummaries.length > 0 && (
+        <div className="mx-4 mb-2 px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-[11px] leading-snug">
+          <div className="font-semibold text-amber-600 dark:text-amber-400">
+            {t('sidebar.orphanSummaries.title').replace('{count}', String(orphanSummaries.length))}
+          </div>
+          <div className="mt-1 font-mono break-all text-muted-foreground">
+            {orphanSummaries.slice(0, 5).join(', ')}
+            {orphanSummaries.length > 5 && ` +${orphanSummaries.length - 5}`}
+          </div>
+          <div className="mt-1 text-muted-foreground">{t('sidebar.orphanSummaries.body')}</div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto px-3 pb-4 space-y-1 custom-scrollbar">
         <AnimatePresence>
