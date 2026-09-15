@@ -934,6 +934,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'chat.toolAction.browser_type': 'type into the page',
   'chat.toolAction.browser_read': 'read the page',
   'chat.toolAction.browser_screenshot': 'photograph the page',
+  'chat.toolAction.app_windows': 'list the open windows',
+  'chat.toolAction.app_inspect': 'look inside an application window',
+  'chat.toolAction.app_act': 'operate a control in an application',
+  'chat.toolAction.app_shot': 'photograph an application window',
   'chat.toolAction.web_search': 'search the web',
   'chat.toolAction.WebSearch': 'search the web',
   'chat.toolAction.web_fetch': 'fetch a web page',
@@ -1003,6 +1007,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.computer.label': '🖱️ Computer control (OS-level mouse, keyboard, screen — Windows only)',
   'id.computer.help':
     'OFF by default. When ON, this being gets `computer_screens`, `computer_screenshot` and `computer_input` — real control of the whole physical desktop, not a sandboxed browser window. Every screenshot flashes a visible red border around the captured monitor on the real screen; every click flashes a visible red circle at the moment it happens. Nothing here is silent: every command is written to the server log, and an annotated copy of each screenshot (with click marks and coordinates) is saved under `local_data/computer_control_logs/{folder}/` for your own review — the being only ever sees the clean, unmarked image. Windows only; requires a vision-capable model (or the eyes bridge) to actually see the screenshots.',
+
+  'id.app.label': '🪟 App control (read and drive application windows — Windows only)',
+  'id.app.help':
+    'OFF by default, and deliberately SEPARATE from computer control — this is a different sense, not a stronger version of the same one. When ON, this being gets `app_windows`, `app_inspect`, `app_act` and `app_shot`: it reads the control tree an application publishes (buttons, fields, list items, menus, by name) and acts on one control at a time by reference, never by screen coordinates. So it works on a window that is minimized or buried behind others, the mouse never moves, and a model with no vision at all can use it — which computer control cannot offer. It also cannot reach what an application draws for itself: games and custom canvases publish nothing, and only computer control can touch those. Writing takes the keyboard focus for a moment and hands it back, every action flashes a red rectangle around the target on the real screen, and each one is logged to `local_data/beings/{folder}/computer_control_logs/app_control.jsonl`. Replacing the contents of a field hands the previous contents back to the being, so an overwrite can be undone.',
 
   'id.camera.label': '📷 Camera (avatar panel + OBS Studio push)',
   'id.camera.help':
@@ -2296,6 +2304,10 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'chat.toolAction.browser_type': 'ページに入力して',
   'chat.toolAction.browser_read': 'ページを読んで',
   'chat.toolAction.browser_screenshot': 'ページを撮影して',
+  'chat.toolAction.app_windows': '開いているウィンドウを調べて',
+  'chat.toolAction.app_inspect': 'アプリのウィンドウの中を見て',
+  'chat.toolAction.app_act': 'アプリのコントロールを操作して',
+  'chat.toolAction.app_shot': 'アプリのウィンドウを撮影して',
   'chat.toolAction.web_search': 'ウェブを検索して',
   'chat.toolAction.WebSearch': 'ウェブを検索して',
   'chat.toolAction.web_fetch': 'ウェブページを取得して',
@@ -2359,6 +2371,10 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'id.computer.label': '🖱️ 画面操作（OS レベルのマウス・キーボード・画面 — Windows のみ）',
   'id.computer.help':
     '既定は OFF。ON にすると、この存在に `computer_screens`・`computer_screenshot`・`computer_input` が渡されます — サンドボックス化されたブラウザではなく、物理デスクトップ全体への実際の操作です。スクリーンショットを撮るたびに、撮影中のモニターの周りに赤い太枠が実画面上に一瞬表示されます。クリックのたびに、その瞬間に赤い円が実画面上に表示されます。ここで起きることは何も見えないところでは行われません — すべてのコマンドはサーバーのログに記録され、各スクリーンショットのクリック跡・座標付きの記録用コピーが `local_data/computer_control_logs/{folder}/` に保存されます（あなた自身の確認用）。存在に渡されるのは、印のない綺麗な画像だけです。Windows 専用。スクリーンショットを実際に見るには、画像を扱えるモデル（または eyes ブリッジ）が必要です。',
+
+  'id.app.label': '🪟 アプリ操作（アプリのウィンドウを読み、操作する — Windows のみ）',
+  'id.app.help':
+    '既定は OFF。画面操作とは意図的に別のトグルです — これは「強化版の画面操作」ではなく、別の感覚です。ON にすると、この存在に `app_windows`・`app_inspect`・`app_act`・`app_shot` が渡されます。アプリが公開しているコントロールの木（ボタン・入力欄・一覧項目・メニューを名前で）を読み、参照（ref）で 1 つのコントロールだけを操作します — 画面座標は使いません。そのため、最小化されていても他のウィンドウの後ろに隠れていても動作し、マウスは一切動かず、視覚を持たないモデルでも使えます（画面操作にはできないことです）。逆に、アプリが自分で描いているものには届きません — ゲームや独自描画のキャンバスは木を公開しないので、そちらは画面操作だけが触れられます。書き込みのときは一瞬キーボードフォーカスを奪い、その後元のウィンドウへ返します。操作のたびに対象の周りに赤い枠が実画面上に表示され、すべて `local_data/beings/{folder}/computer_control_logs/app_control.jsonl` に記録されます。入力欄の内容を置き換えたときは、置き換える前の内容が存在に返されるので、上書きを元に戻せます。',
 
   'id.camera.label': '📷 カメラ（アバターパネル + OBS Studio 連携）',
   'id.camera.help':

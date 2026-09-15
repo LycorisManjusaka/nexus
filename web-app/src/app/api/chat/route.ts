@@ -196,6 +196,14 @@ import {
   computerToolsClaude, computerToolsGemini, computerToolsOpenAI,
   registerActiveTurnStop, ensureStopKeyWatcher,
 } from '@/lib/computerTools';
+// App Control (アプリ操作): the other sense. computer_* drives pixels and needs
+// eyes; app_* walks the control tree an application publishes and needs none —
+// so these are gated by their OWN toggle, deliberately not shared with computer
+// control, because a vision-less vessel can use app_* perfectly well.
+import {
+  runAppTool, APP_TOOL_NAMES,
+  appToolsClaude, appToolsGemini, appToolsOpenAI,
+} from '@/lib/appControl';
 import { looksLikeText, isMediaMime, SNIFF_BYTES, TEXT_MAX_BYTES } from '@/lib/textSniff';
 import { GoogleGenAI } from '@google/genai';
 import sharp from 'sharp';
@@ -426,6 +434,10 @@ function toolActivityLabel(name: string): string | null {
     case 'computer_screens': return 'list monitors';
     case 'computer_screenshot': return 'take a screenshot';
     case 'computer_input': return 'control the mouse/keyboard';
+    case 'app_windows': return 'list the open windows';
+    case 'app_inspect': return 'look inside an application window';
+    case 'app_act': return 'operate a control in an application';
+    case 'app_shot': return 'photograph an application window';
     case 'web_search': case 'WebSearch': return 'search the web';
     case 'web_fetch': case 'WebFetch': return 'fetch a web page';
     case 'AskQuestion': case 'spawn_subagent': return null; // have dedicated UI
@@ -616,13 +628,14 @@ async function streamClaudeViaAgentSDK(args: {
   browserAllowAnyHost: boolean;    // per-Entity: drop the allowlist entirely
   browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
   computerControlEnabled: boolean; // per-Entity: expose the OS-level mouse/keyboard/screen tools
+  appControlEnabled: boolean;      // per-Entity: expose the UI-Automation app tools (separate toggle on purpose)
   convoId: string;                 // conversation id — scopes letter announcements
   keys: any;                       // API keys, for routing a non-Claude subagent
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
   hiddenAttachmentsAccessible: boolean;  // expose the read_attachment MCP tool
   conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[]; // read_attachment scope
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -818,7 +831,7 @@ async function streamClaudeViaAgentSDK(args: {
         // per-conversation toggles. Tool names as seen by the model:
         // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled || computerControlEnabled || hiddenAttachmentsAccessible) {
+        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled || computerControlEnabled || appControlEnabled || hiddenAttachmentsAccessible) {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -1000,6 +1013,41 @@ async function streamClaudeViaAgentSDK(args: {
                   const r = await runComputerTool('computer_input', a, computerCtx);
                   return { content: [{ type: 'text' as const, text: r.text }] };
                 }),
+            );
+          }
+          if (appControlEnabled) {
+            // App Control via UI Automation. Same executor (runAppTool) as every
+            // other provider path; only the schema dialect differs here.
+            const appCtx = { me: folderName, instructions: I };
+            const at = (n: string) => async (a: any) => {
+              const r = await runAppTool(n, a || {}, appCtx);
+              const content: any[] = [{ type: 'text' as const, text: r.text }];
+              if (r.image) content.push({ type: 'image' as const, data: r.image.base64, mimeType: r.image.mimeType });
+              return { content };
+            };
+            nexusTools.push(
+              sdk.tool('app_windows', I.toolAppWindowsDesc, {}, at('app_windows')),
+              sdk.tool('app_inspect', I.toolAppInspectDesc,
+                {
+                  window: z.string().describe(I.appWindowParam),
+                  ref: z.string().optional().describe(I.appInspectRefParam),
+                  filter: z.string().optional().describe(I.appInspectFilterParam),
+                  max_nodes: z.number().optional().describe(I.appInspectMaxNodesParam),
+                  max_depth: z.number().optional().describe(I.appInspectMaxDepthParam),
+                },
+                at('app_inspect')),
+              sdk.tool('app_act', I.toolAppActDesc,
+                {
+                  window: z.string().describe(I.appWindowParam),
+                  ref: z.string().describe(I.appActRefParam),
+                  action: z.string().describe(I.appActActionParam),
+                  text: z.string().optional().describe(I.appActTextParam),
+                  keep_background: z.boolean().optional().describe(I.appActKeepBackgroundParam),
+                },
+                at('app_act')),
+              sdk.tool('app_shot', I.toolAppShotDesc,
+                { window: z.string().describe(I.appWindowParam) },
+                at('app_shot')),
             );
           }
           if (askUserEnabled) {
@@ -2624,6 +2672,7 @@ async function streamViaAnthropicCompat(args: {
   browserAllowAnyHost: boolean;
   browserCompact: boolean;
   computerControlEnabled: boolean;
+  appControlEnabled: boolean;
   convoId: string;
   keys: any;
   injectTurnId: string;
@@ -2638,7 +2687,7 @@ async function streamViaAnthropicCompat(args: {
     instructionOverrides, language, askUserEnabled, askUserTimeoutMs,
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
-    computerControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
+    computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
     hiddenAttachmentsAccessible, conversationAttachmentRefs,
   } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
@@ -2717,6 +2766,7 @@ async function streamViaAnthropicCompat(args: {
   }
   if (browserEnabled) tools.push(...browserToolsClaude(I));
   if (computerControlEnabled) tools.push(...computerToolsClaude(I));
+  if (appControlEnabled) tools.push(...appToolsClaude(I));
   if (askUserEnabled) {
     tools.push({
       name: 'AskQuestion', description: I.askUserDesc,
@@ -2769,7 +2819,7 @@ async function streamViaAnthropicCompat(args: {
     'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash',
     'web_search', 'web_fetch', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments',
     'AskQuestion', 'spawn_subagent',
-    ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES,
+    ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES, ...APP_TOOL_NAMES,
   ]);
 
   const readableStream = new ReadableStream({
@@ -3108,6 +3158,17 @@ async function streamViaAnthropicCompat(args: {
                 } else {
                   resultContent = cr.text;
                 }
+              } else if ((APP_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                // app_shot has no coordinate contract to protect (app_act works
+                // by ref, never by pixel), but it is sent at native size anyway:
+                // the window's own pixels are what was asked for.
+                const ar = await runAppTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
+                resultContent = ar.image
+                  ? [
+                    { type: 'text', text: ar.text },
+                    { type: 'image', source: { type: 'base64', media_type: ar.image.mimeType, data: ar.image.base64 } },
+                  ]
+                  : ar.text;
               } else if (tu.name === 'AskQuestion') {
                 const questions = normalizeQuestions(tu.input);
                 if (questions.length === 0) {
@@ -3359,6 +3420,11 @@ export async function POST(req: Request) {
       // same boundary discipline as browserEnabled: an unset field must never
       // silently grant physical control of the machine.
       computerControlEnabled = false,
+      // App Control via UI Automation. Its own flag, not an alias of the one
+      // above: it reaches a different surface (an application's published
+      // control tree rather than the screen), and it is usable by a vessel with
+      // no vision at all — so the two are granted and refused independently.
+      appControlEnabled = false,
       subagentEnabled = false,
       subagentModel = '',
       // Provider family of the subagent model (e.g. 'GLM', 'Claude', 'Grok').
@@ -3978,6 +4044,7 @@ export async function POST(req: Request) {
           browserAllowAnyHost,
           browserCompact,
           computerControlEnabled,
+          appControlEnabled,
           convoId,
           keys,
           injectTurnId,
@@ -4295,6 +4362,10 @@ export async function POST(req: Request) {
         // OS-level mouse/keyboard/screen control — same three tools, same
         // executor, as every other path.
         claudeTools.push(...computerToolsClaude(I));
+      }
+      if (appControlEnabled) {
+        // App Control via UI Automation — the other sense, granted separately.
+        claudeTools.push(...appToolsClaude(I));
       }
       if (toolUseEnabled) {
         // Tool names mirror Claude Code's built-in workspace tools so the
@@ -4787,7 +4858,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES]);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES, ...APP_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // ── Truncated at the token cap → continue automatically ──────
@@ -5107,6 +5178,32 @@ export async function POST(req: Request) {
                       };
                     } else {
                       resultContent = cr.text;
+                    }
+                  } else if ((APP_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                    // App Control via UI Automation. Only app_shot returns an
+                    // image; the tree tools return text, which is the whole
+                    // point — they work for a vessel with no vision at all.
+                    const ar = await runAppTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
+                    if (ar.image) {
+                      resultContent = [
+                        { type: 'text', text: ar.text },
+                        { type: 'image', source: { type: 'base64', media_type: ar.image.mimeType, data: ar.image.base64 } },
+                      ];
+                      attachmentEvent = {
+                        type: 'file_attachment',
+                        attachment: {
+                          name: `app_shot_${Date.now()}.png`,
+                          type: ar.image.mimeType,
+                          size: Math.ceil(ar.image.base64.length * 0.75),
+                          isImage: true,
+                          ...(await toolAttachmentPayload(Buffer.from(ar.image.base64, 'base64'), ar.image.mimeType, ar.image.base64)),
+                          tokens: Math.max(1, Math.ceil(ar.image.base64.length * 0.75 / 750)),
+                          excluded: false,
+                          toolAction: 'read',
+                        },
+                      };
+                    } else {
+                      resultContent = ar.text;
                     }
                   } else if (tu.name === 'AskQuestion') {
                     // Pause the turn: emit the question, wait for the user's
@@ -5476,6 +5573,10 @@ export async function POST(req: Request) {
         // OS-level mouse/keyboard/screen control. Same UPPERCASE-type / empty-OBJECT
         // requirement as computerToolsGemini() applies here.
         geminiTools.push({ functionDeclarations: computerToolsGemini(I) });
+      }
+      if (appControlEnabled) {
+        // App Control. Same UPPERCASE-type requirement as above.
+        geminiTools.push({ functionDeclarations: appToolsGemini(I) });
       }
       // Optional interactive AskUserQuestion tool (independent of file tools).
       if (askUserEnabled) {
@@ -6109,6 +6210,27 @@ export async function POST(req: Request) {
                           },
                         };
                       }
+                    } else if ((APP_TOOL_NAMES as readonly string[]).includes(fc.name)) {
+                      // App Control via UI Automation — app_shot delivers its
+                      // image via extraInlineParts, same as computer_screenshot.
+                      const ar = await runAppTool(fc.name, fc.args || {}, { me: folderName, instructions: I });
+                      result = { report: ar.text };
+                      if (ar.image) {
+                        extraInlineParts.push({ inlineData: { mimeType: ar.image.mimeType, data: ar.image.base64 } });
+                        attachmentEvent = {
+                          type: 'file_attachment',
+                          attachment: {
+                            name: `app_shot_${Date.now()}.png`,
+                            type: ar.image.mimeType,
+                            size: Math.ceil(ar.image.base64.length * 0.75),
+                            isImage: true,
+                            ...(await toolAttachmentPayload(Buffer.from(ar.image.base64, 'base64'), ar.image.mimeType, ar.image.base64)),
+                            tokens: Math.max(1, Math.ceil(ar.image.base64.length * 0.75 / 750)),
+                            excluded: false,
+                            toolAction: 'read',
+                          },
+                        };
+                      }
                     } else if (fc.name === 'AskQuestion') {
                       // Pause the turn: emit the question, wait for the user's
                       // selection (or the configured timeout), return it as the
@@ -6326,6 +6448,7 @@ export async function POST(req: Request) {
         browserAllowAnyHost,
         browserCompact,
         computerControlEnabled,
+        appControlEnabled,
         convoId,
         keys,
         injectTurnId,
@@ -6928,6 +7051,11 @@ export async function POST(req: Request) {
       // executor as every other provider path.
       if (computerControlEnabled) {
         localTools.push(...computerToolsOpenAI(I));
+      }
+      // App Control via UI Automation — same four tools and the same executor
+      // as every other provider path.
+      if (appControlEnabled) {
+        localTools.push(...appToolsOpenAI(I));
       }
 
       // Build base OpenAI-style messages from the conversation
@@ -7991,6 +8119,47 @@ export async function POST(req: Request) {
                         };
                       } else {
                         resultText = cr.text;
+                      }
+                    } else if ((APP_TOOL_NAMES as readonly string[]).includes(tc.name)) {
+                      // App Control via UI Automation. app_shot goes through the
+                      // same eyes-bridge / pendingImageInjects split as
+                      // computer_screenshot; every other app tool is plain text,
+                      // so a text-only vessel needs no bridge at all here.
+                      const ar = await runAppTool(tc.name, parsed || {}, { me: folderName, instructions: I });
+                      if (ar.image) {
+                        if (useEyes) {
+                          const eyesResult = await describeImage({
+                            imageBase64: ar.image.base64,
+                            imageMimeType: ar.image.mimeType,
+                            eyesPrompt,
+                            eyesModel,
+                            zaiKey: keys.glm || '',
+                            geminiKey: keys.gemini || '',
+                            mimoKey: keys.mimo || '',
+                            oauthToken: keys.claudeOAuthToken || '',
+                            allowHostAnthropicEnv: !!keys.allowHostAnthropicEnv,
+                          });
+                          resultText = `${ar.text}\n\nDescribed via ${eyesModel}:\n\n${eyesResult.description}`;
+                        } else {
+                          const dataUrl = `data:${ar.image.mimeType};base64,${ar.image.base64}`;
+                          resultText = `${ar.text} Image content follows in the next user message.`;
+                          pendingImageInjects.push({ name: `app_shot_${Date.now()}.png`, dataUrl });
+                        }
+                        attachmentEvent = {
+                          type: 'file_attachment',
+                          attachment: {
+                            name: `app_shot_${Date.now()}.png`,
+                            type: ar.image.mimeType,
+                            size: Math.ceil(ar.image.base64.length * 0.75),
+                            isImage: true,
+                            ...(await toolAttachmentPayload(Buffer.from(ar.image.base64, 'base64'), ar.image.mimeType, ar.image.base64)),
+                            tokens: Math.max(1, Math.ceil(ar.image.base64.length * 0.75 / 750)),
+                            excluded: false,
+                            toolAction: 'read',
+                          },
+                        };
+                      } else {
+                        resultText = ar.text;
                       }
                     } else if (tc.name === '$web_search') {
                       // Moonshot (Kimi) builtin web search. Unlike the

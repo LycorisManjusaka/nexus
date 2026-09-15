@@ -110,6 +110,11 @@ const READING_TOOLS = new Set([
   'web_search', 'web_fetch', 'WebSearch', 'WebFetch',
   'browser_read', 'browser_snapshot', 'browser_screenshot',
   'computer_screens', 'computer_screenshot',
+  // App control: looking at what is open, at a window's control tree, or at its
+  // pixels is reading. `app_act` is deliberately absent — it acts, and one of
+  // its actions ("read") is the exception that is not worth a special case,
+  // since the camera state is a coarse signal, not an audit trail.
+  'app_windows', 'app_inspect', 'app_shot',
   'list_letters', 'read_letter',
 ]);
 const WAITING_TOOLS = new Set(['AskQuestion', 'spawn_subagent', 'rate_limit_wait', 'compact']);

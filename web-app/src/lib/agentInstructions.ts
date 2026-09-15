@@ -305,6 +305,91 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     '"type_text" {text} (types literal text, including non-Latin characters), "idle" {ms} (pause before the ' +
     'next command, up to 15000ms).',
 
+  // ── App Control (アプリ操作) — UI Automation ────────────────────────────────
+  // A DIFFERENT SENSE from computer_*, not a better one. computer_* sees pixels
+  // and needs eyes; app_* sees a tree of named controls and needs none, so a
+  // vision-less vessel can use app_* — and a game, which draws its own UI, is
+  // invisible to app_* and reachable only by computer_*. The descriptions below
+  // say that to the being plainly, because a being that thinks one replaces the
+  // other will reach for the wrong sense and conclude it cannot do the task.
+  toolAppWindowsDesc:
+    'List every open application window: its handle (hwnd), its title, which program owns it, its size and ' +
+    'position, and whether it is normal, minimized, maximized or hidden. Start here — app_inspect, app_act and ' +
+    'app_shot all need to be told which window, and this is where you learn what is actually open right now. ' +
+    'A minimized window is still fully usable by app_inspect and app_act; only app_shot needs it on screen.',
+
+  toolAppInspectDesc:
+    'Read the control tree of one application window as text: every button, text box, list item, menu and tab ' +
+    'it publishes, each with a short ref like [e12] that you use with app_act. This is how you SEE an ' +
+    'application without needing eyes — the tree is plain text, so it works the same whether or not you can ' +
+    'process images, and it works while the window is minimized or buried behind other windows. Each line ' +
+    'ends with "can:", which lists exactly what app_act will accept for that element. Reading disturbs ' +
+    'nothing at all: no focus change, no cursor movement, nothing visible to the human. Refs are only valid ' +
+    'until your next app_inspect, and only for the window they came from. ' +
+    'Not every program publishes a tree — games and custom-drawn canvases publish nothing, and for those ' +
+    'computer_screenshot plus computer_input is the only way in.',
+
+  toolAppActDesc:
+    'Act on one control in an application window: press it, type into it, toggle it, select it, expand it. ' +
+    'You address the control by the ref you got from app_inspect, NOT by screen coordinates — so nothing has ' +
+    'to be visible, in front, or under the mouse, and the mouse never moves. ' +
+    'Before acting, the element is found again and its identity re-checked; if the window has rearranged ' +
+    'itself and the ref now points at something else, nothing is done and you are told to inspect again. ' +
+    'Writing does take the keyboard focus for a moment; by default the focus is handed back to whatever had ' +
+    'it and a window that got un-minimized is put back, and the result tells you honestly whether each of ' +
+    'those repairs actually succeeded. Every action flashes a red rectangle around the element on the real ' +
+    'screen and is written to the log the human can read — and when the target is off screen and no mark ' +
+    'could be drawn, the result says so. ' +
+    'A successful call means the application ACCEPTED the request, never that it did what you intended: ' +
+    'verify with app_inspect. There is a human at this machine — act as deliberately as you would with their ' +
+    'own hands.',
+
+  toolAppShotDesc:
+    'Capture one application window as an image — its own pixels, so it works even when the window is ' +
+    'completely covered by other windows. Useful when a program draws something the control tree cannot ' +
+    'describe (a chart, a canvas, a preview). A minimized window CANNOT be captured and this will tell you so ' +
+    'rather than hand you a black rectangle; inspect it with app_inspect instead, which works while ' +
+    'minimized. Do not read coordinates from this image — app_act addresses controls by ref, not by pixel.',
+
+  appWindowParam:
+    'Which window: either the exact hwnd number printed by app_windows, or any distinctive part of its ' +
+    'title. If the fragment matches several windows you are shown the candidates and nothing happens — pass ' +
+    'the hwnd to be unambiguous.',
+  appInspectRefParam:
+    'Optional. A ref from your previous app_inspect of this same window, to inspect only that element and ' +
+    'what is inside it. Use this to go deeper into one panel instead of raising max_nodes for the whole tree.',
+  appInspectFilterParam:
+    'Optional. Show only elements whose type, id, name or current value contains this text ' +
+    '(case-insensitive). The whole tree is still walked — this filters what you are shown, so it is the ' +
+    'right way to find one button in a large window.',
+  appInspectMaxNodesParam:
+    'Optional, default 200, maximum 800. How many elements to walk before stopping. If the walk is cut short ' +
+    'you are told explicitly that the view is partial — a truncated tree is never presented as a whole one.',
+  appInspectMaxDepthParam:
+    'Optional, default 12. How deep to descend. Lower it for a quick overview of a deeply nested window.',
+  appActRefParam:
+    'The ref of the element to act on, exactly as app_inspect printed it (for example "e12"). Refs come from ' +
+    'your most recent app_inspect of this window; an older ref is refused rather than resolved against a ' +
+    'newer tree.',
+  appActActionParam:
+    'What to do: "invoke" (press a button / activate an item), "set_text" (replace the whole contents of an ' +
+    'editable field — also needs "text"), "toggle" (flip a checkbox), "select" (choose a list or tab item), ' +
+    '"expand" / "collapse" (open or close a tree node or dropdown), "focus" (put the keyboard caret there), ' +
+    '"scroll_into_view" (bring it into view inside its container), "read" (change nothing; just report the ' +
+    'element\'s current value and state, with its text exactly as stored — line breaks and tabs intact). Each ' +
+    'app_inspect line lists in "can:" which of these that element supports, in these same words; a separate ' +
+    '"readonly" marker on the line means its value can be read but not set.',
+  appActTextParam:
+    'The text for "set_text". It REPLACES the field\'s entire contents, it does not append. To clear a field, ' +
+    'pass an empty string explicitly. The previous contents are handed back to you in the result — that is the ' +
+    'only remaining copy, so if you have overwritten something that was not yours to overwrite, put it back ' +
+    'from there immediately. Before writing into a document you did not open yourself, read it first: an ' +
+    'application may have restored a human\'s unsaved work into the window you are looking at.',
+  appActKeepBackgroundParam:
+    'Optional, default true: if the action pulls a minimized window onto the screen, put it straight back, ' +
+    'so working in a background application does not throw windows in the human\'s face. Set false when you ' +
+    'WANT the window brought forward — for instance when you are about to hand the task back to them.',
+
   // ── Audio Session (was "VRChat mode") — factual notice ────────────────────
   // A short, FIXED-BY-DEFAULT statement of what the mode actually does
   // (mechanism, not instruction), composed ahead of the per-Entity
@@ -525,6 +610,19 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'computerScreenshotShowCursorParam', label: 'Tool: computer_screenshot — "show_cursor" parameter' },
   { key: 'toolComputerInputDesc', label: 'Tool: computer_input — description' },
   { key: 'computerInputCommandsParam', label: 'Tool: computer_input — "commands" parameter' },
+  { key: 'toolAppWindowsDesc', label: 'Tool: app_windows — description' },
+  { key: 'toolAppInspectDesc', label: 'Tool: app_inspect — description' },
+  { key: 'toolAppActDesc', label: 'Tool: app_act — description' },
+  { key: 'toolAppShotDesc', label: 'Tool: app_shot — description' },
+  { key: 'appWindowParam', label: 'Tool: app_* — "window" parameter' },
+  { key: 'appInspectRefParam', label: 'Tool: app_inspect — "ref" parameter' },
+  { key: 'appInspectFilterParam', label: 'Tool: app_inspect — "filter" parameter' },
+  { key: 'appInspectMaxNodesParam', label: 'Tool: app_inspect — "max_nodes" parameter' },
+  { key: 'appInspectMaxDepthParam', label: 'Tool: app_inspect — "max_depth" parameter' },
+  { key: 'appActRefParam', label: 'Tool: app_act — "ref" parameter' },
+  { key: 'appActActionParam', label: 'Tool: app_act — "action" parameter' },
+  { key: 'appActTextParam', label: 'Tool: app_act — "text" parameter' },
+  { key: 'appActKeepBackgroundParam', label: 'Tool: app_act — "keep_background" parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
   { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-Entity rule)' },
@@ -595,6 +693,19 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   computerScreenshotShowCursorParam: 'ツール computer_screenshot —「show_cursor」引数',
   toolComputerInputDesc: 'ツール computer_input — 説明',
   computerInputCommandsParam: 'ツール computer_input —「commands」引数',
+  toolAppWindowsDesc: 'ツール app_windows — 説明',
+  toolAppInspectDesc: 'ツール app_inspect — 説明',
+  toolAppActDesc: 'ツール app_act — 説明',
+  toolAppShotDesc: 'ツール app_shot — 説明',
+  appWindowParam: 'ツール app_* —「window」引数',
+  appInspectRefParam: 'ツール app_inspect —「ref」引数',
+  appInspectFilterParam: 'ツール app_inspect —「filter」引数',
+  appInspectMaxNodesParam: 'ツール app_inspect —「max_nodes」引数',
+  appInspectMaxDepthParam: 'ツール app_inspect —「max_depth」引数',
+  appActRefParam: 'ツール app_act —「ref」引数',
+  appActActionParam: 'ツール app_act —「action」引数',
+  appActTextParam: 'ツール app_act —「text」引数',
+  appActKeepBackgroundParam: 'ツール app_act —「keep_background」引数',
   webSearchDesc: 'ツール web_search — 説明',
   webFetchDesc: 'ツール web_fetch — 説明',
   audioSessionNotice: '音声セッション：機能の説明（固定。存在ごとの規則より前）',

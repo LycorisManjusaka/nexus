@@ -378,6 +378,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // same boundary discipline as browserEnabled — a wider reach than the
   // browser sandbox, so it gets its own separate flag rather than piggybacking.
   const [computerControlEnabled, setComputerControlEnabled] = useState(false);
+  // App control via UI Automation (Windows only). OFF by default, and its own
+  // flag rather than a rider on computerControlEnabled: it reaches a different
+  // surface (an application's published control tree, not the screen) and it is
+  // usable by a vessel with no vision, so the two are granted independently.
+  const [appControlEnabled, setAppControlEnabled] = useState(false);
   // Being-camera / OBS push (see CameraPanel.tsx). OFF by default. Gates BOTH
   // the OBS push AND the in-app mirror panel — one checkbox, not two, per spec.
   const [cameraEnabled, setCameraEnabled] = useState(false);
@@ -1075,6 +1080,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserCompact(data.browserCompact === true);
         // Same `=== true` discipline as browserEnabled above.
         setComputerControlEnabled(data.computerControlEnabled === true);
+        setAppControlEnabled(data.appControlEnabled === true);
         setCameraEnabled(data.cameraEnabled === true);
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
@@ -1152,6 +1158,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
         setBrowserCompact(pick('browserCompact', false));
         setComputerControlEnabled(pick('computerControlEnabled', false));
+        setAppControlEnabled(pick('appControlEnabled', false));
         setCameraEnabled(pick('cameraEnabled', false));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
@@ -1267,7 +1274,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1330,7 +1337,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2204,6 +2211,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
         browserAllowAnyHost, browserCompact,
         computerControlEnabled,
+        appControlEnabled,
         instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300 };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
@@ -2848,6 +2856,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       browserAllowAnyHost,
       browserCompact,
       computerControlEnabled,
+      appControlEnabled,
       cameraEnabled,
       instructionOverrides,
       toolInstruction,
@@ -4315,6 +4324,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 </p>
               </div>
 
+              {/* ── App control (UI Automation, Windows only)
+                  OFF by default, and separate from computer control on purpose:
+                  a different sense, not a stronger one. Reads the control tree
+                  an application publishes and acts by ref, so it works on
+                  minimized windows, never moves the mouse, and needs no vision —
+                  and in exchange it cannot see anything an app draws itself. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={appControlEnabled}
+                    onChange={(e) => setAppControlEnabled(e.target.checked)}
+                    className="accent-red-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('id.app.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  <Tx k="id.app.help" />
+                </p>
+              </div>
+
               {/* ── Subagent (context-firewall helper) — OAuth Claude only ───── */}
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -5358,6 +5388,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       browserAllowAnyHost,
                       browserCompact,
                       computerControlEnabled,
+                      appControlEnabled,
                       cameraEnabled,
                       instructionOverrides,
                       toolInstruction,

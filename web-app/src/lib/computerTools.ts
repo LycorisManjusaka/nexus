@@ -180,7 +180,7 @@ function psQuote(s: string): string {
 
 interface PsRunResult { ok: boolean; stdout: string; error?: string; }
 
-function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024, trackInput = false): Promise<PsRunResult> {
+export function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024, trackInput = false): Promise<PsRunResult> {
   return new Promise((resolve) => {
     const child = execFile(
       'powershell.exe',
@@ -201,7 +201,7 @@ function runPS(script: string, timeoutMs: number, maxBuffer = 4 * 1024 * 1024, t
 
 // ── DPI awareness + on-screen flash overlay, shared by every script ─────────
 
-const DPI_PREFIX = `
+export const DPI_PREFIX = `
 try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
 $dpiSig = @'
 using System;
@@ -328,7 +328,7 @@ Add-Type -TypeDefinition $gdiSig -ErrorAction SilentlyContinue
  * not guessed: with `detached` the screen was byte-identical before and after;
  * without it, 36,383 red pixels appeared.
  */
-function fireFlash(x: number, y: number, w: number, h: number, ms: number) {
+export function fireFlash(x: number, y: number, w: number, h: number, ms: number) {
   try {
     const l = Math.trunc(x), t = Math.trunc(y);
     const r = Math.trunc(x + w) - 1, b = Math.trunc(y + h) - 1;
