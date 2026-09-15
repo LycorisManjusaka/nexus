@@ -1083,7 +1083,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             {msg.modelLabel || `${msg.modelFamily || ''} ${msg.modelSpecific || ''}${msg.modelThinking ? ' Thinking' : ''}`.trim()}
           </span>
         )}
-        <span>{new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short', hour12: false }).format(new Date(msg.timestamp))}</span>
+        {/* Time tag — only when the message actually HAS a timestamp. Imported
+            messages whose source file carried no time have no `timestamp` field
+            (see markdownLogic.ts); rendering them would print "Invalid Date".
+            Showing nothing is correct: the time is genuinely unknown. */}
+        {typeof msg.timestamp === 'number' && msg.timestamp > 0 && (
+          <span>{new Intl.DateTimeFormat(undefined, { dateStyle: 'short', timeStyle: 'short', hour12: false }).format(new Date(msg.timestamp))}</span>
+        )}
         {displayTokens > 0 && (
           <span className="bg-muted px-2 py-0.5 rounded-full">{t('bubble.tokens').replace('{n}', String(displayTokens))}</span>
         )}

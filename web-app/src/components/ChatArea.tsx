@@ -5479,7 +5479,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // lives in `[username]` tags inside content.
             ...(m.role === 'assistant' ? { name: localAiName || folderName } : {}),
             content: m.content,
-            timestamp: m.timestamp || Date.now(),
+            // Only a timestamp the imported transcript actually carried — no
+            // field at all otherwise (same rule as parseMarkdown: never burn
+            // the import moment in as if it were the message's own time).
+            ...(m.timestamp ? { timestamp: m.timestamp } : {}),
             tokens: Math.ceil((m.content || '').length / 4),
             textTokens: Math.ceil((m.content || '').length / 4),
             attachments: [],

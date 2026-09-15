@@ -235,7 +235,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     "Name of a Media Source (ffmpeg_source) in OBS's current scene, used for video files (mp4/webm/mov/m4v). Auto-created with this name if it doesn't exist yet. Leave blank if this being's camera folder only has still images.",
   'settings.saveTimestampsToMd.label': 'Save timestamps to .md',
   'settings.saveTimestampsToMd.help':
-    "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `## Name` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text.",
+    "When exporting a conversation to Markdown, writes each message's `[YYYY-MM-DD HH:MM:SS]` time under its `[Name]:` header. Importing always reads a timestamp back into the message (independent of this toggle) and strips it from the text; a message whose source file carries no time is stored with NO time at all, rather than being stamped with the moment of import.",
   'settings.customFilter.label': 'Custom regex filter on new AI messages',
   'settings.customFilter.help':
     'When enabled, every match of the pattern below is replaced (deleted if the replacement is empty) in AI output as it streams — the same mechanism as timestamp removal, so it also never reaches TTS.',
@@ -1626,7 +1626,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
     '動画ファイル（mp4/webm/mov/m4v）用に、OBSの現在のシーンにあるメディアソース（ffmpeg_source）の名前です。存在しなければこの名前で自動作成されます。カメラフォルダに静止画しかない場合は空欄のままで構いません。',
   'settings.saveTimestampsToMd.label': '.md 書き出しにタイムスタンプを保存する',
   'settings.saveTimestampsToMd.help':
-    '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `## 名前` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。',
+    '会話を Markdown に書き出す際、各メッセージの `[YYYY-MM-DD HH:MM:SS]` を `[名前]:` の見出しの下に記録します。読み込み時は、この設定に関わらず常にタイムスタンプをメッセージ情報として取り込み、本文からは取り除きます。元のファイルに時刻が無いメッセージは、読み込んだ時刻を焼き込むのではなく、時刻なしとして保存されます。',
   'settings.customFilter.label': '新しいAIメッセージに正規表現フィルタを適用する',
   'settings.customFilter.help':
     '有効にすると、AIの出力がストリーミングされる過程で、下のパターンに一致した箇所がすべて置換されます（置換後が空なら削除）。タイムスタンプ除去と同じ仕組みのため、TTS にも届きません。',

@@ -168,13 +168,20 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       }
     }
 
+    // Timestamp: ONLY what the file actually carried. When the source .md has no
+    // "[YYYY-MM-DD HH:MM:SS]" line, the message gets NO `timestamp` field at all
+    // — it is NOT stamped with the import moment. Burning in the import time
+    // produced a plausible-looking lie (every message of a 2024 log claiming to
+    // have been written the minute it was imported); an absent field says the
+    // true thing: this time is unknown. Every read site guards for it
+    // (`if (m.timestamp)` / `!= null`) and MessageBubble omits the time tag.
     messages.push({
       id: uuidv4(),
       role: role,
       name: currentHeader,
       content: finalContent,
       attachments: [],
-      timestamp: parsedTimestamp !== null ? parsedTimestamp : Date.now(),
+      ...(parsedTimestamp !== null ? { timestamp: parsedTimestamp } : {}),
       tokens: 0,
       ...(parsedThought
         ? { thoughtProcess: parsedThought, thinkingTokens: Math.ceil(parsedThought.length / 4) }
