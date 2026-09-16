@@ -700,6 +700,21 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
+                  checked={globalSettings.alwaysShowHoverControls ?? false}
+                  onChange={e => setGlobalSettings({...globalSettings, alwaysShowHoverControls: e.target.checked})}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">{t('settings.alwaysShowHoverControls.label')}</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                <Tx k="settings.alwaysShowHoverControls.help" />
+              </p>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
                   checked={globalSettings.autoSplitVideos ?? false}
                   onChange={e => setGlobalSettings({...globalSettings, autoSplitVideos: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"

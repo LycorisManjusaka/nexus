@@ -657,6 +657,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         fetchFolders={fetchFolders}
         fetchLogs={fetchLogs}
         setConversations={setConversations}
+        globalSettings={globalSettings}
       />
 
       <main className="flex-1 flex flex-col relative min-w-0">

@@ -1495,11 +1495,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           </div>
         )}
 
-        {/* Action Buttons */}
+        {/* Action Buttons.
+            `no-hover:` on the bar is not decoration — see globals.css. In a
+            remote session the browser reports no hover-capable pointer, and a
+            hover-revealed bar is then unreachable at all. */}
         {!isEditing && (
-          <div className={`absolute bottom-2 opacity-0 group-hover/bubble:opacity-100 transition-opacity flex gap-1 ${
-            isUser ? 'right-full mr-2' : 'left-full ml-2'
-          }`}>
+          <div className={`absolute bottom-2 transition-opacity flex gap-1 ${
+            globalSettings?.alwaysShowHoverControls === true
+              ? 'opacity-100'
+              : 'opacity-0 group-hover/bubble:opacity-100 no-hover:opacity-100'
+          } ${isUser ? 'right-full mr-2' : 'left-full ml-2'}`}>
             {ttsState === 'idle' ? (
               <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-muted-foreground hover:text-green-500`} title={t('bubble.tts.read')}>
                 <Volume2 size={14} />

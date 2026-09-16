@@ -32,6 +32,11 @@ interface SidebarProps {
   // entry point lives up here next to Preferences, not in the chat tool row.
   onOpenGuide?: () => void;
 
+  // Global (per-machine) preferences. Read here only for
+  // `alwaysShowHoverControls`, which decides whether a row's "..." menu is
+  // hover-revealed or permanent.
+  globalSettings?: any;
+
   folders: any[];
   setFolders?: React.Dispatch<React.SetStateAction<any[]>>;
   activeFolderId: string | null;
@@ -61,7 +66,8 @@ export default function Sidebar({
   activeFolderId,
   setActiveFolderId,
   fetchFolders,
-  fetchLogs
+  fetchLogs,
+  globalSettings
 }: SidebarProps) {
   const t = useT();
 
@@ -969,7 +975,11 @@ export default function Sidebar({
                       e.stopPropagation(); 
                       setMenuOpenId(menuOpenId === convo.id ? null : convo.id); 
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground transition-all"
+                    className={`p-1 hover:bg-muted rounded text-muted-foreground hover:text-foreground transition-all ${
+                      globalSettings?.alwaysShowHoverControls === true
+                        ? 'opacity-100'
+                        : 'opacity-0 group-hover:opacity-100 no-hover:opacity-100'
+                    }`}
                   >
                     <MoreVertical size={14} />
                   </button>

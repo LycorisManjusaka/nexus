@@ -22,6 +22,26 @@
    the lesser evil; do not re-add the media query without solving remote first. */
 @custom-variant hover (&:hover);
 
+/* Un-gating alone was not enough, so the controls that MATTER are also made
+   reachable by media query.  Measured 2026-09-16 in the remote session: the
+   browser reports `hover: none`, `any-hover: none`, `pointer: fine: false` --
+   it sees no hover-capable pointer at all.  With the media query gone the rule
+   is present, but `:hover` itself may still never match in such a session, and
+   then the bar stays at opacity-0 forever and the screen looks unchanged.
+   This variant is the belt to that brace: on a device that cannot hover the
+   controls are simply always shown, which is the only reachable design when
+   there is no hover to reveal them with.
+   Applied to the message action bar (MessageBubble) and the sidebar row menu
+   (Sidebar) -- the two `opacity-0 ... hover:opacity-100` elements in the app. */
+/* `@custom-variant` shorthand `(selector)` is for SELECTORS only — an at-rule
+   written that way is silently dropped (measured: the rule never appeared in
+   the served CSS). An at-rule variant needs the block form with `@slot`. */
+@custom-variant no-hover {
+  @media (hover: none) {
+    @slot;
+  }
+}
+
 @theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
