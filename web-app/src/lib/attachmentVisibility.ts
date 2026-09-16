@@ -11,6 +11,14 @@
  * and drew them as "included". That is a lie told to the user, and the fix is
  * not to duplicate the rule more carefully: it is to have one rule.
  *
+ * The same lie has a second, larger form that has nothing to do with billing:
+ * the Anthropic content-block format has no audio or video block at all, so on
+ * Claude/Kimi/MiMo those attachments are filtered out at the send site and the
+ * entity receives nothing — on BOTH auth modes. Fixing only the OAuth image
+ * case left a real conversation whose attachment total was still 73% video that
+ * was never sent, which is exactly why switching billing looked like it changed
+ * nothing. Both causes are answered by undeliverableReason() below.
+ *
  * Both `api/chat/route.ts` (which sends) and `ChatArea.tsx` (which displays and
  * counts) import from here. If the delivery rule changes, it changes once.
  */
@@ -26,6 +34,14 @@ export type BridgeKind = 'eyes' | 'ears' | 'watcher' | null;
 export interface DeliveryContext {
   /** The primary model that will run the turn (e.g. 'claude-opus-5'). */
   specificModel: string;
+  /**
+   * The provider family that will run the turn ('Claude', 'Gemini', 'Kimi', …)
+   * — what picks the wire format, and therefore which media kinds can be
+   * attached at all. Empty string = not knowable in advance (automatic model
+   * selection), and every wire question then answers "assume it carries",
+   * because an unprovable claim of loss is just the old lie inverted.
+   */
+  aiName: string;
   /** True only when this turn really goes through the OAuth/Agent-SDK path. */
   isOAuthClaude: boolean;
   eyesEnabled: boolean;
@@ -86,26 +102,80 @@ export function resolveBridge(
 }
 
 /**
- * True when an image attachment on a PAST message is physically unreachable on
- * the OAuth-Claude path and no bridge is rescuing it.
+ * Provider families whose wire format is the Anthropic content-block spec,
+ * which has `image` blocks and nothing else — no audio block type, no video
+ * block type. Every one of the three send sites that builds those blocks
+ * (`api/chat/route.ts`: the OAuth/Agent-SDK path, the Kimi/MiMo adapter, and
+ * the Claude API-key path) filters on `mimeType.startsWith('image/')` with no
+ * else branch, so an audio or video attachment is dropped in silence.
  *
- * "Past" means: not carried by the last user message. The Agent-SDK path builds
- * native content blocks from `lastUserMsg.mediaFiles` only; everything earlier
- * is replayed as a text transcript with no image bytes at all. The last user
- * message keeps its images because a rerun re-sends exactly those.
- *
- * Deliberately narrow: images only, OAuth only, no-bridge only. Audio and video
- * on Claude are a separate (wider) case — Claude cannot consume them on EITHER
- * auth path — and are not decided here.
+ * Gemini (`inlineData`, any mime) and the OpenAI-compatible path (`image_url`
+ * + `input_audio` + `video_url`) really do carry all three, so they are not
+ * listed here. Matched as a substring, the same way the server tests `aiName`.
  */
-export function isOAuthInvisiblePastImage(
+const ANTHROPIC_SHAPED_FAMILIES = ['claude', 'kimi', 'mimo'];
+
+/** Can this provider's wire format carry this media kind at all? */
+export function wireCarriesMedia(kind: MediaKind, ctx: DeliveryContext): boolean {
+  if (kind !== 'image' && kind !== 'audio' && kind !== 'video') return true;
+  const family = String(ctx.aiName || '').toLowerCase();
+  if (!family) return true;  // unknowable in advance — claim nothing
+  if (ANTHROPIC_SHAPED_FAMILIES.some((f) => family.includes(f))) return kind === 'image';
+  return true;
+}
+
+/** Why an attachment will not arrive, or null when it will. */
+export type UndeliverableReason =
+  /** The provider's wire format has no block type for this media kind. */
+  | 'wire'
+  /** OAuth Claude replays history as text, so past image bytes don't exist. */
+  | 'oauth-transcript';
+
+/**
+ * Why this attachment will not reach the entity on the path that will run —
+ * or null when it will (natively, or as a bridge description).
+ *
+ * Two independent causes, both verified by reading the send path rather than
+ * inferred:
+ *
+ *   • 'wire' — audio/video addressed to an Anthropic-shaped family. Silently
+ *     filtered out at the content-block builder. True on BOTH Claude auth
+ *     modes; switching billing changes nothing.
+ *   • 'oauth-transcript' — an image on a PAST message under OAuth Claude.
+ *     "Past" means: not carried by the last user message. The Agent-SDK path
+ *     builds native blocks from `lastUserMsg.mediaFiles` only; everything
+ *     earlier is replayed as text with no image bytes. The last user message
+ *     keeps its images because a rerun re-sends exactly those.
+ *
+ * A bridge outranks both: a described attachment arrives as text, which every
+ * wire carries. Text attachments are inlined into the message body and always
+ * arrive.
+ *
+ * Still NOT decided here: a model that isn't registered as able to accept a
+ * kind its provider's wire does carry (a text-only model on the OpenAI path
+ * with eyes off). There the provider typically errors, and a loud failure is
+ * not the silent lie this module exists to remove — so it is left alone rather
+ * than guessed at.
+ */
+export function undeliverableReason(
+  kind: MediaKind,
+  isPastMessage: boolean,
+  ctx: DeliveryContext,
+): UndeliverableReason | null {
+  if (kind !== 'image' && kind !== 'audio' && kind !== 'video') return null;
+  if (resolveBridge(kind, isPastMessage, ctx)) return null;
+  if (!wireCarriesMedia(kind, ctx)) return 'wire';
+  if (ctx.isOAuthClaude && kind === 'image' && isPastMessage) return 'oauth-transcript';
+  return null;
+}
+
+/** True when this attachment will not reach the entity at all. */
+export function isUndeliverable(
   kind: MediaKind,
   isPastMessage: boolean,
   ctx: DeliveryContext,
 ): boolean {
-  if (!ctx.isOAuthClaude) return false;
-  if (kind !== 'image' || !isPastMessage) return false;
-  return resolveBridge(kind, isPastMessage, ctx) === null;
+  return undeliverableReason(kind, isPastMessage, ctx) !== null;
 }
 
 // ── Audio-session attachment auto-hide ───────────────────────────────────────
@@ -154,8 +224,8 @@ export interface AutoHideOptions {
  * message array (or the original array when nothing changed).
  *
  * There are two independent reasons to hide an attachment — it fell out of the
- * audio session's newest-N window, and it is a past image on the OAuth path
- * that the entity physically cannot receive — and they MUST be resolved
+ * audio session's newest-N window, and the path that will run physically
+ * cannot carry it (see undeliverableReason) — and they MUST be resolved
  * together. Two separate passes with two separate markers would fight each
  * other: whichever released first would un-hide what the other still wanted
  * hidden, and the attachment would flip on every render.
@@ -208,7 +278,7 @@ export function applyAutoHide<T extends { attachments?: any[] }>(
     let msgChanged = false;
     const atts = m.attachments.map((a: any) => {
       // FACT — the path cannot carry it. Not overridable by a click.
-      const unreachable = isOAuthInvisiblePastImage(attachmentKind(a), isPastMessage, opts.ctx);
+      const unreachable = isUndeliverable(attachmentKind(a), isPastMessage, opts.ctx);
       // POLICY — it fell out of the audio session's newest-N window. A manual
       // decision (`autoHidden === false`) overrules this one.
       const windowed = isOld && a.autoHidden !== false;
@@ -260,7 +330,7 @@ export function attachmentTokens(att: any, isPastMessage: boolean, ctx: Delivery
   if (!att) return 0;
   if (att.excluded) return 0;
   const kind = attachmentKind(att);
-  if (isOAuthInvisiblePastImage(kind, isPastMessage, ctx)) return 0;
+  if (isUndeliverable(kind, isPastMessage, ctx)) return 0;
   const bridge = resolveBridge(kind, isPastMessage, ctx);
   if (bridge) return att.descriptionTokens || 0;
   return att.tokens || 0;

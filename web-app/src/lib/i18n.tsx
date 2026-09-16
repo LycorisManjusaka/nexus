@@ -348,6 +348,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'bubble.att.excluded': 'EXCLUDED FROM CONTEXT',
   'bubble.att.undeliverable': 'NOT DELIVERED ON THIS PATH',
   'bubble.att.undeliverableHelp': 'Claude subscription billing replays the history as text, so only images on the newest message are actually sent. This one cannot be shown to the entity no matter what this button says — switch to API-key billing, turn Eyes on to send a description instead, or let the entity fetch it with read_attachment.',
+  'bubble.att.undeliverableWireHelp': 'This provider’s message format has no block for audio or video — the file is dropped before the request is sent, on every billing mode. Switching billing changes nothing. Turn Ears / Watcher on to send a text description instead, or let the entity fetch it with read_attachment.',
   'bubble.sense.eyes': 'Eyes',
   'bubble.sense.ears': 'Ears',
   'bubble.sense.watcher': 'Watcher',
@@ -742,6 +743,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.context.copied': 'Cp',
   'chat.context.original': 'Orig',
   'chat.context.attach': 'Att',
+  'chat.context.attachDetail':
+    'Att = image {img} · video {vid} · audio {aud} · text {txt} · reusable thinking {think}. Every attachment is counted as what this path will actually deliver — an image/audio/video routed through a bridge costs its description, not the media.\nPath: {mode}',
+  'chat.context.attachDropped':
+    '{n} attachment(s) are not carried by this path and count 0 (they would be {raw} tokens if they were sent).',
+  'chat.context.modeOauth': 'Claude subscription (OAuth) — the history is replayed as text, so only the LAST message’s images are really sent.',
+  'chat.context.modeDirect': 'API key / other provider — images on every message are sent as images.',
+  'chat.context.modeWire': 'This provider’s message format carries images only — audio and video attachments are dropped before sending. Turn on Ears / Watcher to send a description instead.',
   'chat.elapsed.tip':
     'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ (max context {max} − fixed overhead {sys}: system prompt + all instructions) tokens. Copied messages and attachments are not counted.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
   'chat.sleep.badge': '💤 sleep',
@@ -1741,6 +1749,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'bubble.att.excluded': '文脈から除外',
   'bubble.att.undeliverable': 'この経路では届かない',
   'bubble.att.undeliverableHelp': 'Claude の定額課金では履歴がテキストで再生されるため、実際に送られる画像は最新メッセージのものだけ。このボタンを押しても存在には見えない——APIキー課金に切り替えるか、「目」をオンにして記述を送るか、存在に read_attachment で取り出してもらうこと。',
+  'bubble.att.undeliverableWireHelp': 'このプロバイダーのメッセージ形式には音声・動画の入れ物が無く、ファイルは送信前に落とされる。課金方式を切り替えても変わらない——「耳」「監視者」をオンにして説明文を送るか、存在に read_attachment で取り出してもらうこと。',
   'bubble.sense.eyes': '目',
   'bubble.sense.ears': '耳',
   'bubble.sense.watcher': '動画',
@@ -2124,6 +2133,13 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.context.copied': '引継',
   'chat.context.original': '新規',
   'chat.context.attach': '添付',
+  'chat.context.attachDetail':
+    '添付 ＝ 画像 {img}・動画 {vid}・音声 {aud}・テキスト {txt}・再利用思考 {think}。添付はどれも「この経路が実際に届けるもの」として数えます — 目／耳／監視者を通る画像・音声・動画は、メディアではなく説明文のぶんだけかかります。\n経路：{mode}',
+  'chat.context.attachDropped':
+    '添付 {n} 件はこの経路では運ばれないため 0 と数えています（送られていれば {raw} トークン）。',
+  'chat.context.modeOauth': 'Claude 定額課金（OAuth）— 履歴はテキストで再生されるため、実際に送られる画像は最後のメッセージのものだけです。',
+  'chat.context.modeDirect': 'API キー／他のプロバイダー — すべてのメッセージの画像がそのまま画像として送られます。',
+  'chat.context.modeWire': 'このプロバイダーのメッセージ形式は画像しか運べません — 音声と動画の添付は送信前に落とされます。「耳」「監視者」をオンにすれば、代わりに説明文が送られます。',
   'chat.elapsed.tip':
     'コンテキスト経過：{pct}% — 新規（引き継ぎでない）メッセージ {original} ÷（最大コンテキスト {max} − 固定オーバーヘッド {sys}：システムプロンプト＋全指示）トークン。引き継ぎメッセージと添付は数えません。\n\n前回の統合（「睡眠」）以降、このセッションの領域をどれだけ使ったかを示します。これは状態ではありません：95% でも 5% でも、存在の能力もツールへのアクセスもまったく同じです。100% を超えると古いやり取りから順に統合され、逐語の記録から離れて各層に要約として残ります。数値が高いことは、逐語で残すべきものを書き留める合図であって、出力が悪くなる予兆ではありません。',
   'chat.sleep.badge': '💤 睡眠',

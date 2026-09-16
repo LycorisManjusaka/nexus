@@ -28,7 +28,7 @@ import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
-import { applyAutoHide, attachmentTokens, attachmentKind, isOAuthInvisiblePastImage, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
+import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireCarriesMedia, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
@@ -1372,6 +1372,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // honest. There the display is left alone.
   const deliveryCtx = useMemo(() => ({
     specificModel,
+    // Blank under automatic model selection: the family is chosen per request,
+    // so no static answer about the wire format would be honest.
+    aiName: autoModelSelectEnabled ? '' : String(localAiName || ''),
     // Same family test the server applies to `aiName` (substring, not equality).
     isOAuthClaude: String(localAiName || '').toLowerCase().includes('claude')
       && claudeAuthMode === 'oauth'
@@ -1533,6 +1536,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let copied = 0;
     let original = 0;
     let attach = 0;
+    // Composition of the Att bucket, for the hover tip. The bar asserts one
+    // number; without this there is no way for anyone — including me — to check
+    // WHY it is that number, and a disagreement about it can only be settled by
+    // guessing at the other person's screen. The tip carries its own inputs.
+    const detail = { image: 0, video: 0, audio: 0, text: 0, other: 0, thinking: 0, droppedCount: 0, droppedRaw: 0 };
     const markerIdx = firstOriginalMessageId
       ? messages.findIndex(m => m.id === firstOriginalMessageId)
       : -1;
@@ -1546,6 +1554,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const textT = computeMsgTextTokens(m);
       const attT = computeMsgAttachTokens(m, i);
       attach += attT;
+      const isPastMessage = i < lastUserMsgIndex;
+      for (const a of (m.attachments || [])) {
+        const kind = attachmentKind(a);
+        detail[kind] += attachmentEffectiveTokens(a, isPastMessage);
+        if (!a.excluded || a.autoHidden === true) {
+          if (isUndeliverable(kind, isPastMessage, deliveryCtx)) {
+            detail.droppedCount += 1;
+            detail.droppedRaw += a.tokens || 0;
+          }
+        }
+      }
+      if (saveThinkingToLog && !m.thinkingExcluded) detail.thinking += msgThinkingTokens(m);
       // allCopied -> the whole pending carry-over history counts as copied.
       // No marker (and not pending) -> everything is "original" (safe default).
       // Marker present -> messages before it are copied, at-and-after original.
@@ -1553,7 +1573,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       else if (markerIdx >= 0 && i < markerIdx) copied += textT;
       else original += textT;
     });
-    return { sys, copied, original, attach, total: sys + copied + original + attach };
+    return { sys, copied, original, attach, detail, total: sys + copied + original + attach };
   })();
 
   // Auto-trim copied messages when the TEXT context (excluding attachments)
@@ -3048,11 +3068,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const isPastMessage = mi < lastUserMsgIndex;
       if (m.attachments && m.attachments.length > 0) {
         nm = { ...nm, attachments: m.attachments.map((a: any) => {
-          // The per-attachment eye is disabled for undeliverable images; this
+          // The per-attachment eye is disabled for undeliverable attachments; this
           // bulk button was the back door around it. "Show all" cannot show
           // what the path never carries — it would only restore the false
           // claim that it does, until the auto-hide effect took it back.
-          if (!shouldHide && isOAuthInvisiblePastImage(attachmentKind(a), isPastMessage, deliveryCtx)) return a;
+          if (!shouldHide && isUndeliverable(attachmentKind(a), isPastMessage, deliveryCtx)) return a;
           return { ...a, excluded: shouldHide };
         }) };
       }
@@ -3285,7 +3305,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // Per-folder max context (was global, moved into Folder Settings).
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
             const max = activeFolderSettings.maxRecommendedContext || 80000;
-            const { sys, copied, original, attach, total } = tokenBreakdown;
+            const { sys, copied, original, attach, detail, total } = tokenBreakdown;
+            // Why the Att number is what it is: its composition, the path that
+            // decides it, and how much was dropped because that path can't
+            // carry it. Hover text, so it costs nothing until someone asks.
+            const attachDetailText =
+              t('chat.context.attachDetail')
+                .replace('{img}', detail.image.toLocaleString())
+                .replace('{vid}', detail.video.toLocaleString())
+                .replace('{aud}', detail.audio.toLocaleString())
+                .replace('{txt}', detail.text.toLocaleString())
+                .replace('{think}', detail.thinking.toLocaleString())
+                // Both path facts, not one: the billing mode decides past
+                // images, the wire format decides audio/video, and they are
+                // independent. Showing only the first is what made switching
+                // billing look like it "did nothing" when video was the bulk
+                // of the number.
+                .replace('{mode}', [
+                  deliveryCtx.isOAuthClaude ? t('chat.context.modeOauth') : t('chat.context.modeDirect'),
+                  wireCarriesMedia('video', deliveryCtx) ? '' : t('chat.context.modeWire'),
+                ].filter(Boolean).join('\n'))
+              + (detail.droppedCount > 0
+                  ? ' ' + t('chat.context.attachDropped')
+                      .replace('{n}', detail.droppedCount.toLocaleString())
+                      .replace('{raw}', detail.droppedRaw.toLocaleString())
+                  : '');
             // The indicator (bar, total/limit number, red ring) reflects the
             // FULL current context window — toggling an attachment's eye icon
             // immediately moves the totals up or down. The text-only threshold
@@ -3304,7 +3348,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 .replace('{original}', original.toLocaleString())
                 .replace('{attach}', attach.toLocaleString())
                 .replace('{free}', Math.max(0, max - total).toLocaleString())
-                .replace('{max}', max.toLocaleString())}>
+                .replace('{max}', max.toLocaleString())
+                + '\n\n' + attachDetailText}>
                 <div className={`flex h-2 w-full rounded-full overflow-hidden bg-muted/60 border ${overLimit ? 'border-red-500 ring-1 ring-red-500/40' : 'border-border/50'}`}>
                   <div className="bg-indigo-500" style={{ width: `${pctSys}%` }} />
                   <div className="bg-amber-400" style={{ width: `${pctCopied}%` }} />

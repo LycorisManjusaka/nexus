@@ -3684,6 +3684,7 @@ export async function POST(req: Request) {
     // the attachment eye icons), so the two can never drift apart.
     const deliveryCtx = {
       specificModel,
+      aiName: String(aiName || ''),
       isOAuthClaude,
       eyesEnabled: !!eyesEnabled,
       earsEnabled: !!earsEnabled,

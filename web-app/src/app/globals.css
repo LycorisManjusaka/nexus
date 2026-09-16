@@ -8,6 +8,20 @@
 @source "../**/*.{ts,tsx,js,jsx,mdx}";
 @source "../../public/**/*.{html,svg}";
 
+/* Un-gate every `hover:` / `group-hover:` / `peer-hover:` utility.
+   Tailwind v4 wraps them in `@media (hover: hover)` by default (54 such blocks
+   in the served CSS as of 2026-09-16).  In some remote sessions the browser
+   reports `hover: none` for the primary pointer, and then EVERY hover rule dies
+   at once: the message action bar (opacity-0 -> group-hover/bubble:opacity-100)
+   never appears and no button ever highlights -- while native `title` tooltips
+   keep working, because those are drawn by the OS and not by CSS.  That exact
+   split (tooltips yes, hover no) is what was reported.
+   `group-hover` is a compound of the `hover` variant, so overriding `hover`
+   here un-gates the group/peer forms too.  This restores Tailwind v3 semantics.
+   Cost: on a genuine touch device a tap leaves a hover state behind.  That is
+   the lesser evil; do not re-add the media query without solving remote first. */
+@custom-variant hover (&:hover);
+
 @theme {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
