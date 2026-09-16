@@ -4,7 +4,7 @@ import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel } from '@/lib/modelVision';
-import { resolveBridge, mediaKindOf } from '@/lib/attachmentVisibility';
+import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
@@ -3793,14 +3793,10 @@ export async function POST(req: Request) {
                 if (wantBridge === 'watcher') {
                   console.log(`[watcher ${att.name || '(unnamed)'}] DESCRIPTION-REUSE · ${att.description.length} chars from previous turn · skipping API call`);
                 }
-                const tagName =
-                  wantBridge === 'eyes' ? 'image_description' :
-                  wantBridge === 'ears' ? 'audio_description' :
-                                          'video_description';
-                contentStr +=
-                  `\n\n<${tagName} filename="${att.name || wantBridge}" via="${att.descriptionModel || 'cached'}">\n` +
-                  `${att.description}\n` +
-                  `</${tagName}>`;
+                // Same construction the token counter measures — see
+                // bridgedDescriptionText. If this string changes, the number
+                // the user is shown changes with it.
+                contentStr += bridgedDescriptionText(att, wantBridge);
               } else if (wantBridge === 'eyes') {
                 const result = await describeImage({
                   imageBase64: base64Data,

@@ -28,7 +28,7 @@ import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
-import { applyAutoHide, attachmentTokens, resolveKeepMessages } from '@/lib/attachmentVisibility';
+import { applyAutoHide, attachmentTokens, attachmentKind, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
@@ -1451,6 +1451,56 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (changed) setMessages(next as any);
   }, [messages, vrchatMode, hideOldAttachments, keepMessages, deliveryCtx, lastUserMsgIndex]);
 
+  // ── Back-fill `descriptionTokens` for descriptions that pre-date the field ──
+  // A bridged attachment costs its description, not its pixels. The measurement
+  // is taken when the bridge runs — so every description written before that
+  // code existed has no number, and the counter would show 0 for text that is
+  // really being sent on every turn. 0 where the truth is 900 is the same lie,
+  // pointing the other way.
+  //
+  // Measured through the same tokenizer the rest of the UI uses, on the exact
+  // string the send path re-uses (bridgedDescriptionText — one construction).
+  // Sequential, once per attachment, and persisted by the auto-save, so a
+  // conversation pays this at most once. Failures are remembered so a
+  // tokenizer that keeps saying no cannot turn this into a render loop.
+  const descBackfillBusyRef = useRef(false);
+  const descBackfillFailedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (loading) return;
+    if (descBackfillBusyRef.current) return;
+    // Only what is actually charged on the path that will run: an excluded
+    // attachment costs nothing, and one that is not bridged costs its media.
+    const todo: { msgId: string; attId: string; att: any; bridge: 'eyes' | 'ears' | 'watcher' }[] = [];
+    messages.forEach((m: any, mi: number) => {
+      if (!Array.isArray(m.attachments)) return;
+      const isPastMessage = mi < lastUserMsgIndex;
+      m.attachments.forEach((a: any) => {
+        if (!a?.description || a.descriptionTokens || a.excluded) return;
+        if (descBackfillFailedRef.current.has(`${m.id}:${a.id}`)) return;
+        const bridge = resolveBridge(attachmentKind(a), isPastMessage, deliveryCtx);
+        if (!bridge) return;
+        todo.push({ msgId: m.id, attId: a.id, att: a, bridge });
+      });
+    });
+    if (todo.length === 0) return;
+    descBackfillBusyRef.current = true;
+    (async () => {
+      try {
+        for (const item of todo) {
+          const tk = await fetchTokensForText(bridgedDescriptionText(item.att, item.bridge), localAiName);
+          if (!tk) { descBackfillFailedRef.current.add(`${item.msgId}:${item.attId}`); continue; }
+          setMessages(prev => prev.map((mm: any) => mm.id !== item.msgId ? mm : ({
+            ...mm,
+            attachments: (mm.attachments || []).map((a: any) =>
+              a.id === item.attId ? { ...a, descriptionTokens: tk } : a),
+          })));
+        }
+      } finally {
+        descBackfillBusyRef.current = false;
+      }
+    })();
+  }, [messages, loading, deliveryCtx, lastUserMsgIndex, localAiName]);
+
   // Per-message tokens, split so the progress bar can show attachments as
   // their own layer and so the auto-trim threshold can ignore attachments.
   const computeMsgTextTokens = (m: any) => {
@@ -2595,14 +2645,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // the send path injects. Fire-and-forget: a failure leaves the
                 // count at 0 (under-reports) rather than blocking the stream.
                 (async () => {
-                  const tag =
-                    data.kind === 'ears'    ? 'audio_description' :
-                    data.kind === 'watcher' ? 'video_description' :
-                                              'image_description';
-                  const injected =
-                    `\n\n<${tag} filename="${data.attachmentName || tag}" via="${data.model || 'cached'}">\n` +
-                    `${data.description || ''}\n` +
-                    `</${tag}>`;
+                  const bridge: 'eyes' | 'ears' | 'watcher' =
+                    data.kind === 'ears' ? 'ears' : data.kind === 'watcher' ? 'watcher' : 'eyes';
+                  const injected = bridgedDescriptionText(
+                    { name: data.attachmentName, description: data.description || '' },
+                    bridge,
+                    data.model || '',
+                  );
                   const tk = await fetchTokensForText(injected, localAiName);
                   if (!tk) return;
                   setMessages(prev => prev.map(mm => {

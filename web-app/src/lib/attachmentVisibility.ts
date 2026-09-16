@@ -160,12 +160,29 @@ export interface AutoHideOptions {
  * other: whichever released first would un-hide what the other still wanted
  * hidden, and the attachment would flip on every render.
  *
- * Two states are never touched, in either direction:
- *   • `autoHidden === false` — the user clicked the eye. A human decision
- *     outranks every automation, including the one that says "the model can't
- *     see this anyway".
- *   • `excluded` with no `autoHidden` marker — excluded by hand before this
- *     automation existed. Not ours to release.
+ * The two reasons are NOT equal in authority, and conflating them is what made
+ * the first version of this function do nothing at all:
+ *
+ *   • The audio-session window is a POLICY. A human who clicks the eye inside
+ *     it has overruled a preference, and `autoHidden === false` records that
+ *     for good — the automation stops touching that attachment.
+ *   • Unreachability is a FACT. Clicking the eye cannot make OAuth-Claude see
+ *     an image that is never sent; it only restores the false claim that it
+ *     was. So `autoHidden === false` does NOT veto this one.
+ *
+ * That distinction is load-bearing. The conversation this feature was first
+ * tested on had exactly one image, and that image had been eye-toggled by hand
+ * a week earlier — so a stale POLICY opt-out silently vetoed a FACT, and the
+ * whole feature measured as "no effect anywhere".
+ *
+ * Cost of the fact winning: forcing a hide overwrites a stale `autoHidden:
+ * false`, so if the path later changes back the attachment is released with no
+ * opt-out marker. That returns it to `excluded: false`, which is the state the
+ * user had asked for anyway.
+ *
+ * One state is never touched, in either direction:
+ *   • `excluded` with no `autoHidden` marker — excluded by hand. Not ours to
+ *     release, and not ours to re-mark.
  *
  * Hiding is not a confession that the attachment is lost: the send path
  * surfaces a 12-char ref for every excluded attachment, so an image that was
@@ -190,9 +207,15 @@ export function applyAutoHide<T extends { attachments?: any[] }>(
     const isPastMessage = mi < opts.lastUserMsgIndex;
     let msgChanged = false;
     const atts = m.attachments.map((a: any) => {
+      // FACT — the path cannot carry it. Not overridable by a click.
       const unreachable = isOAuthInvisiblePastImage(attachmentKind(a), isPastMessage, opts.ctx);
-      if (isOld || unreachable) {
-        if (a.excluded || a.autoHidden === false) return a;
+      // POLICY — it fell out of the audio session's newest-N window. A manual
+      // decision (`autoHidden === false`) overrules this one.
+      const windowed = isOld && a.autoHidden !== false;
+      if (unreachable || windowed) {
+        // Already hidden — by hand or by us. Leave it; re-marking a hand
+        // exclusion would make us release it later, which is not ours to do.
+        if (a.excluded) return a;
         msgChanged = true;
         return { ...a, excluded: true, autoHidden: true };
       }
@@ -218,8 +241,14 @@ export function applyAutoHide<T extends { attachments?: any[] }>(
  *
  * `att.tokens` is the size of the raw media, measured at attach time — true
  * only if those bytes reach the model. A bridged attachment arrives as a text
- * description, so it costs the description (0 until one has been generated,
- * because nothing exists yet to pay for). An excluded attachment costs nothing.
+ * description, so it costs the description. An excluded attachment costs
+ * nothing.
+ *
+ * `descriptionTokens` is written when the bridge runs, and back-filled by
+ * ChatArea for descriptions that pre-date the field — without that back-fill
+ * this returns 0 for text that really is being sent, which is the same kind of
+ * under-report the whole module exists to remove. 0 here means "no description
+ * yet, or not measured yet", never "free".
  */
 export function attachmentTokens(att: any, isPastMessage: boolean, ctx: DeliveryContext): number {
   if (!att) return 0;
@@ -227,4 +256,27 @@ export function attachmentTokens(att: any, isPastMessage: boolean, ctx: Delivery
   const bridge = resolveBridge(attachmentKind(att), isPastMessage, ctx);
   if (bridge) return att.descriptionTokens || 0;
   return att.tokens || 0;
+}
+
+/**
+ * The exact text a stored description turns into on the way to the entity.
+ *
+ * The send path builds this wrapper when it re-uses a persisted description
+ * (`api/chat/route.ts`), and the token counter must measure the same string or
+ * it is counting something nobody sends. One construction, three callers.
+ *
+ * `modelOverride` is for the first run, where the bridge model that just
+ * produced the text is known but has not been written to the attachment yet.
+ */
+export function bridgedDescriptionText(att: any, bridge: Exclude<BridgeKind, null>, modelOverride?: string): string {
+  const tagName =
+    bridge === 'eyes' ? 'image_description' :
+    bridge === 'ears' ? 'audio_description' :
+                        'video_description';
+  const via = modelOverride || att?.descriptionModel || 'cached';
+  return (
+    `\n\n<${tagName} filename="${att?.name || bridge}" via="${via}">\n` +
+    `${att?.description || ''}\n` +
+    `</${tagName}>`
+  );
 }

@@ -13,7 +13,7 @@ import { attachmentSrc } from '@/lib/attachmentUrl';
 import { useT } from '@/lib/i18n';
 import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
-import { attachmentTokens } from '@/lib/attachmentVisibility';
+import { attachmentTokens, attachmentKind, isOAuthInvisiblePastImage } from '@/lib/attachmentVisibility';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
@@ -619,6 +619,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     if (!deliveryCtx) return att.excluded ? 0 : (att.tokens || 0);  // no context → old behavior
     return attachmentTokens(att, !!isPastMessage, deliveryCtx);
   };
+
+  // True when this path physically cannot carry the attachment, whatever the
+  // eye says. The eye is disabled for these: a button that claims to make an
+  // image visible, and does not, is the lie in a smaller box.
+  const isUndeliverable = (att: any): boolean =>
+    !!deliveryCtx && isOAuthInvisiblePastImage(attachmentKind(att), !!isPastMessage, deliveryCtx);
 
   if (msg.attachments) {
     msg.attachments.forEach((att: any) => {
@@ -1306,9 +1312,18 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   </button>
                 )}
                 <button
-                  onClick={() => onToggleAttachment(att.id)}
-                  className={`${att.isText && att.textData ? '' : 'ml-auto'} p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground`}
-                  title={att.excluded ? t('bubble.att.include') : t('bubble.att.exclude')}
+                  onClick={() => { if (!isUndeliverable(att)) onToggleAttachment(att.id); }}
+                  disabled={isUndeliverable(att)}
+                  className={`${att.isText && att.textData ? '' : 'ml-auto'} p-1 rounded-md text-muted-foreground ${
+                    isUndeliverable(att)
+                      ? 'opacity-40 cursor-not-allowed'
+                      : 'hover:bg-muted hover:text-foreground'
+                  }`}
+                  title={
+                    isUndeliverable(att) ? t('bubble.att.undeliverableHelp')
+                      : att.excluded ? t('bubble.att.include')
+                      : t('bubble.att.exclude')
+                  }
                 >
                   {att.excluded ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -1374,7 +1389,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   )}
                 </button>
               )}
-              {att.excluded && <div className="text-[10px] text-red-500 font-bold mt-1 text-center bg-red-500/10 rounded py-0.5">{t('bubble.att.excluded')}</div>}
+              {att.excluded && (
+                isUndeliverable(att)
+                  // Not a choice anyone made — a statement about the path.
+                  ? <div className="text-[10px] text-amber-600 dark:text-amber-400 font-bold mt-1 text-center bg-amber-500/10 rounded py-0.5" title={t('bubble.att.undeliverableHelp')}>{t('bubble.att.undeliverable')}</div>
+                  : <div className="text-[10px] text-red-500 font-bold mt-1 text-center bg-red-500/10 rounded py-0.5">{t('bubble.att.excluded')}</div>
+              )}
             </div>
           ))}
         </div>
