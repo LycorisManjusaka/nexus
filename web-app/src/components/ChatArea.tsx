@@ -28,7 +28,7 @@ import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
-import { applyAutoHide, attachmentTokens, attachmentKind, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
+import { applyAutoHide, attachmentTokens, attachmentKind, isOAuthInvisiblePastImage, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
@@ -3043,10 +3043,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   const handleToggleAllAttachments = () => {
     const shouldHide = hasVisibleAttachments;
-    setMessages(prev => prev.map(m => {
+    setMessages(prev => prev.map((m, mi) => {
       let nm = m;
+      const isPastMessage = mi < lastUserMsgIndex;
       if (m.attachments && m.attachments.length > 0) {
-        nm = { ...nm, attachments: m.attachments.map((a: any) => ({ ...a, excluded: shouldHide })) };
+        nm = { ...nm, attachments: m.attachments.map((a: any) => {
+          // The per-attachment eye is disabled for undeliverable images; this
+          // bulk button was the back door around it. "Show all" cannot show
+          // what the path never carries — it would only restore the false
+          // claim that it does, until the auto-hide effect took it back.
+          if (!shouldHide && isOAuthInvisiblePastImage(attachmentKind(a), isPastMessage, deliveryCtx)) return a;
+          return { ...a, excluded: shouldHide };
+        }) };
       }
       // Sweep reusable thinking too, but only while the reuse toggle is on
       // (otherwise thinking isn't part of context and shouldn't be touched).

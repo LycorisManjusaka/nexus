@@ -249,11 +249,19 @@ export function applyAutoHide<T extends { attachments?: any[] }>(
  * this returns 0 for text that really is being sent, which is the same kind of
  * under-report the whole module exists to remove. 0 here means "no description
  * yet, or not measured yet", never "free".
+ *
+ * Unreachability is checked HERE, not inferred from `excluded`. `applyAutoHide`
+ * writes that flag as a side effect, one render later — so a counter that
+ * trusted the flag would report the old lie for every render in between (and
+ * for good, anywhere the effect does not run). The fact does not depend on a
+ * flag having been written yet.
  */
 export function attachmentTokens(att: any, isPastMessage: boolean, ctx: DeliveryContext): number {
   if (!att) return 0;
   if (att.excluded) return 0;
-  const bridge = resolveBridge(attachmentKind(att), isPastMessage, ctx);
+  const kind = attachmentKind(att);
+  if (isOAuthInvisiblePastImage(kind, isPastMessage, ctx)) return 0;
+  const bridge = resolveBridge(kind, isPastMessage, ctx);
   if (bridge) return att.descriptionTokens || 0;
   return att.tokens || 0;
 }
