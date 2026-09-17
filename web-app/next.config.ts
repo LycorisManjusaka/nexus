@@ -1,15 +1,56 @@
 import type { NextConfig } from "next";
+import os from "node:os";
+
+// Next's dev server refuses to serve its own dev resources (/_next/*, /__nextjs*)
+// to a browser whose Origin host it does not recognise, answering 403. The SSR
+// shell still renders, so the page looks alive while hydration never happens --
+// a "Loading conversations..." screen that never loads. /api/* is NOT gated:
+// measured, it answers 200 to any Origin. So this list protects dev bundles,
+// not data.
+//
+// A literal address here names ONE machine, so a second machine -- or the same
+// machine reached by a different address -- silently 403s every /_next chunk
+// while the page still looks half-alive. That is exactly what happened: the
+// list held this PC's 192.168.10.2, so 192.168.10.6 answered 403 to every chunk
+// and never hydrated.
+//
+// "Everything" is not expressible: Next rejects a lone "*" or "**" outright
+// (csrf-protection.js, matchWildcardDomain). What IS expressible is the set of
+// names a client could have typed to reach this machine, and the dev server can
+// enumerate that itself at startup. Nothing is hardcoded here, and a DHCP
+// change needs no edit.
+//
+// Three things measured, not assumed:
+//   - node: imports resolve in next.config.ts (loaded through Next's own
+//     loadConfig at phase-development-server; node:os returned the NIC list).
+//   - The matcher compares hostname only, with the port already stripped, so
+//     one entry covers both 3000 and 3001.
+//   - IPv6 must be bracketed: URL.hostname yields "[::1]", not "::1".
+//
+// This gate is development-only. next build + next start never call it, so a
+// shipped copy needs no entry at all.
+function ownDevOrigins(): string[] {
+  const out = new Set<string>(["127.0.0.1", "[::1]", os.hostname()]);
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.internal) continue;
+      // Link-local IPv6 needs a zone id to be reachable, so it is never a name
+      // a client would type. Including it would just be noise.
+      if (a.family === "IPv6" && /^fe80:/i.test(a.address)) continue;
+      out.add(a.family === "IPv6" ? "[" + a.address + "]" : a.address);
+    }
+  }
+  // Escape hatch for what cannot be enumerated: a VPN name, a router-assigned
+  // DNS name, a reverse proxy in front. Comma-separated.
+  for (const extra of (process.env.NEXUS_ALLOWED_DEV_ORIGINS ?? "").split(",")) {
+    const t = extra.trim();
+    if (t) out.add(t);
+  }
+  return [...out];
+}
 
 const nextConfig: NextConfig = {
-  // Next's internal origin matcher strips the port before comparing, so an
-  // entry with a port suffix (e.g. "192.168.10.2:3000") never matches a real
-  // request's Origin header and silently 403s every /_next asset load made
-  // over that origin -- breaking hydration while the static SSR shell still
-  // renders fine. Hostname only. This also covers port 3001 (Cairn's
-  // instance) for free, since the matcher ignores port entirely.
-  allowedDevOrigins: [
-    "192.168.10.2",
-  ],
+  allowedDevOrigins: ownDevOrigins(),
 
   // Playwright must not be bundled. It loads its driver and the Chromium build
   // from %LOCALAPPDATA%\ms-playwright at runtime -- paths no bundler can trace.
