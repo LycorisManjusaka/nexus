@@ -1,8 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Next's internal origin matcher strips the port before comparing, so an
+  // entry with a port suffix (e.g. "192.168.10.2:3000") never matches a real
+  // request's Origin header and silently 403s every /_next asset load made
+  // over that origin -- breaking hydration while the static SSR shell still
+  // renders fine. Hostname only. This also covers port 3001 (Cairn's
+  // instance) for free, since the matcher ignores port entirely.
   allowedDevOrigins: [
-    "192.168.10.2:3000",
+    "192.168.10.2",
   ],
 
   // Playwright must not be bundled. It loads its driver and the Chromium build
