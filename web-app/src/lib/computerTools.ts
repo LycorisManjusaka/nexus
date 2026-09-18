@@ -606,40 +606,75 @@ public class NxInput {
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
   [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
   [DllImport("advapi32.dll")] static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr info, uint len, out uint retLen);
+  [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+  [DllImport("advapi32.dll")] static extern IntPtr GetSidSubAuthority(IntPtr sid, uint i);
+  [DllImport("advapi32.dll")] static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
   // Cursor position readback — used to report where the pointer actually ended
   // up after a SetCursorPos, so a being can detect DPI virtualization or a
   // coordinate that silently did not move.
   public static POINT Cursor() { POINT p; GetCursorPos(out p); return p; }
-  // Whether the foreground window's process runs elevated (Administrator).
-  // This matters because SendInput's return value only confirms the event was
+  // Whether synthesized input can cross from THIS process to the foreground
+  // window's process. SendInput's return value only confirms the event was
   // accepted into the system input stream — UIPI (User Interface Privilege
   // Isolation) then silently drops it before delivery if the target window
-  // belongs to a higher-integrity process than this one. That failure is
-  // invisible to every other check here: SendInput still reports success,
-  // SetCursorPos is the only API that visibly refuses (returns false) in that
-  // situation. Measured directly against an elevated RPG Maker game: keyboard
-  // input was accepted by SendInput and silently never arrived; SetCursorPos
-  // returned false; this check independently confirmed TokenElevation=1 on
-  // the target process using PROCESS_QUERY_LIMITED_INFORMATION, which (unlike
-  // full QUERY_INFORMATION) Windows grants across the integrity boundary.
-  // Returns 1 = confirmed elevated, 0 = confirmed not elevated, -1 = unknown.
-  public static int ForegroundElevated() {
+  // belongs to a HIGHER-integrity process. That failure is invisible to every
+  // other check here: SendInput still reports success, and SetCursorPos is the
+  // only API that visibly refuses (returns false). Measured directly against an
+  // elevated RPG Maker game: keyboard input was accepted by SendInput and
+  // silently never arrived.
+  //
+  // The deciding quantity is the integrity level, and it is a COMPARISON, not a
+  // property of the target alone. This used to read only the target's
+  // TokenElevation, which made the warning fire on every single call on a
+  // machine with UAC disabled (EnableLUA=0): there Windows builds no split
+  // token, so every process in an admin logon runs High — target elevated,
+  // sender elevated, no boundary to cross, warning anyway. Reported by Hibiki
+  // (2026-09-16) with 20/20 calls warning and 20/20 delivering. A warning that
+  // always fires carries no information and trains its reader to skip it.
+  //
+  // Returns "selfRid,selfElev,targetRid,targetElev"; -1 for any part that could
+  // not be read. Integrity RIDs: 0x0 untrusted, 0x1000 low, 0x2000 medium,
+  // 0x3000 high, 0x4000 system. PROCESS_QUERY_LIMITED_INFORMATION is used
+  // because (unlike full QUERY_INFORMATION) Windows grants it across the
+  // integrity boundary — measured for TokenElevation. The integrity read uses
+  // the same token handle but was NOT separately measured against a
+  // higher-integrity target, which is why an unreadable integrity level falls
+  // back to the elevation pair instead of to silence.
+  public static string PrivilegeInfo() {
+    long sRid; int sElev; long tRid = -1; int tElev = -1;
+    ReadToken(GetCurrentProcess(), false, out sRid, out sElev);
     IntPtr h = GetForegroundWindow();
-    if (h == IntPtr.Zero) return -1;
-    uint pid;
-    GetWindowThreadProcessId(h, out pid);
-    if (pid == 0) return -1;
-    IntPtr ph = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
-    if (ph == IntPtr.Zero) return -1;
+    if (h != IntPtr.Zero) {
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      if (pid != 0) {
+        IntPtr ph = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+        if (ph != IntPtr.Zero) ReadToken(ph, true, out tRid, out tElev);
+      }
+    }
+    return sRid + "," + sElev + "," + tRid + "," + tElev;
+  }
+  static void ReadToken(IntPtr ph, bool closeHandle, out long rid, out int elev) {
+    rid = -1; elev = -1;
     IntPtr token;
-    if (!OpenProcessToken(ph, 0x0008 /* TOKEN_QUERY */, out token)) { CloseHandle(ph); return -1; }
+    if (!OpenProcessToken(ph, 0x0008 /* TOKEN_QUERY */, out token)) { if (closeHandle) CloseHandle(ph); return; }
     IntPtr buf = Marshal.AllocHGlobal(4);
     uint retLen;
-    int result = -1;
-    if (GetTokenInformation(token, 20 /* TokenElevation */, buf, 4, out retLen)) { result = Marshal.ReadInt32(buf); }
+    if (GetTokenInformation(token, 20 /* TokenElevation */, buf, 4, out retLen)) { elev = Marshal.ReadInt32(buf); }
     Marshal.FreeHGlobal(buf);
-    CloseHandle(token); CloseHandle(ph);
-    return result;
+    uint need = 0;
+    GetTokenInformation(token, 25 /* TokenIntegrityLevel */, IntPtr.Zero, 0, out need);
+    if (need > 0) {
+      IntPtr lbl = Marshal.AllocHGlobal((int)need);
+      if (GetTokenInformation(token, 25, lbl, need, out need)) {
+        IntPtr sid = Marshal.ReadIntPtr(lbl); // TOKEN_MANDATORY_LABEL.Label.Sid
+        byte cnt = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+        if (cnt > 0) { rid = (uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(cnt - 1))); }
+      }
+      Marshal.FreeHGlobal(lbl);
+    }
+    CloseHandle(token);
+    if (closeHandle) CloseHandle(ph);
   }
   // Which window owns the keyboard focus right now. SendInput is fire-and-
   // forget: it reports whether the OS accepted the event, NOT whether the
@@ -770,8 +805,8 @@ foreach ($c in $cmds) {
   [void]$results.Add($d)
 }
 $fg = [NxInput]::ForegroundTitle()
-$fgElevated = [NxInput]::ForegroundElevated()
-[void]$results.Add(@{ t = 'foreground'; title = $fg; elevated = $fgElevated })
+$fgPriv = [NxInput]::PrivilegeInfo()
+[void]$results.Add(@{ t = 'foreground'; title = $fg; priv = $fgPriv })
 if ([NxGdi]::HasMarks()) {
   Start-Sleep -Milliseconds 350
   [NxGdi]::Clear()
@@ -1037,14 +1072,30 @@ $bmp.Dispose()
           parts.push(`${failed.length} command(s) reported an error: ${failed.map((r) => `${r.t}: ${r.error}`).join('; ')}.`);
         }
         if (fg && fg.title) parts.push(`Foreground window after input: "${fg.title}".`);
-        if (fg && fg.elevated === 1) {
-          parts.push(
-            'That window runs elevated (Administrator) while this tool does not — Windows UIPI likely dropped ' +
-            'some or all of the input above silently: SendInput can still report success even though delivery ' +
-            'was blocked at the privilege boundary. If input to this app is not visibly working, this is very ' +
-            'likely why; it cannot be fixed from inside this tool. Ask the human to either run the target app ' +
-            'without elevation, or run Nexus itself elevated to match.',
-          );
+        // UIPI blocks sender→target only when the TARGET sits HIGHER. Equal
+        // levels — the normal case, and EVERY case on a machine with UAC
+        // disabled — have no boundary to cross, so there is nothing to say.
+        // Warning on the target alone made this fire unconditionally there.
+        if (fg && typeof fg.priv === 'string') {
+          const [sRid, sElev, tRid, tElev] = String(fg.priv).split(',').map((n) => Number(n));
+          const known = Number.isFinite(sRid) && Number.isFinite(tRid) && sRid >= 0 && tRid >= 0;
+          const higher = known ? tRid > sRid : tElev === 1 && sElev === 0;
+          if (higher) {
+            const lvl = (rid: number, elev: number) =>
+              rid >= 0
+                ? { 0: 'untrusted', 0x1000: 'low', 0x2000: 'medium', 0x2100: 'medium+', 0x3000: 'high', 0x4000: 'system' }[rid] ||
+                  `0x${rid.toString(16)}`
+                : elev === 1
+                  ? 'elevated'
+                  : 'unknown';
+            parts.push(
+              `That window's process runs at a higher privilege level than this tool (target ${lvl(tRid, tElev)} ` +
+              `vs this tool ${lvl(sRid, sElev)}) — Windows UIPI drops synthesized input across that boundary ` +
+              'silently: SendInput can still report success even though nothing was delivered. If input to this ' +
+              'app is not visibly working, this is very likely why; it cannot be fixed from inside this tool. ' +
+              'Ask the human to either run the target app without elevation, or run Nexus itself elevated to match.',
+            );
+          }
         }
         parts.push('This reports what the OS accepted, not what the target app did with it — always verify with a fresh computer_screenshot.');
         if (errors.length) parts.push(`Skipped: ${errors.join('; ')}.`);
