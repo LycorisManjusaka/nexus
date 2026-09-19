@@ -102,9 +102,13 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'grok-4.20-non-reasoning',
 
   // ── Kimi (Moonshot) ────────────────────────────────────────────────────────
+  // All four live token-API models take image blocks (image input measured
+  // 2026-09-19 on kimi-k3 and kimi-k2.7-code over both the OpenAI-compatible
+  // and the Anthropic Messages surface). kimi-k2.5 was retired by Moonshot.
   'moonshotai/Kimi-K3',
+  'moonshotai/Kimi-K2.7-Code',
+  'moonshotai/Kimi-K2.7-Code-Highspeed',
   'moonshotai/Kimi-K2.6',
-  'moonshotai/Kimi-K2.5',
 
   // ── Cohere ─────────────────────────────────────────────────────────────────
   // Only the dedicated vision variant.

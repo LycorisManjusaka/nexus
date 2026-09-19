@@ -2507,6 +2507,15 @@ async function runModelSelectorPreflight(args: {
   // configured via the top-level `reasoning_effort` field (only 'max' today). It
   // also fixes temperature/top_p server-side, so those are omitted below.
   const selKimiK3 = isKimi && /k3/i.test(resolveKimiModel(specificModel));
+  // The kimi-k2.7-code line is thinking-ONLY. Measured 2026-09-19 against
+  // api.moonshot.ai: `thinking: { type: 'disabled' }` returns 400 "only
+  // type=enabled is allowed for this model" on both kimi-k2.7-code and
+  // kimi-k2.7-code-highspeed, while kimi-k2.6 and kimi-k3 accept the disable.
+  // So this row is the K2.x analogue of the glm-5.3 exception: reasoning can
+  // only be sent as enabled. `reasoning_effort` was probed here and the result
+  // was NOT conclusive (low/high/max/none gave non-monotone thinking-token
+  // counts, n=1 per cell), so it is deliberately not sent.
+  const selKimiCode = isKimi && /k2\.7-code/i.test(resolveKimiModel(specificModel));
   // `enable_thinking` is a DashScope extension (Qwen, and DeepSeek V3.2 which
   // is ALSO served via DashScope). DeepSeek's own direct API (api.deepseek.com)
   // does not recognize this field at all — it silently ignores it and stays
@@ -2523,6 +2532,7 @@ async function runModelSelectorPreflight(args: {
   const selGLM53 = isGLM && !useDigitalOcean && /glm-5\.3/i.test(String(specificModel || ''));
   if (useDigitalOcean) extra.reasoning_effort = 'none';
   else if (selGLM53) { extra.thinking = { type: 'enabled' }; extra.reasoning_effort = 'low'; }
+  else if (selKimiCode) extra.thinking = { type: 'enabled' };
   else if (isGLM || (isKimi && !selKimiK3) || useDeepSeekDirect) extra.thinking = { type: 'disabled' };
   if (selKimiK3) extra.reasoning_effort = 'max';
   if (isCohere) extra.reasoning_effort = 'none';
@@ -7375,6 +7385,14 @@ export async function POST(req: Request) {
           requestBody.reasoning_effort = 'max';
           delete requestBody.temperature;
           delete requestBody.top_p;
+        } else if (isKimi && /kimi-k2\.7-code/i.test(String(requestBody.model || ''))) {
+          // kimi-k2.7-code / -highspeed are thinking-ONLY: measured 2026-09-19,
+          // `thinking: { type: 'disabled' }` returns 400 "only type=enabled is
+          // allowed for this model". Same exception shape as glm-5.3 above.
+          // (This whole OpenAI branch is unreachable for Kimi from the main
+          // chat path — Kimi returns via streamViaAnthropicCompat earlier — but
+          // the guard is kept so the branch is not a trap if it is ever rewired.)
+          requestBody.thinking = { type: 'enabled' };
         } else if (useDigitalOcean) {
           // DigitalOcean Inference serves GLM through an OpenAI-compatible
           // surface and exposes reasoning via the standard OpenAI

@@ -20,8 +20,11 @@
   "gpt-5.4":                { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 0, "output": 10 },
   "gpt-5.4-mini":           { "input": 0.5,  "cachedInput": 0.05, "cacheWrite": 0, "output": 2 },
 
-  "kimi-k3":                { "input": 3,  "cachedInput": 0.3, "cacheWrite": 0, "output": 15 },
-  "kimi-k2.6":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
+  "_NOTE_kimi": "Verified 2026-09-19 against platform.kimi.ai/docs (pricing page) and a live GET /v1/models on api.moonshot.ai. The token API catalog is exactly four ids: kimi-k3, kimi-k2.7-code, kimi-k2.7-code-highspeed, kimi-k2.6. kimi-k2.5 is RETIRED (404 on retrieve and on call) — its row is kept only so old conversations still cost out, and its numbers were never re-verified against an official page. There is no kimi-k2.8 on the token API in any spelling; 'K2.8 Preview' ships only inside the Kimi Code / Kimi Work subscription (api.kimi.com/coding/v1, served under the id kimi-for-coding), which is flat-rate and therefore has no per-token row here.",
+  "kimi-k3":                { "input": 3,    "cachedInput": 0.3,  "cacheWrite": 0, "output": 15 },
+  "kimi-k2.7-code":         { "input": 0.95, "cachedInput": 0.19, "cacheWrite": 0, "output": 4 },
+  "kimi-k2.7-code-highspeed": { "input": 1.9, "cachedInput": 0.38, "cacheWrite": 0, "output": 8 },
+  "kimi-k2.6":              { "input": 0.95, "cachedInput": 0.16, "cacheWrite": 0, "output": 4 },
   "kimi-k2.5":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
 
   "_NOTE_gemini-3.8-flash": "Released 2026-09-02 (ai.google.dev/gemini-api/docs/latest-model). Introductory pricing $0.75/$3.75 (input/output per 1M) in effect through 2026-12-31; reverts to standard $1.50/$7.50 (same as 3.6 Flash) after that. Numbers below use the CURRENT introductory rate — revisit after the cutover date. cachedInput follows the same 25%-of-input convention used for its Gemini siblings (some third-party writeups say '90% discount', but that doesn't match the pattern Nexus already uses across 3.5/3.6/3.7 Flash, so the codebase convention was kept for consistency).",

@@ -146,9 +146,13 @@ Grok     | grok-4-1-fast-non-reasoning  | off | Grok 4.1 Fast
 Grok     | grok-code-fast-1             | off | Grok Code Fast 1
 
 # ── Kimi (Moonshot) ────────────────────────────────────────────────
+# kimi-k2.7-code / -highspeed reject thinking:{type:'disabled'} (400, measured
+# 2026-09-19), so their on/off column is advisory the same way GLM-5.3's is.
+# kimi-k2.5 was RETIRED by Moonshot (404) and is no longer offered.
 Kimi     | moonshotai/Kimi-K3           | on  | Kimi K3
+Kimi     | moonshotai/Kimi-K2.7-Code    | on  | Kimi K2.7 Code
+Kimi     | moonshotai/Kimi-K2.7-Code-Highspeed | on | Kimi K2.7 Code Highspeed
 Kimi     | moonshotai/Kimi-K2.6         | on  | Kimi K2.6 Thinking
-Kimi     | moonshotai/Kimi-K2.5         | on  | Kimi K2.5 Thinking
 
 # ── Cohere (Command A family) ──────────────────────────────────────
 Cohere   | command-a-plus-05-2026       | off | Command A Plus
@@ -441,6 +445,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // "~6 min remaining"), carried alongside tool_activity. Only the compaction
   // path emits it; every other tool clears it to null.
   const [liveToolDetail, setLiveToolDetail] = useState<string | null>(null);
+  // These four are ONE fact — "what the entity is doing right now" — split
+  // across four pieces of state, and they have to be cleared together. They
+  // were not: every lifecycle site cleared activity+name and left `detail`
+  // (and `localized`) behind. `detail` is the amber suffix, and the whole chip
+  // only renders while `loading`, so a stale detail is invisible until the
+  // NEXT turn starts — then it reappears under a turn it has nothing to do
+  // with. That is how the compaction countdown came back after Stop → rerun:
+  // the server clears the chip at `compact_boundary`, but Stop aborts the
+  // stream before any boundary arrives, so the client-side clear is the only
+  // exit and it was only clearing half. One function, so "clear a subset"
+  // stops being a thing anyone can write by accident.
+  const clearLiveTool = () => {
+    setLiveToolActivity(null);
+    setLiveToolLocalized(false);
+    setLiveToolName(null);
+    setLiveToolDetail(null);
+  };
   // The model the SERVER reports for the current turn. Auto-selection can pick a
   // different model than the conversation is configured with, and the loading
   // line should name the one actually doing the work.
@@ -2061,8 +2082,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Drop any unanswered question card — the turn it belonged to is gone.
     setPendingAsk(null);
     setActiveSubagent(null);
-    setLiveToolActivity(null);
-    setLiveToolName(null);
+    clearLiveTool();
     setStreamPhase(null);
     setLiveModel('');
     setStallIdleSeconds(null);
@@ -2099,8 +2119,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const generateAiResponse = async (history: any[], opts?: { continueMsgId?: string }) => {
     const continueMsgId = opts?.continueMsgId;
     setLoading(true);
-    setLiveToolActivity(null);
-    setLiveToolName(null);
+    clearLiveTool();
     setStreamPhase(null);
     setLiveModel('');
     setStallIdleSeconds(null);
@@ -2607,10 +2626,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   setLiveToolName(typeof data.name === 'string' && data.name ? data.name : null);
                   setLiveToolDetail(typeof data.detail === 'string' && data.detail ? data.detail : null);
                 } else {
-                  setLiveToolActivity(null);
-                  setLiveToolLocalized(false);
-                  setLiveToolName(null);
-                  setLiveToolDetail(null);
+                  clearLiveTool();
                 }
               } else if (data.type === 'stall_warning') {
                 // Server-side watchdog: no SDK activity for this many seconds.
@@ -2761,8 +2777,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Turn finished — no question, subagent, tool, or stall can still be live.
     setPendingAsk(null);
     setActiveSubagent(null);
-    setLiveToolActivity(null);
-    setLiveToolName(null);
+    clearLiveTool();
     setStreamPhase(null);
     setLiveModel('');
     setStallIdleSeconds(null);
@@ -4980,9 +4995,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="moonshotai/Kimi-K3">Kimi K3 (flagship — always-on reasoning, native vision)</option>
+                      <option value="moonshotai/Kimi-K3">Kimi K3 (flagship — 1M context, always-on reasoning, native vision)</option>
+                      <option value="moonshotai/Kimi-K2.7-Code">Kimi K2.7 Code (256K, coding line, thinking-only)</option>
+                      <option value="moonshotai/Kimi-K2.7-Code-Highspeed">Kimi K2.7 Code Highspeed (same model, 2× price, faster)</option>
                       <option value="moonshotai/Kimi-K2.6">Kimi K2.6 (256K context, multimodal)</option>
-                      <option value="moonshotai/Kimi-K2.5">Kimi K2.5 (agentic, multimodal)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.kimi.help'))}
