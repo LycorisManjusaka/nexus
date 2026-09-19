@@ -98,6 +98,20 @@ export function registerActiveTurnStop(stop: (() => void) | null): void {
   activeTurnStop = stop;
 }
 
+/**
+ * Kill only the in-flight input process, without touching the turn stream.
+ * For the BROWSER Stop button: it aborts its fetch, which the chat route turns
+ * into a turn-level abort — but a PowerShell input child that was already
+ * spawned keeps typing/clicking regardless of who is listening. The hotkey
+ * path got this for free via stopComputerSession(); the button did not.
+ */
+export function killActiveInput(): boolean {
+  if (!activeInputChild) return false;
+  try { activeInputChild.kill(); } catch { /* already gone */ }
+  activeInputChild = null;
+  return true;
+}
+
 export function stopComputerSession(): { killedInput: boolean; stoppedTurn: boolean } {
   let killedInput = false;
   if (activeInputChild) {

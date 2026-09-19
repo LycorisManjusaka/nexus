@@ -196,7 +196,7 @@ import {
 import {
   runComputerTool, COMPUTER_TOOL_NAMES,
   computerToolsClaude, computerToolsGemini, computerToolsOpenAI,
-  registerActiveTurnStop, ensureStopKeyWatcher,
+  registerActiveTurnStop, ensureStopKeyWatcher, killActiveInput,
 } from '@/lib/computerTools';
 // App Control (アプリ操作): the other sense. computer_* drives pixels and needs
 // eyes; app_* walks the control tree an application publishes and needs none —
@@ -636,8 +636,9 @@ async function streamClaudeViaAgentSDK(args: {
   injectTurnId: string;            // per-turn id for mid-turn partner interjections
   hiddenAttachmentsAccessible: boolean;  // expose the read_attachment MCP tool
   conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[]; // read_attachment scope
+  turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Build the content blocks for the LATEST user message (its text + any image
@@ -742,7 +743,11 @@ async function streamClaudeViaAgentSDK(args: {
       // fired from both the Stop key/button (via registerActiveTurnStop)
       // and the auto-compaction stall watchdog further down.
       const oauthAbort = new AbortController();
-      registerActiveTurnStop(() => { try { controller.close(); } catch {} try { oauthAbort.abort(); } catch {} });
+      registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} try { oauthAbort.abort(); } catch {} });
+      // The browser Stop button never reaches registerActiveTurnStop — it just
+      // drops the connection. turnAbort is what carries that here.
+      if (turnAbort.signal.aborted) { try { oauthAbort.abort(); } catch {} }
+      else turnAbort.signal.addEventListener('abort', () => { try { oauthAbort.abort(); } catch {} });
 
       // ── Stall watchdog ──────────────────────────────────────────────────
       // The SDK yields a message for every stream event — even a huge Write
@@ -2180,8 +2185,8 @@ async function streamClaudeViaAgentSDK(args: {
         const shown = friendly
           ? `Claude OAuth path stopped: ${friendly}\n(raw: ${msg})`
           : `Claude OAuth path failed: ${msg}`;
-        controller.enqueue(`data: ${JSON.stringify({ error: shown })}\n\n`);
-        controller.close();
+        try { controller.enqueue(`data: ${JSON.stringify({ error: shown })}\n\n`); } catch {}
+        try { controller.close(); } catch {}
       } finally {
         // Stop the stall watchdog on every exit path — a leaked interval
         // would keep firing enqueue() against a closed controller.
@@ -2691,6 +2696,7 @@ async function streamViaAnthropicCompat(args: {
   maxToolRounds: number;
   hiddenAttachmentsAccessible: boolean;
   conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[];
+  turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
 }): Promise<Response> {
   const {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
@@ -2700,7 +2706,7 @@ async function streamViaAnthropicCompat(args: {
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
     computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
-    hiddenAttachmentsAccessible, conversationAttachmentRefs,
+    hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort,
   } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
   const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
@@ -2837,7 +2843,7 @@ async function streamViaAnthropicCompat(args: {
   const readableStream = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
-      registerActiveTurnStop(() => { try { controller.close(); } catch {} });
+      registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
       enqueue(modelSelectedPayload);
       for (const ev of senseEvents) enqueue(ev);
 
@@ -2877,6 +2883,7 @@ async function streamViaAnthropicCompat(args: {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
             body: JSON.stringify(body),
+            signal: turnAbort.signal,   // Stop must reach the provider, not just the browser
           });
           if (r.ok && r.body) { res = r; break; }
           const errText = await r.text().catch(() => '');
@@ -2902,6 +2909,8 @@ async function streamViaAnthropicCompat(args: {
         const decoder = new TextDecoder();
         let buf = '';
         while (true) {
+          // Stop pressed mid-stream: drop the rest instead of draining it.
+          if (turnAbort.signal.aborted) { try { await reader.cancel(); } catch {} break; }
           const { done, value } = await reader.read();
           if (done) break;
           buf += decoder.decode(value, { stream: true });
@@ -2980,6 +2989,7 @@ async function streamViaAnthropicCompat(args: {
       try {
         let currentMessages = [...anthropicMessages];
         for (let iter = 0; iter < maxToolRounds; iter++) {
+          if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
           const { assistantBlocks, stopReason } = await runOnce(currentMessages, true);
 
           const toolUses = assistantBlocks.filter((b: any) => b.type === 'tool_use' && LOCAL_TOOL_NAMES_SET.has(b.name));
@@ -3033,6 +3043,9 @@ async function streamViaAnthropicCompat(args: {
           currentMessages.push({ role: 'assistant', content: assistantBlocks });
           const toolResultBlocks: any[] = [];
           for (const tu of toolUses) {
+            // A tool call already returned by the model must NOT execute after
+            // Stop — this is where the ghost mouse/keyboard input came from.
+            if (turnAbort.signal.aborted) break;
             let resultContent: any = '';
             const actLabel = toolActivityLabel(tu.name);
             if (actLabel) enqueue({ type: 'tool_activity', tool: actLabel, name: tu.name });
@@ -3257,8 +3270,10 @@ async function streamViaAnthropicCompat(args: {
         controller.enqueue(`data: [DONE]\n\n`);
         controller.close();
       } catch (e: any) {
-        controller.enqueue(`data: ${JSON.stringify({ error: e?.message || 'unknown error' })}\n\n`);
-        controller.close();
+        // Same guard as the other providers: after Stop the controller is
+        // already gone and enqueue() throws.
+        try { controller.enqueue(`data: ${JSON.stringify({ error: e?.message || 'unknown error' })}\n\n`); } catch {}
+        try { controller.close(); } catch {}
       }
     },
   });
@@ -3286,6 +3301,35 @@ export async function POST(req: Request) {
       if (!port) port = Number(process.env.PORT) || 3000;
       if (port > 0) ensureStopKeyWatcher(port);
     } catch { /* watcher is a convenience; never block the turn on it */ }
+
+    // ── Turn-level abort ────────────────────────────────────────────────────
+    // ONE controller per turn, fired by either way a turn can be stopped:
+    //   (a) the browser Stop button — it aborts its fetch, which disconnects
+    //       the client, which fires req.signal here;
+    //   (b) the Ctrl+Shift+X stop key — every registerActiveTurnStop callback
+    //       below aborts this too.
+    // It exists because closing the stream controller is NOT enough. Measured
+    // (probe route, 2026-09-20): on client disconnect req.signal fires and the
+    // stream's cancel() runs immediately, controller.enqueue() then throws —
+    // but the async start() body KEEPS RUNNING to completion. So before this,
+    // Stop only silenced the output: the upstream generation was never
+    // cancelled (LM Studio kept generating) and the agentic tool loop kept
+    // issuing computer/app tool calls — mouse and keyboard commands landing on
+    // the PC after the user believed the turn had ended.
+    // Consumed in two ways: as `signal` on every upstream request, and as a
+    // `break` guard at the head of each tool loop and before each tool
+    // dispatch. The guards are deliberate rather than relying on a thrown
+    // AbortError, so the existing finalize-on-abort (billing + tool-usage
+    // save) still runs.
+    const turnAbort = new AbortController();
+    const abortTurn = () => {
+      try { turnAbort.abort(); } catch { /* already aborted */ }
+      // A PowerShell input child that was ALREADY spawned keeps typing and
+      // clicking no matter who is listening. The stop key killed it via
+      // stopComputerSession(); the browser Stop button never could.
+      try { killActiveInput(); } catch { /* nothing running */ }
+    };
+    try { req.signal.addEventListener('abort', abortTurn); } catch { /* no signal on this runtime */ }
 
     // `let` (not const) — auto-model-selection may override aiName,
     // specificModel, and modelParams below before the provider flags are
@@ -4065,6 +4109,7 @@ export async function POST(req: Request) {
           injectTurnId,
           hiddenAttachmentsAccessible,
           conversationAttachmentRefs,
+          turnAbort,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -4273,9 +4318,12 @@ export async function POST(req: Request) {
         console.warn(`[claude-api] NEXUS_TASK_BUDGET=${taskBudgetRaw} ignored — Anthropic's minimum total is 20000.`);
       }
       // Per-request beta header, sent only when a budget is actually in play.
-      const claudeRequestOptions: any = claudeTaskBudget
-        ? { headers: { 'anthropic-beta': 'task-budgets-2026-03-13' } }
-        : undefined;
+      // `signal` is unconditional: without it Stop only closed the browser
+      // stream while Anthropic kept generating (and kept billing).
+      const claudeRequestOptions: any = {
+        signal: turnAbort.signal,
+        ...(claudeTaskBudget ? { headers: { 'anthropic-beta': 'task-budgets-2026-03-13' } } : {}),
+      };
 
       // Optional tools — web search and/or the workspace file tools.
       const claudeTools: any[] = [];
@@ -4583,7 +4631,7 @@ export async function POST(req: Request) {
         }
 
         try {
-          const layer1Resp = await anthropic.messages.create(layer1Params);
+          const layer1Resp = await anthropic.messages.create(layer1Params, { signal: turnAbort.signal });
           for (const block of layer1Resp.content) {
             if (block.type === 'tool_use' && block.name === 'set_creativity') {
               const val = Number((block as any).input?.creativity);
@@ -4629,7 +4677,7 @@ export async function POST(req: Request) {
       const readableStream = new ReadableStream({
         async start(controller) {
           const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
-          registerActiveTurnStop(() => { try { controller.close(); } catch {} });
+          registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
 
           // Identify the model+thinking-mode that's about to respond. Always
           // emitted, regardless of auto-select. The frontend stashes this on
@@ -4687,6 +4735,7 @@ export async function POST(req: Request) {
 
           try {
             for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+              if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
               const iterParams = { ...claudeParams, messages: currentMessages };
               const stream = await anthropic.messages.stream(iterParams, claudeRequestOptions);
 
@@ -4991,6 +5040,9 @@ export async function POST(req: Request) {
               currentMessages.push({ role: 'assistant', content: assistantBlocks });
               const toolResultBlocks: any[] = [];
               for (const tu of toolUses) {
+                // A tool call already returned by the model must NOT execute
+                // after Stop — this is where ghost mouse/keyboard input came from.
+                if (turnAbort.signal.aborted) break;
                 let resultContent: any = '';        // string OR content-block array (Anthropic accepts both)
                 let attachmentEvent: any = null;
                 // Surface what the model is doing so the loading label reflects
@@ -5316,8 +5368,12 @@ export async function POST(req: Request) {
             controller.enqueue(`data: [DONE]\n\n`);
             controller.close();
           } catch (e: any) {
-            controller.enqueue(`data: ${JSON.stringify({ error: e.message })}\n\n`);
-            controller.close();
+            // After a Stop the client is gone (or the controller was already
+            // closed by the stop key), so enqueue() throws "Invalid state".
+            // Guard it: the cleanup path must never become the unhandled
+            // rejection that takes the dev server's turn down with it.
+            try { controller.enqueue(`data: ${JSON.stringify({ error: e.message })}\n\n`); } catch {}
+            try { controller.close(); } catch {}
           }
         }
       });
@@ -5770,7 +5826,13 @@ export async function POST(req: Request) {
         const stream = await ai.models.generateContentStream({
           model: geminiModelId,
           contents,
-          config: geminiConfig,
+          // abortSignal lives INSIDE config for @google/genai (not a sibling of
+          // it) — verified against GenerateContentConfig in the installed
+          // genai.d.ts, not from memory. Note what Google's own doc comment
+          // says there: it is client-only and does NOT cancel the request
+          // service-side, so usage is still billed. It still matters here,
+          // because it ends the await and lets the tool loop stop.
+          config: { ...geminiConfig, abortSignal: turnAbort.signal },
         });
         let visibleText = '';
         let thoughtText = '';
@@ -5908,7 +5970,7 @@ export async function POST(req: Request) {
       const readableStream = new ReadableStream({
         async start(controller) {
           const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
-          registerActiveTurnStop(() => { try { controller.close(); } catch {} });
+          registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);
@@ -5948,6 +6010,7 @@ export async function POST(req: Request) {
             const cumGeminiSourceMap = new Map<string, { url: string; title?: string }>();
 
             while (true) {
+              if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
               if (toolIterations >= MAX_TOOL_ITERATIONS) {
                 toolStopNotice = toolLimitNotice(MAX_TOOL_ITERATIONS);
                 // One final tools-free call so the model writes its closing answer
@@ -6029,6 +6092,9 @@ export async function POST(req: Request) {
                 const fnRespParts: any[] = [];
                 const extraInlineParts: any[] = [];
                 for (const fc of functionCalls) {
+                  // A tool call already returned by the model must NOT execute
+                  // after Stop — this is where ghost mouse/keyboard input came from.
+                  if (turnAbort.signal.aborted) break;
                   let result: any = {};
                   let attachmentEvent: any = null;
                   // Reflect the tool call in the loading label (silent otherwise).
@@ -6404,8 +6470,12 @@ export async function POST(req: Request) {
             controller.enqueue(`data: [DONE]\n\n`);
             controller.close();
           } catch (e: any) {
-            controller.enqueue(`data: ${JSON.stringify({ error: e.message })}\n\n`);
-            controller.close();
+            // After a Stop the client is gone (or the controller was already
+            // closed by the stop key), so enqueue() throws "Invalid state".
+            // Guard it: the cleanup path must never become the unhandled
+            // rejection that takes the dev server's turn down with it.
+            try { controller.enqueue(`data: ${JSON.stringify({ error: e.message })}\n\n`); } catch {}
+            try { controller.close(); } catch {}
           }
         }
       });
@@ -6470,6 +6540,7 @@ export async function POST(req: Request) {
         maxToolRounds: MAX_TOOL_ROUNDS,
         hiddenAttachmentsAccessible,
         conversationAttachmentRefs,
+        turnAbort,
       });
     }
     else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
@@ -7238,6 +7309,7 @@ export async function POST(req: Request) {
               temperature: 0.1,
               top_p: 0.9,
             }),
+            signal: turnAbort.signal,
           });
           if (layer1Res.ok) {
             const layer1Data = await layer1Res.json();
@@ -7502,6 +7574,11 @@ export async function POST(req: Request) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders, ...extraHeaders },
           body: JSON.stringify(requestBody),
+          // Closing the socket is what actually stops LM Studio / llama.cpp:
+          // it cancels the slot instead of letting it generate to completion
+          // while nobody is listening. Same for every cloud provider on this
+          // OpenAI-compatible path — Stop used to keep burning their tokens.
+          signal: turnAbort.signal,
         });
         if (!lsRes.ok || !lsRes.body) {
           const errText = await lsRes.text().catch(() => '');
@@ -7633,6 +7710,8 @@ export async function POST(req: Request) {
         let buf = '';
 
         while (true) {
+          // Stop pressed mid-stream: drop the rest instead of draining it.
+          if (turnAbort.signal.aborted) { try { await reader.cancel(); } catch {} break; }
           const { done, value } = await reader.read();
           if (done) break;
           buf += decoder.decode(value, { stream: true });
@@ -7712,7 +7791,7 @@ export async function POST(req: Request) {
       const readableStream = new ReadableStream({
         async start(controller) {
           const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
-          registerActiveTurnStop(() => { try { controller.close(); } catch {} });
+          registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);
@@ -7776,6 +7855,7 @@ export async function POST(req: Request) {
           };
           try {
             while (true) {
+              if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
               // Hash the cacheable-prefix portion *before* the call. We want
               // to verify that what we sent this iteration begins with the
               // exact same bytes as previous iterations. The first 2 messages
@@ -7912,6 +7992,9 @@ export async function POST(req: Request) {
                 // is the standard workaround.
                 const pendingImageInjects: { name: string; dataUrl: string }[] = [];
                 for (const tc of toolCalls) {
+                  // A tool call already returned by the model must NOT execute
+                  // after Stop — this is where ghost mouse/keyboard input came from.
+                  if (turnAbort.signal.aborted) break;
                   let parsed: any = {};
                   try { parsed = JSON.parse(tc.arguments || '{}'); } catch {}
                   let resultText = '';
@@ -8393,8 +8476,12 @@ export async function POST(req: Request) {
             controller.enqueue(`data: [DONE]\n\n`);
             controller.close();
           } catch (e: any) {
-            controller.enqueue(`data: ${JSON.stringify({ error: e.message })}\n\n`);
-            controller.close();
+            // After a Stop the client is gone (or the controller was already
+            // closed by the stop key), so enqueue() throws "Invalid state".
+            // Guard it: the cleanup path must never become the unhandled
+            // rejection that takes the dev server's turn down with it.
+            try { controller.enqueue(`data: ${JSON.stringify({ error: e.message })}\n\n`); } catch {}
+            try { controller.close(); } catch {}
           }
         },
       });
