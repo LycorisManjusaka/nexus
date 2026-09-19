@@ -8,6 +8,7 @@ import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attach
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
 import { describeVideo } from '@/lib/videoBridge';
+import { extractVideoFrames } from '@/lib/videoFrames';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName, formatReadConversationResult } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
@@ -7077,17 +7078,34 @@ export async function POST(req: Request) {
 
       for (const m of processedMessages) {
         const parts: any[] = [];
-        m.mediaFiles?.forEach((media: any) => {
+        for (const media of (m.mediaFiles || [])) {
           const dataUrl = `data:${media.mimeType};base64,${media.base64Data}`;
           if (media.mimeType.startsWith('image/')) {
             if (media.name) parts.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
             parts.push({ type: 'image_url', image_url: { url: dataUrl } });
           } else if (media.mimeType.startsWith('audio/')) {
+            // LOCAL (LM Studio): there is no audio path at all. Its request
+            // validator accepts exactly two content types and rejects the
+            // whole call otherwise — measured 2026-09-19 on both
+            // /v1/chat/completions and /api/v0/chat/completions, for
+            // `input_audio` (raw base64 and data-URL), `audio_url` and bare
+            // `audio`:
+            //   400 "Invalid 'content': 'content' objects must have a 'type'
+            //        field that is either 'text' or 'image_url'."
+            // There is no /v1/audio/transcriptions either. So sending it does
+            // not "get ignored, no harm" (what this comment used to claim) —
+            // it fails the entire turn. Say so in the transcript instead, and
+            // let the ears bridge carry audio to local models.
+            if (isLocal) {
+              parts.push({
+                type: 'text',
+                text: `<attached_file name="${media.name || 'audio'}" type="${media.mimeType}" delivered="false" reason="this local endpoint accepts text and images only — enable the ears bridge to receive a transcript" />`,
+              });
+              continue;
+            }
             // DashScope/Qwen-Omni OpenAI-compatible audio input. The Python SDK
             // calls this `extra_body` content, but at the wire level it's just
-            // a regular content-part with type "input_audio". Local LM Studio
-            // models will typically ignore this (no harm — it's just an
-            // unrecognized part).
+            // a regular content-part with type "input_audio".
             if (media.name) parts.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
             parts.push({
               type: 'input_audio',
@@ -7099,6 +7117,34 @@ export async function POST(req: Request) {
               input_audio: { data: isBytedance ? media.base64Data : dataUrl, format: audioFormatOf(media.mimeType) },
             });
           } else if (media.mimeType.startsWith('video/')) {
+            // LOCAL (LM Studio): `video_url` is rejected by the same validator
+            // as audio above. But a frame is an image, and images ARE carried
+            // — which is also how the model consumes video in the first place
+            // (Google's Gemma 4 card: "All models support image inputs and can
+            // process videos as frames", 1 fps). So decode the clip here and
+            // send the frames. Measured: a 35 s clip → 35 frames → 3,027
+            // prompt tokens, 5 s of prefill, and the model reported what
+            // changed from frame to frame.
+            if (isLocal) {
+              try {
+                const shot = await extractVideoFrames(Buffer.from(media.base64Data, 'base64'), media.name);
+                parts.push({
+                  type: 'text',
+                  text: `<attached_file name="${media.name || 'video'}" type="${media.mimeType}" delivered="as_frames" frames="${shot.frames.length}" fps="${shot.plan.fps.toFixed(3)}"${shot.durationSec ? ` duration_sec="${shot.durationSec.toFixed(1)}"` : ''} note="this video is presented as still frames in playback order; there is no audio track" />`,
+                });
+                for (const f of shot.frames) {
+                  parts.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${f.toString('base64')}` } });
+                }
+              } catch (e: any) {
+                // Never pretend the video arrived. A failed decode is stated.
+                console.error('[video-frames] extraction failed:', e?.message || e);
+                parts.push({
+                  type: 'text',
+                  text: `<attached_file name="${media.name || 'video'}" type="${media.mimeType}" delivered="false" reason="frame extraction failed: ${String(e?.message || e).replace(/"/g, "'").slice(0, 200)}" />`,
+                });
+              }
+              continue;
+            }
             // DashScope/Qwen video input — same shape as image_url but with a
             // dedicated "video_url" content type. Inline base64 data URLs are
             // accepted per Alibaba's docs.
@@ -7108,7 +7154,7 @@ export async function POST(req: Request) {
           // Other mime types (PDF, etc.) are not part of the OpenAI multimodal
           // spec — they're already injected as <attached_file> text earlier
           // for the text-only path.
-        });
+        }
         if (m.content) parts.push({ type: 'text', text: m.content });
         if (parts.length === 0) parts.push({ type: 'text', text: '-' });
 

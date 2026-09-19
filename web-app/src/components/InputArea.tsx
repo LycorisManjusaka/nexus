@@ -350,6 +350,13 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
       let textData = null;
       let dataUrl: string | null = null;
       let tokens = 0;
+      // Clip length, kept for audio AND video. It is the only input the frame
+      // plan needs (videoFramePlan.ts) to say what a video costs when it is
+      // decoded to frames for a local model — and this is the one moment the
+      // browser can measure it, because the file object exists here and not
+      // later. 0 = not measurable; the counter must then fall back rather than
+      // reconstruct a duration out of the token estimate.
+      let durationSec = 0;
       let finalName = file.name;
       let finalType = file.type;
       let finalSize = file.size;
@@ -462,6 +469,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
              setTimeout(r, 500); // fallback timeout
            });
            const duration = media.duration || 0;
+           durationSec = Number.isFinite(duration) && duration > 0 ? duration : 0;
            if (isClaude) {
              tokens = Math.ceil(duration * 100) || 1000;
            } else {
@@ -491,6 +499,10 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             const data = await res.json();
             if (Array.isArray(data.parts) && data.parts.length > 0) {
               const perPartTokens = Math.max(1, Math.ceil((tokens || 1000) / data.parts.length));
+              // Segments are cut on a near-even time grid, so each carries
+              // roughly an equal slice of the clip. Approximate — but it is an
+              // approximation of a measured number, not of nothing.
+              const perPartDuration = durationSec > 0 ? durationSec / data.parts.length : 0;
               // The split route already wrote each part into the store, so the
               // parts arrive as refs — no payload crosses back to the browser.
               return data.parts.map((p: any) => ({
@@ -502,6 +514,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
                 textData: null,
                 ref: p.ref,
                 tokens: perPartTokens,
+                ...(perPartDuration > 0 ? { durationSec: perPartDuration } : {}),
                 fileObj: null,
               }));
             }
@@ -561,6 +574,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
         // degrades to the old inline behavior instead of losing the attachment.
         ...(ref ? { ref } : dataUrl ? { dataUrl } : {}),
         tokens,
+        ...(durationSec > 0 ? { durationSec } : {}),
         fileObj: file
       };
     }));

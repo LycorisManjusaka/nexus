@@ -24,6 +24,7 @@
  */
 
 import { isVisionCapable, isAudioCapable, isVideoCapable } from './modelVision';
+import { frameTokensForDuration } from './videoFramePlan';
 
 /** Media class of an attachment, derived from its mime type. */
 export type MediaKind = 'image' | 'audio' | 'video' | 'text' | 'other';
@@ -115,12 +116,46 @@ export function resolveBridge(
  */
 const ANTHROPIC_SHAPED_FAMILIES = ['claude', 'kimi', 'mimo'];
 
+/**
+ * The Local family is LM Studio, and LM Studio is stricter than the rest of the
+ * OpenAI-compatible path: its request validator accepts exactly two content
+ * types and 400s the WHOLE call on anything else. Measured 2026-09-19 against a
+ * loaded gemma-4-26B-A4B, identical on `/v1/chat/completions` and
+ * `/api/v0/chat/completions`, for `input_audio` (raw base64 and data-URL),
+ * `audio_url`, bare `audio`, and `video_url`:
+ *
+ *   400 "Invalid 'content': 'content' objects must have a 'type' field that is
+ *        either 'text' or 'image_url'."
+ *
+ * It is the validator, not the model — a text-only request to the same endpoint
+ * answers 200, and there is no `/v1/audio/transcriptions` to upload to either.
+ *
+ * So on Local:
+ *   • audio  — cannot arrive. Reported as undeliverable, which is the same
+ *     honesty fix already applied to Claude/Kimi/MiMo, except that here the old
+ *     behaviour was worse than a silent drop: it failed the entire turn.
+ *   • video  — DOES arrive, as frames. The send path decodes the clip with
+ *     ffmpeg and sends still images (see `videoFramePlan.ts`), which is how the
+ *     model consumes video anyway.
+ *   • image  — arrives natively.
+ *
+ * Caveat worth knowing before trusting this: `LOCAL_LLM_BASE` can be pointed at
+ * something other than LM Studio (raw `llama-server` does accept `input_audio`
+ * when its mmproj carries an audio tower). This rule describes the default
+ * endpoint NEXUS ships with, so a non-LM-Studio local server would be
+ * under-reported here — an over-cautious error, not a false claim of delivery.
+ */
+function localWireCarries(kind: MediaKind): boolean {
+  return kind !== 'audio';
+}
+
 /** Can this provider's wire format carry this media kind at all? */
 export function wireCarriesMedia(kind: MediaKind, ctx: DeliveryContext): boolean {
   if (kind !== 'image' && kind !== 'audio' && kind !== 'video') return true;
   const family = String(ctx.aiName || '').toLowerCase();
   if (!family) return true;  // unknowable in advance — claim nothing
   if (ANTHROPIC_SHAPED_FAMILIES.some((f) => family.includes(f))) return kind === 'image';
+  if (family.includes('local')) return localWireCarries(kind);
   return true;
 }
 
@@ -333,6 +368,19 @@ export function attachmentTokens(att: any, isPastMessage: boolean, ctx: Delivery
   if (isUndeliverable(kind, isPastMessage, ctx)) return 0;
   const bridge = resolveBridge(kind, isPastMessage, ctx);
   if (bridge) return att.descriptionTokens || 0;
+  // A video sent to a local model is not sent as a video: it is decoded to
+  // frames, so it costs N images, not `att.tokens` (which was measured as
+  // duration x a per-second video rate at attach time). Same plan the server
+  // executes — see videoFramePlan.ts.
+  //
+  // `durationSec` is written at attach time. Attachments from before that field
+  // existed have none, and there is no honest way to recover it here, so they
+  // keep reporting the old video estimate rather than a number invented from
+  // the old number.
+  if (kind === 'video' && String(ctx.aiName || '').toLowerCase().includes('local')) {
+    const framed = frameTokensForDuration(att.durationSec);
+    if (framed > 0) return framed;
+  }
   return att.tokens || 0;
 }
 
