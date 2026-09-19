@@ -214,6 +214,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.lmStudioPath.placeholder': 'e.g. C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
   'settings.lmStudioPath.help':
     "Path to LM Studio.exe, used to auto-start LM Studio when a Local conversation begins and the server isn't running. Leave empty to manage LM Studio manually. Saved with the API keys.",
+  'settings.gemmaBatch.label': 'Gemma vision models — batch size fix',
+  'settings.gemmaBatch.preview': 'Preview',
+  'settings.gemmaBatch.apply': 'Patch all Gemma vision models',
+  'settings.gemmaBatch.working': 'Working…',
+  'settings.gemmaBatch.previewOf': 'Would change. Gemma vision models found:',
+  'settings.gemmaBatch.resultOf': 'Done. Gemma vision models found:',
+  'settings.gemmaBatch.changedN': 'changed:',
+  'settings.gemmaBatch.backup': 'Originals copied to:',
+  'settings.gemmaBatch.help':
+    "Gemma reads an image with non-causal attention, and llama.cpp requires the physical batch size (n_ubatch) to be at least as large as that block. LM Studio's default is 512, which is too small: sending an image kills the model process mid-request, and Nexus sees the model as unloaded. There is no command-line flag for this, so the button edits LM Studio's own per-model config files, raising llm.load.llama.physicalBatchSize to 2048 for every installed model whose architecture is Gemma and which reports vision. It only ever raises — a larger value you set by hand is kept — and running it twice changes nothing the second time. The originals are copied into local_data/backups/lmstudio-config/ first, with a manifest describing how to undo it. Two things this does not do: a Gemma you download later is not covered until you press it again, and a model already loaded keeps the batch size it was loaded with until the next load.",
   'settings.diffViewerPath.label': 'Diff viewer executable path',
   'settings.diffViewerPath.placeholder': 'e.g. C:\\Program Files\\WinMerge\\WinMergeU.exe',
   'settings.diffViewerPath.help':
@@ -1628,6 +1638,16 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.lmStudioPath.placeholder': '例: C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
   'settings.lmStudioPath.help':
     'LM Studio.exe のパスです。Local の会話を始めたとき、LM Studio のサーバーが起動していなければ、このパスから自動起動します。空にしておくと手動での管理になります。APIキーと一緒に保存されます。',
+  'settings.gemmaBatch.label': 'Gemma 系の視覚モデル — バッチサイズの修正',
+  'settings.gemmaBatch.preview': '確認だけ',
+  'settings.gemmaBatch.apply': 'Gemma 系の視覚モデルをすべて修正',
+  'settings.gemmaBatch.working': '実行中…',
+  'settings.gemmaBatch.previewOf': '変更予定。見つかった Gemma 視覚モデル:',
+  'settings.gemmaBatch.resultOf': '完了。見つかった Gemma 視覚モデル:',
+  'settings.gemmaBatch.changedN': '変更:',
+  'settings.gemmaBatch.backup': '元のファイルの控え:',
+  'settings.gemmaBatch.help':
+    'Gemma は画像を「非因果的な注意」で読みます。llama.cpp はその場合、物理バッチサイズ（n_ubatch）が画像のブロック以上であることを要求します。LM Studio の既定値は 512 で足りず、画像を送るとモデルのプロセスが処理の途中で落ち、Nexus からは「読み込まれていない」ように見えます。コマンドラインのフラグは存在しないため、このボタンは LM Studio 自身のモデル別設定ファイルを書き換え、アーキテクチャが Gemma かつ視覚ありと申告しているインストール済みモデルすべてについて llm.load.llama.physicalBatchSize を 2048 に上げます。上げるだけで、手動で設定したより大きい値はそのまま残します。二度押しても二度目は何も変わりません。書き換える前に元のファイルを local_data/backups/lmstudio-config/ に控え、戻し方を書いた manifest を添えます。できないことが二つあります。後からダウンロードした Gemma は、もう一度押すまで対象になりません。すでに読み込み済みのモデルは、次に読み込み直すまで読み込み時のバッチサイズのままです。',
   'settings.diffViewerPath.label': '差分比較ツールの実行ファイルのパス',
   'settings.diffViewerPath.placeholder': '例: C:\\Program Files\\WinMerge\\WinMergeU.exe',
   'settings.diffViewerPath.help':

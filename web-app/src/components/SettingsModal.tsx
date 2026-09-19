@@ -94,6 +94,27 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // Which engine row has an action in flight, and the last message from it.
   const [engineBusy, setEngineBusy] = useState<string | null>(null);
   const [engineMsg, setEngineMsg] = useState<Record<string, string>>({});
+
+  // Gemma vision batch-size patch (LM Studio). Preview and apply share one
+  // report shape, so what the button shows before is what it did after.
+  const [gemmaBusy, setGemmaBusy] = useState(false);
+  const [gemmaReport, setGemmaReport] = useState<any>(null);
+  const [gemmaPreview, setGemmaPreview] = useState(false);
+
+  const runGemmaPatch = React.useCallback(async (dry: boolean) => {
+    setGemmaBusy(true);
+    try {
+      const res = await fetch('/api/local/gemma-batch', { method: dry ? 'GET' : 'POST' });
+      const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      setGemmaReport(json);
+      setGemmaPreview(dry);
+    } catch (e: any) {
+      setGemmaReport({ error: e?.message || 'Request failed.' });
+      setGemmaPreview(dry);
+    } finally {
+      setGemmaBusy(false);
+    }
+  }, []);
   const enginePollRef = React.useRef<any>(null);
 
   const refreshEngines = React.useCallback((withPaths = false) => {
@@ -780,6 +801,72 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <p className="text-xs text-muted-foreground mt-1">
                 <Tx k="settings.lmStudioPath.help" />
               </p>
+            </div>
+
+            {/* ── Gemma vision batch-size patch ──────────────────────────────
+                Gemma attends over the image block non-causally; llama.cpp
+                asserts n_ubatch >= n_tokens_all for such a batch, and LM
+                Studio's default physical batch size of 512 is below what an
+                image needs. The model process dies mid-request. There is no
+                `lms load` flag for it, so this writes LM Studio's own
+                per-model config file. Raise-only, backed up, idempotent. */}
+            <div>
+              <span className="text-sm text-foreground">{t('settings.gemmaBatch.label')}</span>
+              <div className="mt-1 flex gap-2">
+                <button
+                  type="button"
+                  disabled={gemmaBusy}
+                  onClick={() => runGemmaPatch(true)}
+                  className="text-xs px-3 py-1.5 rounded-md border border-border bg-background hover:bg-muted transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {t('settings.gemmaBatch.preview')}
+                </button>
+                <button
+                  type="button"
+                  disabled={gemmaBusy}
+                  onClick={() => runGemmaPatch(false)}
+                  className="text-xs px-3 py-1.5 rounded-md border border-border bg-accent/20 hover:bg-accent/40 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {gemmaBusy ? t('settings.gemmaBatch.working') : t('settings.gemmaBatch.apply')}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.gemmaBatch.help" />
+              </p>
+              {gemmaReport && (
+                <div className="mt-2 text-[10px] font-mono border border-border rounded-md p-2 bg-background/50 max-h-56 overflow-auto">
+                  {gemmaReport.error && <p className="text-red-400">{gemmaReport.error}</p>}
+                  {!gemmaReport.error && (
+                    <>
+                      <p className="text-muted-foreground">
+                        {gemmaPreview ? t('settings.gemmaBatch.previewOf') : t('settings.gemmaBatch.resultOf')}
+                        {' '}
+                        {gemmaReport.scanned} / {t('settings.gemmaBatch.changedN')} {gemmaReport.changed}
+                      </p>
+                      {gemmaReport.results?.map((r: any) => (
+                        <p
+                          key={r.modelKey + r.configPath}
+                          className={
+                            r.action === 'refused' || r.action === 'failed'
+                              ? 'text-red-400'
+                              : r.action === 'already-ok'
+                                ? 'text-muted-foreground'
+                                : 'text-foreground'
+                          }
+                        >
+                          {r.action.padEnd(11, ' ')} {r.previousValue ?? '–'} &rarr; {r.value ?? '–'} {r.modelKey}
+                          {r.reason ? `  (${r.reason})` : ''}
+                        </p>
+                      ))}
+                      {!gemmaPreview && gemmaReport.backupDir && (
+                        <p className="text-muted-foreground mt-1">
+                          {t('settings.gemmaBatch.backup')} {gemmaReport.backupDir}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             <div>
