@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1224,16 +1224,38 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             least one tool this turn — so its ABSENCE on a reply that claims
             tool use is itself the finding. Shown to the user only; the entity
             never sees this and it is not part of the context. */}
-        {!isUser && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0 && (
-          <button
-            onClick={() => setToolReportOpen(true)}
-            title={t('bubble.toolCallsTitle').replace('{n}', String(msg.toolCalls.length))}
-            className="flex items-center gap-1 opacity-70 hover:opacity-100 transition"
-          >
-            <Wrench size={12} />
-            <span className="text-[10px]">{msg.toolCalls.length}</span>
-          </button>
-        )}
+        {!isUser && Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0 && (() => {
+          // The list also carries `kind: 'event'` entries — things that happened
+          // BETWEEN the tool calls (automatic compaction). They are counted
+          // separately so the wrench number keeps meaning exactly what it has
+          // always meant: tools the model actually dispatched.
+          const entries = msg.toolCalls as any[];
+          const eventCount = entries.filter((c) => c?.kind === 'event').length;
+          const toolCount = entries.length - eventCount;
+          return (
+            <button
+              onClick={() => setToolReportOpen(true)}
+              title={(eventCount > 0
+                ? t('bubble.toolCallsTitleWithEvents').replace('{e}', String(eventCount))
+                : t('bubble.toolCallsTitle')
+              ).replace('{n}', String(toolCount))}
+              className="flex items-center gap-1 opacity-70 hover:opacity-100 transition"
+            >
+              {toolCount > 0 && (
+                <>
+                  <Wrench size={12} />
+                  <span className="text-[10px]">{toolCount}</span>
+                </>
+              )}
+              {eventCount > 0 && (
+                <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                  <Scissors size={12} />
+                  <span className="text-[10px]">{eventCount}</span>
+                </span>
+              )}
+            </button>
+          );
+        })()}
       </div>
 
       {/* Turn-stopped diagnostics. Deliberately rendered OUTSIDE the message
@@ -1575,8 +1597,19 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 <Wrench size={16} className="text-blue-500 shrink-0" />
                 <span className="text-sm font-medium">{t('bubble.tool.title')}</span>
                 <span className="text-[10px] text-muted-foreground shrink-0">
-                  {t('bubble.tool.count').replace('{n}', String((msg.toolCalls || []).length))}
+                  {t('bubble.tool.count').replace(
+                    '{n}',
+                    String((msg.toolCalls || []).filter((c: any) => c?.kind !== 'event').length),
+                  )}
                 </span>
+                {(msg.toolCalls || []).some((c: any) => c?.kind === 'event') && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0">
+                    {t('bubble.tool.eventCount').replace(
+                      '{e}',
+                      String((msg.toolCalls || []).filter((c: any) => c?.kind === 'event').length),
+                    )}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
@@ -1602,11 +1635,23 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               </div>
             </div>
             <div className="p-4 overflow-y-auto space-y-3">
-              {(msg.toolCalls || []).map((c: any, i: number) => (
-                <div key={i} className="rounded-lg border border-border overflow-hidden">
-                  <div className="px-3 py-1.5 bg-muted/50 flex items-center gap-2">
+              {(msg.toolCalls || []).map((c: any, i: number) => {
+              // Events are drawn in the same ordered list — that ordering IS
+              // the information ("it happened between which two calls?") — but
+              // tinted and un-monospaced so they read as something that
+              // happened to the turn, not something the model called.
+              const isEvent = c?.kind === 'event';
+              const eventLabel = c?.name === 'automatic compaction'
+                ? t('bubble.tool.event.compaction')
+                : String(c?.name ?? '');
+              return (
+                <div key={i} className={`rounded-lg border overflow-hidden ${isEvent ? 'border-amber-500/40' : 'border-border'}`}>
+                  <div className={`px-3 py-1.5 flex items-center gap-2 ${isEvent ? 'bg-amber-500/10' : 'bg-muted/50'}`}>
                     <span className="text-[10px] text-muted-foreground w-5 shrink-0">#{i + 1}</span>
-                    <span className="font-mono text-xs font-medium">{c.name}</span>
+                    {isEvent && <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />}
+                    <span className={isEvent ? 'text-xs font-medium text-amber-700 dark:text-amber-300' : 'font-mono text-xs font-medium'}>
+                      {isEvent ? eventLabel : c.name}
+                    </span>
                     {c.at && (
                       <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
                         {new Date(c.at).toLocaleTimeString()}
@@ -1625,7 +1670,8 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                     </div>
                   )}
                 </div>
-              ))}
+              );
+              })}
             </div>
             <div className="px-5 py-2 border-t border-border text-[10px] text-muted-foreground shrink-0">
               {t('bubble.tool.footer')}

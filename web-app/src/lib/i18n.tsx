@@ -349,6 +349,8 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'No price configured for "{model}".\nAdd it in src/lib/modelPricing.json',
   'bubble.copyLink': 'Copy a link to this message',
   'bubble.toolCallsTitle': '{n} tool call(s) — click for details',
+  'bubble.toolCallsTitleWithEvents':
+    '{n} tool call(s) + {e} event(s) (e.g. automatic compaction) — click for details',
   'bubble.noticeFooter':
     'Shown to you only — not part of the conversation or the context sent to the model.',
   'bubble.webSources': 'Web sources ({n}) — verified, clickable',
@@ -392,6 +394,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'bubble.delete.cloned': 'Delete (cloned)',
   'bubble.tool.title': 'Tool calls in this message',
   'bubble.tool.count': '{n} call(s)',
+  'bubble.tool.eventCount': '+ {e} event(s)',
+  // Not a tool the entity called — Anthropic's own automatic compaction, listed
+  // in place so you can see which two tool calls it happened between.
+  'bubble.tool.event.compaction': 'automatic compaction (Anthropic-side)',
   'bubble.tool.copyJson': 'Copy the whole report as JSON',
   'bubble.tool.truncated':
     'Arguments truncated for storage — original was {n} characters.',
@@ -1763,6 +1769,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
     '「{model}」の価格が未設定です。\nsrc/lib/modelPricing.json に追加してください。',
   'bubble.copyLink': 'このメッセージへのリンクをコピー',
   'bubble.toolCallsTitle': 'ツール呼び出し {n} 件 — クリックで詳細',
+  'bubble.toolCallsTitleWithEvents':
+    'ツール呼び出し {n} 件 ＋ イベント {e} 件（自動コンパクションなど） — クリックで詳細',
   'bubble.noticeFooter':
     'これはあなたにだけ表示されます。会話にも、モデルへ送る文脈にも含まれません。',
   'bubble.webSources': 'Web の出典（{n} 件）— 検証済み・クリック可能',
@@ -1806,6 +1814,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'bubble.delete.cloned': '削除（複製）',
   'bubble.tool.title': 'このメッセージでのツール呼び出し',
   'bubble.tool.count': '{n} 件',
+  'bubble.tool.eventCount': '＋ イベント {e} 件',
+  // エンティティが呼んだツールではなく、Anthropic 側の自動コンパクション。
+  // どのツール呼び出しとどのツール呼び出しの間で起きたかが分かるよう、
+  // 同じ並びの中にそのまま置く。
+  'bubble.tool.event.compaction': '自動コンパクション（Anthropic 側）',
   'bubble.tool.copyJson': 'レポート全体を JSON でコピー',
   'bubble.tool.truncated':
     '保存のため引数を切り詰めました — 元は {n} 文字でした。',

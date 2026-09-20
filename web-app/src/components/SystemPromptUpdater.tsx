@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Copy, FolderOutput } from 'lucide-react';
+import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
@@ -425,7 +425,10 @@ export default function SystemPromptUpdater({
   // MessageBubble's Tool Usage Report but scoped to a single agent run
   // instead of a single reply; reset when the next run starts, otherwise
   // stays on screen so it is still readable once the run has finished.
-  const [runToolCalls, setRunToolCalls] = useState<{ name: string; input: any; at: number }[]>([]);
+  // `kind: 'event'` entries are not tools the agent called — they are things
+  // that happened between its calls (Anthropic-side automatic compaction). Kept
+  // in the same ordered list because the position is the information.
+  const [runToolCalls, setRunToolCalls] = useState<{ name: string; input: any; at: number; kind?: string }[]>([]);
   const [toolLogOpen, setToolLogOpen] = useState(false);
   const [toolLogCopyState, setToolLogCopyState] = useState<'idle' | 'copied'>('idle');
   // Refs, not state: these are written on every SSE frame. Keeping them out of
@@ -1181,6 +1184,9 @@ export default function SystemPromptUpdater({
               name: d.call.name,
               input: d.call.input,
               at: Number(d.call.at) || Date.now(),
+              // Carried so the list can show an event as an event instead of
+              // silently filing automatic compaction under "tools it called".
+              ...(typeof d.call.kind === 'string' ? { kind: d.call.kind } : {}),
             }]);
           }
           if (d?.error) throw new Error(d.error);
@@ -2325,15 +2331,26 @@ export default function SystemPromptUpdater({
                 {runUsage.total.toLocaleString()} in · {runUsage.cached.toLocaleString()} cached · {runUsage.out.toLocaleString()} out
               </span>
             )}
-            {runToolCalls.length > 0 && (
-              <button
-                onClick={() => setToolLogOpen(true)}
-                title={t('spu.run.toolsTitle')}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
-              >
-                <Wrench size={10} />{runToolCalls.length}
-              </button>
-            )}
+            {runToolCalls.length > 0 && (() => {
+              // Counted apart so the wrench number keeps meaning "tools the
+              // agent dispatched" even when an event is in the list.
+              const eventCount = runToolCalls.filter((c) => c.kind === 'event').length;
+              const toolCount = runToolCalls.length - eventCount;
+              return (
+                <button
+                  onClick={() => setToolLogOpen(true)}
+                  title={t('spu.run.toolsTitle')}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25"
+                >
+                  {toolCount > 0 && (<><Wrench size={10} />{toolCount}</>)}
+                  {eventCount > 0 && (
+                    <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                      <Scissors size={10} />{eventCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
           </div>
         )}
 
@@ -2890,8 +2907,19 @@ export default function SystemPromptUpdater({
                 <Wrench size={16} className="text-blue-500 shrink-0" />
                 <span className="text-sm font-medium">{t('spu.tool.title')}</span>
                 <span className="text-[10px] text-muted-foreground shrink-0">
-                  {t('spu.tool.count').replace('{n}', String(runToolCalls.length))}
+                  {t('spu.tool.count').replace(
+                    '{n}',
+                    String(runToolCalls.filter((c) => c.kind !== 'event').length),
+                  )}
                 </span>
+                {runToolCalls.some((c) => c.kind === 'event') && (
+                  <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0">
+                    {t('bubble.tool.eventCount').replace(
+                      '{e}',
+                      String(runToolCalls.filter((c) => c.kind === 'event').length),
+                    )}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
@@ -2917,11 +2945,19 @@ export default function SystemPromptUpdater({
               </div>
             </div>
             <div className="p-4 overflow-y-auto space-y-3">
-              {runToolCalls.map((c, i) => (
-                <div key={i} className="rounded-lg border border-border overflow-hidden">
-                  <div className="px-3 py-1.5 bg-muted/50 flex items-center gap-2">
+              {runToolCalls.map((c, i) => {
+              const isEvent = c.kind === 'event';
+              const eventLabel = c.name === 'automatic compaction'
+                ? t('bubble.tool.event.compaction')
+                : String(c.name ?? '');
+              return (
+                <div key={i} className={`rounded-lg border overflow-hidden ${isEvent ? 'border-amber-500/40' : 'border-border'}`}>
+                  <div className={`px-3 py-1.5 flex items-center gap-2 ${isEvent ? 'bg-amber-500/10' : 'bg-muted/50'}`}>
                     <span className="text-[10px] text-muted-foreground w-5 shrink-0">#{i + 1}</span>
-                    <span className="font-mono text-xs font-medium">{c.name}</span>
+                    {isEvent && <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />}
+                    <span className={isEvent ? 'text-xs font-medium text-amber-700 dark:text-amber-300' : 'font-mono text-xs font-medium'}>
+                      {isEvent ? eventLabel : c.name}
+                    </span>
                     {c.at && (
                       <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
                         {new Date(c.at).toLocaleTimeString()}
@@ -2940,7 +2976,8 @@ export default function SystemPromptUpdater({
                     </div>
                   )}
                 </div>
-              ))}
+              );
+              })}
             </div>
             <div className="px-5 py-2 border-t border-border text-[10px] text-muted-foreground shrink-0">
               {t('spu.tool.footer')}

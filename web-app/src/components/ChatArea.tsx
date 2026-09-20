@@ -246,11 +246,11 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
 // `Local` is deliberately empty: the list comes from whatever LM Studio has
 // loaded, so there is no sane default to guess.
 const FAMILY_DEFAULT_MODEL: Record<string, string> = {
-  Claude: 'claude-sonnet-5',
-  Gemini: 'gemini-3.7-flash',
+  Claude: 'claude-opus-5',
+  Gemini: 'gemini-3.8-flash',
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
-  GLM: 'glm-5.2',
+  GLM: 'glm-5.3',
   Grok: 'grok-4.6',
   Kimi: 'moonshotai/Kimi-K3',
   Cohere: 'command-a-reasoning-08-2025',
@@ -2531,6 +2531,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // A tool the model really dispatched. Recorded regardless of
                 // whether it succeeded — the report answers "was this called?",
                 // which is the question a hallucinated tool claim fails.
+                // The same channel also carries `kind: 'event'` entries (e.g.
+                // automatic compaction): not tools, but things that happened
+                // between them, kept in the same list because their POSITION in
+                // the sequence is the whole point. MessageBubble separates the
+                // two; nothing else reads this list.
                 if (data.call && typeof data.call.name === 'string') {
                   toolCalls.push(data.call);
                 }

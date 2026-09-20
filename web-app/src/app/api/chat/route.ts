@@ -782,14 +782,51 @@ async function streamClaudeViaAgentSDK(args: {
       // SDK goes SILENT for minutes (no tool/thought/text events), which would
       // otherwise trip the stall watchdog and freeze the camera on a stale
       // phase. Instead we track it explicitly: (a) suppress the stall warning
-      // for the whole compaction, (b) emit a running "~N min remaining"
-      // countdown so the user sees progress, (c) the tool_activity below
-      // carries name 'compact' so the camera resolves to Waiting. Cleared on
-      // compact_boundary / compact_error.
+      // for the whole compaction, (b) refresh a live "~N min remaining" chip so
+      // the user sees progress (chip only — it disappears when it stops being
+      // true), (c) the tool_activity below carries name 'compact' so the camera
+      // resolves to Waiting. Cleared on compact_boundary / compact_error.
       let compacting = false;
       let compactStartAt = 0;
       let lastCompactionMinEmitted = 0;
       const COMPACT_ESTIMATE_MS = 7 * 60 * 1000; // typical total, ~7 min
+      // Compaction is not a tool call, but it is the one thing that happens
+      // BETWEEN tool calls and silently changes what the model can still see.
+      // The 🔧 report is the only record that preserves turn ordering, so the
+      // fact goes there — tagged `kind: 'event'` so the report can show it as
+      // what it is instead of counting it as a tool the model dispatched.
+      // Built in ONE place and reached from three exits (boundary = finished,
+      // compact_error = failed, the `finally` below = the turn ended while it
+      // was still running) so no exit can record a different-shaped fact, and
+      // an interrupted compaction still leaves a trace.
+      let compactRecorded = false;
+      const recordCompaction = (
+        outcome: 'completed' | 'failed' | 'interrupted',
+        extra: Record<string, unknown> = {},
+      ) => {
+        if (compactRecorded) return; // once per compaction, not once per turn
+        compactRecorded = true;
+        const startedAt = compactStartAt || Date.now();
+        // try/catch: every exit path can race stream teardown on client abort.
+        try {
+          enqueue({
+            type: 'tool_call',
+            call: {
+              name: 'automatic compaction',
+              kind: 'event',
+              // `at` is when compaction STARTED, because that is the point in
+              // the tool sequence the reader is looking for ("it happened
+              // between which two calls?"). Duration is carried separately.
+              at: startedAt,
+              input: {
+                outcome,
+                ...extra,
+                elapsedSec: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+              },
+            },
+          });
+        } catch {}
+      };
       const touchSdkActivity = () => {
         lastSdkEventAt = Date.now();
         if (stallWarned) {
@@ -809,9 +846,12 @@ async function streamClaudeViaAgentSDK(args: {
           if (remainingMin !== lastCompactionMinEmitted) {
             lastCompactionMinEmitted = remainingMin;
             try {
-              enqueue({ type: 'notice', content: language === 'ja'
-                ? `会話の自動要約を実行中… 再開まで残り約${remainingMin}分（推定）。`
-                : `Summarizing this conversation to make room (automatic compaction)… roughly ${remainingMin} min remaining (estimated).` });
+              // No `notice` here. Notices persist on the message forever, but a
+              // countdown is only true while it is counting — and it is never
+              // even rendered live (flushStreamingMessage does not write
+              // notices), so it was only ever read after it became false. The
+              // live signal is the tool_activity chip below; the durable fact
+              // is the completion notice at compact_boundary.
               enqueue({ type: 'tool_activity', tool: 'summarize this conversation', name: 'compact', detail: language === 'ja'
                 ? `残り約${remainingMin}分（推定）`
                 : `~${remainingMin} min remaining (estimated)` });
@@ -1836,15 +1876,20 @@ async function streamClaudeViaAgentSDK(args: {
                   compacting = true;
                   compactStartAt = Date.now();
                   lastCompactionMinEmitted = 7;
+                  // Reset per compaction, not per turn: a long turn can compact
+                  // more than once, and each one is a separate entry.
+                  compactRecorded = false;
                   enqueue({ type: 'tool_activity', tool: 'summarize this conversation', name: 'compact', detail: language === 'ja' ? '残り約7分（推定）' : '~7 min remaining (estimated)' });
-                  enqueue({ type: 'notice', content: language === 'ja'
-                    ? 'この会話は長くなったため、続きのための空きを作るべく内容を自動で要約しています（コンパクション）。再開まで通常約7分かかります。'
-                    : 'This conversation has gotten long, so it is being summarized automatically to make room for more (compaction). This usually takes about 7 minutes before the turn resumes.' });
+                  // No announcement notice: it says "this will take about 7
+                  // minutes", which stops being true the moment it finishes,
+                  // and it is only ever read after that. The live signal is the
+                  // chip above; the durable fact is recorded at the boundary.
                 }
                 const cErr = (msg as any).compact_error;
                 if (cErr) {
                   compacting = false;
                   console.log(`${oauthTag} compact_error: ${cErr}`);
+                  recordCompaction('failed', { error: String(cErr) });
                   enqueue({ type: 'notice', content: `Automatic compaction failed: ${cErr}` });
                 }
                 continue;
@@ -1856,6 +1901,10 @@ async function streamClaudeViaAgentSDK(args: {
                 // Clear the "summarizing…" chip so the loading label falls back
                 // to the model's real next action instead of lingering.
                 enqueue({ type: 'tool_activity', tool: null, name: null });
+                recordCompaction('completed', {
+                  trigger: meta.trigger || 'auto',
+                  ...(meta.pre_tokens ? { pre_tokens: meta.pre_tokens } : {}),
+                });
                 enqueue({ type: 'notice', content: language === 'ja'
                   ? `自動コンパクションが完了した（${meta.trigger || 'auto'}${meta.pre_tokens ? `、${meta.pre_tokens}トークン前` : ''}）。この時点より前の会話は要約に置き換わった——それ以前のメッセージの細部は逐語では再現されない。`
                   : `Automatic compaction completed (${meta.trigger || 'auto'}${meta.pre_tokens ? `, ${meta.pre_tokens} tokens before` : ''}). The conversation before this point has been replaced with a summary — fine details of earlier messages are no longer reproduced verbatim.` });
@@ -2193,6 +2242,10 @@ async function streamClaudeViaAgentSDK(args: {
         // refresh token, etc.).
         const msg = e?.message || String(e);
         console.error('[claude-oauth] error:', msg);
+        // If the turn died while compaction was still running, record it here
+        // (before the stream closes) so the report says "it started and did not
+        // finish" rather than showing nothing at all.
+        if (compacting) recordCompaction('interrupted');
         // Translate a known signature (context-window overflow, rate limit,
         // credit, token) into a plain reason so the stop is never a mystery;
         // keep the raw text too for anything unrecognized.
@@ -2203,6 +2256,11 @@ async function streamClaudeViaAgentSDK(args: {
         try { controller.enqueue(`data: ${JSON.stringify({ error: shown })}\n\n`); } catch {}
         try { controller.close(); } catch {}
       } finally {
+        // Last resort for exits that are neither boundary nor catch (e.g. the
+        // client aborted mid-compaction). The stream may already be closed, in
+        // which case the enqueue inside recordCompaction throws and is
+        // swallowed — this is best effort, not a guarantee.
+        if (compacting) recordCompaction('interrupted');
         // Stop the stall watchdog on every exit path — a leaked interval
         // would keep firing enqueue() against a closed controller.
         clearInterval(stallTimer);
