@@ -641,6 +641,21 @@ async function streamClaudeViaAgentSDK(args: {
   const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
+  // Working-directory note — OAuth ONLY, and only when Bash actually exists.
+  // Claude Code owns its built-in tools' descriptions and we cannot override
+  // them, so the one true thing we can say about them has to ride on the system
+  // prompt instead. It is scoped here rather than in the shared toolInstruction
+  // (which route.ts appends for EVERY provider) because on the non-OAuth paths
+  // it would be a lie: there, each Bash call spawns a fresh process in the
+  // workspace and relative file-tool paths never consult a shell cwd at all.
+  // The gate mirrors the tool gate below (`dangerousAlwaysDisabled`): a being
+  // without dangerous tools has no Bash, so it cannot cd, so it must not be
+  // handed a warning about a trap it cannot reach.
+  const effectiveSystemPrompt =
+    toolUseEnabled && agentDangerousTools && I.oauthCwdNote
+      ? `${systemPrompt}\n\n${I.oauthCwdNote}`
+      : systemPrompt;
+
   // Build the content blocks for the LATEST user message (its text + any image
   // attachments). The full prior conversation is replayed separately as a text
   // transcript (see historyText below) — we always start a fresh session and
@@ -1772,7 +1787,7 @@ async function streamClaudeViaAgentSDK(args: {
         const consume = async (useResume: string | null): Promise<{ subtype: string | null; errorText: string }> => {
           const opts: any = { ...queryOptions };
           if (useResume) { opts.resume = useResume; delete opts.systemPrompt; }
-          else { delete opts.resume; opts.systemPrompt = systemPrompt; }
+          else { delete opts.resume; opts.systemPrompt = effectiveSystemPrompt; }
           let resultSubtype: string | null = null;
           let resultErrorText = '';
           // ── Turn instrumentation ────────────────────────────────────────

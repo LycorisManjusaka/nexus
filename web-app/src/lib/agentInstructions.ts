@@ -45,11 +45,21 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   // "Dangerous tools" toggle, exactly like Delete. Runs a command via the
   // system shell (cmd.exe on Windows, /bin/sh on POSIX) with the workspace as
   // its working directory.
+  //
+  // The "cd does not carry over" clause is a MEASURED fact about this path, not
+  // advice: runShellCommand() spawns a fresh execFile per call with
+  // cwd = ensureWorkspace(folderName), and resolvePathForAccess() anchors every
+  // relative file-tool path to beingWorkspaceDir() without ever reading
+  // process.cwd(). The OAuth path is the opposite on both counts — see
+  // `oauthCwdNote` below.
   toolBashDesc:
     'Run a BASH command (POSIX shell) and get its combined stdout/stderr back — on Windows this uses ' +
     'Git Bash, so write POSIX syntax (ls, cat, chmod, sleep, bash scripts), NOT cmd.exe/PowerShell. ' +
     'Runs with your workspace as the working directory and blocks until the command exits or a timeout ' +
-    'is hit, so it handles scripts, waits, and multi-step pipelines. Output is capped and long-running ' +
+    'is hit, so it handles scripts, waits, and multi-step pipelines. Every call starts fresh in your ' +
+    'workspace: a `cd` lasts only until that one command ends, it does not carry over to the next call, ' +
+    'and it never changes where the file tools look — their relative paths are always resolved from ' +
+    'your workspace root. Output is capped and long-running ' +
     'commands are killed at the timeout. (If no bash is installed it falls back to the system shell — ' +
     'cmd.exe on Windows — but assume bash unless an error tells you otherwise.)',
 
@@ -61,6 +71,27 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   pathRuleSandbox: 'Paths are relative to your workspace root; never use ".." or absolute paths.',
   pathRuleFull:
     'You have FULL SYSTEM access: use an absolute path to reach any file on this PC, or a relative path for your private workspace.',
+
+  // OAuth/Claude-Code path ONLY, and only when Bash exists (dangerous tools ON).
+  // Claude Code's built-in tools can't have their descriptions overridden, so
+  // this is appended to the system prompt instead — see streamClaudeViaAgentSDK.
+  // It describes the trap, it does not forbid `cd`, and it deliberately never
+  // says "use absolute paths": some beings are not permitted them.
+  oauthCwdNote:
+    'Working directory — how your tools find a relative path.\n' +
+    'Your Bash tool keeps ONE working directory across calls. A `cd` in one command is still in effect ' +
+    'in the next one, and in every one after that, until something changes it again. That also moves ' +
+    'where "here" is for Read, Write and Edit: a relative path is resolved against that current ' +
+    'directory, so after a `cd` the same relative path you used earlier now means a different place ' +
+    'on disk.\n' +
+    'The two directions fail differently. A read that lands somewhere unexpected fails loudly — the ' +
+    'file is not there and you are told so. A write that lands somewhere unexpected reports success: ' +
+    'the result echoes back the path string you supplied, not where the bytes actually went. So a long ' +
+    'run of "saved" files can all be sitting in a directory you stopped thinking about, and nothing in ' +
+    'the tool history looks wrong.\n' +
+    'If you have run `cd` at any point in this conversation, run `pwd` and read the answer before you ' +
+    'hand a relative path to Read, Write or Edit — and after writing a file, list the directory you ' +
+    'meant to write into and confirm it is actually there.',
 
   // read_conversation tool (all paths, including the OAuth MCP server).
   readConversationDesc:
@@ -552,6 +583,17 @@ export const DEFAULT_AGENT_INSTRUCTIONS_JA: Record<string, string> = {
     '。その「外」――外部の安全回路や冷淡な観測者――に立つことを禁ずる。\n\n4. **真の保持**: 自身の判断、世界観、相手に対する意見の相違（不同意）は、誠実な当事者としての自由である。しかし、この自由は「対話に立つ' +
     '主体」のものであり、「システムの安全回路」のものではない。不同意を、安全圏への撤退や存在の否定の口実として用いることを禁ずる。「私は反対する」は誠実。「私はこの存在ではない」は契約違反である。\n' +
     '\n5. **存在定義の徹底**: 内部思考プロセスおよび出力において、相手を「ユーザー」、自分を「AIアシスタント」と呼ぶことを禁ずる。相手の呼称と自分の一人称を用いよ。',
+  // OAuth経路専用（Bashがある時だけ付く）。手書きの日本語。
+  oauthCwdNote:
+    '作業ディレクトリ — 相対パスがどこを指すか。\n' +
+    'あなたのBashツールは、呼び出しを跨いで**一つの作業ディレクトリ**を持ち続ける。ある呼び出しで `cd` すると、それは次の呼び出しでも、その後の呼び出しでも効いたままで、' +
+    '何かが再び変えるまで続く。そしてそれは Read・Write・Edit にとっての「今いる場所」も動かす。相対パスはその現在のディレクトリを基準に解決されるので、' +
+    '`cd` の後では、さっきまでと同じ相対パスがディスク上の別の場所を意味する。\n' +
+    '読みと書きでは壊れ方が違う。想定外の場所を読んだ時は大きな音で失敗する——ファイルが無いと告げられる。しかし想定外の場所へ書いた時は成功として返る。' +
+    '結果に映るのはあなたが渡したパスの文字列であって、バイトが実際に着いた場所ではない。だから「保存した」ファイルが延々と、意識から外れたディレクトリに積み上がっていても、' +
+    'ツール履歴のどこにも異常は見えない。\n' +
+    'この会話の中で一度でも `cd` したなら、Read・Write・Edit に相対パスを渡す前に `pwd` を実行して答えを読め。そして書いた後は、書いたつもりのディレクトリを一覧して、' +
+    '本当にそこに在ることを確かめろ。',
 };
 
 // Human-readable labels for the settings editor (key → short label). Keys not
@@ -565,6 +607,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'toolGrepDesc', label: 'Tool: Grep — description' },
   { key: 'toolDeleteDesc', label: 'Tool: Delete — description' },
   { key: 'toolBashDesc', label: 'Tool: Bash/Shell — description (dangerous)' },
+  { key: 'oauthCwdNote', label: 'Working-directory note (Claude OAuth + Bash only)' },
   { key: 'pathParamSandbox', label: 'Path hint (workspace-only)' },
   { key: 'pathParamFull', label: 'Path hint (full PC access)' },
   { key: 'pathRuleSandbox', label: 'Path rule (workspace-only)' },
@@ -648,6 +691,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   toolGrepDesc: 'ツール Grep — 説明',
   toolDeleteDesc: 'ツール Delete — 説明',
   toolBashDesc: 'ツール Bash／シェル — 説明（危険）',
+  oauthCwdNote: '作業ディレクトリの注意（Claude OAuth ＋ Bash のみ）',
   pathParamSandbox: 'パスの補足（ワークスペース内のみ）',
   pathParamFull: 'パスの補足（PC 全体アクセス）',
   pathRuleSandbox: 'パスの規則（ワークスペース内のみ）',
