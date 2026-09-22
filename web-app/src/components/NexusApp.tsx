@@ -87,6 +87,31 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const [folders, setFolders] = useState<any[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
 
+  // ── Is a Claude OAuth token configured on THIS machine? ───────────────────
+  // New conversations default to monthly-paid (OAuth) Claude, but the server
+  // rejects an OAuth turn with no token outright (hard 400, no silent fallback
+  // to the API key — by design). On a machine that only has an API key that
+  // default would break every new conversation until the mode is switched by
+  // hand, so the default follows what is actually configured here.
+  //   null  → not known yet (fetch in flight) → treat as "OAuth", the stated
+  //           default; the only cost of being wrong is one loud, actionable 400
+  //   true  → OAuth default
+  //   false → API-key default
+  // The keys blob is NOT in globalSettings (that is localStorage); it only
+  // exists server-side, hence the fetch. Only the boolean crosses the wire
+  // boundary into component state — never the token itself.
+  const [claudeOAuthAvailable, setClaudeOAuthAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/keys')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled) setClaudeOAuthAvailable(!!(data?.claudeOAuthToken || '').trim());
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   // Load basic data
   useEffect(() => {
     const savedGlobal = localStorage.getItem('nexus_globalSettings');
@@ -686,6 +711,8 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             defaultAiVoice={activeFolder.settings?.aiVoice}
             defaultLiveSessionVoice={activeFolder.settings?.liveSessionVoice || 'Aoede'}
             globalSettings={globalSettings}
+            // Decides the billing-mode default for NEW conversations only.
+            claudeOAuthAvailable={claudeOAuthAvailable}
             folders={folders}
             onUpdateTitle={fetchLogs}
             // The name this conversation was created with. It only matters

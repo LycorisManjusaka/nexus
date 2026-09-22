@@ -135,12 +135,17 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'gpt-5.4-mini',
 
   // ── Xiaomi MiMo ──────────────────────────────────────────────────────────────
-  // IMPORTANT: the open-weight MiMo-V2.5 is omnimodal, but Xiaomi's HOSTED API
-  // (api.xiaomimimo.com) is more restrictive. Per their image-understanding
-  // docs, ONLY `mimo-v2.5` (and `mimo-v2-omni`) accept image input — the
-  // `mimo-v2.5-pro` tier is TEXT-ONLY on the hosted endpoint and returns
-  // 404 "No endpoints found that support image input" if you send an image.
-  // So only the standard tier goes in the vision set.
+  // Measured 2026-09-22 against the hosted API with a real 512x512 PNG: BOTH
+  // `mimo-v2.6-pro` and `mimo-v2.6-flash` accept image input (273 prompt tokens,
+  // image_tokens=256) on the OpenAI-compatible AND the Anthropic endpoint.
+  // The V2.6 series is natively fully multimodal across both tiers — the V2.5
+  // split, where only the standard tier could see and `-pro` was TEXT-ONLY, is
+  // gone. (The old note here said v2.5-pro returned 404 "No endpoints found that
+  // support image input"; that was true of v2.5 and is not true of v2.6.)
+  // v2.5-pro and v2.5 are deprecated 2026-10-21 and stay listed so existing
+  // conversations keep working until then.
+  'mimo-v2.6-pro',
+  'mimo-v2.6-flash',
   'mimo-v2.5',
 ]);
 
@@ -196,6 +201,14 @@ export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // Xiaomi MiMo V2.5 — hosted API has a dedicated audio encoder and documents
   // native audio understanding. The pro tier is text-only, so only v2.5.
   'mimo-v2.5',
+  // MiMo V2.6 is deliberately NOT added here, though its endpoint really does
+  // take audio (measured: audio_tokens=51 on the OpenAI-compatible path).
+  // NEXUS routes MiMo through the Anthropic-format adapter, which builds image
+  // blocks only — and MiMo's ANTHROPIC endpoint silently DROPS input_audio
+  // (measured: the same real 8s clip came back with input_tokens=17, the text
+  // alone, and the model reported hearing nothing). Staying off this list makes
+  // the ears bridge engage, so the user gets a real transcript instead of a
+  // silent drop. Add V2.6 only when the adapter can actually carry audio.
 ]);
 
 export function isAudioCapable(specificModel: string | undefined | null): boolean {
@@ -231,6 +244,13 @@ export const VIDEO_CAPABLE_MODELS = new Set<string>([
   // Xiaomi MiMo V2.5 — hosted API documents native video understanding
   // (platform.xiaomimimo.com .../multimodal-understanding/video-understanding).
   'mimo-v2.5',
+  // MiMo V2.6 is deliberately NOT added here. Measured: MiMo's Anthropic
+  // endpoint DOES accept a native video block (a real 4s clip came back with
+  // 772 input tokens, video_tokens=720, and a description that matched the
+  // actual frame) — but NEXUS's `streamViaAnthropicCompat` builds image blocks
+  // only, so a video attached to a MiMo conversation never leaves the browser.
+  // Staying off this list lets the video watcher engage and produce a real
+  // description instead of a silent drop. Add V2.6 when the adapter carries it.
   // MiniMax M3 — natively multimodal, documents image + video understanding.
   'MiniMax-M3',
   // GLM-5.3-Flash — first natively multimodal GLM-5 model, documents image +

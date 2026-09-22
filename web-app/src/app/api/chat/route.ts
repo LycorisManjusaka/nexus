@@ -2633,7 +2633,8 @@ async function runModelSelectorPreflight(args: {
     isDeepSeek ? DEEPSEEK_FLASH :
     isQwen     ? 'qwen3.6-plus' :
     isOpenAI   ? 'gpt-5.6-terra' :
-    isMimo     ? 'mimo-v2.5' :
+    // V2.6 replaced the V2.5 series; v2.5-pro/v2.5 are deprecated 2026-10-21.
+    isMimo     ? 'mimo-v2.6-pro' :
     isBytedance ? 'seed-2-0-pro-260328' :
                  'local-model'
   ));
@@ -6581,7 +6582,7 @@ export async function POST(req: Request) {
           ? 'https://api.moonshot.ai/anthropic/v1/messages'
           : 'https://api.xiaomimimo.com/anthropic/v1/messages',
         apiKey: isKimi ? keys.kimi : keys.mimo,
-        model: isKimi ? resolveKimiModel(specificModel) : (specificModel || 'mimo-v2.5'),
+        model: isKimi ? resolveKimiModel(specificModel) : (specificModel || 'mimo-v2.6-pro'),
         systemPrompt: enhancedSystemPrompt,
         processedMessages,
         modelSelectedPayload,
@@ -6751,7 +6752,7 @@ export async function POST(req: Request) {
         isDeepSeek ? DEEPSEEK_FLASH :
         isQwen     ? 'qwen3.6-plus' :
         isOpenAI   ? 'gpt-5.6-terra' :
-        isMimo     ? 'mimo-v2.5' :
+        isMimo     ? 'mimo-v2.6-pro' :
         isBytedance ? 'seed-2-0-pro-260328' :
                      'local-model'
       ));

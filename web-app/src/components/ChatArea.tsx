@@ -172,8 +172,11 @@ ChatGPT  | gpt-5.4                      | on  | GPT-5.4
 ChatGPT  | gpt-5.4-mini                 | off | GPT-5.4 Mini
 
 # ── Xiaomi MiMo — always-on reasoning, no toggle ───────────────────
-MiMo     | mimo-v2.5-pro                | on  | MiMo V2.5 Pro
-MiMo     | mimo-v2.5                    | on  | MiMo V2.5
+MiMo     | mimo-v2.6-pro                | on  | MiMo V2.6 Pro
+MiMo     | mimo-v2.6-flash              | on  | MiMo V2.6 Flash
+MiMo     | mimo-v2.6-pro-ultraspeed     | on  | MiMo V2.6 Pro UltraSpeed
+MiMo     | mimo-v2.5-pro                | on  | MiMo V2.5 Pro (deprecated 2026-10-21)
+MiMo     | mimo-v2.5                    | on  | MiMo V2.5 (deprecated 2026-10-21)
 
 # ── ByteDance Seed (BytePlus ModelArk) — reasoning-first, no toggle ─
 ByteDance | seed-2-0-pro-260328          | on  | Seed 2.0 Pro
@@ -256,7 +259,7 @@ const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   Cohere: 'command-a-reasoning-08-2025',
   Minimax: 'MiniMax-M3',
   ChatGPT: 'gpt-5.6-terra',
-  MiMo: 'mimo-v2.5',
+  MiMo: 'mimo-v2.6-pro',
   ByteDance: 'seed-2-0-pro-260328',
   Local: '',
 };
@@ -295,7 +298,7 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
   }
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -518,7 +521,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
   const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
   const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'all');
-  const [claudeThinking, setClaudeThinking] = useState(false);
+  // Thinking is ON by default for Claude, matching every other family: Gemini
+  // ships thinkingLevel 'medium', the OpenAI-compatible families read
+  // `qwenEnableThinking !== false` (absent = on), MiniMax/MiMo/ByteDance are
+  // hardcoded on. Claude was the lone family that started a new conversation
+  // with reasoning off, which is a quiet accuracy tax on the first turns of
+  // every new conversation. Existing conversations are NOT touched — the
+  // load-from-log path below still honours whatever they stored.
+  const [claudeThinking, setClaudeThinking] = useState(true);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
   // When ON, a hidden note is appended to the system prompt each turn telling
   // the entity its own context-elapsed % (the same value on the status bar).
@@ -647,9 +657,30 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // ── Claude billing mode (per-conversation) ────────────────────────────────
   // 'api-key' → token-paid API key (pay per token)
   // 'oauth'   → monthly-paid OAuth token (Pro/Max subscription)
-  // Default 'api-key'. Existing conversations without this field behave as
-  // token-paid unless they already had a claudeAuthMode stored in their log.
-  const [claudeAuthMode, setClaudeAuthMode] = useState<'api-key' | 'oauth'>('api-key');
+  //
+  // NEW conversations default to 'oauth' when this machine has an OAuth token
+  // configured, and to 'api-key' when it provably does not. The condition is
+  // not caution for its own sake: the server rejects an OAuth turn with no
+  // token via a hard 400 and deliberately never falls back to the API key, so
+  // an unconditional 'oauth' default would make every new conversation on an
+  // API-key-only install fail on its first Claude message, forever, until the
+  // mode is switched by hand each time.
+  //
+  // `claudeOAuthAvailable === null` means the probe hasn't returned yet; that
+  // resolves toward 'oauth' (the stated default) rather than toward the safer
+  // value, so the worst case in the fetch window is one loud, self-describing
+  // 400 — not a silent switch to a billing mode the UI isn't showing.
+  //
+  // This still never sends 'auto'. The client picks 'api-key' or 'oauth'
+  // explicitly, which is what keeps `isOAuthClaude` an exact statement about
+  // the turn rather than a prediction (see the note above the meta bar).
+  //
+  // EXISTING conversations are unaffected: the load-from-log path below reads
+  // whatever they stored and treats a missing field as 'api-key', because
+  // flipping that would retroactively move already-billed conversations onto
+  // the subscription.
+  const oauthIsDefault = claudeOAuthAvailable !== false;
+  const [claudeAuthMode, setClaudeAuthMode] = useState<'api-key' | 'oauth'>(oauthIsDefault ? 'oauth' : 'api-key');
 
   // ── "Eyes" — vision bridge for text-only models (plus OAuth-Claude past-image
   //    recall: describes only PAST images so they persist in the flat transcript) ─
@@ -1204,10 +1235,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setAutoModelSelectAllowedModels(folderSettings.autoModelSelectAllowedModels);
         }
         setAgentSession(null);
-        setClaudeAuthMode(pick('claudeAuthMode', 'api-key') as 'api-key' | 'oauth');
+        // Folder settings still win outright; the fallback is the machine-aware
+        // default described where claudeAuthMode is declared.
+        setClaudeAuthMode(pick('claudeAuthMode', oauthIsDefault ? 'oauth' : 'api-key') as 'api-key' | 'oauth');
         if (typeof folderSettings.toolInstruction === 'string') setToolInstruction(folderSettings.toolInstruction);
         if (typeof folderSettings.toolImageInstruction === 'string') setToolImageInstruction(folderSettings.toolImageInstruction);
-        setClaudeThinking(pick('claudeThinking', false));
+        setClaudeThinking(pick('claudeThinking', true));
         setSaveThinkingToLog(pick('saveThinkingToLog', false));
         setShowFatigueToEntity(pick('showFatigueToEntity', false));
         if (typeof folderSettings.fatigueInstruction === 'string') setFatigueInstruction(folderSettings.fatigueInstruction);
@@ -4635,6 +4668,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite (Google key)' },
                           { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Google key)' },
                           { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview (Google key)' },
+                          { value: 'mimo-v2.6-pro', label: 'mimo-v2.6-pro (MiMo key)' },
+                          { value: 'mimo-v2.6-flash', label: 'mimo-v2.6-flash (MiMo key)' },
                           { value: 'mimo-v2.5', label: 'mimo-v2.5 (MiMo key)' },
                         ]}
                       />
@@ -5062,8 +5097,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="mimo-v2.5-pro">MiMo V2.5 Pro (flagship reasoning — text only)</option>
-                      <option value="mimo-v2.5">MiMo V2.5 (text + image input)</option>
+                      <option value="mimo-v2.6-pro">MiMo V2.6 Pro (flagship — text + image + video + audio)</option>
+                      <option value="mimo-v2.6-flash">MiMo V2.6 Flash (fast + cheap — same modalities)</option>
+                      <option value="mimo-v2.6-pro-ultraspeed">MiMo V2.6 Pro UltraSpeed (up to 20x faster, 10x the price)</option>
+                      <option value="mimo-v2.5-pro">MiMo V2.5 Pro (deprecated 2026-10-21 — text only)</option>
+                      <option value="mimo-v2.5">MiMo V2.5 (deprecated 2026-10-21 — text + image)</option>
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.mimo.help'))}
