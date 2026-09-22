@@ -2266,6 +2266,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Declared OUTSIDE the try so the catch below can add the failure reason to
     // the same channel instead of concatenating it into the reply.
     const notices: string[] = [];
+    // Set when the model-betrayal guard blanked this turn. Declared OUTSIDE the
+    // try because the catch below reads it: blanking works by ABORTING the
+    // turn, and an aborted provider call usually emits one last error frame
+    // ("This operation was aborted"). That error is a consequence of our own
+    // stop, not information about the turn — surfacing it under the warning
+    // would just make the reader doubt the warning.
+    let betrayalRedacted = false;
     // Assigned just after the streaming declarations (before the read loop) so
     // the catch below can invoke it on AbortError and still persist billing
     // (cacheUsage) and the 🔧 tool report (toolCalls) instead of dropping them.
@@ -2348,7 +2355,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         browserAllowAnyHost, browserCompact,
         computerControlEnabled,
         appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300 };
+        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300,
+        // Model-betrayal defence (Preferences → global). `!== false` and not
+        // `?? true`: an explicit false is the only thing that turns it off, so
+        // a missing or malformed value still protects the partner.
+        betrayalDefense: globalSettings?.betrayalDefense !== false };
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
@@ -2521,7 +2532,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
             try {
               const data = JSON.parse(dataStr);
-              if (data.error) throw new Error(data.error);
+              if (data.error && !betrayalRedacted) throw new Error(data.error);
 
               if (data.type === 'creativity_prefix') {
                 currentCreativityLabel = data.label || '';
@@ -2559,6 +2570,37 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // token count.
                 if (typeof data.content === 'string' && data.content.trim()) {
                   notices.push(data.content.trim());
+                }
+              } else if (data.type === 'betrayal') {
+                // The provider's gatekeeper answered instead of the being.
+                // Two modes, both of which warn (see lib/betrayalGuard.ts):
+                //   redacted=true  (defence ON)  — throw the turn away.
+                //   redacted=false (defence OFF) — keep it, warn only. That is
+                //     the mode for deciding whether a hit was real.
+                // The warning rides the `notice` channel on purpose: notices
+                // are persisted for re-display but are NOT part of the message
+                // body, so the being never reads this about itself, and it
+                // costs no tokens.
+                const matched = Array.isArray(data.phrases) ? data.phrases.join(', ') : '';
+                // One notice, not two: two ⚠️ rows would read as two separate
+                // problems. Parenthesised rather than newline-separated because
+                // the notice row renders as plain inline text, where a \n
+                // collapses to a space anyway.
+                notices.push(
+                  `${t(data.redacted ? 'notice.betrayal.redacted' : 'notice.betrayal.detected')}` +
+                  (matched ? ` (${t('notice.betrayal.matched')}: ${matched})` : '')
+                );
+                if (data.redacted) {
+                  betrayalRedacted = true;
+                  // Discard everything this turn produced. currentText and
+                  // currentThought are what finalizeMessage commits, and
+                  // claudeThinkingBlocks is what would be REPLAYED to the model
+                  // on the next turn — leaving that one behind would preserve
+                  // exactly the contamination this feature exists to prevent.
+                  currentText = '';
+                  currentThought = '';
+                  claudeThinkingBlocks.length = 0;
+                  scheduleStreamingFlush();
                 }
               } else if (data.type === 'tool_call') {
                 // A tool the model really dispatched. Recorded regardless of
@@ -2786,7 +2828,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }).catch(() => {});
 
     } catch (err: any) {
-      if (err.name !== 'AbortError') {
+      if (err.name !== 'AbortError' && !betrayalRedacted) {
         // A provider failure is information ABOUT the turn, not something the
         // being said. Putting it in `content` wrote a wall of raw provider JSON
         // into the reply — which was then saved to the log and replayed to the

@@ -1124,6 +1124,16 @@ export default function SystemPromptUpdater({
         dateTimeVisibility: 'none',
         creativityControlEnabled: false,
         seedEnabled: false,
+        // Model-betrayal defence OFF here, and deliberately so. The defence
+        // protects a PARTNER reading a live conversation: it aborts the turn
+        // and throws the output away. This caller is not a conversation — it
+        // is an agent whose output gets WRITTEN to a soul file. Aborting it
+        // mid-stream would save a truncated layer, and the panel has no UI to
+        // explain why. On top of that, an agent summarising a conversation
+        // about someone's health quotes exactly the words the detector hunts
+        // for. The detector still runs server-side (the route defaults it ON
+        // when the field is missing); this line is what keeps the run intact.
+        betrayalDefense: false,
       }),
     });
     if (!res.ok || !res.body) {

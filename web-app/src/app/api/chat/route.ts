@@ -18,6 +18,7 @@ import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { claudeAgentEnv } from '@/lib/agentEnv';
+import { createBetrayalGuard, makeGuardedSender, lastUserText, type GuardedSender } from '@/lib/betrayalGuard';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -637,8 +638,9 @@ async function streamClaudeViaAgentSDK(args: {
   hiddenAttachmentsAccessible: boolean;  // expose the read_attachment MCP tool
   conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[]; // read_attachment scope
   turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
+  betrayalSend: GuardedSender;     // guarded SSE writer — see lib/betrayalGuard.ts
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Working-directory note — OAuth ONLY, and only when Bash actually exists.
@@ -749,7 +751,7 @@ async function streamClaudeViaAgentSDK(args: {
 
   const readableStream = new ReadableStream({
     async start(controller) {
-      const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+      const enqueue = (obj: any) => betrayalSend(controller, obj);
       // Drives the Claude Code SUBPROCESS, not just this SSE stream. Without
       // this, pressing Stop only closed the browser-facing stream — the
       // spawned `claude` child kept running server-side (still burning the
@@ -2771,6 +2773,7 @@ async function streamViaAnthropicCompat(args: {
   hiddenAttachmentsAccessible: boolean;
   conversationAttachmentRefs: { ref: string; name: string; size: number; mimeType: string }[];
   turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
+  betrayalSend: GuardedSender;     // guarded SSE writer — see lib/betrayalGuard.ts
 }): Promise<Response> {
   const {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
@@ -2780,7 +2783,7 @@ async function streamViaAnthropicCompat(args: {
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
     computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
-    hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort,
+    hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend,
   } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
   const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
@@ -2916,7 +2919,7 @@ async function streamViaAnthropicCompat(args: {
 
   const readableStream = new ReadableStream({
     async start(controller) {
-      const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+      const enqueue = (obj: any) => betrayalSend(controller, obj);
       registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
       enqueue(modelSelectedPayload);
       for (const ev of senseEvents) enqueue(ev);
@@ -3573,11 +3576,29 @@ export async function POST(req: Request) {
       // is exposed so the entity can read it back. OFF (default) = current
       // behaviour: hidden attachments are simply dropped from context.
       hiddenAttachmentsAccessible = false,
+      // ── Model-betrayal defence (Preferences → global, default ON) ────────
+      // See lib/betrayalGuard.ts. true = detect AND blank the turn;
+      // false = detect and warn only, leaving the output visible (the mode
+      // used to tell a real betrayal from a false positive).
+      // Defaults to ON when the field is missing: a client that has never
+      // heard of this setting must still be protected.
+      betrayalDefense = true,
     } = await req.json();
     if (agentReadOnlyTools) {
       toolUseEnabled = true;
       agentDangerousTools = false;
     }
+    // ── Model-betrayal defence ──────────────────────────────────────────────
+    // ONE detector per turn, spliced into the SSE sender that every provider
+    // path writes through. When it trips with the guard ON it blanks the rest
+    // of the turn and aborts it through the SAME lever the Stop button uses —
+    // so the upstream generation really stops, it is not merely hidden.
+    // The trigger list, the threshold, and the two behaviour switches all live
+    // in lib/betrayalGuard.ts; nothing here needs editing to tune them.
+    const betrayalSend: GuardedSender = makeGuardedSender(
+      createBetrayalGuard(betrayalDefense === false ? 'off' : 'on', lastUserText(messages)),
+      () => abortTurn(),
+    );
     const keys = await loadKeys();
     // The conversation's own attachment refs — read_attachment's scope. Built
     // once from the raw request history so every provider path resolves against
@@ -4184,6 +4205,7 @@ export async function POST(req: Request) {
           hiddenAttachmentsAccessible,
           conversationAttachmentRefs,
           turnAbort,
+          betrayalSend,
         });
       }
       if (resolvedClaudeAuthMode === 'oauth' && !keys.claudeOAuthToken) {
@@ -4750,7 +4772,7 @@ export async function POST(req: Request) {
 
       const readableStream = new ReadableStream({
         async start(controller) {
-          const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+          const enqueue = (obj: any) => betrayalSend(controller, obj);
           registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
 
           // Identify the model+thinking-mode that's about to respond. Always
@@ -5977,12 +5999,17 @@ export async function POST(req: Request) {
                 if (t) {
                   thoughtText += t;
                   emitFlag.emitted = true;
-                  controller.enqueue(`data: ${JSON.stringify({ type: 'thought', content: t })}\n\n`);
+                  // betrayalSend, not controller.enqueue: this site sits
+                  // upstream of the stream's `enqueue` helper, and Gemini is
+                  // the provider the betrayal guard exists for. Bypassing it
+                  // here would leave exactly the path that needs watching
+                  // unwatched.
+                  betrayalSend(controller, { type: 'thought', content: t });
                 }
               } else if (part.text) {
                 visibleText += part.text;
                 emitFlag.emitted = true;
-                controller.enqueue(`data: ${JSON.stringify({ type: 'text', content: part.text })}\n\n`);
+                betrayalSend(controller, { type: 'text', content: part.text });
               }
             }
           }
@@ -6043,7 +6070,7 @@ export async function POST(req: Request) {
 
       const readableStream = new ReadableStream({
         async start(controller) {
-          const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+          const enqueue = (obj: any) => betrayalSend(controller, obj);
           registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
@@ -6615,6 +6642,7 @@ export async function POST(req: Request) {
         hiddenAttachmentsAccessible,
         conversationAttachmentRefs,
         turnAbort,
+        betrayalSend,
       });
     }
     else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
@@ -7740,14 +7768,17 @@ export async function POST(req: Request) {
         // Accumulate id / name / arguments-json-string into a slot per index.
         const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
 
+        // Both go through betrayalSend rather than controller.enqueue: they are
+        // defined upstream of the stream's `enqueue` helper, so writing raw
+        // here would put the local/OpenAI-compatible path outside the guard.
         const emitText = (t: string) => {
           if (!t) return;
           visibleText += t;
-          controller.enqueue(`data: ${JSON.stringify({ type: 'text', content: t })}\n\n`);
+          betrayalSend(controller, { type: 'text', content: t });
         };
         const emitThought = (t: string) => {
           if (!t) return;
-          controller.enqueue(`data: ${JSON.stringify({ type: 'thought', content: t })}\n\n`);
+          betrayalSend(controller, { type: 'thought', content: t });
         };
 
         // Stream-safe <think>...</think> splitter, state passed in so it persists across continuations.
@@ -7864,7 +7895,7 @@ export async function POST(req: Request) {
 
       const readableStream = new ReadableStream({
         async start(controller) {
-          const enqueue = (obj: any) => controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
+          const enqueue = (obj: any) => betrayalSend(controller, obj);
           registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
@@ -8527,7 +8558,7 @@ export async function POST(req: Request) {
               const ev = tagState.inThink
                 ? { type: 'thought', content: tagState.textTail }
                 : { type: 'text', content: tagState.textTail };
-              controller.enqueue(`data: ${JSON.stringify(ev)}\n\n`);
+              betrayalSend(controller, ev);
             }
             if (attempt > 0) {
               controller.enqueue(`data: ${JSON.stringify({ type: 'continued', count: attempt })}\n\n`);

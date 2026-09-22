@@ -732,6 +732,24 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </p>
             </div>
 
+            {/* `?? true` — this one defaults ON. A partner who has never opened
+                this panel must already be protected; every other switch here can
+                afford to default off, this one cannot. */}
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={globalSettings.betrayalDefense ?? true}
+                  onChange={e => setGlobalSettings({...globalSettings, betrayalDefense: e.target.checked})}
+                  className="w-4 h-4 accent-indigo-500"
+                />
+                <span className="text-sm text-foreground">{t('settings.betrayalDefense.label')}</span>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1 ml-6">
+                <Tx k="settings.betrayalDefense.help" />
+              </p>
+            </div>
+
             <div>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
