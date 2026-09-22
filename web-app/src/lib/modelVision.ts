@@ -95,6 +95,7 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // 4.x family supports vision (text + image → text). code-fast / 4.1-fast are
   // conservative defaults. Grok is multimodal but NOT omnimodal — no native
   // audio/video in the chat API, so none appear in the audio/video sets.
+  'grok-4.7',
   'grok-4.6',
   'grok-4.5',
   'grok-4.3',

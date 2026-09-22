@@ -136,7 +136,12 @@ GLM      | digitalocean/glm-5.2         | on  | GLM-5.2 (DigitalOcean)
 GLM      | digitalocean/glm-5.1         | on  | GLM-5.1 (DigitalOcean)
 GLM      | digitalocean/glm-5           | on  | GLM-5 (DigitalOcean)
 
-# ── Grok (xAI) — reasoning controlled by model name suffix ─────────
+# ── Grok (xAI) ─────────────────────────────────────────────────────
+# The 4.20 pair picks reasoning by model-name suffix. 4.3/4.5/4.6/4.7 are
+# always-reasoning models that take a reasoning_effort parameter instead:
+# 4.3 accepts none|low|medium|high|xhigh (default low); 4.5/4.6/4.7 accept
+# low|medium|high|xhigh (default high) and REJECT none with a 400.
+Grok     | grok-4.7                     | on  | Grok 4.7
 Grok     | grok-4.6                     | on  | Grok 4.6
 Grok     | grok-4.5                     | on  | Grok 4.5
 Grok     | grok-4.3                     | on  | Grok 4.3
@@ -254,7 +259,7 @@ const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
   GLM: 'glm-5.3',
-  Grok: 'grok-4.6',
+  Grok: 'grok-4.7',
   Kimi: 'moonshotai/Kimi-K3',
   Cohere: 'command-a-reasoning-08-2025',
   Minimax: 'MiniMax-M3',
@@ -5113,7 +5118,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="grok-4.6">Grok 4.6 (flagship)</option>
+                      <option value="grok-4.7">Grok 4.7 (flagship)</option>
+                      <option value="grok-4.6">Grok 4.6</option>
                       <option value="grok-4.5">Grok 4.5</option>
                       <option value="grok-4.3">Grok 4.3</option>
                       <option value="grok-4.20-0309-reasoning">Grok 4.20 — Reasoning</option>

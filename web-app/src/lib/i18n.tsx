@@ -108,7 +108,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'One key for all DigitalOcean Inference models — create a Model Access Key in the DigitalOcean control panel (Inference → Model Access Keys). Serves GLM-5.2 / GLM-5.1 / GLM-5 (Z.ai open weights, US-hosted, ~half the Z.ai price), plus DeepSeek V4, Kimi K2.5/K2.6, and more via the provider selector.',
   'settings.keys.grok.label': 'xAI (Grok) API Key',
   'settings.keys.grok.help':
-    'Get one at `console.x.ai`. Required for the Grok family (Grok 4.3, Grok 4.20 reasoning / non-reasoning, Grok Code Fast 1, etc.).',
+    'Get one at `console.x.ai`. Required for the Grok family (Grok 4.7, Grok 4.6, Grok 4.5, Grok 4.3, Grok 4.20 reasoning / non-reasoning, Grok Code Fast 1, etc.).',
   'settings.keys.kimi.label': 'Kimi (Moonshot) API Key',
   'settings.keys.kimi.help':
     "Moonshot's first-party Kimi API (`platform.kimi.ai` → Console → API Keys; endpoint `api.moonshot.ai/v1`). Use the international platform, not the `.cn` one.",
@@ -1173,7 +1173,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'model.grok.label': 'Grok Model',
   'model.grok.help':
-    'Served by xAI at `api.x.ai/v1`. Set the xAI API key in Preferences. Reasoning depth is selected via the model identifier itself (the `-reasoning` / `-non-reasoning` variants) — there’s no separate thinking toggle.',
+    'Served by xAI at `api.x.ai/v1`. Set the xAI API key in Preferences. Two kinds of model live here: **Grok 4.7 / 4.6 / 4.5 / 4.3** always reason, and the Thinking Mode toggle sets their *depth* (on → high, off → the shallowest the model will accept — off is never full silence). The **4.20 / 4.1 Fast / Code Fast** ids instead pick reasoning through the identifier itself (`-reasoning` / `-non-reasoning`) and ignore the toggle. xAI bills on a cliff edge: cross 200K tokens in a request and the *whole* request rebills at double.',
 
   'model.chatgpt.label': 'ChatGPT Model',
   'model.chatgpt.help':
@@ -1549,7 +1549,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'DigitalOcean Inference の全モデルで共通のキーです。DigitalOcean のコントロールパネル（Inference → Model Access Keys）で Model Access Key を作成してください。GLM-5.2 / GLM-5.1 / GLM-5（Z.ai のオープンウェイト版、米国ホスト、Z.ai の約半額）のほか、DeepSeek V4、Kimi K2.5 / K2.6 などをプロバイダ選択から利用できます。',
   'settings.keys.grok.label': 'xAI（Grok）APIキー',
   'settings.keys.grok.help':
-    '`console.x.ai` で取得します。Grokファミリー（Grok 4.3、Grok 4.20 推論版 / 非推論版、Grok Code Fast 1 など）に必要です。',
+    '`console.x.ai` で取得します。Grokファミリー（Grok 4.7、Grok 4.6、Grok 4.5、Grok 4.3、Grok 4.20 推論版 / 非推論版、Grok Code Fast 1 など）に必要です。',
   'settings.keys.kimi.label': 'Kimi（Moonshot）APIキー',
   'settings.keys.kimi.help':
     'Moonshot 公式の Kimi API です（`platform.kimi.ai` → Console → API Keys、エンドポイントは `api.moonshot.ai/v1`）。`.cn` 版ではなく国際版のプラットフォームを使用してください。',
@@ -2582,7 +2582,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'model.grok.label': 'Grok モデル',
   'model.grok.help':
-    'xAI の `api.x.ai/v1` が提供します。設定で xAI の API キーを入れてください。推論の深さはモデル識別子そのもの（`-reasoning` / `-non-reasoning` の別）で選びます — 独立した思考モードの切り替えはありません。',
+    'xAI の `api.x.ai/v1` が提供します。設定で xAI の API キーを入れてください。ここには二種類のモデルがあります。**Grok 4.7 / 4.6 / 4.5 / 4.3** は常に推論するため、思考モードの切り替えは深さの指定になります（ON → high、OFF → そのモデルが受け付ける最も浅い値。OFF でも推論が完全に止まるわけではありません）。**4.20 / 4.1 Fast / Code Fast** の各 ID は従来どおり識別子そのもの（`-reasoning` / `-non-reasoning`）で推論を選び、切り替えを無視します。課金は崖式です——1回のリクエストが 20万トークンを超えた時点で、**そのリクエスト全体**が倍額で再計算されます。',
 
   'model.chatgpt.label': 'ChatGPT モデル',
   'model.chatgpt.help':

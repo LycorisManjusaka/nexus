@@ -2629,7 +2629,7 @@ async function runModelSelectorPreflight(args: {
     : useDigitalOcean ? (specificModel || '').slice('digitalocean/'.length)
     : (specificModel || (
     isGLM      ? 'glm-4.7' :
-    isGrok     ? 'grok-4.5' :
+    isGrok     ? 'grok-4.7' :
     isCohere   ? 'command-a-plus-05-2026' :
     isMinimax  ? 'MiniMax-M3' :
     isDeepSeek ? DEEPSEEK_FLASH :
@@ -3740,8 +3740,10 @@ export async function POST(req: Request) {
     // GLM is Z.AI (Zhipu) — its own OpenAI-compatible endpoint.
     const isGLM       = aiName.toLowerCase().includes('glm');
     // Grok is xAI — its own OpenAI-compatible endpoint at api.x.ai/v1.
-    // Reasoning effort is selected via model-name suffix (-reasoning /
-    // -non-reasoning), so we don't send a thinking toggle parameter.
+    // TWO reasoning mechanisms, split by model id: the 4.20 / 4.1-fast /
+    // code-fast ids select reasoning by model-name SUFFIX and take no
+    // parameter; grok-4.3/4.5/4.6/4.7 always reason and take a top-level
+    // `reasoning_effort`. See the isGrok branch near `reasoning_effort` below.
     const isGrok      = aiName.toLowerCase().includes('grok');
     // Kimi is Moonshot's model family, served by Moonshot's first-party API
     // (api.moonshot.ai) using keys.kimi. Thinking mode shape matches GLM's
@@ -3792,7 +3794,14 @@ export async function POST(req: Request) {
       isMinimax      ? true :
       isMimo         ? true :
       isBytedance    ? true :
-      isGrok         ? /reasoning/i.test(specificModel || '') && !/non-?reasoning/i.test(specificModel || '') :
+      // Grok is split: the suffix-selected ids (4.20 / 4.1-fast / code-fast)
+      // carry "reasoning" in the name, while grok-4.3/4.5/4.6/4.7 always
+      // reason and follow the shared toggle through `reasoning_effort` (OFF
+      // is still shallow reasoning, not silence — same as glm-5.3, which this
+      // list already reports via qwenEnableThinking).
+      isGrok         ? (/^grok-4\.(3|5|6|7)$/i.test(specificModel || '')
+                          ? modelParams.qwenEnableThinking !== false
+                          : /reasoning/i.test(specificModel || '') && !/non-?reasoning/i.test(specificModel || '')) :
                        false;
     const modelLabelForSSE = buildModelLabel(aiName, specificModel, modelThinkingFlag, modelParams);
     const modelSelectedPayload = {
@@ -6779,7 +6788,7 @@ export async function POST(req: Request) {
                           : {};
       let localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
-        isGrok     ? 'grok-4.5' :
+        isGrok     ? 'grok-4.7' :
         isCohere   ? 'command-a-plus-05-2026' :
         // Case-sensitive per MiniMax docs: capital M's, lowercase i, hyphen.
         isMinimax  ? 'MiniMax-M3' :
@@ -7573,6 +7582,36 @@ export async function POST(req: Request) {
           // chat path — Kimi returns via streamViaAnthropicCompat earlier — but
           // the guard is kept so the branch is not a trap if it is ever rewired.)
           requestBody.thinking = { type: 'enabled' };
+        } else if (isGrok) {
+          // Grok (xAI) splits into two kinds of model and NEXUS used to send no
+          // reasoning parameter to either:
+          //
+          //   - grok-4.20-* / grok-4-1-fast-* / grok-code-fast-1 pick reasoning
+          //     by model-name SUFFIX. They take no reasoning_effort — leave them
+          //     alone (this is what the old "suffix selects reasoning" comment
+          //     described, and it is still true for exactly these ids).
+          //   - grok-4.3 / 4.5 / 4.6 / 4.7 ALWAYS reason and take a top-level
+          //     `reasoning_effort` instead. Same exception shape as glm-5.3 and
+          //     kimi-k3 above: the toggle maps onto depth, not on/off.
+          //
+          // Vocabulary differs by generation (measured 2026-09-23 against
+          // api.x.ai): 4.3 accepts none|low|medium|high|xhigh (default low);
+          // 4.5/4.6/4.7 accept low|medium|high|xhigh (default high) and return
+          // 400 "This model does not support reasoning_effort value `none`".
+          // So OFF sends 'none' only on 4.3 and 'low' — the shallowest legal
+          // value — everywhere else. 'xhigh' is deliberately never sent: on
+          // grok-4.7 it measured FEWER reasoning tokens than 'high' (607 vs
+          // 1293) and produced a flat refusal of a benign instruction.
+          //
+          // Effort is a CEILING, not a floor: an easy prompt spends few
+          // reasoning tokens even at 'high', so this is not a latency tax on
+          // short turns.
+          const grokId = String(requestBody.model || '').toLowerCase();
+          if (/^grok-4\.(3|5|6|7)$/.test(grokId)) {
+            requestBody.reasoning_effort =
+              modelParams.qwenEnableThinking !== false ? 'high'
+                : (grokId === 'grok-4.3' ? 'none' : 'low');
+          }
         } else if (useDigitalOcean) {
           // DigitalOcean Inference serves GLM through an OpenAI-compatible
           // surface and exposes reasoning via the standard OpenAI
