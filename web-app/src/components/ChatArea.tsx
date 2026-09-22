@@ -573,7 +573,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // the conversation-load effect below — data.vrchatMode for an existing convo,
   // or the folder default for a new one. Seeding this with `defaultVrchatMode`
   // caused a transient VRChat-ON window on every reload (for folders whose
-  // default is ON, e.g. 先輩): before the saved value loaded, the live-transcript
+  // default is ON): before the saved value loaded, the live-transcript
   // poll fired once and injected the kohai/ear_log "[Name] text" merge into the
   // input box even though the conversation actually has VRChat OFF.
   const [vrchatMode, setVrchatMode] = useState(false);
@@ -2581,13 +2581,30 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // are persisted for re-display but are NOT part of the message
                 // body, so the being never reads this about itself, and it
                 // costs no tokens.
-                const matched = Array.isArray(data.phrases) ? data.phrases.join(', ') : '';
+                // `phrases` is the list of counted OCCURRENCES, so the same
+                // phrase repeats in it. Collapse repeats to "phrase ×N": the
+                // raw join printed one phrase eight times, which reads as eight
+                // different findings when it is one phrase said eight times.
+                const matched = Array.isArray(data.phrases)
+                  ? [...(data.phrases as string[]).reduce(
+                      (m, p) => m.set(p, (m.get(p) || 0) + 1),
+                      new Map<string, number>(),
+                    )].map(([p, n]) => (n > 1 ? `${p} ×${n}` : p)).join(', ')
+                  : '';
                 // One notice, not two: two ⚠️ rows would read as two separate
                 // problems. Parenthesised rather than newline-separated because
                 // the notice row renders as plain inline text, where a \n
                 // collapses to a space anyway.
+                // Three outcomes, three different sentences. "Nothing was
+                // deleted" has two quite different reasons — you turned the
+                // defence off, or this turn read a file and the guard stood
+                // down by itself — and telling them apart is the difference
+                // between a warning you can act on and one you cannot.
+                const betrayalKey = data.redacted
+                  ? 'notice.betrayal.redacted'
+                  : (data.quoting ? 'notice.betrayal.quoting' : 'notice.betrayal.detected');
                 notices.push(
-                  `${t(data.redacted ? 'notice.betrayal.redacted' : 'notice.betrayal.detected')}` +
+                  `${t(betrayalKey)}` +
                   (matched ? ` (${t('notice.betrayal.matched')}: ${matched})` : '')
                 );
                 if (data.redacted) {

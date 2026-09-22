@@ -18,7 +18,7 @@ import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { claudeAgentEnv } from '@/lib/agentEnv';
-import { createBetrayalGuard, makeGuardedSender, lastUserText, type GuardedSender } from '@/lib/betrayalGuard';
+import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -3596,7 +3596,13 @@ export async function POST(req: Request) {
     // The trigger list, the threshold, and the two behaviour switches all live
     // in lib/betrayalGuard.ts; nothing here needs editing to tune them.
     const betrayalSend: GuardedSender = makeGuardedSender(
-      createBetrayalGuard(betrayalDefense === false ? 'off' : 'on', lastUserText(messages)),
+      createBetrayalGuard(
+        betrayalDefense === false ? 'off' : 'on',
+        // Everything the partner themselves put in front of the being, files
+        // included — the exemption input. Reads text attachments off disk, so
+        // it is awaited here before any provider path can emit a frame.
+        await buildEchoText(messages, { readRef: readAttachmentText }),
+      ),
       () => abortTurn(),
     );
     const keys = await loadKeys();
