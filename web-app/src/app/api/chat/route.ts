@@ -4313,7 +4313,7 @@ export async function POST(req: Request) {
       if (resolvedClaudeAuthMode === 'oauth' && keys.claudeOAuthToken) {
         return streamClaudeViaAgentSDK({
           oauthToken: keys.claudeOAuthToken,
-          model: specificModel?.includes('claude') ? specificModel : 'claude-opus-4-8',
+          model: specificModel?.includes('claude') ? specificModel : 'claude-opus-5-5',
           systemPrompt: enhancedSystemPrompt,
           processedMessages,
           resumeSessionId: claudeAgentSessionId,
@@ -4360,7 +4360,7 @@ export async function POST(req: Request) {
       const anthropic = new Anthropic({ apiKey: keys.claude });
 
       const useThinking = !!modelParams.claudeThinking;
-      const claudeModel = specificModel?.includes('claude') ? specificModel : 'claude-opus-4-8';
+      const claudeModel = specificModel?.includes('claude') ? specificModel : 'claude-opus-5-5';
 
       // Models that support extended thinking
       const thinkingModels = ['claude-opus-4', 'claude-sonnet-4', 'claude-opus-3-7'];
@@ -4444,10 +4444,18 @@ export async function POST(req: Request) {
 
       const isOpus47 = claudeModel.includes('opus-4-7') || claudeModel.includes('opus-4.7');
       const isOpus48 = claudeModel.includes('opus-4-8') || claudeModel.includes('opus-4.8');
-      // Claude Opus 5 (July 2026): flagship Opus — same adaptive-thinking + effort
-      // request surface as Opus 4.8 (rejects classic enabled/budget_tokens and
-      // sampling params). Full effort range including 'max' (unlike Sonnet 5), 1M
-      // context, 128k output, vision. Priced identically to Opus 4.8 ($5/$25).
+      // Claude Opus 5 (July 2026) and Opus 5.5 (2026-09-21): flagship Opus — same
+      // adaptive-thinking + effort request surface as Opus 4.8 (rejects classic
+      // enabled/budget_tokens and sampling params). Full effort range including
+      // 'max' (unlike Sonnet 5), 1M context, 128k output, vision.
+      //
+      // This ONE flag deliberately covers both: `includes('opus-5')` matches
+      // 'claude-opus-5-5' as well, and /v1/models/claude-opus-5-5 reports an
+      // identical capability shape (verified 2026-09-23: max_input 1M, max_tokens
+      // 128k, thinking.enabled unsupported / adaptive supported, effort
+      // low|medium|high|xhigh|max). So 5.5 needs no branch of its own — only its
+      // own price row, which it has (it is CHEAPER than Opus 5: $4/$20 with $0.20
+      // cache hits, vs $5/$25 with $0.50).
       const isOpus5 = claudeModel.includes('opus-5') || claudeModel.includes('opus5');
       // Claude Sonnet 5 (June 2026): adaptive thinking with selectable effort,
       // same request shape as Opus 4.7/4.8 (classic enabled/budget_tokens is

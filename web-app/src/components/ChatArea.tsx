@@ -83,6 +83,7 @@ const CLOUD_MODELS_FILL =
 # ── Claude (Anthropic) ─────────────────────────────────────────────
 Claude   | claude-fable-5-1             | on  | Claude Fable 5.1 Thinking
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
+Claude   | claude-opus-5-5              | on  | Claude Opus 5.5 Thinking
 Claude   | claude-opus-5                | on  | Claude Opus 5 Thinking
 Claude   | claude-opus-4-8              | on  | Claude Opus 4.8 Thinking
 Claude   | claude-opus-4-7              | on  | Claude Opus 4.7 Thinking
@@ -254,7 +255,7 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
 // `Local` is deliberately empty: the list comes from whatever LM Studio has
 // loaded, so there is no sane default to guess.
 const FAMILY_DEFAULT_MODEL: Record<string, string> = {
-  Claude: 'claude-opus-5',
+  Claude: 'claude-opus-5-5',
   Gemini: 'gemini-3.8-flash',
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
@@ -628,6 +629,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "# family | specificModel | on/off | optional display label\n" +
     "Claude | claude-fable-5-1 | on | Claude Fable 5.1 Thinking\n" +
     "Claude | claude-fable-5 | on | Claude Fable 5 Thinking\n" +
+    "Claude | claude-opus-5-5 | on | Claude Opus 5.5 Thinking\n" +
     "Claude | claude-opus-5 | on | Claude Opus 5 Thinking\n" +
     "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
     "Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking\n" +
@@ -4728,6 +4730,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           // No-key options first — what you want when only OAuth
                           // Claude and/or local models are available.
                           { value: 'claude-haiku-4-5', label: t('senses.eyes.optHaiku') },
+                          { value: 'claude-opus-5-5', label: t('senses.eyes.optOpus55') },
                           { value: 'claude-opus-5', label: t('senses.eyes.optOpus5') },
                           { value: 'claude-opus-4-8', label: t('senses.eyes.optOpus48') },
                           { value: 'local:qwen2-vl-7b-instruct', label: t('senses.eyes.optLocal') },
@@ -4962,6 +4965,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     >
                       <option value="claude-fable-5-1">Claude Fable 5.1 (adaptive thinking, flagship)</option>
                       <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, legacy)</option>
+                      <option value="claude-opus-5-5">Claude Opus 5.5 (adaptive thinking, newest)</option>
                       <option value="claude-opus-5">Claude Opus 5 (adaptive thinking)</option>
                       <option value="claude-opus-4-8">Claude Opus 4.8 (thinking)</option>
                       <option value="claude-opus-4-7">Claude Opus 4.7 (thinking)</option>
