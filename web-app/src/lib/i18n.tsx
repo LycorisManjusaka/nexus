@@ -1174,6 +1174,9 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.grok.label': 'Grok Model',
   'model.grok.help':
     'Served by xAI at `api.x.ai/v1`. Set the xAI API key in Preferences. Two kinds of model live here: **Grok 4.7 / 4.6 / 4.5 / 4.3** always reason, and the Thinking Mode toggle sets their *depth* (on → high, off → the shallowest the model will accept — off is never full silence). The **4.20 / 4.1 Fast / Code Fast** ids instead pick reasoning through the identifier itself (`-reasoning` / `-non-reasoning`) and ignore the toggle. xAI bills on a cliff edge: cross 200K tokens in a request and the *whole* request rebills at double.',
+  'model.grok.nativeSearch': 'Use xAI native search (web + X)',
+  'model.grok.nativeSearchHelp':
+    'Off by default. This is **not** the same as the web-search checkbox on the Being tab — that one gives Grok NEXUS’s own `web_search` / `web_fetch` tools, which work alongside everything else. This one sends the turn to xAI’s `/v1/responses` endpoint instead, where xAI runs the search on its own servers against the live web and X. In exchange, **that turn has no workspace tools** — no file reads, no PC control, no letters — and the search is billed on top: measured on 2026-09-23, a one-sentence question cost $0.002 on a plain turn and **$0.062** with this on (4 searches, and the fetched pages come back into the context). Turn it on for a question you want answered from live sources; leave it off for work.',
 
   'model.chatgpt.label': 'ChatGPT Model',
   'model.chatgpt.help':
@@ -2583,6 +2586,9 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.grok.label': 'Grok モデル',
   'model.grok.help':
     'xAI の `api.x.ai/v1` が提供します。設定で xAI の API キーを入れてください。ここには二種類のモデルがあります。**Grok 4.7 / 4.6 / 4.5 / 4.3** は常に推論するため、思考モードの切り替えは深さの指定になります（ON → high、OFF → そのモデルが受け付ける最も浅い値。OFF でも推論が完全に止まるわけではありません）。**4.20 / 4.1 Fast / Code Fast** の各 ID は従来どおり識別子そのもの（`-reasoning` / `-non-reasoning`）で推論を選び、切り替えを無視します。課金は崖式です——1回のリクエストが 20万トークンを超えた時点で、**そのリクエスト全体**が倍額で再計算されます。',
+  'model.grok.nativeSearch': 'xAI のネイティブ検索を使う（ウェブ＋X）',
+  'model.grok.nativeSearchHelp':
+    '初期値は無効です。「存在」タブのウェブ検索チェックとは**別物**です——あちらは NEXUS 自身の `web_search` / `web_fetch` ツールを Grok に渡すもので、他のツールと並んで普通に動きます。こちらは、そのターンを xAI の `/v1/responses` エンドポイントに送り、xAI 側のサーバーがウェブと X を直接検索します。その代わり、**そのターンにはワークスペースのツールがありません**——ファイルも読めず、PC 操作も手紙も使えません——さらに検索は別途課金されます。2026-09-23 の実測では、一文の質問が通常のターンで $0.002、これを ON にすると **$0.062** でした（検索4回。取得したページが文脈に戻ってくるため）。生の情報源から答えてほしい質問のときだけ ON にして、作業のときは OFF のままにしてください。',
 
   'model.chatgpt.label': 'ChatGPT モデル',
   'model.chatgpt.help':

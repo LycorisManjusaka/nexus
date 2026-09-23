@@ -2414,6 +2414,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         outputTokens: number;
         cacheCreationTokens: number;
         providerHint: string;
+        // Only xAI's Responses API sends these: its own total for the request,
+        // and the count of billed server-side search calls (which no token
+        // table can express). Absent everywhere else.
+        reportedUsd?: number;
+        serverToolCalls?: number;
       } | null = null;
       // Web-search citations from the backend's `web_sources` SSE event. These
       // are the clickable proof that the model actually consulted live pages
@@ -2561,6 +2566,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   outputTokens: Number(data.outputTokens || 0),
                   cacheCreationTokens: Number(data.cacheCreationTokens || 0),
                   providerHint: String(data.providerHint || ''),
+                  ...(Number(data.reportedUsd) > 0 ? { reportedUsd: Number(data.reportedUsd) } : {}),
+                  ...(Number(data.serverToolCalls) > 0 ? { serverToolCalls: Number(data.serverToolCalls) } : {}),
                 };
               } else if (data.type === 'web_sources') {
                 if (Array.isArray(data.sources) && data.sources.length > 0) {
@@ -4361,10 +4368,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               {/* ── Web Search & Access (universal DuckDuckGo tools) ──────────
                   Moved here from the Model tab so every tool toggle lives in
                   one place. Shown for the OpenAI-compatible families that have
-                  no first-party search; Gemini (Google grounding) and Claude
-                  (native web_search) keep their own toggles on the Model tab
-                  because they use different engines and fields. The web_search /
-                  web_fetch description editors live inside this check for
+                  no first-party search; Gemini (Google grounding), Claude
+                  (native web_search) and Grok (xAI native search) keep their own
+                  toggles on the Model tab because those are different engines on
+                  different fields — and, for Grok, a different endpoint that
+                  costs the turn its workspace tools. This checkbox always means
+                  the same thing: NEXUS's own web_search/web_fetch. The web_search
+                  / web_fetch description editors live inside this check for
                   consistency with the other per-tool description editors. */}
               {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'ByteDance' || localAiName === 'Local') && (
                 <div>
@@ -5479,6 +5489,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+                  {/* xAI native search — a DIFFERENT engine from the Being tab's
+                      web-search checkbox, so it gets its own switch here (same
+                      reason Gemini grounding and Claude web_search live on this
+                      tab). Turning this on replaces the whole turn with a call
+                      to xAI's /v1/responses: the workspace tools are not part of
+                      that shape, so the being cannot read files on such a turn,
+                      and each search is billed separately (~30× a plain turn,
+                      measured). Default off. The Being tab checkbox keeps
+                      meaning NEXUS's own web_search/web_fetch. */}
+                  {localAiName === 'Grok' && (
+                    <div className="col-span-2 flex items-start gap-2 mt-2">
+                      <input
+                        type="checkbox"
+                        id="grokNativeSearch"
+                        checked={modelParams.enableGrokNativeSearch || false}
+                        onChange={(e) => setModelParams({ ...modelParams, enableGrokNativeSearch: e.target.checked })}
+                        className="mt-0.5 rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                      />
+                      <label htmlFor="grokNativeSearch" className="text-sm font-medium text-foreground cursor-pointer">
+                        {t('model.grok.nativeSearch')}
+                        <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
+                          {renderRich(t('model.grok.nativeSearchHelp'))}
+                        </span>
+                      </label>
                     </div>
                   )}
                 </div>

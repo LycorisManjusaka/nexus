@@ -247,16 +247,44 @@ async function shrinkImageForClaude(
 // /v1/responses endpoint — the old chat/completions `search_parameters` "Live
 // Search" was deprecated (→ 410). The Responses shape differs from chat: `input`
 // not `messages`, and the answer is nested at output[].content[].text (the
-// top-level `output_text` is null on xAI). Citations come as a top-level
-// `citations[]` and/or per-span `annotations[]`. This is a NON-streaming call:
-// the answer + citations arrive together, then we emit them as NEXUS SSE events.
+// top-level `output_text` is null on xAI).
+//
+// This is a SEPARATE, opt-in turn shape (Model tab → "xAI native search"), not
+// an add-on to the normal tool loop: it returns before the chat/completions loop
+// runs, so a turn taken this way has NO workspace tools (no file reads, no PC
+// control, no letters). That is the trade, and it is why the toggle is its own
+// switch instead of riding on the Being tab's general web-search checkbox — a
+// being whose search was on could not open its own desk.
+//
+// Cost warning, measured 2026-09-23 (grok-4.6, one-sentence question):
+//   plain turn, no tools            650 input tokens   $0.0020
+//   same question with search on  27,714 input tokens  $0.0616   (4 web_search calls)
+// The server pulls whole pages back into the context and bills each search
+// separately (~$0.005/call), so a search turn costs ~30× a plain one. Nothing to
+// fix there — that is what xAI charges. NEXUS's own web_search/web_fetch tools
+// (Being tab) are the cheap path.
+//
+// Streaming: xAI implements the standard Responses SSE event names. We read
+//   response.reasoning_summary_text.delta → thought  (the model's reasoning
+//     SUMMARY — xAI does not stream raw reasoning; a summary is what exists)
+//   response.output_text.delta           → text
+//   response.output_text.annotation.added → citations (top-level `citations` is
+//     null on xAI; annotations are the only source)
+//   response.web_search_call.*           → tool_activity chip
+//   response.completed                   → usage
+// Before 2026-09-23 this was a single non-streaming POST that read only the
+// message text, which is why these turns showed zero thinking and sat silent
+// for the whole (search-inflated) generation.
 async function runGrokNativeSearch(params: {
   apiKey: string;
   model: string;
   input: { role: string; content: string }[];
   enqueue: (obj: any) => void;
+  signal?: AbortSignal;
+  language?: string;
 }): Promise<void> {
-  const { apiKey, model, input, enqueue } = params;
+  const { apiKey, model, input, enqueue, signal, language } = params;
+  const ja = language === 'ja';
   let res: Response;
   try {
     res = await fetch('https://api.x.ai/v1/responses', {
@@ -266,9 +294,12 @@ async function runGrokNativeSearch(params: {
         model,
         input,
         tools: [{ type: 'web_search' }, { type: 'x_search' }],
+        stream: true,
       }),
+      ...(signal ? { signal } : {}),
     });
   } catch (e: any) {
+    if (signal?.aborted) return;
     enqueue({ type: 'text', content: `[Grok native search could not connect: ${e?.message || 'network error'}]` });
     return;
   }
@@ -278,41 +309,103 @@ async function runGrokNativeSearch(params: {
     enqueue({ type: 'text', content: `[Grok native search error ${res.status}: ${errText.slice(0, 300)}]` });
     return;
   }
-  const data = await res.json().catch(() => ({} as any));
 
-  let text = '';
   const citations: { url: string; title?: string }[] = [];
-  // Text + inline annotations from the message item(s) in output[].
-  if (Array.isArray(data.output)) {
-    for (const item of data.output) {
-      if (item?.type === 'message' && Array.isArray(item.content)) {
-        for (const c of item.content) {
-          if ((c?.type === 'output_text' || c?.type === 'text') && typeof c.text === 'string') text += c.text;
-          if (Array.isArray(c?.annotations)) {
-            for (const a of c.annotations) {
-              const url = a?.url || a?.url_citation?.url;
-              if (url) citations.push({ url, title: a?.title || a?.url_citation?.title });
+  const pushCitation = (a: any) => {
+    const url = a?.url || a?.url_citation?.url;
+    if (url) citations.push({ url, title: a?.title || a?.url_citation?.title });
+  };
+  let sawText = false;
+  let usage: any = null;
+  let searchCalls = 0;
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    enqueue({ type: 'text', content: '[Grok native search returned no stream.]' });
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      if (signal?.aborted) { try { await reader.cancel(); } catch {} break; }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;      // `event:` lines carry no payload
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let ev: any;
+        try { ev = JSON.parse(payload); } catch { continue; }
+        switch (ev.type) {
+          case 'response.reasoning_summary_text.delta':
+            if (ev.delta) enqueue({ type: 'thought', content: ev.delta });
+            break;
+          case 'response.output_text.delta':
+            if (ev.delta) { sawText = true; enqueue({ type: 'text', content: ev.delta }); }
+            break;
+          case 'response.output_text.annotation.added':
+            pushCitation(ev.annotation);
+            break;
+          // One search produces in_progress + searching + completed; only the
+          // first is turned into a chip, or the label flickers per phase.
+          case 'response.web_search_call.in_progress':
+            searchCalls++;
+            enqueue({ type: 'tool_activity', tool: ja ? 'ウェブを検索' : 'searching the web', name: 'web_search' });
+            break;
+          case 'response.output_item.done':
+            // Non-streamed leftovers: a message item can carry annotations that
+            // never arrived as annotation.added events.
+            if (ev.item?.type === 'message' && Array.isArray(ev.item.content)) {
+              for (const c of ev.item.content) {
+                if (Array.isArray(c?.annotations)) for (const a of c.annotations) pushCitation(a);
+              }
             }
+            break;
+          case 'response.completed':
+            usage = ev.response?.usage || null;
+            if (Array.isArray(ev.response?.citations)) {
+              for (const c of ev.response.citations) {
+                if (typeof c === 'string') citations.push({ url: c });
+                else if (c?.url) citations.push({ url: c.url, title: c.title });
+              }
+            }
+            break;
+          case 'response.failed':
+          case 'response.incomplete': {
+            const why = ev.response?.error?.message || ev.response?.incomplete_details?.reason || ev.type;
+            enqueue({ type: 'text', content: `\n[Grok native search ${ev.type === 'response.failed' ? 'failed' : 'ended early'}: ${String(why).slice(0, 200)}]` });
+            break;
           }
         }
       }
     }
+  } catch (e: any) {
+    if (!signal?.aborted) enqueue({ type: 'text', content: `\n[Grok native search stream broke: ${e?.message || 'unknown error'}]` });
   }
-  // Top-level citations[] (Grok style): array of URL strings or {url,title}.
-  if (Array.isArray(data.citations)) {
-    for (const c of data.citations) {
-      if (typeof c === 'string') citations.push({ url: c });
-      else if (c?.url) citations.push({ url: c.url, title: c.title });
-    }
-  }
+  if (searchCalls) enqueue({ type: 'tool_activity', tool: null, name: null });
 
-  enqueue({ type: 'text', content: text.trim() || '[Grok returned no answer from native search.]' });
+  if (!sawText && !signal?.aborted) {
+    enqueue({ type: 'text', content: '[Grok returned no answer from native search.]' });
+  }
 
   if (citations.length) {
     const seen = new Set<string>();
     const deduped = citations.filter(c => c.url && !seen.has(c.url) && (seen.add(c.url), true));
     if (deduped.length) enqueue({ type: 'web_sources', sources: deduped });
   }
+
+  // Usage. This branch returns early and never reaches the shared
+  // normalizeCacheUsage emission at the end of the OpenAI-compatible path, so
+  // it has to emit its own — without this, every Grok turn with web search ON
+  // stored NO cacheUsage at all and the message rendered with no cost, which is
+  // how these turns silently showed nothing while plain Grok turns showed a price.
+  const usagePayload = normalizeCacheUsage(usage, 'grok-responses');
+  if (usagePayload) enqueue(usagePayload);
 }
 import Anthropic from '@anthropic-ai/sdk';
 
@@ -560,6 +653,39 @@ function normalizeCacheUsage(usage: any, providerHint: string): any | null {
       outputTokens: output,
       cacheCreationTokens: 0,
       providerHint: 'deepseek',
+    };
+  }
+
+  // ── xAI Responses API (/v1/responses — Grok native search) ──────────────
+  // A DIFFERENT shape from chat/completions: `input_tokens` /
+  // `input_tokens_details.cached_tokens` / `output_tokens` (the standard branch
+  // below reads prompt_tokens/completion_tokens and would silently yield zeros).
+  //
+  // It also reports two things no token table can express:
+  //   • num_server_side_tools_used — each web_search/x_search call is billed on
+  //     top of the tokens. Measured 2026-09-23: 6 calls added exactly $0.0300
+  //     over the token cost ⇒ $0.005 per call (derived from the residual, not
+  //     from a published figure).
+  //   • cost_in_usd_ticks — xAI's OWN total for the request, in units of
+  //     1e-10 USD. Verified against modelPricing.json on two tool-free calls:
+  //     both matched to the last digit, so this is the biller's figure rather
+  //     than our re-derivation, and it is what we show.
+  if (hint === 'grok-responses') {
+    const cached = Number(usage.input_tokens_details?.cached_tokens || 0);
+    const total = Number(usage.input_tokens || 0);
+    const output = Number(usage.output_tokens || 0);
+    const ticks = Number(usage.cost_in_usd_ticks || 0);
+    const toolCalls = Number(usage.num_server_side_tools_used || 0);
+    return {
+      type: 'cache_usage',
+      cachedInputTokens: cached,
+      uncachedInputTokens: Math.max(0, total - cached),
+      totalInputTokens: total,
+      outputTokens: output,
+      cacheCreationTokens: 0,
+      providerHint: 'grok',
+      ...(ticks > 0 ? { reportedUsd: ticks / 1e10 } : {}),
+      ...(toolCalls > 0 ? { serverToolCalls: toolCalls } : {}),
     };
   }
 
@@ -7950,13 +8076,24 @@ export async function POST(req: Request) {
           }
 
           // ── Grok native web + X search fork ─────────────────────────────────
-          // When web search is on for a Grok conversation, run xAI's server-side
-          // web_search + x_search via /v1/responses instead of the normal
-          // chat/completions tool loop (whose only web option here is the flaky
-          // keyless DuckDuckGo tool). Non-streaming, then close the stream.
-          // Text-only input (images are dropped for the search query); workspace
-          // tools / thinking are not part of this scoped search turn.
-          if (isGrok && modelParams.enableWebSearch) {
+          // Opt-in, Model tab only (`enableGrokNativeSearch`, default off). Runs
+          // xAI's server-side web_search + x_search via /v1/responses instead of
+          // the normal chat/completions tool loop, then closes the stream.
+          //
+          // This deliberately does NOT hang off the Being tab's `enableWebSearch`
+          // any more. It used to, and the result was that a Grok being with web
+          // search on lost every workspace tool — it could not read its own desk
+          // — because this fork returns before the tool loop (and before
+          // `nexusWebToolsEnabled` is even read). Being tab on → Grok now takes
+          // the ordinary path with NEXUS's own web_search/web_fetch tools, like
+          // every other OpenAI-compatible family.
+          //
+          // Still true of this fork by construction: text-only input (images are
+          // dropped from the search query) and no workspace tools. The Responses
+          // API does accept `function` tools alongside the search tools (measured
+          // 2026-09-23 — it returned a well-formed function_call), so wiring the
+          // full tool loop onto this endpoint is possible; it is not done here.
+          if (isGrok && modelParams.enableGrokNativeSearch) {
             const grokInput = baseOaiMessages.map((m: any) => ({
               role: m.role,
               content: typeof m.content === 'string'
@@ -7966,7 +8103,7 @@ export async function POST(req: Request) {
                     : String(m.content ?? '')),
             }));
             try {
-              await runGrokNativeSearch({ apiKey: keys.grok || '', model: localModel, input: grokInput, enqueue });
+              await runGrokNativeSearch({ apiKey: keys.grok || '', model: localModel, input: grokInput, enqueue, signal: turnAbort.signal, language });
             } catch (e: any) {
               enqueue({ type: 'text', content: `[Grok native search failed: ${e?.message || 'unknown error'}]` });
             }

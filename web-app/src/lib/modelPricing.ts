@@ -37,6 +37,13 @@ export interface CacheUsageLike {
   uncachedInputTokens?: number;
   cacheCreationTokens?: number;
   outputTokens?: number;
+  // The provider's OWN total for the request, in USD, when it reports one.
+  // Today only xAI's /v1/responses does (`cost_in_usd_ticks`). When present it
+  // WINS over the token-table arithmetic below, because it includes charges the
+  // token buckets cannot represent — server-side search calls, which on a real
+  // 6-search turn were 29% of the bill.
+  reportedUsd?: number;
+  serverToolCalls?: number;
 }
 
 const M = 1_000_000;
@@ -101,7 +108,16 @@ export function messageCost(
   timestamp?: number | null,
 ): { usd: number; breakdown: string } | null {
   const resolved = resolvePrice(modelId);
-  if (!resolved || !cu) return null;
+  if (!cu) return null;
+  if (!resolved) {
+    // No price row — but if the provider told us what it charged, that figure
+    // is better than showing nothing.
+    if (!(cu.reportedUsd && cu.reportedUsd > 0)) return null;
+    return {
+      usd: cu.reportedUsd,
+      breakdown: `Cost reported by the provider: ${fmtUSD(cu.reportedUsd)}  (${normalizeId(modelId)})`,
+    };
+  }
 
   const hasPeak = !!resolved.peakHoursUtc?.length;
   const peak = hasPeak && isPeakTime(timestamp, resolved.peakHoursUtc);
@@ -123,12 +139,24 @@ export function messageCost(
   const usd = cIn + cCached + cWrite + cOut;
 
   const rateTag = hasPeak ? (peak ? ' · PEAK rate' : ' · off-peak rate') : '';
+  // When the provider reported its own total, that is the number to show and
+  // the number to sum — the token lines below then explain only the part the
+  // price table can account for, and the remainder is named as what it is.
+  const reported = cu.reportedUsd && cu.reportedUsd > 0 ? cu.reportedUsd : null;
+  const extra = reported !== null ? reported - usd : 0;
+  const head =
+    reported !== null
+      ? `Cost reported by the provider: ${fmtUSD(reported)}  (${normalizeId(modelId)}${rateTag})\n`
+      : `Estimated cost: ${fmtUSD(usd)}  (${normalizeId(modelId)}${rateTag})\n`;
   const breakdown =
-    `Estimated cost: ${fmtUSD(usd)}  (${normalizeId(modelId)}${rateTag})\n` +
+    head +
     `  input uncached: ${uncached.toLocaleString()} × $${price.input}/M = ${fmtUSD(cIn)}\n` +
     (cached ? `  input cached:   ${cached.toLocaleString()} × $${price.cachedInput}/M = ${fmtUSD(cCached)}\n` : '') +
     (cacheWrite ? `  cache write:    ${cacheWrite.toLocaleString()} × $${price.cacheWrite}/M = ${fmtUSD(cWrite)}\n` : '') +
-    `  output:         ${output.toLocaleString()} × $${price.output}/M = ${fmtUSD(cOut)}`;
+    `  output:         ${output.toLocaleString()} × $${price.output}/M = ${fmtUSD(cOut)}` +
+    (reported !== null && Math.abs(extra) >= 0.000001
+      ? `\n  server-side tools${cu.serverToolCalls ? ` (${cu.serverToolCalls} search call${cu.serverToolCalls === 1 ? '' : 's'})` : ''}: ${fmtUSD(extra)}`
+      : '');
 
-  return { usd, breakdown };
+  return { usd: reported !== null ? reported : usd, breakdown };
 }

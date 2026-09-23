@@ -1118,7 +1118,14 @@ export default function SystemPromptUpdater({
         // footer is still shown to the agent, explicitly labelled as
         // reference-only, inside the user message.
         suppressLayer5: true,
-        modelParams: { ...modelParams, claudeThinking: false },
+        // `enableGrokNativeSearch: false` is not a preference, it is a
+        // requirement. That toggle sends the whole turn to xAI's /v1/responses
+        // endpoint, which returns before the tool loop — an agent run there has
+        // no Read/Glob/Grep at all, so it cannot open the very files it is being
+        // told to read, and the shape it answers in is a search answer rather
+        // than the layered output this panel parses. A folder-level toggle must
+        // not be able to do that to a soul-writing run.
+        modelParams: { ...modelParams, claudeThinking: false, enableGrokNativeSearch: false },
         specificModel: runModel,
         ...(runAuthMode ? { claudeAuthMode: runAuthMode } : {}),
         dateTimeVisibility: 'none',
