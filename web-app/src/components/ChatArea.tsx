@@ -255,7 +255,7 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
 // `Local` is deliberately empty: the list comes from whatever LM Studio has
 // loaded, so there is no sane default to guess.
 const FAMILY_DEFAULT_MODEL: Record<string, string> = {
-  Claude: 'claude-opus-5-5',
+  Claude: 'claude-opus-5',
   Gemini: 'gemini-3.8-flash',
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
