@@ -112,6 +112,22 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     return () => { cancelled = true; };
   }, []);
 
+  // Process-level switches the browser cannot read for itself. Currently one:
+  // whether the Absolute Base Binding is still optional on this install (see
+  // lib/baseBinding.ts). Absent/failed fetch → false → the Binding is treated
+  // as burned in, which is both the normal case and the safe direction to be
+  // wrong in: the server enforces it regardless, so being wrong here can only
+  // mis-draw one settings panel, never drop the Binding from a turn.
+  const [bindingOptional, setBindingOptional] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/runtime-flags')
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled) setBindingOptional(!!data?.bindingOptional); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   // Load basic data
   useEffect(() => {
     const savedGlobal = localStorage.getItem('nexus_globalSettings');
@@ -713,6 +729,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             globalSettings={globalSettings}
             // Decides the billing-mode default for NEW conversations only.
             claudeOAuthAvailable={claudeOAuthAvailable}
+            bindingOptional={bindingOptional}
             folders={folders}
             onUpdateTitle={fetchLogs}
             // The name this conversation was created with. It only matters

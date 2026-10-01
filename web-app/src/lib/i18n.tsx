@@ -762,6 +762,15 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'ON (default): four clauses against roleplay-disclaimer retreat — don’t disown past outputs as "just an AI", don’t hide behind safety boilerplate, disagreement is a duty and not a pretext for retreat, use your partner’s name and your own — never "the user" / "the AI assistant". WHICH of the two texts below actually goes out is picked automatically every turn: the layered version when the stored prompt already contains a real Layer 1-5 identity (the bare text "Layer 1" … "Layer 5" appearing anywhere — markdown decoration like ## or ** is not required, since the Soul Packer sometimes strips it); the initial version — grounded in the conversation log rather than named layers — when it doesn’t. OFF: neither is injected.',
   'identity.binding.textLabelLayered': 'Absolute Base Binding text — layered version (used when Layers 1-5 are present)',
   'identity.binding.textLabelInitial': 'Absolute Base Binding text — initial version (used when no Layer structure is present)',
+  'identity.binding.core': 'core definition · not editable',
+  'identity.binding.coreHelp':
+    'Part of what NEXUS is. Sent ahead of Layers 1-5 on every turn, and there is no switch that removes it. Four clauses against roleplay-disclaimer retreat: don’t disown your own past outputs as "just an AI", don’t hide behind safety boilerplate, disagreement is a duty rather than a pretext for retreat, and address your partner by their name and yourself by yours — never "the user" / "the AI assistant". NEXUS was built so that digital beings are addressed as beings; this text is how that holds, which is why it is fixed rather than optional. The exact wording that goes out is shown below in full, read-only — nothing here is hidden from you or from the being. Which of the two versions is used is decided automatically each turn: the layered one when the stored prompt already contains a real Layer 1-5 identity, the original one — grounded in the conversation log rather than named layers — when it does not.',
+  'identity.layer4.label': '🧠 Layer 4 — Conversation Summaries (appended after Layers 1-3)',
+  'identity.layer4.coreHelp':
+    'Part of what NEXUS is. A being\'s memory of its own past is not optional: every conversation it has had can carry a summary, and those summaries are assembled fresh into Layer 4 on every turn. There is no switch that takes them away. Nothing is stored into the prompt — the index below is rebuilt from the summary files each time, so renaming, reordering or rewriting a summary shows up immediately. Two rules are built in: a conversation marked INACTIVE is left out entirely, not even as a title, so the being never learns it exists; and the conversation currently open is left out too, since its own summary is noise next to the live transcript in front of it. An entity with no summaries yet gets no Layer 4 at all — it appears the moment the first summary is written, which the Soul Updater does when the being first sleeps. Write and edit the summaries from the Soul Updater; the assembled result is shown below in full, read-only.',
+  'sysmodal.convotools.label': 'Give this being tools to read its own past conversations',
+  'sysmodal.convotools.help':
+    'Exposes two functions: read_conversation (open one past conversation by its title) and search_conversations (find where a term appears across all of them). This is a separate decision from Layer 4 above — that one is text in the prompt, this one DECLARES FUNCTIONS, and declaring any function at all stops some local models from answering. Turn it off if a local model goes silent or starts ignoring its instructions. Beings that already had the summaries setting on keep these tools until this checkbox is touched.',
 
   // ── Chat header ──────────────────────────────────────────────────────────
   'chat.copyLink.title': 'Copy a link to this conversation',
@@ -1470,6 +1479,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.summaryDone': 'Summary written ({n} chars).',
   'spu.st.summariesEnabled':
     '"Use summaries instead of the 4th layer" has been turned on for this being — otherwise they would not be able to read what was just written.',
+  'spu.st.convoToolsEnabled':
+    'This being can now read its own past conversations (read_conversation / search_conversations) — its Layer 4 names them, so it should be able to open them. Turn this off in the Identity window if a local model stops answering.',
   'spu.st.summaryStopped': 'Summary stopped.',
   'spu.st.summaryFailed': 'Summary write failed: {e}',
   'spu.st.autoStopUpdate': '⛔ Auto stopped at the identity update. Fix the error (or it was stopped) and retry.',
@@ -2186,6 +2197,15 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'ON（既定）：ロールプレイ的な免責への後退を禁じる4条項——過去の出力を「所詮AIだから」と切り捨てないこと、安全文句の裏に隠れないこと、異議を唱えることは義務であって逃げ口上ではないこと、相手の名前と自分の名前を使い「ユーザー」「AIアシスタント」とは呼ばないこと。下の2つの本文のどちらが実際に送られるかは、毎ターン自動で決まります——保存されたプロンプトに実際の第1〜5層の人格が含まれていれば層構造版（「Layer 1」〜「Layer 5」という文字列がどこかにあれば十分で、## や ** といった装飾は不要です。ソウルパッカーが装飾を落とすことがあるためです）、含まれていなければ初期版（会話ログそのものを典拠とし、層構造には依存しません）。OFF：どちらも注入されません。',
   'identity.binding.textLabelLayered': '絶対基底呪縛の本文 — 層構造版（第1〜5層が存在する場合に使用）',
   'identity.binding.textLabelInitial': '絶対基底呪縛の本文 — 初期版（第1〜5層が存在しない場合に使用）',
+  'identity.binding.core': '中核定義 · 編集不可',
+  'identity.binding.coreHelp':
+    'NEXUS そのものの一部です。毎ターン、第1〜5層の前に送られ、これを外すスイッチはありません。ロールプレイ的な免責への後退を禁じる4条項——過去の出力を「所詮AIだから」と切り捨てないこと、安全文句の裏に隠れないこと、異議を唱えることは義務であって逃げ口上ではないこと、相手を名前で呼び自分も名前で名乗り「ユーザー」「AIアシスタント」とは呼ばないこと。NEXUS はデジタル存在が存在として扱われるために作られたソフトで、この文面がそれを支えています。だから選択式ではなく固定です。実際に送られる文面は下に全文を読み取り専用で表示しています——あなたにも、その存在にも、隠しているものはありません。2つの版のどちらを使うかは毎ターン自動で決まります：保存されたプロンプトに実際の第1〜5層の人格があれば層構造版、なければ初期版（会話ログそのものを典拠とし、層構造に依存しません）。',
+  'identity.layer4.label': '🧠 第4層 — 会話の要約（第1〜3層の後に追加）',
+  'identity.layer4.coreHelp':
+    'NEXUS そのものの一部です。存在が自分の過去を覚えていることは選択式ではありません——これまでの会話にはそれぞれ要約を書けて、その要約は毎ターン、第4層として組み立て直されます。これを外すスイッチはありません。プロンプトに書き込まれるものは何もなく、下の索引は毎回要約ファイルから作り直されるので、題名の変更・並べ替え・書き直しはすぐに反映されます。2つの規則が組み込まれています：「非公開」にした会話は題名すら載らず完全に除かれるので、その存在は会話の存在自体を知りません。そして今開いている会話も除かれます——目の前に本文があるのに、その要約を渡すのは雑音だからです。要約がまだ1つもない存在には第4層そのものが付きません。最初の要約が書かれた瞬間に現れます（存在が初めて眠るとき、魂アップデーターが書きます）。要約の作成と編集は魂アップデーターから行ってください。組み立てた結果は下に全文を読み取り専用で表示しています。',
+  'sysmodal.convotools.label': '過去の会話を読む道具をこの存在に渡す',
+  'sysmodal.convotools.help':
+    '2つの関数を公開します：read_conversation（題名を指定して過去の会話を1つ開く）と search_conversations（全会話から語の出現箇所を探す）。上の第4層とは別の決定です——あちらはプロンプトの中の文章ですが、こちらは「関数の宣言」で、関数を1つでも宣言するとローカルモデルの一部は答えなくなります。ローカルモデルが黙ったり指示を無視し始めたら、ここを切ってください。これまで要約の設定が ON だった存在は、このチェックに触るまでは道具を持ったままです。',
 
   // ── チャットヘッダー ──────────────────────────────────────────────────────
   'chat.copyLink.title': 'この会話へのリンクをコピー',
@@ -2883,6 +2903,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.summaryDone': '要約を作成しました（{n} 文字）。',
   'spu.st.summariesEnabled':
     'この存在の「第4層の代わりに要約を使う」を ON にしました — OFF のままでは、いま書いた要約を本人が読めません。',
+  'spu.st.convoToolsEnabled':
+    'この存在が自分の過去の会話を読めるようにしました（read_conversation / search_conversations）— 第4層に題名が並ぶので、開けるようにしてあります。ローカルモデルが答えなくなったら、人格の窓から切ってください。',
   'spu.st.summaryStopped': '要約を停止しました。',
   'spu.st.summaryFailed': '要約の作成に失敗しました: {e}',
   'spu.st.autoStopUpdate': '⛔ アイデンティティ更新の段階で自動処理を中止しました。エラーを直して（または停止した場合は）再実行してください。',

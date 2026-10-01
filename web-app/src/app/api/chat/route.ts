@@ -182,7 +182,9 @@ function collectConversationAttachmentRefs(messages: any[]): { ref: string; name
   return out;
 }
 
-import { appendLayer5Footer } from '@/lib/layer4';
+import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure, LAYER4_HEADING } from '@/lib/layer4';
+import { isBaseBindingOptional, selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
+import { buildLayer4IndexBody, folderUsesSummariesForLayer4 } from '@/lib/layer4Index';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
 import { drainInjections, drainSystemNotes, pushSystemNote, clearInjections, frameInjection } from '@/lib/injectMessage';
@@ -3571,8 +3573,24 @@ export async function POST(req: Request) {
       toolImageInstruction = '',
       // Set by callers whose systemPrompt is an AGENT's instructions rather than
       // an entity's identity — the System Prompt Updater and the summary writer.
-      // Suppresses the automatic Layer 5 append below. See the comment there.
+      // Suppresses the automatic Layer 5 append AND the Absolute Base Binding
+      // prepend below (see both comments there). The name predates the second
+      // use; `isAgentInstructionPrompt` below reads it under its real meaning.
       suppressLayer5 = false,
+      // ── Absolute Base Binding ─────────────────────────────────────────────
+      // Both fields are HINTS, not controls. The Binding is burned in: it is
+      // injected below no matter what arrives here, unless the server process
+      // carries the developer override (lib/baseBinding.ts).
+      //
+      // baseBindingMode — the old per-conversation switch. Honoured ONLY when
+      //   that override is set. Thousands of stored conversations and the
+      //   browser both still send it; ignoring it silently is the point.
+      // bindingLayered — whether the entity's STORED prompt has a real Layer
+      //   1-5 structure, computed by the client before it appended the Layer 4
+      //   index. Chooses WHICH text is injected, never whether. Absent for a
+      //   direct API caller, in which case the server works it out itself.
+      baseBindingMode = 'on',
+      bindingLayered = null,
       modelParams = { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' },
       specificModel = 'gemini-3.5-flash',
       dateTimeVisibility = 'all',
@@ -3747,6 +3765,115 @@ export async function POST(req: Request) {
     // and NEXUS sets no maxTurns on the main query.
     const MAX_TOOL_ROUNDS = Math.min(300, Math.max(1, Number(maxToolIterationsRaw) || 300));
 
+    // `suppressLayer5` under its real meaning: this prompt is an AGENT's
+    // instruction file (System Prompt Updater, summary writer), not a being's
+    // identity. Two things hang off it — the Layer 5 append below and the
+    // Absolute Base Binding prepend just after. A shikigami must receive
+    // neither: the Binding addresses whoever is being embodied, and an agent
+    // run is not an embodiment. It has one caller
+    // (SystemPromptUpdater.tsx:1121) covering every agent mode.
+    const isAgentInstructionPrompt = !!suppressLayer5;
+
+    // ── Absolute Base Binding — injected HERE, and only here ────────────────
+    // This is the whole of the burn-in. The browser no longer composes the
+    // Binding onto the prompt it sends (it still composes an identical copy
+    // for the "Sys" token counter, so that number stays honest); every entity
+    // turn gets it added at this line instead, whatever the request body said.
+    // See lib/baseBinding.ts for why it moved here and what the one
+    // environment-variable override is for.
+    //
+    // Runs BEFORE the Layer 5 append on purpose: the layered-vs-initial
+    // detection must not see a "Layer 5" heading this code is about to add.
+    // Read once — both burn-ins below (the Binding, and Layer 4) consult it.
+    const bindingOptional = isBaseBindingOptional();
+
+    if (!isAgentInstructionPrompt) {
+      // Which of the two texts. The client computed this on the STORED prompt
+      // and sent its answer; a direct API caller sends nothing, so fall back
+      // to stripping the appended Layer 4 block first — its heading would
+      // otherwise read as "this entity has layers" for an entity that has
+      // none written.
+      const layered = typeof bindingLayered === 'boolean'
+        ? bindingLayered
+        : hasLayerStructure(String(systemPrompt || '').split(LAYER4_HEADING)[0]);
+      const builtIn = resolveAgentInstructions(null, language);
+      const bindingText = selectBaseBindingText({
+        optional: bindingOptional,
+        mode: baseBindingMode === 'off' ? 'off' : 'on',
+        layered,
+        defaults: {
+          layered: builtIn.absoluteBaseBinding || '',
+          initial: builtIn.absoluteBaseBindingInitial || '',
+        },
+        // Per-entity text overrides are honoured ONLY with the override set.
+        // Burned-in means not editable; an override silently ignored would be
+        // an editor that lies about what it changes.
+        overrides: bindingOptional
+          ? {
+            layered: (instructionOverrides as any)?.absoluteBaseBinding,
+            initial: (instructionOverrides as any)?.absoluteBaseBindingInitial,
+          }
+          : null,
+      });
+      // Idempotence guard. Nothing in this build sends a prompt that already
+      // carries the Binding, but three things could: a browser tab left open
+      // across the deploy that still has the old composing code, a stored
+      // prompt that someone pasted an assembled copy into, and a caller
+      // replaying a captured request body. Doubling the Binding is a worse
+      // failure than skipping it, so compare the front of the prompt first.
+      const probe = bindingText.trim().slice(0, 80);
+      const alreadyThere = !!probe && String(systemPrompt || '').trimStart().startsWith(probe);
+      if (bindingText && !alreadyThere) {
+        systemPrompt = prependIdentityPreamble(systemPrompt, bindingText);
+      }
+    }
+
+    // ── Layer 4 — the summaries index, injected HERE, and only here ─────────
+    // The second half of the burn-in (2026-10-01). The browser no longer
+    // appends this on the way out; it builds an identical copy for the "Sys"
+    // counter and the read-only Identity view, through /api/summaries, which
+    // calls the same builder this does.
+    //
+    // ORDER MATTERS, twice over. It runs AFTER the Binding block because the
+    // layered-vs-initial detection must not see the "Layer 4" heading added
+    // here, and BEFORE the Layer 5 append below so the two generated layers
+    // land in numerical order.
+    //
+    // An entity with no summaries gets nothing: buildLayer4IndexBody returns ''
+    // and appendLayer4Index short-circuits, so there is no empty heading.
+    // Shikigami (isAgentInstructionPrompt) are excluded for the same reason
+    // they get no Binding — an agent run is not an embodiment, and an
+    // instruction file has no conversation history to index.
+    if (!isAgentInstructionPrompt) {
+      const injectLayer4 = shouldInjectLayer4({
+        optional: bindingOptional,
+        // Consulted only with the override set; a disk read either way would
+        // be wasted work in the shipped product.
+        folderSetting: bindingOptional ? await folderUsesSummariesForLayer4(folderName) : false,
+      });
+      // Idempotence guard, same reasoning as the Binding's: a browser tab left
+      // open across the deploy still runs the old composing code and would
+      // send a prompt that already carries the index. Two Layer 4 blocks is a
+      // worse failure than relying on the one already there.
+      const alreadyIndexed = String(systemPrompt || '').includes(LAYER4_HEADING);
+      if (injectLayer4 && !alreadyIndexed) {
+        try {
+          const indexBody = await buildLayer4IndexBody({
+            folderName,
+            currentConvoId: convoId,
+            // Matches what the client used to request: 'ja' only for Japanese.
+            lang: language === 'ja' ? 'ja' : 'en',
+          });
+          systemPrompt = appendLayer4Index(systemPrompt, indexBody);
+        } catch (e: any) {
+          // Never fail a turn over the index. Losing it degrades the identity
+          // (the being forgets its own past), so this is logged loudly rather
+          // than swallowed, but it is not worth refusing to answer over.
+          console.warn(`[layer4] index assembly failed for ${folderName || 'turn'}:`, e?.message || e);
+        }
+      }
+    }
+
     // Per-Entity editable footer = Layer 5. When the entity keeps a FOOTER.md in
     // its workspace, its contents are injected as a self-authored "Layer 5"
     // block — the SAME auto-generated-heading mechanism as the Layer-4 summaries
@@ -3764,7 +3891,7 @@ export async function POST(req: Request) {
     // is the likeliest reason a shikigami's own output format got ignored.
     // Those callers pass `suppressLayer5` and show the footer explicitly, as
     // clearly-labelled reference material inside the user message instead.
-    if (!suppressLayer5) {
+    if (!isAgentInstructionPrompt) {
       try {
         const footer = await readEntityFooter(folderName);
         if (footer && footer.trim()) {

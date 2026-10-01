@@ -4,43 +4,16 @@ import {
   readSummary,
   writeSummary,
   listSummaries,
-  assembleSummaryIndex,
   replaceManySummaries,
   summaryKey,
-  type SummaryIndexEntry,
 } from '@/lib/summaryStorage';
+import { buildLayer4IndexBody } from '@/lib/layer4Index';
 
-// Resolve the ordered, title-paired list of conversations for one entity
-// folder. Order follows folder.settings.convoOrder (the sidebar order); any
-// conversation not listed there is appended by recency. Each entry carries the
-// live title and the `active` flag (default true when absent).
-async function orderedConvos(folderName: string): Promise<Array<{ convoId: string; title: string; active: boolean }>> {
-  const folders = await listFolders();
-  const folder = folders.find((f) => f.name === folderName);
-  const convoOrder: string[] = Array.isArray(folder?.settings?.convoOrder)
-    ? folder!.settings.convoOrder
-    : [];
-
-  const logs = (await listLogs()).filter((l: any) => l.folderName === folderName);
-  const byId = new Map<string, any>(logs.map((l: any) => [l.id, l]));
-
-  const ordered: Array<{ convoId: string; title: string; active: boolean }> = [];
-  const seen = new Set<string>();
-  for (const id of convoOrder) {
-    const l = byId.get(id);
-    if (!l) continue;
-    seen.add(id);
-    ordered.push({ convoId: id, title: l.title || 'Untitled', active: l.active !== false });
-  }
-  // Append any logs missing from convoOrder, most-recent first (listLogs is
-  // already sorted by updatedAt desc).
-  for (const l of logs) {
-    if (seen.has(l.id)) continue;
-    ordered.push({ convoId: l.id, title: l.title || 'Untitled', active: l.active !== false });
-  }
-  return ordered;
-}
-
+// `orderedConvos()` and the index assembly USED TO LIVE HERE. They moved to
+// lib/layer4Index.ts on 2026-10-01, when Layer 4 was burned in and the chat
+// route became the thing that actually appends it. This endpoint now calls the
+// same builder, so the body shown in the Identity window and counted in the
+// "Sys" total cannot drift from the body that is sent.
 // GET /api/summaries?folder=X&title=Y            → { content: string | null }
 // GET /api/summaries?folder=X&mode=index          → { body: string }
 //   The assembled Layer-4 index body (titles + summaries in sidebar order;
@@ -74,30 +47,9 @@ export async function GET(req: Request) {
       // transcript), so it is excluded from both the read-only preview and the
       // injected Layer-4 index.
       const current = url.searchParams.get('current') || '';
-      const ordered = await orderedConvos(folder);
-      const summaries = await listSummaries(folder);
-      // Per-folder editable hint override (undefined → default hint used).
-      const folders = await listFolders();
-      const hintOverride = folders.find((f) => f.name === folder)?.settings?.summaryIndexHint as
-        | string
-        | undefined;
-      const entries: SummaryIndexEntry[] = ordered
-        // Inactive ("non-public") conversations are fully hidden — not even a
-        // title placeholder — so the AI never learns they exist.
-        .filter((c) => c.active)
-        // Drop the current conversation entirely.
-        .filter((c) => !current || c.convoId !== current)
-        .map((c) => ({
-          convoId: c.convoId,
-          title: c.title,
-          active: c.active,
-          // Summaries are filed under the (sanitized) conversation title.
-          summary: summaries[summaryKey(c.title)] ?? null,
-        }))
-        // Present oldest → newest, matching the old baked Layer 4 ordering.
-        // orderedConvos follows the sidebar order (newest-first), so reverse it.
-        .reverse();
-      return NextResponse.json({ body: assembleSummaryIndex(entries, hintOverride, lang) });
+      return NextResponse.json({
+        body: await buildLayer4IndexBody({ folderName: folder, currentConvoId: current, lang }),
+      });
     }
 
     if (title) {

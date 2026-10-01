@@ -696,8 +696,18 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
   { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-Entity rule)' },
-  { key: 'absoluteBaseBinding', label: 'Absolute Base Binding — layered version (used when a Layer 1-5 structure is present)' },
-  { key: 'absoluteBaseBindingInitial', label: 'Absolute Base Binding — initial version (used when no Layer structure is present)' },
+  // REMOVED FROM THIS LIST 2026-10-01 — `absoluteBaseBinding` and
+  // `absoluteBaseBindingInitial`. The Binding is burned in (lib/baseBinding.ts)
+  // and the route uses the BUILT-IN text, ignoring any override, so leaving
+  // editors here would have shipped two text boxes that accept input and
+  // change nothing about what is sent. An editor that lies about what it edits
+  // is worse than no editor.
+  //
+  // The override keys themselves still work — they are simply only honoured
+  // when the developer override is set, and in that mode the Identity window
+  // shows its own pair of editors for them. Their labels are left in
+  // AGENT_INSTRUCTION_LABELS_JA below: unused strings cost nothing, and they
+  // are what this list would need again if the decision is ever reversed.
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },
   { key: 'injectionRetryNote', label: 'Interjection: OAuth retry note' },
 ];

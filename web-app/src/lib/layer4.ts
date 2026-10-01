@@ -72,6 +72,13 @@ export function appendLayer5Footer(systemPrompt: string, footerBody: string): st
 // instead of after it: Absolute Base Binding, then the entity's own Layer 1-5
 // prompt.
 //
+// WHO CALLS IT CHANGED 2026-10-01. The real caller is now the chat route, not
+// the browser: the Binding is burned in, and a gate that lived only in client
+// code was a button rather than a capability. See lib/baseBinding.ts. The
+// browser still calls this for the "Sys" token counter (so the count includes
+// what is actually sent) and for Gemini Live, which never passes through
+// /api/chat and so has no server to do it.
+//
 // A second block ("Working Discipline" / "Working Method") used to be composed
 // ahead of the Binding here; it was removed 2026-09-14 after an effect was
 // never found in three lookings while its side effect was measured. See the
@@ -84,31 +91,24 @@ export function appendLayer5Footer(systemPrompt: string, footerBody: string): st
 // with or without markdown heading decoration ("##", "**"). Deliberately
 // loose — the Soul Packer sometimes strips those symbols, so requiring them
 // would silently misdetect a prompt that plainly still has a 5-layer
-// identity written into it. Used by resolveBindingText below to choose which
-// Absolute Base Binding text to inject — NOT whether to inject at all; that
-// gate is a plain on/off switch (see resolveBindingText).
+// identity written into it. Feeds selectBaseBindingText (lib/baseBinding.ts)
+// to choose WHICH Absolute Base Binding text is injected — never whether one
+// is; that is not a choice any more.
+//
+// MUST be given the STORED prompt. Called on an assembled one it answers yes
+// for every entity, because the appended "## **Layer 4 …" / "Layer 5 …"
+// headings match it.
 const BARE_LAYER_RE = /\bLayer\s*[1-5]\b/i;
 export function hasLayerStructure(systemPrompt: string): boolean {
   return BARE_LAYER_RE.test(systemPrompt || '');
 }
 
-/**
- * Absolute Base Binding is a plain on/off switch. When on, WHICH text gets
- * injected is decided automatically: `layeredText` (the current, layers-
- * focused wording) when the stored prompt already has a real Layer 1-5
- * structure, `initialText` (Utai's original wording, grounded in the
- * conversation log instead of named layers) when it doesn't. When off,
- * returns '' so prependIdentityPreamble omits the Binding block entirely.
- */
-export function resolveBindingText(
-  enabled: boolean,
-  systemPrompt: string,
-  layeredText: string,
-  initialText: string,
-): string {
-  if (!enabled) return '';
-  return hasLayerStructure(systemPrompt) ? (layeredText || '') : (initialText || '');
-}
+// REMOVED 2026-10-01 — `resolveBindingText(enabled, prompt, layered, initial)`.
+// Its first parameter was an on/off gate that the browser owned, and that gate
+// no longer exists: the Binding is burned in and chosen by
+// selectBaseBindingText in lib/baseBinding.ts, which the chat route and this
+// client both call. Deleted rather than left exported, so the next reader
+// cannot reach for a function whose signature still implies the switch.
 
 /**
  * Prepend Absolute Base Binding text ahead of the entity's own prompt. A blank

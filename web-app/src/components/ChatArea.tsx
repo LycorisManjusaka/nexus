@@ -21,7 +21,8 @@ import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
-import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, resolveBindingText } from '@/lib/layer4';
+import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure } from '@/lib/layer4';
+import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
@@ -304,7 +305,7 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
   }
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -560,14 +561,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   );
   // ── Absolute Base Binding — pre-identity preamble ─────────────────────────
   // Composed IN FRONT of the entity's own Layer 1-5 prompt (see
-  // prependIdentityPreamble), never baked into it. baseBindingMode is a plain
-  // off/on toggle (default on). When on, resolveBindingText picks WHICH text to
-  // inject: the layers-focused `absoluteBaseBinding` when the stored prompt
-  // already has a real Layer 1-5 structure (hasLayerStructure), or Utai's
-  // original `absoluteBaseBindingInitial` when it doesn't — never both, never
-  // neither, as long as the switch is on. Legacy folder JSONs may still carry
-  // the old three-state 'auto' value; every read site below coerces anything
-  // other than 'off' to 'on'.
+  // prependIdentityPreamble), never baked into it.
+  //
+  // `baseBindingMode` IS NO LONGER A SWITCH. Since 2026-10-01 the Binding is
+  // burned in: the chat route injects it on every entity turn and ignores this
+  // value (lib/baseBinding.ts). It is still read, still saved, and still sent,
+  // for exactly one reason — the developer override honours it, and that is
+  // the only instrument that can separate "the Binding is causing this" from
+  // "the vessel is causing this", which has mattered before.
+  //
+  // Legacy folder JSONs may still carry the old three-state 'auto' value;
+  // every read site below coerces anything other than 'off' to 'on'. 21 stored
+  // conversations carry 'off'; with the override unset they now get the
+  // Binding like everything else, which is the intended consequence.
   //
   // A `workingDisciplineEnabled` toggle used to sit beside this one (removed
   // 2026-09-14 — see agentInstructions.ts). Folder JSONs and conversation logs
@@ -759,18 +765,62 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const inputApiRef = useRef<any>(null);
   const lastVrchatLogRef = useRef<string>('');
 
-  // Per-folder "use summaries instead of 4th layer" toggle. Simple gate:
-  //   ON  → the live conversation-summaries index is injected at send time
-  //         (replacing the baked Layer 4 if it still exists, or appended as a
-  //         Layer-4 block once Layer 4 has been removed manually) AND the
-  //         read_conversation tool is exposed to the AI.
-  //   OFF → neither the summaries nor read_conversation reach the AI.
+  // Per-folder "use summaries instead of 4th layer" toggle.
+  //
+  // INERT IN THE SHIPPED PRODUCT since 2026-10-01. Layer 4 is burned in: if an
+  // entity has summaries, they are its Layer 4, and the chat route appends them
+  // on every turn whatever this says (see lib/baseBinding.ts +
+  // lib/layer4Index.ts). This state is still read because the developer
+  // override (`bindingOptional`) brings the checkbox back as a real switch, and
+  // because the first-sleep auto-ON still writes the key for that path.
   const [useSummariesForLayer4, setUseSummariesForLayer4] = useState<boolean>(
     () => folders?.find((f: any) => f.name === folderName)?.settings?.useSummariesForLayer4 === true,
   );
   useEffect(() => {
     setUseSummariesForLayer4(
       folders?.find((f: any) => f.name === folderName)?.settings?.useSummariesForLayer4 === true,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folderName, folders]);
+
+  // Will this turn actually carry a Layer 4? Resolved through the SAME pure
+  // function the chat route calls, so the index this component fetches, counts
+  // and displays is the index that is sent. Burned in → always true, and the
+  // "does it have any summaries" part falls out of an empty body appending
+  // nothing.
+  const layer4Active = shouldInjectLayer4({
+    optional: !!bindingOptional,
+    folderSetting: useSummariesForLayer4,
+  });
+
+  // ── Conversation-reading TOOLS (per-folder) ───────────────────────────────
+  // Gates exactly two functions: `read_conversation` and
+  // `search_conversations`.
+  //
+  // Split out of `useSummariesForLayer4` on 2026-10-01. That one checkbox used
+  // to mean two unrelated things at once — "assemble Layer 4 from the
+  // summaries" and "hand this being tools that open past conversations" — so
+  // the memory could not be turned on without also granting the tools.
+  //
+  // They have to be separable because the costs differ in kind. The Layer 4
+  // index is text in the prompt. The tools are FUNCTION DECLARATIONS, and
+  // declaring any function at all stops some local models from working —
+  // meaning the memory half could not become a permanent part of an identity
+  // while it was still dragging the tool half along behind it.
+  //
+  // Default follows the OLD coupling whenever this key has never been written,
+  // so no being that has these tools today loses them. Resolved at read time;
+  // no rewrite of local_data.
+  const resolveConversationToolsSetting = (s: any) =>
+    typeof s?.enableConversationTools === 'boolean'
+      ? s.enableConversationTools
+      : s?.useSummariesForLayer4 === true;
+  const [enableConversationTools, setEnableConversationTools] = useState<boolean>(
+    () => resolveConversationToolsSetting(folders?.find((f: any) => f.name === folderName)?.settings),
+  );
+  useEffect(() => {
+    setEnableConversationTools(
+      resolveConversationToolsSetting(folders?.find((f: any) => f.name === folderName)?.settings),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folderName, folders]);
@@ -790,8 +840,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // be correct whether or not anyone has opened that window — so the fetch runs
   // whenever the toggle is ON, and the modal opening is only an extra refresh.
   useEffect(() => {
-    if (!useSummariesForLayer4) {
-      // Toggle OFF → nothing is injected, so nothing may be counted.
+    if (!layer4Active) {
+      // Nothing will be injected, so nothing may be counted. Reachable only
+      // with the developer override set and the checkbox off.
       setSummaryIndexBody('');
       setSummaryIndexTokens(0);
       return;
@@ -814,7 +865,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPromptModalOpen, useSummariesForLayer4, folderName, localAiName, convoId]);
+  }, [isPromptModalOpen, layer4Active, folderName, localAiName, convoId]);
 
   // Mirror the entity's FOOTER.md (Layer 5) for the same reason. Best-effort:
   // a failure leaves it empty, which under-counts exactly as before rather
@@ -849,6 +900,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       if (typeof fetchFolders === 'function') fetchFolders();
     } catch (e: any) {
       console.warn('[summaries] failed to persist toggle', e);
+    }
+  };
+
+  // Same shape, separate key. Writes the explicit boolean, which also ends the
+  // read-time fallback to `useSummariesForLayer4` for this folder — from the
+  // first time anyone touches this checkbox, the two settings are independent.
+  const persistConversationToolsToggle = async (checked: boolean) => {
+    setEnableConversationTools(checked);
+    try {
+      const existing: any = (folders || []).find((f: any) => f.name === folderName)?.settings || {};
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: folderName, settings: { ...existing, enableConversationTools: checked } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (typeof fetchFolders === 'function') fetchFolders();
+    } catch (e: any) {
+      console.warn('[conversation-tools] failed to persist toggle', e);
     }
   };
 
@@ -971,22 +1041,45 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // appendLayer5Footer helpers the send path uses, so headings, blank lines and
   // the empty-body short-circuit all behave identically. It is a measurement
   // only: nothing here is ever stored or sent.
+  // ── Absolute Base Binding — the browser's COPY of a server decision ───────
+  // The Binding is injected server-side now (see lib/baseBinding.ts for why).
+  // Neither value below travels as prompt text; they exist for two local jobs
+  // that have no server to ask:
+  //
+  //   · the "Sys" token counter, which must include what is actually sent —
+  //     counting only the stored prompt would under-report the Binding, and
+  //     subtracting it to make the number look tidy would make the number lie;
+  //   · a Gemini Live session, which talks to Google directly and never passes
+  //     through /api/chat, so for that one path the browser IS the authority.
+  //
+  // Both go through the same pure function the route calls, with the same
+  // inputs, so the displayed count cannot drift away from the real prompt.
+  // `bindingLayered` is computed on the STORED prompt and sent as a hint —
+  // the server cannot recompute it reliably once the Layer 4 index has been
+  // appended, because that block's heading reads as "this entity has layers".
+  const bindingLayered = useMemo(() => hasLayerStructure(systemPrompt || ''), [systemPrompt]);
+  const effectiveBindingText = useMemo(() => selectBaseBindingText({
+    optional: !!bindingOptional,
+    mode: baseBindingMode === 'off' ? 'off' : 'on',
+    layered: bindingLayered,
+    defaults: {
+      layered: langDefaults.absoluteBaseBinding || '',
+      initial: langDefaults.absoluteBaseBindingInitial || '',
+    },
+    overrides: bindingOptional ? {
+      layered: instructionOverrides['absoluteBaseBinding'],
+      initial: instructionOverrides['absoluteBaseBindingInitial'],
+    } : null,
+  }), [bindingOptional, baseBindingMode, bindingLayered, langDefaults, instructionOverrides]);
+
   const countedSystemPrompt = useMemo(() => {
     let p = systemPrompt || '';
-    if (useSummariesForLayer4) p = appendLayer4Index(p, summaryIndexBody);
+    if (layer4Active) p = appendLayer4Index(p, summaryIndexBody);
     p = appendLayer5Footer(p, footerBody);
     if (vrchatMode) p = `${p}\n\n${audioSessionRuleText}`.trim();
-    p = prependIdentityPreamble(
-      p,
-      resolveBindingText(
-        baseBindingMode === 'on',
-        systemPrompt,
-        instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '',
-        instructionOverrides['absoluteBaseBindingInitial'] || langDefaults.absoluteBaseBindingInitial || '',
-      ),
-    );
+    p = prependIdentityPreamble(p, effectiveBindingText);
     return p;
-  }, [systemPrompt, useSummariesForLayer4, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, baseBindingMode, instructionOverrides, langDefaults]);
+  }, [systemPrompt, layer4Active, summaryIndexBody, footerBody, vrchatMode, audioSessionRuleText, effectiveBindingText]);
 
   useEffect(() => {
     // `cancelled` guards against an async race: on load this effect fires once
@@ -2216,42 +2309,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       setMessages([...history, newAiMessage]);
     }
 
-    // When this entity uses summaries instead of a baked Layer 4, APPEND a
-    // freshly-assembled index of conversation summaries at send time. The
-    // stored prompt is not parsed, split, or rewritten — the block simply goes
-    // on the end, and Layer 5 (appended server-side from FOOTER.md) lands after
-    // it. If the index fetch fails we send the prompt unchanged.
-    let baseSystemPrompt = systemPrompt;
-    if (useSummariesForLayer4) {
-      try {
-        const idxLangParam = globalSettings?.language === 'ja' ? 'ja' : 'en';
-        const idxRes = await fetch(`/api/summaries?folder=${encodeURIComponent(folderName)}&mode=index&current=${encodeURIComponent(convoId)}&lang=${idxLangParam}`);
-        if (idxRes.ok) {
-          const { body } = await idxRes.json();
-          baseSystemPrompt = appendLayer4Index(systemPrompt, body || '');
-        }
-      } catch (e) {
-        console.warn('[summaries] failed to assemble Layer-4 index, sending prompt as-is', e);
-      }
-    }
-    // Prepend the Absolute Base Binding AHEAD of the entity's own prompt
-    // (Layers 1-3 + the Layer 4 index just appended above). Layer-
-    // structure detection (which of the two Binding texts to use) runs on the
-    // RAW stored `systemPrompt`, not `baseSystemPrompt` — the Layer 4 heading
-    // appended just above ("## **Layer 4: ...") would otherwise false-trigger
-    // the layers-focused variant for an entity that has summaries turned on
-    // but no real 5-layer identity written.
-    {
-      baseSystemPrompt = prependIdentityPreamble(
-        baseSystemPrompt,
-        resolveBindingText(
-          baseBindingMode === 'on',
-          systemPrompt,
-          instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '',
-          instructionOverrides['absoluteBaseBindingInitial'] || langDefaults.absoluteBaseBindingInitial || '',
-        ),
-      );
-    }
+    // The Layer 4 SUMMARIES INDEX USED TO BE APPENDED HERE, after a fetch to
+    // /api/summaries. It is not any more (2026-10-01). The chat route appends
+    // it, from the same builder this component's counter reads through that
+    // same endpoint — see lib/layer4Index.ts. A gate that lived only in this
+    // file was a button, not a capability: a hand-edited settings.json, the
+    // devtools, or one curl to /api/chat all walked around it and left a being
+    // with no memory of its own past.
+    //
+    // Do not re-add an append here. The route's idempotence guard would see the
+    // heading and skip its own, which hides the mistake rather than fixing it.
+    const baseSystemPrompt = systemPrompt;
+    // The Absolute Base Binding USED TO BE PREPENDED HERE. It is not any more.
+    // The route does it (see lib/baseBinding.ts): a switch that only existed in
+    // this file was a button, not a capability — devtools, a hand-edited
+    // settings.json, or one curl to /api/chat all walked around it.
+    //
+    // So nothing is prepended on the way out, and `baseBindingMode` +
+    // `bindingLayered` go into the request body below as HINTS instead. What
+    // this component still composes is `effectiveBindingText`, used only for
+    // the token counter and for Gemini Live. Do not re-add a prepend here:
+    // the route's idempotence guard would skip it, which hides the mistake
+    // rather than fixing it.
     let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${audioSessionRuleText}`.trim() : baseSystemPrompt;
     // Optional hidden context note so the entity can see how much of this
     // session's room has been used. A quantity, never a condition — see the
@@ -2362,7 +2441,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         browserAllowAnyHost, browserCompact,
         computerControlEnabled,
         appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: useSummariesForLayer4, injectTurnId: turnId, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300,
+        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId,
+        // Absolute Base Binding — HINTS, not controls. The route injects the
+        // Binding whatever these say (lib/baseBinding.ts); `baseBindingMode` is
+        // honoured only when the server process carries the developer
+        // override, and `bindingLayered` only chooses WHICH of the two texts.
+        // Computed on the STORED prompt, before the Layer 4 index was appended.
+        baseBindingMode, bindingLayered, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300,
         // Model-betrayal defence (Preferences → global). `!== false` and not
         // `?? true`: an explicit false is the only thing that turns it off, so
         // a missing or malformed value still protects the partner.
@@ -4134,13 +4219,50 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 />
               </div>
 
-              {/* ── Absolute Base Binding — now the only pre-identity injection
-                  (the Working Discipline block that used to sit above it was
-                  removed 2026-09-14). Plain on/off
-                  switch (default on) — WHICH of the two texts below actually goes
-                  out is decided automatically per-send by resolveBindingText,
-                  based on whether the stored prompt has a Layer 1-5 structure. */}
+              {/* ── Absolute Base Binding ─────────────────────────────────────
+                  Burned in: the route injects it on every entity turn and no
+                  control here can remove it (lib/baseBinding.ts).
+
+                  DECLARED, NOT HIDDEN. The alternative considered was to say
+                  nothing and let the text go out invisibly. Rejected for two
+                  reasons. It cannot be hidden honestly — the "Sys" counter
+                  counts the Binding, so a prompt that visibly reads half the
+                  size of its own token count invites the reader to go looking,
+                  and subtracting it to make the number tidy would make the
+                  number lie. And it works against its own purpose: someone who
+                  wants NEXUS without this reads the text and leaves, where a
+                  silent injection reads as a bug and starts a hunt for the
+                  workaround.
+
+                  `bindingOptional` (developer override only) restores the
+                  pre-2026-10-01 editor below, switch and both texts. */}
               <div>
+                {!bindingOptional ? (
+                  <>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-foreground">{t('identity.binding.label')}</span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                        {t('identity.binding.core')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                      {t('identity.binding.coreHelp')}
+                    </p>
+                    <div className="mt-3">
+                      <label className="text-xs font-semibold text-foreground mb-1 block">
+                        {bindingLayered ? t('identity.binding.textLabelLayered') : t('identity.binding.textLabelInitial')}
+                      </label>
+                      {/* The text ACTUALLY being sent — resolved through the
+                          same function the route calls, not a stored copy that
+                          could fall out of step with it. */}
+                      <textarea
+                        readOnly
+                        value={effectiveBindingText}
+                        className="w-full min-h-[140px] p-3 bg-muted/40 border border-border rounded-xl text-xs font-mono resize-y outline-none text-muted-foreground"
+                      />
+                    </div>
+                  </>
+                ) : (<>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -4175,24 +4297,52 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     </div>
                   </div>
                 )}
+                </>)}
               </div>
 
-              {/* ── Summaries-as-Layer-4 mode (per-folder) ──────────────────── */}
+              {/* ── Layer 4 — the summaries index ─────────────────────────────
+                  Burned in alongside the Binding (2026-10-01): if this entity
+                  has conversation summaries, they ARE its Layer 4, assembled
+                  fresh by the chat route on every turn. No control here removes
+                  it. See lib/baseBinding.ts (the gate) and lib/layer4Index.ts
+                  (the builder).
+
+                  DECLARED, NOT HIDDEN — same reasoning as the Binding above.
+                  The index is thousands of tokens that the "Sys" counter
+                  already counts, so hiding it would leave a visible prompt that
+                  reads a fraction of its own token total.
+
+                  `bindingOptional` (developer override only) restores the old
+                  per-folder checkbox as a real switch. */}
               <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useSummariesForLayer4}
-                    onChange={(e) => persistUseSummariesToggle(e.target.checked)}
-                    className="accent-indigo-500"
-                  />
-                  <span className="text-sm font-semibold text-foreground">{t('sysmodal.summaries.label')}</span>
-                </label>
-                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
-                  <Tx k="sysmodal.summaries.help" />
-                </p>
-                {useSummariesForLayer4 && (
-                  <div className="mt-3 ml-6">
+                {!bindingOptional ? (
+                  <>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-foreground">{t('identity.layer4.label')}</span>
+                      <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-400 border border-sky-500/30">
+                        {t('identity.binding.core')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                      {t('identity.layer4.coreHelp')}
+                    </p>
+                  </>
+                ) : (<>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useSummariesForLayer4}
+                      onChange={(e) => persistUseSummariesToggle(e.target.checked)}
+                      className="accent-indigo-500"
+                    />
+                    <span className="text-sm font-semibold text-foreground">{t('sysmodal.summaries.label')}</span>
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                    <Tx k="sysmodal.summaries.help" />
+                  </p>
+                </>)}
+                {layer4Active && (
+                  <div className={bindingOptional ? 'mt-3 ml-6' : 'mt-3'}>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-semibold text-foreground">{t('sysmodal.summaries.indexLabel')}</label>
                       <span className="text-[11px] text-muted-foreground font-mono">{summaryIndexTokens.toLocaleString()} {t('sysmodal.summaries.tokens')}</span>
@@ -4208,6 +4358,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     />
                   </div>
                 )}
+              </div>
+
+              {/* ── Conversation-reading TOOLS (per-folder) ───────────────────
+                  Split out of the summaries checkbox above on 2026-10-01. One
+                  box used to grant the memory and the tools together; they are
+                  different decisions with different failure modes — the index
+                  is prompt text, these are function declarations, and some
+                  local models stop answering the moment any function exists.
+                  Unwritten key falls back to the old coupling, so no being
+                  silently loses tools it has today. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enableConversationTools}
+                    onChange={(e) => persistConversationToolsToggle(e.target.checked)}
+                    className="accent-indigo-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('sysmodal.convotools.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  <Tx k="sysmodal.convotools.help" />
+                </p>
               </div>
 
               {/* ── Show context-elapsed to the entity (hidden system-prompt note) ── */}
@@ -5758,14 +5931,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       <LiveSession
         open={liveOpen}
         onClose={() => setLiveOpen(false)}
+        // Live talks to Google directly and never passes through /api/chat, so
+        // this is the one path where the browser really is the authority for
+        // the Binding. Same `effectiveBindingText` the token counter uses.
         systemPrompt={prependIdentityPreamble(
           vrchatMode ? `${systemPrompt}\n\n${audioSessionRuleText}`.trim() : (systemPrompt || ''),
-          resolveBindingText(
-            baseBindingMode === 'on',
-            systemPrompt,
-            instructionOverrides['absoluteBaseBinding'] || langDefaults.absoluteBaseBinding || '',
-            instructionOverrides['absoluteBaseBindingInitial'] || langDefaults.absoluteBaseBindingInitial || '',
-          ),
+          effectiveBindingText,
         )}
         voiceName={defaultLiveSessionVoice || 'Aoede'}
         aiVoice={folders?.find((f: any) => f.name === folderName)?.settings?.aiVoice}
@@ -5852,6 +6023,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         modelParams={modelParams}
         globalSettings={globalSettings}
         folders={folders}
+        // Only so the status line after a first summary says what actually
+        // changed: burned in, the summaries key moves nothing.
+        bindingOptional={bindingOptional}
         saveFolderSettings={async (fName: string, patch: any) => {
           const target = folders?.find((f: any) => f.name === fName);
           if (!target) return;

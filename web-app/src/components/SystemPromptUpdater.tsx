@@ -345,12 +345,19 @@ interface Props {
   folders: any[];
   saveFolderSettings: (folderName: string, patch: any) => Promise<void>;
   onFinalize: (args: { newSystemPrompt: string; newIndex: number }) => Promise<void>;
+  /**
+   * Developer override state (NEXUS_BINDING_OPTIONAL). Needed here for one
+   * reason only: to say the truth in the status line after a first summary.
+   * Burned in, the per-folder summaries key changes nothing — announcing that
+   * it was "turned on" would describe a switch the product no longer has.
+   */
+  bindingOptional?: boolean;
 }
 
 export default function SystemPromptUpdater({
   open, onClose, folderName, convoId, title, originalMessages,
   aiName, specificModel, modelParams,
-  folders, saveFolderSettings, onFinalize,
+  folders, saveFolderSettings, onFinalize, bindingOptional,
 }: Props) {
   const t = useT();
   // ── State ────────────────────────────────────────────────────────────────
@@ -1961,23 +1968,49 @@ export default function SystemPromptUpdater({
   }, [firstMessageTimestamp]);
 
   // ── Run the summary writer (separate call, separate model) ───────────────
-  // Writing a summary and not reading it back is a dead end: the summary lands
-  // in local_data/summaries/, the next conversation's Layer 4 index is built
-  // from those files, and the identity sees NONE of it unless
-  // "Use summaries instead of the 4th layer" is on. That switch being off after
-  // a summary has been written is never what anyone wanted — it just looks like
-  // the identity has forgotten everything. So the first successful summary turns
-  // it on for this entity. Idempotent, and only ever ON: an entity that has it
-  // on stays on, and nothing here can turn it off.
-  const enableSummariesForLayer4 = useCallback(async () => {
-    if (folder?.settings?.useSummariesForLayer4 === true) return false;
+  // This used to carry the whole burden of making a written summary readable:
+  // Layer 4 was a per-folder checkbox, and a summary written while it was off
+  // was a file nobody would ever see, which looks exactly like an identity that
+  // has forgotten everything. So the first successful summary switched it on.
+  //
+  // LAYER 4 IS BURNED IN since 2026-10-01 — the chat route assembles it from
+  // whatever summaries exist, with no switch to remove it — so that half is now
+  // automatic and this function cannot be the thing that makes memory work. It
+  // still writes the key for the developer override's sake (see
+  // lib/baseBinding.ts), but it no longer REPORTS having done so unless the
+  // override is set, because in the shipped product nothing changed.
+  //
+  // What it still genuinely does is grant the conversation-reading TOOLS
+  // (`read_conversation` / `search_conversations`), split out of the same
+  // checkbox on 2026-10-01 because declaring any function at all breaks some
+  // local models. An entity's first sleep should leave it able to OPEN what its
+  // index names, not just see the titles.
+  //
+  // Only ever ON, and never overrides a decision someone made by hand: an
+  // explicit `enableConversationTools: false` is left alone, so a being whose
+  // vessel breaks on function declarations does not get them back every time it
+  // sleeps.
+  const enableSummariesForLayer4 = useCallback(async (): Promise<{ summaries: boolean; tools: boolean }> => {
+    const s: any = folder?.settings || {};
+    const needSummaries = s.useSummariesForLayer4 !== true;
+    const needTools = s.enableConversationTools === undefined || s.enableConversationTools === null;
+    if (!needSummaries && !needTools) return { summaries: false, tools: false };
     try {
-      await saveFolderSettings(folderName, { useSummariesForLayer4: true });
-      return true;
+      const patch: any = {};
+      // Still written even though Layer 4 is burned in: it is what the
+      // developer override reads when the old checkbox is restored, so the
+      // override keeps behaving the way it did before the burn-in.
+      if (needSummaries) patch.useSummariesForLayer4 = true;
+      if (needTools) patch.enableConversationTools = true;
+      await saveFolderSettings(folderName, patch);
+      // Only reportable as a change when it is actually one. Burned in, the
+      // summaries key moves nothing — the being was always going to receive
+      // this summary as part of its Layer 4.
+      return { summaries: needSummaries && !!bindingOptional, tools: needTools };
     } catch {
-      return false;
+      return { summaries: false, tools: false };
     }
-  }, [folder, folderName, saveFolderSettings]);
+  }, [folder, folderName, saveFolderSettings, bindingOptional]);
 
   const runSummaryWrite = useCallback(async (): Promise<string | null> => {
     const summaryAgentPrompt =
@@ -2040,7 +2073,8 @@ export default function SystemPromptUpdater({
         (controller.signal.aborted
           ? t('spu.st.summaryStoppedPartial').replace('{n}', String(newSummary.length))
           : t('spu.st.summaryDone').replace('{n}', String(newSummary.length)))
-        + (turnedOn ? ' ' + t('spu.st.summariesEnabled') : '')
+        + (turnedOn.summaries ? ' ' + t('spu.st.summariesEnabled') : '')
+        + (turnedOn.tools ? ' ' + t('spu.st.convoToolsEnabled') : '')
       );
       return controller.signal.aborted ? null : newSummary;
     } catch (e: any) {
