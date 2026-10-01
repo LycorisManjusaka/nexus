@@ -420,6 +420,33 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
   return (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(v) ? v : 'high';
 }
 
+// Claude models on which thinking CANNOT be switched off: Anthropic answers
+// `thinking: { type: 'disabled' }` with a 400. Measured 2026-10-01 for
+// claude-opus-5-5 (API-key path):
+//   "\"thinking.type.disabled\" is not supported for this model. Use
+//    \"thinking.type.adaptive\" and \"output_config.effort\" …"
+// Fable/Mythos 5 were measured earlier. Plain claude-opus-5 ACCEPTS disabled,
+// and so do Opus 4.7, Opus 4.8 and Sonnet 5 (all re-measured the same day, each
+// with the toggle off so `disabled` really went on the wire) — so this is a
+// short deny-list, NOT "all adaptive models". (Sonnet 4.6 is not in that set:
+// it is non-adaptive, so this branch never sends it `disabled` at all — its
+// toggle-off turn carries `temperature` instead. Untested, by construction.)
+//
+// `/v1/models` cannot be used to derive this: the catalog reports
+// thinking.types = { enabled:false, adaptive:true } IDENTICALLY for Opus 5,
+// Opus 5.5, Sonnet 5, Fable 5.1 and Opus 4.8. `disabled` is not one of the
+// enumerated types, so the axis that actually differs is invisible there. A
+// model's `disabled` support can only be learned by sending it.
+//
+// ONE definition on purpose. Three sites read it — the API-key branch, the
+// OAuth branch, and the SSE `thinking` flag — and they must not drift apart.
+// (A detector and its own audit copy once claimed to match, drifted, and the
+// report printed an empty field while claiming a hit.)
+function claudeRejectsDisabledThinking(model: string): boolean {
+  const m = (model || '').toLowerCase();
+  return /fable-?5|mythos-?5/.test(m) || /opus-?5[-.]5|opus55/.test(m);
+}
+
 // ── Tool-activity display names ──────────────────────────────────────────────
 // Maps NEXUS's internal workspace-tool names to a short human phrase for the
 // `tool_activity` SSE event (drives the "<Entity> is using X…" loading label).
@@ -1458,10 +1485,23 @@ async function streamClaudeViaAgentSDK(args: {
         // simple "enabled" on older models that don't support adaptive.
         // `display: 'summarized'` makes the thinking visible (the SDK
         // surfaces it as `summarized_thinking` blocks rather than hiding it).
-        // Claude Fable 5 / Mythos 5 only support adaptive thinking — `disabled`
-        // is rejected — so force adaptive regardless of the UI toggle.
-        const isFable5Oauth = /fable-?5|mythos-?5/.test(model || '');
-        const wantThinking = !!modelParams?.claudeThinking || isFable5Oauth;
+        // Claude Fable 5 / Mythos 5 and Opus 5.5 only support adaptive thinking
+        // — `disabled` is rejected — so force adaptive regardless of the UI
+        // toggle. See claudeRejectsDisabledThinking() for the measured 400 and
+        // why /v1/models cannot be used to detect this.
+        //
+        // NOTE on why this is mirrored here even though OAuth does NOT 400:
+        // measured 2026-10-01, `thinking: { type: 'disabled' }` + Opus 5.5 over
+        // OAuth returns is_error=false. Claude Code's own binary carries
+        // per-model "request latches" (recordThinkingTypeOverride /
+        // effortUnsupportedModels) that absorb upstream refusals and substitute
+        // a supported shape. What it substitutes is NOT documented and was not
+        // measured — if it falls back to plain adaptive, the server default
+        // effort is 'high', i.e. the DEEPEST tier behind a toggle the user set
+        // to off, the opposite of what the API-key path now does. Sending the
+        // shape explicitly makes the toggle mean the same thing on both paths.
+        const isNoDisableThinkingOauth = claudeRejectsDisabledThinking(model || '');
+        const wantThinking = !!modelParams?.claudeThinking || isNoDisableThinkingOauth;
         const thinkingConfig: any = wantThinking
           ? { type: 'adaptive', display: 'summarized' }
           : { type: 'disabled' };
@@ -1471,11 +1511,16 @@ async function streamClaudeViaAgentSDK(args: {
         // pass it to Sonnet/Haiku; default 'high' = same as omitting it.
         // Sonnet 5 is adaptive+effort like Opus 4.7/4.8, so it takes the effort
         // control too. (The classic non-adaptive Sonnet 4.6/Haiku do not.)
-        const isAdaptiveOauth = isFable5Oauth || /opus-4-?7|opus-4-?8|opus-?5|sonnet-?5/.test(model || '');
+        const isAdaptiveOauth = isNoDisableThinkingOauth
+          || /opus-4-?7|opus-4-?8|opus-?5|sonnet-?5/.test(model || '');
         const isSonnet5Oauth = /sonnet-?5/.test(model || '');
         let oauthEffort = sanitizeClaudeEffort(modelParams?.claudeEffort);
         // Sonnet 5 tops out at 'xhigh' (no 'max' tier) — clamp to avoid a 400.
         if (isSonnet5Oauth && oauthEffort === 'max') oauthEffort = 'xhigh';
+        // Same translation as the API-key path: on a model that always thinks,
+        // the toggle set to OFF means the shallowest tier, not the server
+        // default ('high').
+        if (isNoDisableThinkingOauth && !modelParams?.claudeThinking) oauthEffort = 'low';
 
         // Per-character sandbox path. Claude Code's file tools (Read/Write/
         // Edit/Glob/Grep) operate relative to `cwd` and refuse to escape it
@@ -4040,7 +4085,13 @@ export async function POST(req: Request) {
     // detection when the user is running on a manually-picked model.
     const modelThinkingFlag: boolean =
       autoSelectedThinking !== null ? autoSelectedThinking :
-      isClaude       ? !!modelParams.claudeThinking :
+      // Fable/Mythos 5 and Opus 5.5 always think — `disabled` 400s, so the
+      // toggle set to OFF runs adaptive at the shallowest effort. Report that
+      // as thinking ON: shallow reasoning is not silence. (Same rule the Grok
+      // and glm-5.3 rows below already follow.) Reporting the raw toggle here
+      // would print "thinking: off" on a turn that thought.
+      isClaude       ? (!!modelParams.claudeThinking
+                          || claudeRejectsDisabledThinking(specificModel || '')) :
       isGemini       ? (modelParams.thinkingLevel && modelParams.thinkingLevel !== 'minimal' && modelParams.thinkingLevel !== 'none') :
       (isQwen || isDeepSeek || isGLM || isKimi || isCohere || isOpenAI)
                      ? modelParams.qwenEnableThinking !== false :
@@ -4599,14 +4650,27 @@ export async function POST(req: Request) {
       // `thinking: { type: 'enabled', budget_tokens }` shape and require the
       // adaptive format with an `output_config.effort` control instead.
       const isAdaptiveThinking = isOpus47 || isOpus48 || isOpus5 || isFable5 || isSonnet5;
-      // Fable/Mythos 5 cannot disable thinking, so force it on regardless of the
-      // UI toggle. (Also keeps temperature off, which adaptive models reject.)
-      const claudeThinkingOn = enableThinking || isFable5;
+      // Models where thinking cannot be switched off at all — Fable/Mythos 5 and
+      // Opus 5.5 both 400 on `disabled`. See claudeRejectsDisabledThinking() for
+      // the measured error and why /v1/models cannot detect it. NOTE this is NOT
+      // foldable into isOpus5: that flag matches both 'claude-opus-5' and
+      // 'claude-opus-5-5' deliberately, and plain Opus 5 accepts `disabled`.
+      // Omitting the field is NOT a fallback either (see the else-branch below —
+      // omission silently runs adaptive against the no-thinking budget).
+      const rejectsDisabledThinking = claudeRejectsDisabledThinking(claudeModel);
+      const claudeThinkingOn = enableThinking || rejectsDisabledThinking;
       // Per-conversation thinking-depth level for adaptive models. Sonnet 5's
       // highest supported tier is 'xhigh' (Opus/Fable go up to 'max'), so
       // clamp 'max'→'xhigh' for Sonnet 5 to avoid an invalid-effort 400.
       let claudeEffort = sanitizeClaudeEffort(modelParams.claudeEffort);
       if (isSonnet5 && claudeEffort === 'max') claudeEffort = 'xhigh';
+      // When thinking physically cannot be turned off, the UI's OFF still has
+      // to mean something. Translate it to the shallowest tier rather than
+      // running the server default ('high') behind a toggle set to off — the
+      // honest reading of "off" on a model that always thinks is "as little as
+      // possible". (This also changes Fable/Mythos 5, which previously ran at
+      // the user's saved effort with the toggle off.)
+      if (rejectsDisabledThinking && !enableThinking) claudeEffort = 'low';
 
       if (claudeThinkingOn) {
         claudeParams.max_tokens = 16000;
@@ -4658,8 +4722,12 @@ export async function POST(req: Request) {
           // answer truncates, with the UI toggle apparently doing nothing.
           // `disabled` is accepted on Opus 5 only at effort 'high' or below, so
           // do NOT send output_config here — the server default is 'high'.
-          // (Fable/Mythos 5 reject `disabled` outright, but they force
-          // claudeThinkingOn above and never reach this branch.)
+          //
+          // Models that reject `disabled` outright (Fable/Mythos 5, Opus 5.5)
+          // cannot reach this branch: `rejectsDisabledThinking` forces
+          // claudeThinkingOn true above. That is the ONLY thing keeping this
+          // line from 400-ing on them — if you ever narrow claudeThinkingOn,
+          // this line needs its own guard.
           claudeParams.thinking = { type: 'disabled' };
         } else {
           claudeParams.temperature = modelParams.temperature;

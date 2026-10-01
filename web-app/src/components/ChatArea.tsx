@@ -82,6 +82,10 @@ const CLOUD_MODELS_FILL =
 # Format: family | specificModel | on|off | optional display label
 
 # ── Claude (Anthropic) ─────────────────────────────────────────────
+# fable-5 / fable-5-1 / opus-5-5 CANNOT disable thinking (Anthropic 400s on
+# thinking:{type:'disabled'} — measured 2026-10-01 for opus-5-5), so the on/off
+# column is advisory for those rows: off sends adaptive at effort 'low'.
+# Plain claude-opus-5 DOES accept disabled — the two Opus 5 ids differ here.
 Claude   | claude-fable-5-1             | on  | Claude Fable 5.1 Thinking
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
 Claude   | claude-opus-5-5              | on  | Claude Opus 5.5 Thinking
