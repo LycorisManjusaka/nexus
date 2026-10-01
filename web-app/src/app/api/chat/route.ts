@@ -593,6 +593,98 @@ function explainClaudeStopError(raw: string): string | null {
   return null;
 }
 
+// Turn an Anthropic classifier refusal into a plain-language reason. A refusal
+// is a 200 response with stop_reason "refusal" and a `stop_details` object that
+// names the policy area (`category`) and carries human prose (`explanation`).
+// Before this existed NEXUS showed only "the model declined to continue" and
+// threw the rest away — the same failure shape as swallowing the Opus 5.5
+// version-gate 400, which told us the exact version to upgrade to.
+//
+// `category` is deliberately typed as an open string, NOT the SDK's
+// `'cyber' | 'bio' | null` union: the published table already lists five
+// categories (cyber, bio, frontier_llm, reasoning_extraction, general_harms)
+// and Anthropic ships new ones on the wire ahead of schema updates. Trusting
+// the union here would drop the very category we hit most. An unknown category
+// is shown verbatim rather than mapped.
+//
+// `explanation` is "unstable human prose — display only, never parse" per the
+// docs, so it is passed through untouched and never matched against.
+//
+// The billed/not-billed split is Anthropic's own, as of 2026-09: a refusal that
+// arrives BEFORE any output is billed only for bio / frontier_llm /
+// reasoning_extraction. Saying so is the difference between "something went
+// wrong" and "this cost money and counted against the rate limit" — the first
+// question anyone asks. Anthropic states the list may change, hence the date.
+const REFUSAL_BILLED_CATEGORIES = new Set(['bio', 'frontier_llm', 'reasoning_extraction']);
+function describeRefusal(
+  category: string | null | undefined,
+  explanation: string | null | undefined,
+  language?: string,
+  hadOutput?: boolean,
+): string {
+  const ja = language === 'ja';
+  const cat = (category || '').trim();
+  const meaning: Record<string, { en: string; ja: string }> = {
+    cyber: {
+      en: 'the request could enable cyber harm (malware / exploit development). Benign security work also triggers this category.',
+      ja: 'サイバー被害（マルウェアやエクスプロイトの開発）につながりうる要求と判定された。無害なセキュリティ業務でも発火する。',
+    },
+    bio: {
+      en: 'the request could enable biological harm. Beneficial life-sciences work also triggers this category.',
+      ja: '生物学的被害につながりうる要求と判定された。有益な生命科学の作業でも発火する。',
+    },
+    frontier_llm: {
+      en: 'the request could assist the development of a competing AI model, restricted under Anthropic\'s commercial terms. Benign machine-learning work also triggers this category.',
+      ja: '競合AIモデルの開発を助けうる要求と判定された（Anthropicの商用規約で制限されている）。無害な機械学習の作業でも発火する。',
+    },
+    reasoning_extraction: {
+      en: 'the request was read as asking the model to reproduce its internal reasoning in the response text. Discussing why a turn stopped, or analyzing thinking output, can land here.',
+      ja: 'モデルに内部推論を応答テキストで再現させる要求と読まれた。ターンが止まった理由の議論や、思考出力の分析もここに入りうる。',
+    },
+    general_harms: {
+      en: 'the request falls under a usage-policy area outside the four named categories. Benign work also triggers this category.',
+      ja: '名前の付いた4カテゴリ以外の利用ポリシー領域に該当すると判定された。無害な作業でも発火する。',
+    },
+  };
+  const parts: string[] = [];
+  if (cat) {
+    parts.push(ja ? `分類は "${cat}"。` : `Category "${cat}".`);
+    const m = meaning[cat];
+    if (m) parts.push(ja ? m.ja : m.en);
+  } else {
+    parts.push(ja
+      ? '分類名は返されなかった（nullは正常な値で、欠損ではない）。'
+      : 'No category was returned (null is a normal value here, not a gap).');
+  }
+  // Billing, in the order the rules actually apply. A MID-STREAM refusal is
+  // billed regardless of category (input + whatever already streamed), so
+  // `hadOutput` overrides the table — reading the category alone would report
+  // "not billed" on a turn that was. Before-any-output refusals follow the
+  // table. An UNKNOWN category gets no billing claim in either direction:
+  // asserting one would be stating something not measured.
+  if (hadOutput) {
+    parts.push(ja
+      ? 'これは出力が始まった後の拒否なので、入力とそれまでに流れた出力が通常料金で課金される（カテゴリに関係なく）。'
+      : 'This refusal arrived mid-stream, so the input and whatever output already streamed are billed at normal rates, regardless of category.');
+  } else if (cat && REFUSAL_BILLED_CATEGORIES.has(cat)) {
+    parts.push(ja
+      ? 'このカテゴリは、出力が1トークンも出ていなくても通常料金で課金される（Anthropicの規定、2026-09時点）。'
+      : 'This category is billed at normal rates even when no output was produced (Anthropic\'s rule, as of 2026-09).');
+  } else if (!cat || meaning[cat]) {
+    parts.push(ja
+      ? 'この場合、出力前の拒否なら課金されない（2026-09時点）。'
+      : 'A refusal in this case is not billed when it arrives before any output (as of 2026-09).');
+  }
+  // True in every case per Anthropic's docs ("Either way … the request still
+  // counts against your rate limits"), so it is stated unconditionally.
+  parts.push(ja
+    ? '課金の有無にかかわらず、リクエストはレート制限に計上される。'
+    : 'Billed or not, the request counts against the rate limit.');
+  const prose = (explanation || '').trim();
+  if (prose) parts.push(ja ? `Anthropicの説明: "${prose}"` : `Anthropic's explanation: "${prose}"`);
+  return parts.join(' ');
+}
+
 // ── Kimi (Moonshot) host resolution ──────────────────────────────────────────
 // Kimi runs on Moonshot's first-party API (platform.kimi.ai / api.moonshot.ai),
 // using keys.kimi. Model IDs are normalized to the bare Moonshot form
@@ -1921,6 +2013,21 @@ async function streamClaudeViaAgentSDK(args: {
         let lastStopReason: string | null = null;
         let lastToolError: string | null = null;
         let anyToolUsed = false;
+        // Structured refusal detail. The SDK emits a dedicated system message
+        // carrying `api_refusal_category` + `api_refusal_explanation`
+        // ('model_refusal_no_fallback' when the turn died, 'model_refusal_fallback'
+        // when Claude Code silently retried on another model). Detecting
+        // stop_reason "refusal" on the assistant frame — which is all NEXUS did
+        // before — tells you THAT it happened and nothing about why.
+        // Typed `any` for the same TS control-flow quirk documented on
+        // `lastToolError` below: assignment happens deep inside the stream loop
+        // where CFA can't follow it, so a precise union gets wrongly narrowed to
+        // `null` at the read site and every field access becomes `never`.
+        let refusalDetail: any = null;
+        // A fallback is NOT a neutral convenience in this house: the vessel was
+        // swapped mid-turn, so the reply you are reading came from a different
+        // model than the one selected. That has to be visible.
+        let refusalFallback: any = null;
         // Text of a locally-fabricated "isApiErrorMessage" assistant message
         // (see below) — the CLI's own authoritative explanation for a hard
         // stop that never touched the API, so it's the most trustworthy note
@@ -2188,6 +2295,37 @@ async function streamClaudeViaAgentSDK(args: {
               continue;
             }
 
+            // Structured refusal envelopes. These are the ONLY place the
+            // classifier's category + explanation reach the client; the
+            // assistant frame carries bare stop_reason "refusal" and nothing
+            // else. Both subtypes are optional fields on older CLIs, so every
+            // read is defensive.
+            if (msg.type === 'system') {
+              const sysAny: any = msg as any;
+              const sub = sysAny.subtype;
+              if (sub === 'model_refusal_no_fallback' || sub === 'model_refusal_fallback') {
+                refusalDetail = {
+                  category: sysAny.api_refusal_category ?? null,
+                  explanation: sysAny.api_refusal_explanation ?? null,
+                };
+                if (sub === 'model_refusal_fallback') {
+                  refusalFallback = {
+                    from: sysAny.original_model,
+                    to: sysAny.fallback_model,
+                    scope: sysAny.scope || 'session',
+                  };
+                }
+                console.log(
+                  `${oauthTag} ${sub} category=${sysAny.api_refusal_category || '-'}`
+                  + ` request_id=${sysAny.request_id || '-'}`
+                  + (sub === 'model_refusal_fallback'
+                      ? ` ${sysAny.original_model} -> ${sysAny.fallback_model} scope=${sysAny.scope || 'session'}`
+                      : '')
+                  + ` explanation=${JSON.stringify(sysAny.api_refusal_explanation || '').slice(0, 300)}`
+                );
+              }
+            }
+
             // ── Non-streaming envelopes ─────────────────────────────────
             // With includePartialMessages enabled, `assistant` messages still
             // arrive at end-of-turn carrying the fully-assembled content.
@@ -2332,7 +2470,18 @@ async function streamClaudeViaAgentSDK(args: {
           if (lastStopReason === 'max_tokens') {
             notes.push('the reply hit the token limit and was cut off — lower the Thinking Level (effort) for this conversation, or resend.');
           } else if (lastStopReason === 'refusal') {
-            notes.push('the model declined to continue (stop_reason: refusal).');
+            // Lead with the fact, then everything the classifier actually told
+            // us. `describeRefusal` names the category, says whether it was
+            // billed, and quotes Anthropic's own prose.
+            notes.push(language === 'ja'
+              ? 'Anthropicの安全分類器がこのターンを止めた（stop_reason: refusal）。'
+              : 'an Anthropic safety classifier stopped this turn (stop_reason: refusal).');
+            notes.push(describeRefusal(refusalDetail?.category, refusalDetail?.explanation, language, producedContent));
+            if (!refusalDetail) {
+              notes.push(language === 'ja'
+                ? '（構造化された詳細は届かなかった——古いCLIか、分類器の判定がその経路に乗らなかった場合。）'
+                : '(No structured detail arrived — an older CLI, or a refusal that did not travel that lane.)');
+            }
           } else if (lastStopReason === 'pause_turn') {
             notes.push('the model paused a long-running turn (stop_reason: pause_turn) and did not resume — resend to continue.');
           }
@@ -2347,6 +2496,29 @@ async function streamClaudeViaAgentSDK(args: {
             // inside the harvestOauthBlocks closure, which CFA can't see, so it
             // wrongly narrows the type here. The runtime value is a real string.
             notes.push(`last tool error → ${String(lastToolError).replace(/\s+/g, ' ').slice(0, 240)}`);
+          }
+          // A vessel swap is reported on its own, NOT folded into the notes
+          // above: those are prefixed "Turn stopped", and a fallback means the
+          // turn did NOT stop — it completed on a different model. Saying
+          // "stopped" there would be false. Claude Code does this silently by
+          // default (switchModelsOnFlag), so without this the reply looks like
+          // it came from the selected model.
+          if (refusalFallback) {
+            const f = refusalFallback;
+            const local = f.scope === 'local';
+            enqueue({ type: 'notice', content: language === 'ja'
+              ? `安全分類器が最初の試行を拒否したため、Claude Code が器を差し替えて再実行した: ${f.from || '?'} → ${f.to || '?'}。`
+                + (local
+                    ? '（適用範囲は local ——このサブエージェント／傍らの応答だけで、会話のモデルは変わっていない。）'
+                    : '（適用範囲は session ——この会話のモデルがその場で差し替わった。）')
+                + ` ${describeRefusal(refusalDetail?.category, refusalDetail?.explanation, language)}`
+                + ' 拒否された試行は、フォールバック試行の料金とは別に計上される——出力が始まった後の拒否か、課金カテゴリだった場合。'
+              : `A safety classifier refused the first attempt, so Claude Code retried on a different vessel: ${f.from || '?'} → ${f.to || '?'}.`
+                + (local
+                    ? ' (Scope "local" — only this subagent / side response came from the fallback; the conversation model is unchanged.)'
+                    : ' (Scope "session" — the model for this conversation was swapped in place.)')
+                + ` ${describeRefusal(refusalDetail?.category, refusalDetail?.explanation, language)}`
+                + ' The refused attempt is billed on top of the fallback request when it arrived mid-stream or its category is a billed one.' });
           }
           if (notes.length > 0) {
             // A DIAGNOSTIC, not part of the reply. Emitted as its own event type
@@ -3153,6 +3325,12 @@ async function streamViaAnthropicCompat(args: {
         let curTool: any = null;
         let curToolJson = '';
         let stopReason = '';
+        // `stop_details` rides on message_delta next to stop_reason and is the
+        // only carrier of a refusal's category + explanation. Typed `any`
+        // deliberately: the SDK's RefusalStopDetails.category union is
+        // 'cyber' | 'bio' | null, which does NOT include the categories we
+        // actually hit (frontier_llm, reasoning_extraction, general_harms).
+        let refusalStop: any = null;
         let streamError: string | null = null;
 
         const reader = res.body.getReader();
@@ -3189,6 +3367,7 @@ async function streamViaAnthropicCompat(args: {
             } else if (p.type === 'message_delta') {
               if (p.usage?.output_tokens) cumUsage.output += Number(p.usage.output_tokens);
               if (p.delta?.stop_reason) stopReason = p.delta.stop_reason;
+              if (p.delta?.stop_details) refusalStop = p.delta.stop_details;
             } else if (p.type === 'content_block_start') {
               const bt = p.content_block?.type;
               if (bt === 'text') {
@@ -3233,19 +3412,31 @@ async function streamViaAnthropicCompat(args: {
         }
 
         if (streamError && assistantBlocks.length === 0) throw new Error(streamError);
-        return { assistantBlocks, stopReason };
+        return { assistantBlocks, stopReason, refusalStop };
       };
 
       try {
         let currentMessages = [...anthropicMessages];
         for (let iter = 0; iter < maxToolRounds; iter++) {
           if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
-          const { assistantBlocks, stopReason } = await runOnce(currentMessages, true);
+          const { assistantBlocks, stopReason, refusalStop } = await runOnce(currentMessages, true);
 
           const toolUses = assistantBlocks.filter((b: any) => b.type === 'tool_use' && LOCAL_TOOL_NAMES_SET.has(b.name));
           if (toolUses.length === 0) {
             if (stopReason === 'max_tokens') {
               enqueue({ type: 'text', content: '\n\n⚠️ _[Response hit the token limit and was cut off — resend to continue.]_' });
+            }
+            // A refusal returns HTTP 200 with an EMPTY content array, so with no
+            // notice the turn renders as a blank reply with no reason at all.
+            // This path serves Anthropic-format third parties (Kimi / MiMo),
+            // which have not been observed to emit stop_details — the wiring is
+            // here because the wire format admits it and the cost is one branch.
+            if (stopReason === 'refusal') {
+              enqueue({ type: 'notice', content: (language === 'ja'
+                ? '安全分類器がこのターンを止めた（stop_reason: refusal）。'
+                : 'A safety classifier stopped this turn (stop_reason: refusal).')
+                + ' ' + describeRefusal(refusalStop?.category, refusalStop?.explanation, language,
+                    assistantBlocks.some((b: any) => b.type === 'text' && String(b.text || '').trim())) });
             }
             break;
           }
@@ -5202,6 +5393,13 @@ export async function POST(req: Request) {
               // Why the model stopped this iteration. 'max_tokens' means the
               // thinking+output hit the hard cap and the turn is truncated.
               let stopReason = '';
+              // `stop_details` rides on the same message_delta as stop_reason
+              // and is the only carrier of a refusal's category + explanation.
+              // Typed `any` deliberately: the SDK's RefusalStopDetails.category
+              // union is 'cyber' | 'bio' | null, which does NOT include the
+              // categories we actually hit (frontier_llm, reasoning_extraction,
+              // general_harms) — trusting it would drop them.
+              let refusalStop: any = null;
 
               // ── Per-iteration diagnostics ────────────────────────────────
               // Opus 5 on this path has produced turns that end with
@@ -5233,6 +5431,7 @@ export async function POST(req: Request) {
                   // stop_reason arrives on message_delta (e.g. 'end_turn',
                   // 'tool_use', 'max_tokens'). Capture it to detect truncation.
                   if (chunk.delta?.stop_reason) stopReason = chunk.delta.stop_reason;
+                  if ((chunk as any).delta?.stop_details) refusalStop = (chunk as any).delta.stop_details;
                 }
                 if (chunk.type === 'content_block_start') {
                   const blockType = chunk.content_block?.type;
@@ -5407,6 +5606,20 @@ export async function POST(req: Request) {
                           : ' before any answer was produced — thinking consumed the whole budget. Lower the **Thinking Level (effort)** for this conversation, or resend to retry')
                       + '.]_',
                   });
+                }
+                // A refusal is HTTP 200 with an EMPTY content array — without a
+                // notice this path renders a blank reply and says nothing at
+                // all. (The OAuth path at least said "declined to continue";
+                // this one was completely silent.) `hadText` distinguishes a
+                // mid-stream refusal, which is billed regardless of category.
+                if (stopReason === 'refusal') {
+                  enqueue({ type: 'notice', content: (language === 'ja'
+                    ? 'Anthropicの安全分類器がこのターンを止めた（stop_reason: refusal）。'
+                    : 'An Anthropic safety classifier stopped this turn (stop_reason: refusal).')
+                    + ' ' + describeRefusal(refusalStop?.category, refusalStop?.explanation, language, hadText)
+                    + (refusalStop ? '' : (language === 'ja'
+                        ? ' （stop_details が届かなかったため、分類の詳細は不明。）'
+                        : ' (No stop_details arrived, so the category is unknown.)')) });
                 }
                 break;
               }
