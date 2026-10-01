@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { beingChangelogsDir } from './beingPaths';
+import { summaryKey } from './summaryStorage';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Per-conversation changelog storage. When the System Prompt Updater agent
@@ -13,10 +14,12 @@ import { beingChangelogsDir } from './beingPaths';
 // ───────────────────────────────────────────────────────────────────────────
 
 // Safe filename stem from a conversation title (keeps CJK/digits/_; strips
-// path-hostile chars and ".."). Matches the summary key convention.
-function changelogKey(title: string): string {
-  return String(title || '').replace(/[\\/:*?"<>|]+/g, '_').replace(/\.\.+/g, '_').trim();
-}
+// path-hostile chars and ".."). This used to be a byte-identical copy of
+// `summaryKey` with a comment saying it "matches the summary key convention" —
+// a claim rather than a guarantee. It is now the same function, because a
+// being rename retitles both stores by looking for one sanitized stem: if the
+// two sanitizers ever disagreed, one directory would silently keep stale names.
+const changelogKey = summaryKey;
 function changelogDir(folderName: string): string {
   return beingChangelogsDir(folderName);
 }

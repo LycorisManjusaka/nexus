@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
@@ -80,6 +80,19 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   const [charaList, setCharaList] = useState<
     { name: string; engine?: string; character?: string; defaultStyle?: string; hasVoice?: boolean }[]
   >([]);
+  // Read the registry. Kept as one named function because it is now called from
+  // three places (mount, the editor's save event, tab refocus) and a copy per
+  // caller is how call sites drift apart. A failed read leaves the list ALONE
+  // rather than emptying it: a transient error must not make the speaker you
+  // already picked vanish from the dropdown.
+  const loadCharaList = useCallback(async () => {
+    try {
+      const r = await fetch('/api/chara/list');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (Array.isArray(d?.characters)) setCharaList(d.characters);
+    } catch { /* keep whatever is on screen */ }
+  }, []);
   // Speaking styles the CURRENT identity's character offers, asked of the engine
   // live. Only fetched while the Audio Session is on — off it, nothing is spoken,
   // so a style would be a control with no effect.
@@ -124,9 +137,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     }
     // Populate the speaker dropdown from character_map.json — shared registry,
     // not per-browser state, so this one still comes straight from the server.
-    fetch('/api/chara/list').then(r => r.json()).then(d => {
-      setCharaList(d?.characters || []);
-    }).catch(() => {});
+    loadCharaList();
     // Re-sync from localStorage on two signals: the native 'storage' event
     // (fires in OTHER tabs of this same browser the instant one of them
     // writes the key — the cross-tab sync the old 30s server poll used to
@@ -139,11 +150,35 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     };
     window.addEventListener('storage', resync);
     window.addEventListener('nx-chara-changed', resync as EventListener);
+    // The LIST needs its own refresh signal. It used to be fetched once on
+    // mount, which meant a user identity added in Settings was invisible in this
+    // dropdown until the page was reloaded — and adding your own identity is the
+    // very first thing a new user does, so the first thing they did appeared not
+    // to work. Two triggers, for two different distances:
+    //
+    //   • 'nx-chara-map-changed' — same tab, fired by the identity editor the
+    //     moment its POST to /api/character-map succeeds. Instant.
+    //   • window 'focus' — the registry is a SERVER file, so another tab, another
+    //     browser, or a hand edit of character_map.json leaves no in-page signal
+    //     at all. Re-reading when this tab is looked at again covers all three
+    //     without any of them having to know this component exists.
+    //
+    // Refetching is one small JSON file read (no TTS engine is consulted), so
+    // the cheap trigger is affordable. Deliberately NOT on the <select>'s own
+    // focus: that lands while the native popup is already open on Windows, where
+    // replacing <option> children mid-popup is a visible glitch.
+    const reloadList = () => { void loadCharaList(); };
+    window.addEventListener('nx-chara-map-changed', reloadList);
+    window.addEventListener('focus', reloadList);
     return () => {
       window.removeEventListener('storage', resync);
       window.removeEventListener('nx-chara-changed', resync as EventListener);
+      window.removeEventListener('nx-chara-map-changed', reloadList);
+      window.removeEventListener('focus', reloadList);
     };
-  }, []);
+    // loadCharaList is a stable useCallback with no deps — listed so the lint
+    // rule sees it, not because this effect should ever re-run.
+  }, [loadCharaList]);
 
   // The style dropdown's contents. Asked of the running engine (falling back to
   // its cached catalog) rather than remembered, because the whole reason indices

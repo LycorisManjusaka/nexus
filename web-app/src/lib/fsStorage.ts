@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import path from 'path';
 import { putDataUrl } from './attachmentStore';
 import { retitleForRenamedIdentity } from './convoNaming';
+import { summaryKey } from './summaryStorage';
 import {
   DATA_DIR,
   BEINGS_DIR,
@@ -594,11 +595,6 @@ export interface RenameFolderReport {
   failed: { what: string; error: string }[];
 }
 
-/** Escape a name for literal use inside a RegExp (identity names are user-chosen). */
-function escapeForRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 async function pathExists(p: string): Promise<boolean> {
   try { await fs.stat(p); return true; } catch { return false; }
 }
@@ -607,6 +603,14 @@ async function pathExists(p: string): Promise<boolean> {
  * Rename `<oldStem>_<n>.md` → `<newStem>_<n>.md` inside one directory.
  * Files that don't match the pattern are left exactly as they are — a
  * hand-named file keeps its name.
+ *
+ * The match is NOT a local regex: it is `retitleForRenamedIdentity`, the very
+ * function that retitles the conversations themselves. The two MUST agree — a
+ * file named after a title that was left alone must not be renamed, and a file
+ * named after a retitled conversation must follow it — and the only way to keep
+ * two rules in agreement is to have one rule. (Two "identical" copies of one
+ * predicate in this codebase drifted apart once already; the symptom was a
+ * report printing an empty field while the detector fired.)
  */
 async function retitleNumberedFiles(
   dir: string,
@@ -619,12 +623,13 @@ async function retitleNumberedFiles(
   try {
     entries = await fs.readdir(dir);
   } catch { return; }
-  const re = new RegExp(`^${escapeForRegExp(oldStem)}_(\\d+)\\.md$`);
   let n = 0;
   for (const name of entries) {
-    const m = re.exec(name);
-    if (!m) continue;
-    const to = path.join(dir, `${newStem}_${m[1]}.md`);
+    if (name.startsWith('.') || !name.endsWith('.md')) continue;
+    const stem = name.slice(0, -'.md'.length);
+    const nextStem = retitleForRenamedIdentity(stem, oldStem, newStem);
+    if (nextStem === stem) continue;
+    const to = path.join(dir, `${nextStem}.md`);
     if (await pathExists(to)) {
       report.failed.push({ what: `${label}/${name}`, error: 'target already exists' });
       continue;
@@ -733,10 +738,36 @@ export async function renameFolder(oldName: string, newName: string): Promise<Re
   await rewriteLogsForRename(beingLogsDir(trimmed), oldName, trimmed, report);
 
   // The soul's numbered files (`<name>_<n>.md`) carry the old name in their
-  // filename stem even though they already moved with the directory.
-  // Summaries and changelogs are named after the conversation TITLE, not the
-  // entity — nothing to retitle there.
-  await retitleNumberedFiles(beingSoulDir(trimmed), oldName, trimmed, 'soul files', report);
+  // filename stem even though they already moved with the directory. The stem is
+  // the name AS ITS WRITER SPELLED IT — `systemPromptStorage` runs it through
+  // sanitizeBeingName — so that is what we have to look for. Passing the raw
+  // name worked for every name in this house and would have missed one
+  // containing \ / : * ? " < > | (impossible for a NEW name, which renameFolder
+  // rejects above, but reachable for an old one that predates that guard).
+  await retitleNumberedFiles(
+    beingSoulDir(trimmed), sanitizeBeingName(oldName), sanitizeBeingName(trimmed), 'soul files', report);
+
+  // Summaries and changelogs are keyed by the conversation TITLE — and the
+  // titles were just rewritten above, so their filenames are now stale. The
+  // files move with the directory, so nothing is lost on disk; what breaks is
+  // the PAIRING. `listSummaries()` keys by filename stem and the index matches
+  // it against live titles, so every one of them becomes an orphan: dropped out
+  // of Layer 4, and reported by the amber "no matching conversation" banner.
+  // (The earlier comment here claimed there was "nothing to retitle" because
+  // summaries are named after the title rather than the entity. True, and
+  // beside the point — the titles contain the entity name and get retitled.)
+  //
+  // Both stores sanitize the title into the stem with the same function, so the
+  // stem to look for is the sanitized old name, not the raw one.
+  const oldKey = summaryKey(oldName);
+  const newKey = summaryKey(trimmed);
+  await retitleNumberedFiles(beingSummariesDir(trimmed), oldKey, newKey, 'summaries', report);
+  await retitleNumberedFiles(beingChangelogsDir(trimmed), oldKey, newKey, 'changelogs', report);
+
+  // Deliberately NOT renamed: backups/summaries/<timestamp>/ and
+  // backups/soul/. Those are dated snapshots of a past state — rewriting names
+  // inside them would make the archive claim a history it does not have. No
+  // code restores them, so the stale names cost nothing.
 
   return report;
 }

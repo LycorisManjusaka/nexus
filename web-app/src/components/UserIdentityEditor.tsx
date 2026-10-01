@@ -156,6 +156,13 @@ export default function UserIdentityEditor() {
         flashStatus({ ok: false, text: res.error });
       } else {
         flashStatus({ ok: true, text: t('useridentity.saved') });
+        // Tell the speaker dropdown above the composer that the registry moved.
+        // It used to read character_map.json once on mount, so a newly added
+        // identity could not be selected until the page was reloaded — the first
+        // thing a new user does, appearing not to work. Fired HERE, next to the
+        // write, rather than on modal close: a save that happened must announce
+        // itself, and a save that was rejected above must not.
+        window.dispatchEvent(new CustomEvent('nx-chara-map-changed'));
       }
     } catch (e: any) {
       flashStatus({ ok: false, text: e?.message || t('useridentity.err.saveFailed') });
