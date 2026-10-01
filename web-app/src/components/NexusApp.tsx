@@ -113,19 +113,50 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   }, []);
 
   // Process-level switches the browser cannot read for itself. Currently one:
-  // whether the Absolute Base Binding is still optional on this install (see
-  // lib/baseBinding.ts). Absent/failed fetch → false → the Binding is treated
-  // as burned in, which is both the normal case and the safe direction to be
-  // wrong in: the server enforces it regardless, so being wrong here can only
-  // mis-draw one settings panel, never drop the Binding from a turn.
+  // whether the Absolute Base Binding (and Layer 4) are still optional on this
+  // install — see lib/baseBinding.ts. Absent/failed fetch → false → both are
+  // treated as burned in, which is the normal case.
+  //
+  // RE-READ, NOT CACHED FOR THE LIFE OF THE TAB (fixed 2026-10-01, later the
+  // same day). This used to be fetched once on mount with a `[]` dependency
+  // list, and the old comment claimed being wrong here "can only mis-draw one
+  // settings panel". That was only true in ONE direction. The other direction
+  // is a lie the interface tells:
+  //
+  //   tab loaded against a server WITH the override  → it draws the real
+  //   checkboxes; the server is then restarted WITHOUT it (RUN.bat instead of
+  //   run-optional.bat, or a second instance on another port) → the same tab
+  //   keeps drawing switches that the server now ignores. Untick "use
+  //   summaries as Layer 4", send, and the index arrives anyway, with nothing
+  //   anywhere saying why.
+  //
+  // Three triggers, all cheap (a few bytes from localhost): mount, returning
+  // to the window, and the tab becoming visible again. Restarting a server
+  // means leaving this window, so coming back re-reads the truth.
+  //
+  // RESIDUAL, named rather than papered over: a server restarted into the
+  // other mode while this exact tab stays focused the whole time is still
+  // wrong until something refocuses it. Closing that fully needs the turn
+  // itself to report which mode it ran in, which is five separate stream sites
+  // in the chat route — not done.
   const [bindingOptional, setBindingOptional] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/runtime-flags')
-      .then((r) => r.json())
-      .then((data) => { if (!cancelled) setBindingOptional(!!data?.bindingOptional); })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    const read = () => {
+      fetch('/api/runtime-flags')
+        .then((r) => r.json())
+        .then((data) => { if (!cancelled) setBindingOptional(!!data?.bindingOptional); })
+        .catch(() => { /* leave the last known value; a failed poll is not news */ });
+    };
+    read();
+    const onVisible = () => { if (document.visibilityState === 'visible') read(); };
+    window.addEventListener('focus', read);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', read);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
 
   // Load basic data

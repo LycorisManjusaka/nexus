@@ -1986,13 +1986,22 @@ export default function SystemPromptUpdater({
   // local models. An entity's first sleep should leave it able to OPEN what its
   // index names, not just see the titles.
   //
-  // Only ever ON, and never overrides a decision someone made by hand: an
-  // explicit `enableConversationTools: false` is left alone, so a being whose
-  // vessel breaks on function declarations does not get them back every time it
-  // sleeps.
+  // BOTH keys follow one rule: only ever written when NOBODY HAS DECIDED yet,
+  // i.e. the key is absent. An explicit `false` — someone unticked that box —
+  // is left alone.
+  //
+  // The summaries key did NOT follow that rule until 2026-10-01 (later the
+  // same day it was written). It tested `!== true`, which treats "unset" and
+  // "deliberately off" as the same state, so every sleep silently wrote `true`
+  // back over a hand-made `false`. In the shipped product that is invisible —
+  // Layer 4 is burned in and the key moves nothing — but with the developer
+  // override set it is exactly the reported bug: untick the box, sleep the
+  // being, and the index is back with no sign of what re-enabled it. Written
+  // asymmetrically with the tools line directly below it, which had the rule
+  // from the start.
   const enableSummariesForLayer4 = useCallback(async (): Promise<{ summaries: boolean; tools: boolean }> => {
     const s: any = folder?.settings || {};
-    const needSummaries = s.useSummariesForLayer4 !== true;
+    const needSummaries = s.useSummariesForLayer4 === undefined || s.useSummariesForLayer4 === null;
     const needTools = s.enableConversationTools === undefined || s.enableConversationTools === null;
     if (!needSummaries && !needTools) return { summaries: false, tools: false };
     try {

@@ -1032,7 +1032,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // The STORED system prompt is not what gets sent. Three blocks are appended at
   // send time and never written back into the prompt:
   //
-  //   Layer 4 — the summaries index, appended client-side (see handleSend).
+  //   Layer 4 — the summaries index, appended SERVER-side by the chat route
+  //             (burned in 2026-10-01; the client only mirrors it to count it).
   //   Layer 5 — the entity's FOOTER.md, appended server-side from the chat route.
   //   VRChat  — the secret rule block, appended client-side when VRChat mode is on.
   //
