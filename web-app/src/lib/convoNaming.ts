@@ -50,6 +50,23 @@ export function isNumberedIdentityTitle(title: string | undefined | null, identi
 }
 
 /**
+ * The generation number inside a `<identity>_<n>` title, or null when the title
+ * isn't one of ours.
+ *
+ * Reading half of the same convention `nextConversationTitle` writes. Handover
+ * restore walks backwards through generations (`_37` → `_36` → `_35` …), and it
+ * must agree with the writer about what counts as a numbered title — a
+ * hand-picked name has no predecessor to walk back to.
+ */
+export function numberedIdentityTitleIndex(title: string | undefined | null, identityName: string): number | null {
+  if (!identityName) return null;
+  const m = new RegExp(`^${escapeForRegExp(identityName)}_(\\d+)$`).exec((title || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Rename half of the same convention: if `title` belongs to `oldName`, hand
  * back the same number under `newName`. Anything else comes back untouched —
  * a hand-picked title survives an identity rename unchanged.

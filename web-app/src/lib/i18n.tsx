@@ -734,8 +734,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'folder.context.heading': 'Context Management',
   'folder.context.maxLabel': 'Maximal recommended context window size',
   'folder.context.tokens': 'tokens',
+  'folder.context.units': '× 10,000 tokens — 1 to 100 (10k … 1M)',
   'folder.context.help':
-    'Drives the progress bar in the chat header and (if enabled below) auto-trimming of copied messages.',
+    'Drives the progress bar in the chat header, auto-trimming of copied messages (if enabled below), and **handover restore**: whenever there is room under this ceiling, carried-over messages trimmed earlier are read back from older generations (`<being>_<N-1>` and further) until the ceiling is met. Lowering this trims; raising it restores. Restore also fires when room appears for other reasons — switching to a model with a shorter system prompt, for instance.',
   'folder.context.autoTrim': 'Remove old copied messages automatically',
   'folder.context.autoTrim.help':
     'When the **text** context (system + messages, **excluding attachments**) exceeds the limit, copied messages (those before the `first-original` marker) are pruned from the top until the limit is satisfied. **Original messages are never deleted**, and **attachment tokens never count toward the limit**.',
@@ -873,6 +874,12 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.save.warnPrefix': 'Approaching the save size limit. ',
   'chat.save.dismiss': 'Dismiss',
   'chat.save.dismissTitle': 'Hide this notice (the underlying problem is not fixed)',
+
+  // ── Handover restore ─────────────────────────────────────────────────────
+  'chat.restore.prefix': 'Handover restored. ',
+  'chat.restore.done': '{count} message(s) ({tokens} text tokens) came back from {gens}.',
+  'chat.restore.truncated': 'The walk stopped at the generation cap — older conversations were not read.',
+  'chat.restore.failed': 'Could not read older generations ({status}). Nothing was changed; reopen the conversation to retry.',
 
   // ── Close/reload guard ───────────────────────────────────────────────────
   // Short by design: these are shown as a browser TAB TITLE prefix, which is
@@ -2169,8 +2176,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'folder.context.heading': 'コンテキスト管理',
   'folder.context.maxLabel': '推奨するコンテキストウィンドウの上限',
   'folder.context.tokens': 'トークン',
+  'folder.context.units': '× 10,000 トークン — 1〜100（1万〜100万）',
   'folder.context.help':
-    'チャット上部のプログレスバーの基準になり、下の設定が有効な場合はコピー済みメッセージの自動削除にも使われます。',
+    'チャット上部のプログレスバーの基準になり、下の設定が有効な場合はコピー済みメッセージの自動削除にも使われます。さらに **引き継ぎの復元** の基準になります：この上限に余地があるかぎり、以前に削除された引き継ぎメッセージを古い世代（`<存在>_<N-1>` 以前）から読み戻し、上限まで埋めます。下げれば削られ、上げれば戻ります。復元は上限を上げたときだけでなく、余地が生まれたとき（たとえばシステムプロンプトの短いモデルへ切り替えたとき）にも働きます。',
   'folder.context.autoTrim': '古いコピー済みメッセージを自動的に削除する',
   'folder.context.autoTrim.help':
     '**テキスト**のコンテキスト（システム＋メッセージ、**添付は除く**）が上限を超えると、コピー済みメッセージ（`first-original` マーカーより前のもの）が上から順に削除されます。**オリジナルのメッセージは決して削除されません。** また、**添付ファイルのトークンは上限に加算されません。**',
@@ -2305,6 +2313,12 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.save.warnPrefix': '保存サイズの上限に近づいています。',
   'chat.save.dismiss': '閉じる',
   'chat.save.dismissTitle': 'この通知を隠す（原因は解消されていません）',
+
+  // ── 引き継ぎの復元 ───────────────────────────────────────────────────────
+  'chat.restore.prefix': '引き継ぎを取り戻しました。',
+  'chat.restore.done': '{gens} から {count} 件（本文 {tokens} トークン）が戻りました。',
+  'chat.restore.truncated': '遡る世代数の上限で止まりました — それより古い会話は読んでいません。',
+  'chat.restore.failed': '古い世代を読めませんでした（{status}）。何も変わっていません。会話を開き直すと再試行します。',
 
   // ── 閉じる／再読み込みの確認 ─────────────────────────────────────────────
   'unload.busy.generating': '{name}は作業中',

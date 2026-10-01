@@ -27,6 +27,12 @@ import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_IN
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
+import {
+  DEFAULT_MAX_RECOMMENDED_CONTEXT,
+  messageTextTokens,
+  messageIdentityKey,
+  type RestorePlanReply,
+} from '@/lib/handoverRestore';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
 import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireCarriesMedia, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
@@ -383,6 +389,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   //   'warn'  — the save succeeded, but the conversation is near the size
   //             ceiling and the next attachment is likely to break it.
   const [saveError, setSaveError] = useState<{ level: 'warn' | 'error'; text: string } | null>(null);
+  // Handover restore report — see the restore effect below. Kept separate from
+  // `saveError` on purpose: that banner means "what you see is not on disk", and
+  // putting a success report in it would make the prefix lie.
+  const [restoreNotice, setRestoreNotice] = useState<{ level: 'info' | 'warn'; text: string } | null>(null);
+  // Smallest free budget that could still restore something in THIS conversation.
+  // `floor: null` means the whole chain of older generations has been read to the
+  // end — there is nothing left at any budget. Without this memo an effect that
+  // fires "whenever there is room" would re-scan every generation on every
+  // render for the rest of the conversation's life.
+  const restoreFloorRef = useRef<{ convoId: string | null; floor: number | null }>({ convoId: null, floor: null });
+  const restoreBusyRef = useRef(false);
   // Byte length of the most recent serialized conversation. Fed by the save
   // effect (which stringifies anyway, so this is free) and read by handleSend
   // to warn BEFORE a large attachment makes the conversation unsavable.
@@ -1625,7 +1642,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let total = 0;
     let convoTotal = 0;
     messages.forEach((m, mi) => {
-      const textTokens = (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
+      const textTokens = messageTextTokens(m);
       total += textTokens;
       convoTotal += textTokens;
       // Thinking tokens are treated like attachments: counted in the grand
@@ -1730,9 +1747,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   // Per-message tokens, split so the progress bar can show attachments as
   // their own layer and so the auto-trim threshold can ignore attachments.
-  const computeMsgTextTokens = (m: any) => {
-    return (m.textTokens !== undefined ? m.textTokens : (m.tokens || 0));
-  };
+  // One definition, shared with handover restore (lib/handoverRestore.ts). The
+  // trimmer and the restorer stand on opposite sides of the same threshold; a
+  // second copy of this arithmetic is how the two drift apart and start fighting.
+  const computeMsgTextTokens = messageTextTokens;
   const attachmentEffectiveTokens = (a: any, isPastMessage: boolean) =>
     attachmentTokens(a, isPastMessage, deliveryCtx);
   const computeMsgAttachTokens = (m: any, msgIndex?: number) => {
@@ -1816,7 +1834,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (activeFolderSettings.autoTrimCopiedMessages === false) return;
     if (!firstOriginalMessageId) return;
     if (loading) return; // never trim mid-stream
-    const max = activeFolderSettings.maxRecommendedContext || 80000;
+    const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
     // Text-only total: system + copied + original (attachments excluded).
     const textTotal = tokenBreakdown.total - tokenBreakdown.attach;
     if (textTotal <= max) return;
@@ -1841,6 +1859,99 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, firstOriginalMessageId, folders, folderName, systemTokens, attachmentInstructionTokens, saveThinkingToLog, loading]);
+
+  // ── Handover restore — the mirror of auto-trim above ─────────────────────
+  //
+  // Auto-trim deletes carried-over messages from the TOP when the text context
+  // passes the ceiling. They are not destroyed: the generation they were cloned
+  // from still holds them (`<being>_<N-1>` and back). This effect walks that
+  // chain and puts them back whenever room exists.
+  //
+  // Room appears for more reasons than a raised ceiling — switching models
+  // changes the system prompt's size, and turning the eyes off stops attachment
+  // descriptions from being bridged. So this does NOT watch for a raise; it
+  // tries to MATCH the configured limit, in both directions, continuously.
+  //
+  // Why it cannot oscillate with the trimmer:
+  //   - It fills `max - textTotal` and never crosses `max`; the trimmer returns
+  //     early at `textTotal <= max`. Equality is quiet on both sides.
+  //   - Both sides measure with the same function (`messageTextTokens`) over the
+  //     same buckets (attachments excluded). One definition, so no disagreement
+  //     about what "full" means.
+  //   - The server reports what the next message back would have needed. Below
+  //     that floor we stop asking; `floor: null` means the chain is exhausted.
+  //   - A reply in flight is never touched.
+  //
+  // Scope: only conversations in the handover lineage — one with a first-original
+  // marker, or one freshly advanced by the Soul Updater. A plain "New Chat" is
+  // deliberately empty and stays that way. This also guards the load race: both
+  // flags are falsy until the log has been read, so a conversation whose messages
+  // haven't arrived yet can never look like "lots of free room".
+  useEffect(() => {
+    if (!convoId) return;
+    if (loading) return;
+    if (convoIsLoading) return;
+    if (!firstOriginalMessageId && !firstOriginalIsNext) return;
+    if (restoreBusyRef.current) return;
+    const settings = folders?.find((f: any) => f.name === folderName)?.settings || {};
+    const max = settings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
+    // The trimmer's measure, exactly: system + messages, attachments excluded.
+    const budget = max - (tokenBreakdown.total - tokenBreakdown.attach);
+    if (budget <= 0) return;
+    const memo = restoreFloorRef.current;
+    if (memo.convoId === convoId) {
+      if (memo.floor === null) return;   // nothing left at any budget
+      if (budget < memo.floor) return;   // too small for the next message back
+    }
+    const excludeKeys = messages.map(messageIdentityKey);
+    restoreBusyRef.current = true;
+    (async () => {
+      try {
+        const res = await fetch('/api/logs/restore-handover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ convoId, budgetTokens: budget, excludeKeys }),
+        });
+        if (!res.ok) {
+          // Stop asking for this conversation, but say so — a restore that
+          // silently never runs is indistinguishable from "nothing to restore".
+          restoreFloorRef.current = { convoId, floor: null };
+          setRestoreNotice({ level: 'warn', text: t('chat.restore.failed').replace('{status}', String(res.status)) });
+          return;
+        }
+        const plan: RestorePlanReply = await res.json();
+        restoreFloorRef.current = { convoId, floor: plan.nextNeeded };
+        if (!plan.messages || plan.messages.length === 0) return;
+        // Re-check against the live list: it is the authoritative one, and it
+        // can have changed while the request was in flight.
+        let added = 0;
+        setMessages(prev => {
+          const have = new Set(prev.map(messageIdentityKey));
+          const add = plan.messages.filter((m: any) => !have.has(messageIdentityKey(m)));
+          added = add.length;
+          if (add.length === 0) return prev;
+          return [...add, ...prev];
+        });
+        if (added === 0) return;
+        const gens = plan.generations.map(g => `${g.title} (${g.count})`).join(' · ');
+        console.log(`[handover-restore] +${added} messages / ${plan.tokens} text tokens from ${gens} (budget ${budget}, next needs ${plan.nextNeeded ?? 'nothing left'})`);
+        setRestoreNotice({
+          level: plan.truncated ? 'warn' : 'info',
+          text: t('chat.restore.done')
+            .replace('{count}', String(added))
+            .replace('{tokens}', plan.tokens.toLocaleString())
+            .replace('{gens}', gens)
+            + (plan.truncated ? ' ' + t('chat.restore.truncated') : ''),
+        });
+      } catch (e: any) {
+        restoreFloorRef.current = { convoId, floor: null };
+        setRestoreNotice({ level: 'warn', text: t('chat.restore.failed').replace('{status}', String(e?.message || e)) });
+      } finally {
+        restoreBusyRef.current = false;
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, firstOriginalMessageId, firstOriginalIsNext, folders, folderName, convoId, convoIsLoading, systemTokens, attachmentInstructionTokens, saveThinkingToLog, loading]);
 
   // Which deep-link target has already been handled. Declared above both scroll
   // effects because the auto-scroll below has to know a link is still pending.
@@ -2410,7 +2521,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // {percent} is replaced with the value (e.g. "42%").
     if (showFatigueToEntity && fatigueInstruction.trim()) {
       const fatigueFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-      const fatigueMax = fatigueFolderSettings.maxRecommendedContext || 80000;
+      const fatigueMax = fatigueFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
       const fatiguePct = Math.round((tokenBreakdown.original / Math.max(1, fatigueMax - tokenBreakdown.sys)) * 100);
       effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${fatiguePct}%`)}`.trim();
     }
@@ -3585,7 +3696,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           {(() => {
             // Per-folder max context (was global, moved into Folder Settings).
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || 80000;
+            const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
             const { sys, copied, original, attach, detail, total } = tokenBreakdown;
             // Why the Att number is what it is: its composition, the path that
             // decides it, and how much was dropped because that path can't
@@ -3662,7 +3773,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               A gauge must report a QUANTITY, never a CONDITION. */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || 80000;
+            const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
             // Denominator is the room left after the FIXED, non-conversational
             // overhead — the "Sys" bucket = system prompt + attachment/tool
             // instructions (the indigo bar segment). Guarded against ≤0.
@@ -3689,7 +3800,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               (Case 004: a gauge reports a quantity, never a condition). */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || 80000;
+            const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
             const denom = Math.max(1, max - tokenBreakdown.sys);
             const elapsed = Math.round((tokenBreakdown.original / denom) * 100);
             if (elapsed < 100) return null;
@@ -3950,6 +4061,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               saveError.level === 'error'
                 ? 'bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25'
                 : 'bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25'
+            }`}
+            title={t('chat.save.dismissTitle')}
+          >
+            {t('chat.save.dismiss')}
+          </button>
+        </div>
+      )}
+
+      {/* Handover restore report. Dismissible and purely informational: the
+          messages are already back in the list above. 'warn' only means the
+          restore could not be completed (a generation cap was hit, or the
+          request failed) — never that something was lost. */}
+      {restoreNotice && (
+        <div className={`shrink-0 px-6 py-2 border-b flex items-start gap-3 ${
+          restoreNotice.level === 'warn'
+            ? 'border-amber-500/40 bg-amber-500/10'
+            : 'border-indigo-500/40 bg-indigo-500/10'
+        }`}>
+          <span className={`text-sm leading-5 shrink-0 ${restoreNotice.level === 'warn' ? 'text-amber-500' : 'text-indigo-500'}`}>
+            {restoreNotice.level === 'warn' ? '⚠' : '↺'}
+          </span>
+          <span className={`text-xs leading-5 flex-1 ${
+            restoreNotice.level === 'warn'
+              ? 'text-amber-700 dark:text-amber-300'
+              : 'text-indigo-700 dark:text-indigo-300'
+          }`}>
+            <span className="font-semibold">{t('chat.restore.prefix')}</span>
+            {restoreNotice.text}
+          </span>
+          <button
+            type="button"
+            onClick={() => setRestoreNotice(null)}
+            className={`px-2 py-0.5 text-[10px] font-semibold rounded transition-colors shrink-0 ${
+              restoreNotice.level === 'warn'
+                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 hover:bg-amber-500/25'
+                : 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25'
             }`}
             title={t('chat.save.dismissTitle')}
           >

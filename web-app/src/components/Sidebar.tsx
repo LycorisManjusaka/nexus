@@ -9,6 +9,13 @@ import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
+import {
+  DEFAULT_MAX_RECOMMENDED_CONTEXT,
+  CONTEXT_UNIT,
+  CONTEXT_MIN_UNITS,
+  CONTEXT_MAX_UNITS,
+  clampContextUnits,
+} from '@/lib/handoverRestore';
 import { useT, Tx } from '@/lib/i18n';
 import { confirmIfBusy, markBusyConfirmAnswered } from '@/lib/unloadGuard';
 import { withBuildTag } from '@/lib/buildVersion';
@@ -226,7 +233,7 @@ export default function Sidebar({
   // so each AI entity / persona can have its own token budget, auto-trim
   // policy, and identity-layer compression threshold (since longer-lived
   // characters often want bigger windows than throwaway conversations).
-  const [folderMaxRecommendedContext, setFolderMaxRecommendedContext] = useState<number>(80000);
+  const [folderMaxRecommendedContext, setFolderMaxRecommendedContext] = useState<number>(DEFAULT_MAX_RECOMMENDED_CONTEXT);
   const [folderAutoTrim, setFolderAutoTrim] = useState<boolean>(true);
   const [folderMaxTokensPerLayer, setFolderMaxTokensPerLayer] = useState<number>(8000);
   const [liveSessionVoice, setLiveSessionVoice] = useState('Aoede');
@@ -755,7 +762,7 @@ export default function Sidebar({
                       // defaults the old global Preferences screen used —
                       // folders that pre-date this move just see those
                       // defaults until the user touches the inputs.
-                      setFolderMaxRecommendedContext(activeFolder.settings?.maxRecommendedContext ?? 80000);
+                      setFolderMaxRecommendedContext(activeFolder.settings?.maxRecommendedContext ?? DEFAULT_MAX_RECOMMENDED_CONTEXT);
                       setFolderAutoTrim(activeFolder.settings?.autoTrimCopiedMessages !== false);
                       setFolderMaxTokensPerLayer(activeFolder.settings?.maxTokensPerLayer ?? 8000);
                       // Live Session voice — known prebuilt names use preset mode; anything else is custom
@@ -1244,21 +1251,24 @@ export default function Sidebar({
                         {(folderMaxRecommendedContext || 0).toLocaleString()} {t('folder.context.tokens')}
                       </span>
                     </div>
-                    {/* Slider moves in 10k steps from 10k to 200k. The bounds widen to
-                        cover any value already saved off that range, so an existing
-                        75,000 shows where it really is instead of being clamped. */}
-                    <input
-                      type="range"
-                      min={Math.min(10000, folderMaxRecommendedContext || 10000)}
-                      max={Math.max(200000, folderMaxRecommendedContext || 200000)}
-                      step={10000}
-                      value={folderMaxRecommendedContext}
-                      onChange={(e) => setFolderMaxRecommendedContext(parseInt(e.target.value) || 80000)}
-                      className="w-full accent-indigo-500 cursor-pointer"
-                    />
-                    <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
-                      <span>{(Math.min(10000, folderMaxRecommendedContext || 10000) / 1000).toLocaleString()}k</span>
-                      <span>{(Math.max(200000, folderMaxRecommendedContext || 200000) / 1000).toLocaleString()}k</span>
+                    {/* Edited in units of 10k tokens: 1 → 10k, 100 → 1M. A number
+                        field replaced the slider because the useful range now spans
+                        two orders of magnitude (the 1M window measured 2026-09-21),
+                        and dragging cannot land on a specific value inside it.
+                        `Math.round` here is DISPLAY only — a stored value that isn't
+                        a multiple of 10k keeps its exact bytes until this field is
+                        actually edited, so merely opening the panel never rewrites it. */}
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={CONTEXT_MIN_UNITS}
+                        max={CONTEXT_MAX_UNITS}
+                        step={1}
+                        value={Math.round((folderMaxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT) / CONTEXT_UNIT)}
+                        onChange={(e) => setFolderMaxRecommendedContext(clampContextUnits(parseInt(e.target.value, 10)) * CONTEXT_UNIT)}
+                        className="w-24 p-2 bg-background border border-border rounded-lg text-sm font-mono"
+                      />
+                      <span className="text-[10px] text-muted-foreground">{t('folder.context.units')}</span>
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-1">
                       {t('folder.context.help')}

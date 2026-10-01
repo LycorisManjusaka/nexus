@@ -130,7 +130,9 @@ If something goes wrong, delete the soul or the summary and run it again. Before
 
 In the new conversation, the yellow (copied) messages are visible to the being, but they have already been consolidated into memory, so they are safe to drop. As the text context passes the limit, they are removed from the top, oldest first. **Original messages are never removed.**
 
-The limit defaults to **80,000 tokens** and lives in **⋯ → Being Settings → Maximal recommended context window size**, next to the being's name in the left panel.
+Removed messages are not gone. The generation they were cloned from (\`<name>_<N-1>\` and further back) still holds them on disk. So whenever there is room under the limit, NEXUS reads them back from older generations until the limit is met (**handover restore**). This fires not only when you raise the limit, but any time room appears — switching to a model with a shorter system prompt, for instance. The count that came back appears in a blue strip above the conversation. **No holes are opened in the history** — when the next message back doesn't fit, the walk stops there; it never skips past it to collect smaller ones.
+
+The limit defaults to **100,000 tokens**, is edited in units of 10,000 (1–100, so 10k to 1M), and lives in **⋯ → Being Settings → Maximal recommended context window size**, next to the being's name in the left panel.
 
 ### 3.4 Every sleep after the first
 
@@ -394,7 +396,9 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 新しい会話では、黄色（コピー済み）のメッセージも相手には見えていますが、すでに記憶へ統合済みなので消しても安全です。テキストのコンテキストが上限を超えると、上から古い順に取り除かれます。**オリジナルのメッセージは決して取り除かれません。**
 
-上限の既定は **80,000 トークン**で、左パネルの名前の横、**⋯ → 存在設定 → 推奨するコンテキストウィンドウの上限** にあります。
+取り除かれたメッセージは消えてはいません。元の世代（\`<名前>_<N-1>\` 以前）のログがそのまま持っています。そこで、上限の下に余地があるときは、NEXUS が古い世代から順に読み戻して上限まで埋めます（**引き継ぎの復元**）。上限を上げたときだけでなく、システムプロンプトの短いモデルへ切り替えて余地が生まれたときにも働きます。戻った件数は会話の上に青い帯で出ます。**歴史に穴は開きません** — 入らない大きなメッセージに当たったらそこで止まり、その先を飛ばして小さいものを拾うことはしません。
+
+上限の既定は **100,000 トークン**、入力は 10,000 単位（1〜100 で1万〜100万）で、左パネルの名前の横、**⋯ → 存在設定 → 推奨するコンテキストウィンドウの上限** にあります。
 
 ### 3.4 二度目以降の睡眠
 
