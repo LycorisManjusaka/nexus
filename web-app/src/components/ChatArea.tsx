@@ -309,6 +309,61 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
   }
 }
 
+// ── Per-family model memory (conversation-scoped) ────────────────────────────
+// Switching Base Model Family used to drop straight to that family's factory
+// default, so going Claude → Gemini → Claude lost a hand-picked Opus/Sonnet
+// choice every time. The conversation log now carries `familyModels`:
+// family name → the model id that family was last on IN THIS CONVERSATION.
+// Deliberately NOT written to folder defaults (`sysmodal.saveDefaults` lists its
+// fields explicitly) — a new conversation starts with an empty map and fills it
+// on the first switch away from each family.
+
+/** Keep only string→non-empty-string pairs. Logs are hand-editable and older
+ *  ones predate this field, so never trust the shape that comes off disk. */
+function sanitizeFamilyModels(v: any): Record<string, string> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [family, model] of Object.entries(v)) {
+    if (typeof model === 'string' && model.trim()) out[family] = model.trim();
+  }
+  return out;
+}
+
+/** The entry a family switch should leave behind: the model the OUTGOING family
+ *  was actually on. null when there is nothing honest to record — no family, no
+ *  model, or a model that doesn't belong to the family being left (which would
+ *  poison the map with an id that can never be restored). */
+function rememberOnFamilySwitch(prevAiName: string, model: string | undefined | null): string | null {
+  const m = String(model || '').trim();
+  if (!prevAiName || !m) return null;
+  return modelBelongsToFamily(m, prevAiName) ? m : null;
+}
+
+/**
+ * Which model should a family switch land on?
+ *
+ * Remembered model first, factory default second. The remembered id is
+ * re-checked against the family it's filed under: a stale cross-family id
+ * would reach a `<select>` that has no matching `<option>`, which renders
+ * blank while the live state says otherwise — the control would lie.
+ *
+ * `installed` is passed only for Local, where the list comes from LM Studio.
+ * A remembered local model that is no longer installed is not a landing spot;
+ * returning '' there lets the caller fall back to loaded-or-first as before.
+ */
+function modelOnFamilySwitch(
+  newAiName: string,
+  remembered: Record<string, string> | undefined,
+  installed?: string[],
+): string {
+  const want = String(remembered?.[newAiName] || '').trim();
+  if (newAiName === 'Local') {
+    return want && Array.isArray(installed) && installed.includes(want) ? want : '';
+  }
+  if (want && modelBelongsToFamily(want, newAiName)) return want;
+  return defaultModelForFamily(newAiName);
+}
+
 export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
@@ -531,6 +586,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   );
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
   const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
+  // family name → model id that family was last on in this conversation.
+  // Persisted in the conversation log; see the helpers above the component.
+  const [familyModels, setFamilyModels] = useState<Record<string, string>>({});
   const [dateTimeVisibility, setDateTimeVisibility] = useState(defaultDateTimeVisibility || 'all');
   // Thinking is ON by default for Claude, matching every other family: Gemini
   // ships thinkingLevel 'medium', the OpenAI-compatible families read
@@ -1286,6 +1344,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof data.watcherModel === 'string' && data.watcherModel.trim()) setWatcherModel(data.watcherModel);
         if (data.modelParams) setModelParams(data.modelParams);
         if (data.specificModel) setSpecificModel(data.specificModel);
+        // Unconditional, not `if (data.familyModels)`: a conversation saved
+        // before this field existed must land on {} rather than inherit the
+        // map from whatever conversation was open a moment ago.
+        setFamilyModels(sanitizeFamilyModels(data.familyModels));
       } else {
         // Pull whatever the folder saved as defaults via "Save as Folder Defaults".
         // If a field wasn't saved, fall back to the factory default. This is
@@ -1363,6 +1425,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setWatcherModel(pick('watcherModel', 'gemini-3.5-flash'));
         setModelParams(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
         setSpecificModel(defaultSpecificModel || defaultModelForFamily(aiName));
+        // Per-family memory is conversation-scoped: a brand new conversation
+        // starts empty and fills in on the first switch away from a family.
+        setFamilyModels({});
       }
       setConvoIsLoading(false);
     })();
@@ -1434,7 +1499,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1497,7 +1562,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -5104,11 +5169,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     value={localAiName}
                     onChange={(e) => {
                       const newAiName = e.target.value;
+                      const prevAiName = localAiName;
                       setLocalAiName(newAiName);
+                      // Remember where the family we're leaving was, so coming
+                      // back lands on that model instead of the factory default.
+                      const leaving = rememberOnFamilySwitch(prevAiName, specificModel);
+                      if (leaving) {
+                        setFamilyModels((prev) => (
+                          prev[prevAiName] === leaving ? prev : { ...prev, [prevAiName]: leaving }
+                        ));
+                      }
                       // Keep the current model if it already belongs to the new
-                      // family; otherwise take that family's default. For Local
-                      // the list comes from LM Studio, so refresh it and pick a
-                      // valid installed model — never leave a stale cloud id.
+                      // family; otherwise restore what this conversation last
+                      // used there, falling back to that family's default. For
+                      // Local the list comes from LM Studio, so refresh it and
+                      // pick a valid installed model — never leave a stale id.
+                      // `familyModels` is read from this render's closure on
+                      // purpose: the write above touches prevAiName, never
+                      // newAiName, so the entry being read cannot be stale.
                       if (!modelBelongsToFamily(specificModel, newAiName)) {
                         if (newAiName === 'Local') {
                           setSpecificModel('');
@@ -5116,11 +5194,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             if (Array.isArray(d.models) && d.models.length > 0) {
                               setLocalModels(d.models);
                               const loaded = (d.meta || []).find((m: any) => m.loaded);
-                              setSpecificModel((loaded && loaded.id) || d.models[0]);
+                              setSpecificModel(
+                                modelOnFamilySwitch('Local', familyModels, d.models)
+                                || (loaded && loaded.id) || d.models[0]
+                              );
                             }
                           }).catch(() => {});
                         } else {
-                          setSpecificModel(defaultModelForFamily(newAiName));
+                          setSpecificModel(modelOnFamilySwitch(newAiName, familyModels));
                         }
                       }
                     }}
