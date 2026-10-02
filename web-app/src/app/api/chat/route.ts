@@ -432,6 +432,19 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
 // it is non-adaptive, so this branch never sends it `disabled` at all — its
 // toggle-off turn carries `temperature` instead. Untested, by construction.)
 //
+// claude-sonnet-5-5 (added 2026-10-02) is in the deny-list BY ANALOGY, NOT by
+// measurement. We have NOT sent it `disabled`. The analogy: every newest ".5"
+// model that has been measured drops the classic `disabled` type (Opus 5.5,
+// Fable 5, Mythos 5), and the Opus 5.5 error text ("use adaptive + effort")
+// reads like a generation-wide direction. Note plain Sonnet 5 ACCEPTS disabled,
+// so this is NOT "all Sonnet" — it is "the 5.5 bump, like Opus 5→5.5, probably
+// flipped it". The direction is chosen to be SAFE: if 5.5 actually accepts
+// `disabled`, including it here only means toggle-off sends adaptive+effort'low'
+// instead of disabled (shallow thinking, no error); excluding it when it in
+// fact rejects would be a 400 — the exact bug this guard exists to prevent.
+// Replace this analogy with a measurement the first time a real Sonnet 5.5
+// toggle-off turn runs.
+//
 // `/v1/models` cannot be used to derive this: the catalog reports
 // thinking.types = { enabled:false, adaptive:true } IDENTICALLY for Opus 5,
 // Opus 5.5, Sonnet 5, Fable 5.1 and Opus 4.8. `disabled` is not one of the
@@ -444,7 +457,7 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
 // report printed an empty field while claiming a hit.)
 function claudeRejectsDisabledThinking(model: string): boolean {
   const m = (model || '').toLowerCase();
-  return /fable-?5|mythos-?5/.test(m) || /opus-?5[-.]5|opus55/.test(m);
+  return /fable-?5|mythos-?5/.test(m) || /opus-?5[-.]5|opus55/.test(m) || /sonnet-?5[-.]5|sonnet55/.test(m);
 }
 
 // ── Tool-activity display names ──────────────────────────────────────────────

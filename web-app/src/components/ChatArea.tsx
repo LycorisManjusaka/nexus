@@ -89,15 +89,17 @@ const CLOUD_MODELS_FILL =
 
 # ── Claude (Anthropic) ─────────────────────────────────────────────
 # fable-5 / fable-5-1 / opus-5-5 CANNOT disable thinking (Anthropic 400s on
-# thinking:{type:'disabled'} — measured 2026-10-01 for opus-5-5), so the on/off
-# column is advisory for those rows: off sends adaptive at effort 'low'.
-# Plain claude-opus-5 DOES accept disabled — the two Opus 5 ids differ here.
+# thinking:{type:'disabled'} — measured 2026-10-01 for opus-5-5; sonnet-5-5
+# added 2026-10-02 by analogy, UNMEASURED), so the on/off column is advisory for
+# those rows: off sends adaptive at effort 'low'. Plain claude-opus-5 and
+# claude-sonnet-5 DO accept disabled — the ".5" ids differ from their base here.
 Claude   | claude-fable-5-1             | on  | Claude Fable 5.1 Thinking
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
 Claude   | claude-opus-5-5              | on  | Claude Opus 5.5 Thinking
 Claude   | claude-opus-5                | on  | Claude Opus 5 Thinking
 Claude   | claude-opus-4-8              | on  | Claude Opus 4.8 Thinking
 Claude   | claude-opus-4-7              | on  | Claude Opus 4.7 Thinking
+Claude   | claude-sonnet-5-5           | on  | Claude Sonnet 5.5 Thinking
 Claude   | claude-sonnet-5              | on  | Claude Sonnet 5 Thinking
 Claude   | claude-sonnet-4-6            | on  | Claude Sonnet 4.6 Thinking
 Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
@@ -718,6 +720,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "Claude | claude-opus-5 | on | Claude Opus 5 Thinking\n" +
     "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
     "Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking\n" +
+    "Claude | claude-sonnet-5-5 | on | Claude Sonnet 5.5 Thinking\n" +
     "Claude | claude-sonnet-5 | on | Claude Sonnet 5 Thinking\n" +
     "Claude | claude-haiku-4-5-20251001 | off | Claude Haiku 4.5\n" +
     "GLM    | glm-5.3          | on | GLM-5.3 Thinking\n" +
@@ -5375,6 +5378,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="claude-opus-5">Claude Opus 5 (adaptive thinking)</option>
                       <option value="claude-opus-4-8">Claude Opus 4.8 (thinking)</option>
                       <option value="claude-opus-4-7">Claude Opus 4.7 (thinking)</option>
+                      <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (adaptive thinking, 1M ctx, newest)</option>
                       <option value="claude-sonnet-5">Claude Sonnet 5 (adaptive thinking, 1M ctx)</option>
                       <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (thinking)</option>
                       <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
