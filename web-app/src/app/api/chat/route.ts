@@ -17,7 +17,7 @@ import { findAttachmentsByRefPrefix, searchAttachments, formatAttachmentSearchFo
 import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
-import { claudeAgentEnv } from '@/lib/agentEnv';
+import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 
 // Payload field for an attachment the AI produced by reading an image from the
@@ -890,6 +890,24 @@ async function streamClaudeViaAgentSDK(args: {
   const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
+  // Refusal-retry CONFIGURATION, resolved ONCE here so the parent query() and
+  // any subagent child read the same decision — the two gates the SDK
+  // documents (an `Options.fallbackModel` at all, and the catch-all env var for
+  // categories absent from the binary's fallback map) have to agree, and
+  // keeping the rule in one function is what stops them from drifting apart.
+  // Off unless Preferences opts in; see resolveRefusalFallback() for what is
+  // measured about this and what is not.
+  //
+  // Named ...Retry, not ...Fallback: `refusalFallback` further down is the
+  // OBSERVATION (the swap that actually happened, which the notice reports).
+  // Two same-named things in one function is how a measurement starts
+  // describing itself — this one is the request, that one is the event.
+  const refusalRetry = resolveRefusalFallback(
+    keys?.claudeRefusalFallback,
+    keys?.claudeRefusalFallbackModel,
+    model,
+  );
+
   // Working-directory note — OAuth ONLY, and only when Bash actually exists.
   // Claude Code owns its built-in tools' descriptions and we cannot override
   // them, so the one true thing we can say about them has to ride on the system
@@ -1461,6 +1479,17 @@ async function streamClaudeViaAgentSDK(args: {
                   const childModel = (subagentModel && /claude|haiku|opus|sonnet|fable|mythos/i.test(subagentModel))
                     ? subagentModel
                     : 'claude-haiku-4-5';
+                  // Resolved against childModel, not the parent's — the
+                  // self-swap guard has to compare the model that would
+                  // actually refuse. Same function as the parent, so the rule
+                  // itself still lives in exactly one place. A swap here is
+                  // scope:'local' per the SDK: only this side-question's answer
+                  // came from elsewhere, the session model is untouched.
+                  const childRefusalRetry = resolveRefusalFallback(
+                    keys?.claudeRefusalFallback,
+                    keys?.claudeRefusalFallbackModel,
+                    childModel,
+                  );
                   const childSystem =
                     'You are a focused sub-investigator with a FRESH, empty context. You have read-only tools ' +
                     '(Read, Glob, Grep). Do EXACTLY the task below, then reply with ONLY the distilled result — ' +
@@ -1485,8 +1514,11 @@ async function streamClaudeViaAgentSDK(args: {
                       // the child's whole environment (SDK contract), stripping
                       // APPDATA/PATHEXT/etc. and breaking hg, git and every
                       // native exe launched from PowerShell.
-                      env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv),
+                      env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv, childRefusalRetry.catchAll),
                       model: childModel,
+                      ...(childRefusalRetry.fallbackModel
+                        ? { fallbackModel: childRefusalRetry.fallbackModel }
+                        : {}),
                       systemPrompt: childSystem,
                       cwd: workspaceDir,
                       // Same trusted-junction fix as the parent query() below —
@@ -1868,13 +1900,28 @@ async function streamClaudeViaAgentSDK(args: {
           //
           // autoCompactWindow (tried 2026-09-08, removed): the trigger is
           // min(modelWindow, configuredValue) - 33000 (20000 output reserve +
-          // 13000 additional), and the model window on this OAuth path is
-          // 200000 — so any value >= 200000 is a no-op, the trigger never
-          // moves past ~167000, and configuring it also disables the CLI's
+          // 13000 additional). The "~167000 ceiling" this comment used to state
+          // was a property of the bundled CLI 2.1.150, which treated Opus 5/5.5
+          // and Sonnet 5 as unknown models and assumed a 200K window; CLI
+          // 2.1.280 carries window: 1,000,000 for them and a 732K single-turn
+          // read was measured with zero compact_boundary (2026-09-21). The
+          // reason not to re-add this option is unchanged and is the second
+          // clause below: configuring it also disables the CLI's
           // emergency reactive fallback (YtH() -> ZH false). Cannot extend
           // working past the 200K wall; do not re-add.
-          env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv),
+          env: claudeAgentEnv(oauthToken, !!keys?.allowHostAnthropicEnv, refusalRetry.catchAll),
           model,
+          // Retry target when the safety classifier ends a turn with
+          // stop_reason "refusal". Omitted entirely when off, because the SDK
+          // reads "no fallback model is configured" as one of the conditions
+          // that makes a refusal a dead stop — passing null/'' would be a
+          // configured-but-unresolvable target instead, which the same doc
+          // lists as its own decline reason. A swap is announced by the
+          // model_refusal_fallback notice (original model, fallback, category,
+          // scope); it is never silent.
+          ...(refusalRetry.fallbackModel
+            ? { fallbackModel: refusalRetry.fallbackModel }
+            : {}),
           // NOTE: `resume` vs `systemPrompt` is set PER-ATTEMPT in consume()
           // below (they're mutually exclusive — systemPrompt only applies when
           // CREATING a session, resume only when continuing one). This lets us

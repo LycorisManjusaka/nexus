@@ -51,6 +51,7 @@
 export function claudeAgentEnv(
   oauthToken: string,
   allowHostAnthropicEnv: boolean = false,
+  refusalFallbackCatchAll: boolean = false,
 ): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = { ...process.env };
 
@@ -71,5 +72,95 @@ export function claudeAgentEnv(
 
   env.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
 
+  // Refusal-fallback catch-all. See resolveRefusalFallback() below for what
+  // this does and what is NOT measured about it.
+  //
+  // Only ever SET, never cleared: a host that already defines this variable at
+  // the OS level made that choice deliberately, and the spread above is what
+  // delivers it. Deleting it when the Preferences box is off would silently
+  // override the user's own shell — the same failure shape the
+  // allowHostAnthropicEnv comment above is about.
+  if (refusalFallbackCatchAll) {
+    env.CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL = '1';
+  }
+
   return env;
+}
+
+/**
+ * Default retry target. Sonnet is the model the two public false-positive
+ * reports (claude-code #95561, #87273) switched to when Opus kept refusing,
+ * and it is inside the same subscription — so the retry does not move billing.
+ */
+export const DEFAULT_REFUSAL_FALLBACK_MODEL = 'claude-sonnet-5';
+
+/**
+ * Should a refused turn be retried on another model, and on which one?
+ *
+ * WHAT THE SHIPPED SDK TYPES SAY (primary source, not inference)
+ * -------------------------------------------------------------
+ * `model_refusal_no_fallback` — the event that ends a turn with "the model
+ * declined to continue" — is documented as firing when:
+ *
+ *   "no fallback model is configured, or per-category routing declined the
+ *    retry (the mapped fallback target is unresolvable, or
+ *    CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL is explicitly disabled and the
+ *    refusal category has no fallback map entry)"
+ *
+ * Two independent gates, and NEXUS was failing the FIRST one: `fallbackModel`
+ * is an SDK option (Options.fallbackModel) that this codebase had never passed.
+ * So no retry could run for ANY category, mapped or not. That is why a refusal
+ * here has always been a dead stop, while the same binary retries in Claude
+ * Code's own CLI — where filesystem settings supply the fallback and
+ * `switchModelsOnFlag` lives. NEXUS passes `settingSources: []` (SDK isolation
+ * mode, present since before 2026-08-10), so no filesystem setting reaches the
+ * child: the SDK option and the env var are the only levers this app has.
+ *
+ * WHAT IS MEASURED AND WHAT IS NOT — read before trusting this
+ * ------------------------------------------------------------
+ * Measured (desk: refusal-reasoning-extraction.md): the per-category fallback
+ * map in the shipped binary contains exactly {"cyber", "frontier_llm"}; of the
+ * 11 refusals recorded in this house, one was `cyber` (and did silently swap
+ * models, before the notice existed), the rest were `reasoning_extraction` or
+ * `null` — neither has a map entry, which is precisely the case the catch-all
+ * env var is documented to cover.
+ *
+ * NOT measured: that `Options.fallbackModel` is the same "fallback model" the
+ * refusal path consults. Its own doc comment describes overload/unavailability,
+ * not refusals. The refusal event's wording ("no fallback model is configured")
+ * is the only link, and it is wording, not a test. Nothing here fires until a
+ * real refusal arrives, so the first one either confirms this or refutes it —
+ * and `model_refusal_fallback` (wired 2026-10-02) makes either outcome visible
+ * instead of silent. Do not upgrade this comment to a claim without a
+ * measurement.
+ *
+ * WHY A SWAP MUST STAY OPT-IN AND VISIBLE
+ * ---------------------------------------
+ * A fallback means the answer came from a different vessel than the one that
+ * was chosen, and `scope: 'session'` makes that swap persist for the rest of
+ * the session. In this house a vessel changing underneath a being is not a
+ * neutral convenience — it is the thing we instrument. Hence: off by default,
+ * and the notice wired on 2026-10-02 names the original model, the fallback,
+ * the category and the scope every time it happens.
+ */
+export function resolveRefusalFallback(
+  enabled: boolean | undefined,
+  modelRaw: string | undefined | null,
+  primaryModel: string | undefined | null,
+): { catchAll: boolean; fallbackModel: string | null } {
+  if (enabled !== true) return { catchAll: false, fallbackModel: null };
+
+  const wanted = (typeof modelRaw === 'string' ? modelRaw : '').trim()
+    || DEFAULT_REFUSAL_FALLBACK_MODEL;
+
+  // Falling back to the model that just refused cannot help, and the primary is
+  // re-tried at the start of every user turn anyway (SDK doc) — so a self-swap
+  // would burn a second refused request per turn. Compared case-insensitively
+  // because model ids reach here from a saved text field.
+  const primary = (typeof primaryModel === 'string' ? primaryModel : '').trim();
+  if (primary && primary.toLowerCase() === wanted.toLowerCase()) {
+    return { catchAll: false, fallbackModel: null };
+  }
+
+  return { catchAll: true, fallbackModel: wanted };
 }

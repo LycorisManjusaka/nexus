@@ -70,6 +70,8 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     lmStudioPath: '',
     diffViewerPath: '',
     allowHostAnthropicEnv: false,
+    claudeRefusalFallback: false,
+    claudeRefusalFallbackModel: '',
     obsWebSocketUrl: '',
     obsWebSocketPassword: '',
     obsSourceName: '',
@@ -453,6 +455,37 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                   <Tx k="settings.allowHostAnthropicEnv.help" />
                 </p>
+                <label className="flex items-center gap-2 cursor-pointer select-none mt-3">
+                  <input
+                    type="checkbox"
+                    checked={!!keys.claudeRefusalFallback}
+                    onChange={e => setKeys({ ...keys, claudeRefusalFallback: e.target.checked })}
+                    className="w-4 h-4 accent-indigo-500"
+                  />
+                  <span className="text-xs text-foreground">{t('settings.claudeRefusalFallback.label')}</span>
+                </label>
+                <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                  <Tx k="settings.claudeRefusalFallback.help" />
+                </p>
+                {/* Shown only while the retry is on. An input the server ignores
+                    is an input that lies about what it changes. */}
+                {!!keys.claudeRefusalFallback && (
+                  <div className="mt-2">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      {t('settings.claudeRefusalFallbackModel.label')}
+                    </label>
+                    <input
+                      type="text"
+                      value={keys.claudeRefusalFallbackModel || ''}
+                      onChange={e => setKeys({ ...keys, claudeRefusalFallbackModel: e.target.value })}
+                      placeholder={t('settings.claudeRefusalFallbackModel.placeholder')}
+                      className="w-full px-3 py-2 bg-input border border-border rounded text-sm text-foreground focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                      <Tx k="settings.claudeRefusalFallbackModel.help" />
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 

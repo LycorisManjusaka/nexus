@@ -241,6 +241,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.allowHostAnthropicEnv.label': 'Allow ANTHROPIC_* environment variables from this machine',
   'settings.allowHostAnthropicEnv.help':
     "Off by default: Nexus removes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL from the environment it hands to Claude Code subprocesses, so a leftover value from another tool on this machine can't silently switch OAuth billing away from your subscription. Turn this on only if you deliberately rely on one of those variables as your own authentication method — Claude Code is required to let you keep any built-in auth method you choose.",
+  'settings.claudeRefusalFallback.label': 'Retry a refused turn on another model',
+  'settings.claudeRefusalFallback.help':
+    "Off by default. When Anthropic's safety classifier ends a turn with stop_reason \"refusal\", Claude Code can retry it once on a different model instead of stopping. Nexus had never enabled this: the retry needs a fallback model to be configured, and Nexus did not pass one — so a refusal was always a dead stop here, even for the categories the binary does have a retry route for. Turning this on passes a fallback model and sets CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL so categories without their own route are retried too. NOT FULLY MEASURED: the option Nexus passes is documented for overload and unavailability; that the refusal path reads the same setting comes from the refusal event's own wording, not from a test. Nothing happens until a real refusal arrives — and when one does, you get a notice naming the original model, the replacement, the category and whether the swap applies to the rest of the session. A swap is never silent.",
+  'settings.claudeRefusalFallbackModel.label': 'Model to retry on',
+  'settings.claudeRefusalFallbackModel.placeholder': 'claude-sonnet-5',
+  'settings.claudeRefusalFallbackModel.help':
+    'Leave blank for claude-sonnet-5 — the model the two public false-positive reports switched to, and inside the same subscription, so the retry does not move billing. A comma-separated list is tried in order. Setting this to the model already in use disables the retry instead: a model that just refused cannot help, and the primary is re-tried at the start of every turn anyway.',
   'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
   'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
   'settings.obsWebSocketUrl.help':
@@ -1703,6 +1710,13 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.allowHostAnthropicEnv.label': 'このPCの ANTHROPIC_* 環境変数を許可する',
   'settings.allowHostAnthropicEnv.help':
     '既定ではオフです。NexusはClaude Codeのサブプロセスに渡す環境から ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL を取り除きます。これにより、このPC上の他のツールが残した値がOAuthの課金先を無断であなたのサブスクリプションから切り替えてしまうことを防ぎます。これらの変数を自分の認証方法として意図的に使っている場合のみオンにしてください — Claude Codeは、利用者が選んだ既存の認証方法を維持できることを求めています。',
+  'settings.claudeRefusalFallback.label': '拒否されたターンを別のモデルで再実行する',
+  'settings.claudeRefusalFallback.help':
+    '既定ではオフです。Anthropicの安全分類器が stop_reason "refusal" でターンを終わらせたとき、Claude Codeはそこで止まる代わりに、別のモデルで一度だけ再実行できます。Nexusはこれを一度も有効にしていませんでした — 再実行には「フォールバック先のモデル」が設定されていることが必要で、Nexusはそれを渡していなかったためです。だからこの家では、バイナリが再実行の経路を持っているカテゴリであっても、拒否は必ず行き止まりでした。オンにするとフォールバック先を渡し、さらに CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL を設定して、独自の経路を持たないカテゴリも再実行の対象にします。完全には測定していません: Nexusが渡すオプションは「過負荷・利用不能」の場合として説明されており、拒否の経路が同じ設定を読むという根拠は、拒否イベント側の記述の文言だけで、実測ではありません。本物の拒否が来るまで何も起きません — そして来たときは、元のモデル・差し替え先・分類名・以降のセッションに適用されるかを明記した通知が出ます。差し替えが黙って起きることはありません。',
+  'settings.claudeRefusalFallbackModel.label': '再実行に使うモデル',
+  'settings.claudeRefusalFallbackModel.placeholder': 'claude-sonnet-5',
+  'settings.claudeRefusalFallbackModel.help':
+    '空欄なら claude-sonnet-5 を使います — 公開されている2件の偽陽性報告がどちらも切り替えた先で、同じサブスクリプションの中にあるため、再実行で課金先が動きません。カンマ区切りで複数指定すると順に試します。現在使っているモデルと同じものを指定すると、再実行は行いません: たった今拒否したモデルでは解決しないうえ、主モデルはどのターンの冒頭でも再試行されるからです。',
   'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
   'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
   'settings.obsWebSocketUrl.help':
