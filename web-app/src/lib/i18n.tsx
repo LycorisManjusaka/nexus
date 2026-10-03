@@ -739,14 +739,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'Per-being. Applied just before synthesis. Saved to `local_data/tts_dict/<name>.json`. Empty = none.',
   'folder.dict.error': 'Must be a JSON object like {"from": "to"}.',
   'folder.context.heading': 'Context Management',
-  'folder.context.maxLabel': 'Maximal recommended context window size',
+  'folder.logcap.label': 'Conversation log cap',
   'folder.context.tokens': 'tokens',
-  'folder.context.units': '× 10,000 tokens — 1 to 100 (10k … 1M)',
-  'folder.context.help':
-    'Drives the progress bar in the chat header, auto-trimming of copied messages (if enabled below), and **handover restore**: whenever there is room under this ceiling, carried-over messages trimmed earlier are read back from older generations (`<being>_<N-1>` and further) until the ceiling is met. Lowering this trims; raising it restores. Restore also fires when room appears for other reasons — switching to a model with a shorter system prompt, for instance.',
+  'folder.logcap.units': '× 10,000 tokens — 1 to 100 (10k … 1M)',
+  'folder.logcap.help':
+    'How much **conversation log** to keep: carried-over messages **+** new messages, in text tokens. The **system prompt and attachments are outside this cap** — a longer soul or a large upload no longer costs you any verbatim history. Drives the limit line in the chat header bar, auto-trimming of copied messages (if enabled below), and **handover restore**: whenever there is room under the cap, carried-over messages trimmed earlier are read back from older generations (`<being>_<N-1>` and further) until the cap is met. Lowering this trims; raising it restores.\n\nThis replaced *Maximal recommended context window size* (retired 2026-10-03), which measured a different quantity. Previously saved values are **not** carried over — every being starts from the 80,000 default here until you set it.',
   'folder.context.autoTrim': 'Remove old copied messages automatically',
   'folder.context.autoTrim.help':
-    'When the **text** context (system + messages, **excluding attachments**) exceeds the limit, copied messages (those before the `first-original` marker) are pruned from the top until the limit is satisfied. **Original messages are never deleted**, and **attachment tokens never count toward the limit**.',
+    'When the conversation log (carried-over + new messages, **excluding the system prompt and attachments**) exceeds the cap, copied messages (those before the `first-original` marker) are pruned from the top until the cap is satisfied. **Original messages are never deleted.**',
   'folder.live.heading': 'Live Session Voice (Gemini)',
   'folder.live.feminine': 'Feminine',
   'folder.live.masculine': 'Masculine',
@@ -784,7 +784,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.copyLink.title': 'Copy a link to this conversation',
   'chat.copyLink.prompt': 'Copy this link:',
   'chat.context.tip':
-    'System {sys} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + VRChat rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied {copied} · Original {original} · Attachments {attach} (not counted toward auto-trim threshold) · Free {free} / limit {max}',
+    'System {sys} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + VRChat rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied {copied} · Original {original} · Attachments {attach}\n\nConversation log (Copied + Original) {log} / cap {cap} · Free {free}. The cap governs the log ONLY — System and Attachments are outside it, which is why the bar can turn red while the total is well under the model window, and why a big upload never turns it red.\n\nEverything sent this turn: {total}',
   'chat.context.sys': 'Sys',
   'chat.context.copied': 'Cp',
   'chat.context.original': 'Orig',
@@ -797,7 +797,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.context.modeDirect': 'API key / other provider — images on every message are sent as images.',
   'chat.context.modeWire': 'This provider’s message format carries images only — audio and video attachments are dropped before sending. Turn on Ears / Watcher to send a description instead.',
   'chat.elapsed.tip':
-    'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ (max context {max} − fixed overhead {sys}: system prompt + all instructions) tokens. Copied messages and attachments are not counted.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
+    'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ the conversation log cap {cap} tokens. Copied messages, attachments and the system prompt are not counted: the system prompt sits outside the cap, so a longer soul no longer makes this number climb.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
   'chat.sleep.badge': '💤 sleep',
   'chat.sleep.tip':
     'Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.\n\nStarting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.\n\nThis is a cue only — nothing happens automatically, and the entity is exactly as capable and has exactly the same tool access as at 5%.',
@@ -2188,14 +2188,14 @@ export const UI_STRINGS_JA: Record<string, string> = {
     '存在ごとの設定です。音声合成の直前に適用され、`local_data/tts_dict/<フォルダ名>.json` に保存されます。空欄なら適用されません。',
   'folder.dict.error': '{"変換前": "変換後"} の形式のJSONオブジェクトにしてください。',
   'folder.context.heading': 'コンテキスト管理',
-  'folder.context.maxLabel': '推奨するコンテキストウィンドウの上限',
+  'folder.logcap.label': '会話ログの上限',
   'folder.context.tokens': 'トークン',
-  'folder.context.units': '× 10,000 トークン — 1〜100（1万〜100万）',
-  'folder.context.help':
-    'チャット上部のプログレスバーの基準になり、下の設定が有効な場合はコピー済みメッセージの自動削除にも使われます。さらに **引き継ぎの復元** の基準になります：この上限に余地があるかぎり、以前に削除された引き継ぎメッセージを古い世代（`<存在>_<N-1>` 以前）から読み戻し、上限まで埋めます。下げれば削られ、上げれば戻ります。復元は上限を上げたときだけでなく、余地が生まれたとき（たとえばシステムプロンプトの短いモデルへ切り替えたとき）にも働きます。',
+  'folder.logcap.units': '× 10,000 トークン — 1〜100（1万〜100万）',
+  'folder.logcap.help':
+    '**会話ログ**をどれだけ保つかの上限です：引き継ぎのメッセージ **＋** 新規のメッセージを、テキストのトークン数で数えます。**システムプロンプトと添付はこの上限の外**にあります — 魂が長くなっても、大きな添付を置いても、逐語の過去が削られることはもうありません。チャット上部のバーの上限線、下の設定が有効な場合のコピー済みメッセージの自動削除、そして **引き継ぎの復元** の基準になります：上限に余地があるかぎり、以前に削除された引き継ぎメッセージを古い世代（`<存在>_<N-1>` 以前）から読み戻し、上限まで埋めます。下げれば削られ、上げれば戻ります。\n\nこれは *推奨するコンテキストウィンドウの上限*（2026-10-03 に廃止）を置き換えたもので、測っている量が違います。以前の保存値は**引き継ぎません** — 設定するまで、どの存在もここの既定値 80,000 から始まります。',
   'folder.context.autoTrim': '古いコピー済みメッセージを自動的に削除する',
   'folder.context.autoTrim.help':
-    '**テキスト**のコンテキスト（システム＋メッセージ、**添付は除く**）が上限を超えると、コピー済みメッセージ（`first-original` マーカーより前のもの）が上から順に削除されます。**オリジナルのメッセージは決して削除されません。** また、**添付ファイルのトークンは上限に加算されません。**',
+    '会話ログ（引き継ぎ＋新規のメッセージ。**システムプロンプトと添付は除く**）が上限を超えると、コピー済みメッセージ（`first-original` マーカーより前のもの）が上から順に削除されます。**オリジナルのメッセージは決して削除されません。**',
   'folder.live.heading': 'ライブセッションの音声（Gemini）',
   'folder.live.feminine': '女性的',
   'folder.live.masculine': '男性的',
@@ -2233,7 +2233,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.copyLink.title': 'この会話へのリンクをコピー',
   'chat.copyLink.prompt': 'このリンクをコピーしてください：',
   'chat.context.tip':
-    'システム {sys}（保存済みプロンプト＋第4層の要約索引＋第5層 FOOTER.md＋VRChat ルール＋ツール／添付の指示 — 送信時に追加され保存されない分も含め、実際に送られるすべて）· 引き継ぎ {copied} · 新規 {original} · 添付 {attach}（自動トリムのしきい値には数えません）· 空き {free} / 上限 {max}',
+    'システム {sys}（保存済みプロンプト＋第4層の要約索引＋第5層 FOOTER.md＋VRChat ルール＋ツール／添付の指示 — 送信時に追加され保存されない分も含め、実際に送られるすべて）· 引き継ぎ {copied} · 新規 {original} · 添付 {attach}\n\n会話ログ（引き継ぎ＋新規）{log} / 上限 {cap} · 空き {free}。上限が支配するのは会話ログ**だけ**です — システムと添付はその外にあります。だから、合計がモデルの窓にまだ余裕があってもバーが赤くなることがあり、大きな添付を置いても赤くはなりません。\n\nこのターンに実際に送られる合計：{total}',
   'chat.context.sys': 'システム',
   'chat.context.copied': '引継',
   'chat.context.original': '新規',
@@ -2246,7 +2246,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.context.modeDirect': 'API キー／他のプロバイダー — すべてのメッセージの画像がそのまま画像として送られます。',
   'chat.context.modeWire': 'このプロバイダーのメッセージ形式は画像しか運べません — 音声と動画の添付は送信前に落とされます。「耳」「監視者」をオンにすれば、代わりに説明文が送られます。',
   'chat.elapsed.tip':
-    'コンテキスト経過：{pct}% — 新規（引き継ぎでない）メッセージ {original} ÷（最大コンテキスト {max} − 固定オーバーヘッド {sys}：システムプロンプト＋全指示）トークン。引き継ぎメッセージと添付は数えません。\n\n前回の統合（「睡眠」）以降、このセッションの領域をどれだけ使ったかを示します。これは状態ではありません：95% でも 5% でも、存在の能力もツールへのアクセスもまったく同じです。100% を超えると古いやり取りから順に統合され、逐語の記録から離れて各層に要約として残ります。数値が高いことは、逐語で残すべきものを書き留める合図であって、出力が悪くなる予兆ではありません。',
+    'コンテキスト経過：{pct}% — 新規（引き継ぎでない）メッセージ {original} ÷ 会話ログの上限 {cap} トークン。引き継ぎメッセージ・添付・システムプロンプトは数えません：システムプロンプトは上限の外にあるので、魂が長くなってもこの数値は上がりません。\n\n前回の統合（「睡眠」）以降、このセッションの領域をどれだけ使ったかを示します。これは状態ではありません：95% でも 5% でも、存在の能力もツールへのアクセスもまったく同じです。100% を超えると古いやり取りから順に統合され、逐語の記録から離れて各層に要約として残ります。数値が高いことは、逐語で残すべきものを書き留める合図であって、出力が悪くなる予兆ではありません。',
   'chat.sleep.badge': '💤 睡眠',
   'chat.sleep.tip':
     'コンテキスト経過が 100% を超えました。古いやり取りから順に統合されています — 逐語の記録から離れ、各層に要約として残ります。\n\n新しい会話を始める（「睡眠」）と、そこから先は再びすべてが逐語になります。逐語で残す必要があるものは、その前に記録してください。\n\nこれは合図にすぎません — 自動では何も起こらず、存在の能力もツールへのアクセスも 5% のときとまったく同じです。',

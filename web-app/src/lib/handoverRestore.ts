@@ -8,12 +8,12 @@
  * ids. Everything before the `first-original` marker is handover context.
  *
  * Auto-trim (ChatArea) then deletes handover messages from the TOP whenever the
- * text context passes the per-being ceiling. Those messages are gone from the
+ * conversation log passes the per-being cap. Those messages are gone from the
  * current log — but the generation they came from still holds them on disk.
  * Nothing is ever actually destroyed; the pointer to it is.
  *
  * So restore walks backwards: `_37` → `_36` → `_35` …, taking messages the
- * current conversation no longer has, newest first, until the ceiling is met.
+ * current conversation no longer has, newest first, until the cap is met.
  *
  * WHY IDS AND NOT TIMESTAMPS
  * --------------------------
@@ -34,13 +34,32 @@
  * person) has no way to see that a hole is there.
  */
 
-/** Ceiling, in text tokens, for a being whose folder has no explicit setting. */
-export const DEFAULT_MAX_RECOMMENDED_CONTEXT = 100000;
+/**
+ * WHAT THE CAP MEASURES — `maxConversationLog`
+ * --------------------------------------------
+ * The cap governs the CONVERSATION LOG only: carried-over messages + new
+ * messages, counted in text tokens. The system prompt and attachments are
+ * outside it entirely.
+ *
+ * It replaced `maxRecommendedContext` (retired 2026-10-03), which capped
+ * system + messages against an assumed context-window size. Two measurements
+ * removed the reason for that framing: Claude's auto-compaction moved to a 1M
+ * window (2026-09-21) and Gemini holds quality to 1M. A soul that grows is no
+ * longer something to fight, so the ceiling stopped being a statement about the
+ * window and became a statement about how much log to keep.
+ *
+ * The retired key is deliberately NOT read as a fallback. Its stored values
+ * meant a different quantity against a different reference; carrying them over
+ * would silently re-use a number nobody chose for this parameter.
+ */
 
-/** The context ceiling is edited in units of 10k tokens: 1 → 10k, 100 → 1M. */
-export const CONTEXT_UNIT = 10000;
-export const CONTEXT_MIN_UNITS = 1;
-export const CONTEXT_MAX_UNITS = 100;
+/** Cap, in log text tokens, for a being whose folder has no explicit setting. */
+export const DEFAULT_MAX_CONVERSATION_LOG = 80000;
+
+/** The log cap is edited in units of 10k tokens: 1 → 10k, 100 → 1M. */
+export const LOG_CAP_UNIT = 10000;
+export const LOG_CAP_MIN_UNITS = 1;
+export const LOG_CAP_MAX_UNITS = 100;
 
 /** Hard stop on how many older generations one restore call will read. Far above
  *  any real chain (the longest here is 37). A run that hits this reports it —
@@ -50,9 +69,39 @@ export const MAX_GENERATIONS_SCANNED = 200;
 
 /** Clamp a 10k-unit value coming from the number input. Non-numbers fall to the
  *  default rather than to a bound, so a cleared field doesn't mean "10k". */
-export function clampContextUnits(n: number): number {
-  if (!Number.isFinite(n)) return DEFAULT_MAX_RECOMMENDED_CONTEXT / CONTEXT_UNIT;
-  return Math.min(CONTEXT_MAX_UNITS, Math.max(CONTEXT_MIN_UNITS, Math.round(n)));
+export function clampLogCapUnits(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_MAX_CONVERSATION_LOG / LOG_CAP_UNIT;
+  return Math.min(LOG_CAP_MAX_UNITS, Math.max(LOG_CAP_MIN_UNITS, Math.round(n)));
+}
+
+/**
+ * The quantity the cap governs: carried-over + new message text tokens.
+ *
+ * The single definition shared by the trimmer, the restorer, the bar, and the
+ * Context Elapsed gauge. One definition is the reason the trimmer and the
+ * restorer cannot disagree about what "full" means — they stand on opposite
+ * banks of the same threshold, and a second copy of this arithmetic is exactly
+ * how that threshold would start meaning two things.
+ */
+export function logCapUsage(b: { copied: number; original: number }): number {
+  return (b?.copied || 0) + (b?.original || 0);
+}
+
+/**
+ * Context elapsed, in percent: NEW (non-copied) message text over the cap.
+ *
+ * Read in three places — the gauge in the header, the 💤 badge that appears at
+ * ≥100%, and the optional hidden note the entity receives. The badge's whole
+ * job is to mark the moment the gauge reaches 100, so a second copy of this
+ * arithmetic anywhere would let the badge appear at a number the gauge isn't
+ * showing. One definition, three readers.
+ *
+ * The denominator is the cap ITSELF, not `cap − sys`: the system prompt sits
+ * outside the cap, so a longer soul must not make a session read as fuller.
+ * Can exceed 100 — original messages are never deleted.
+ */
+export function contextElapsedPercent(b: { original: number }, cap: number): number {
+  return Math.round(((b?.original || 0) / Math.max(1, cap)) * 100);
 }
 
 /**

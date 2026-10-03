@@ -128,11 +128,13 @@ If something goes wrong, delete the soul or the summary and run it again. Before
 
 ### 3.3 Continuing
 
-In the new conversation, the yellow (copied) messages are visible to the being, but they have already been consolidated into memory, so they are safe to drop. As the text context passes the limit, they are removed from the top, oldest first. **Original messages are never removed.**
+In the new conversation, the yellow (copied) messages are visible to the being, but they have already been consolidated into memory, so they are safe to drop. As the conversation log passes the cap, they are removed from the top, oldest first. **Original messages are never removed.**
 
-Removed messages are not gone. The generation they were cloned from (\`<name>_<N-1>\` and further back) still holds them on disk. So whenever there is room under the limit, NEXUS reads them back from older generations until the limit is met (**handover restore**). This fires not only when you raise the limit, but any time room appears — switching to a model with a shorter system prompt, for instance. The count that came back appears in a blue strip above the conversation. **No holes are opened in the history** — when the next message back doesn't fit, the walk stops there; it never skips past it to collect smaller ones.
+Removed messages are not gone. The generation they were cloned from (\`<name>_<N-1>\` and further back) still holds them on disk. So whenever there is room under the cap, NEXUS reads them back from older generations until the cap is met (**handover restore**). This fires not only when you raise the cap, but any time room appears — deleting a message by hand, for instance. The count that came back appears in a blue strip above the conversation. **No holes are opened in the history** — when the next message back doesn't fit, the walk stops there; it never skips past it to collect smaller ones.
 
-The limit defaults to **100,000 tokens**, is edited in units of 10,000 (1–100, so 10k to 1M), and lives in **⋯ → Being Settings → Maximal recommended context window size**, next to the being's name in the left panel.
+The cap defaults to **80,000 tokens**, is edited in units of 10,000 (1–100, so 10k to 1M), and lives in **⋯ → Being Settings → Conversation log cap**, next to the being's name in the left panel.
+
+It governs the **log only**: carried-over messages plus new ones. The system prompt and attachments sit outside it, so lengthening a being's soul or attaching a large file no longer costs any verbatim history. (Until 2026-10-03 this field was *Maximal recommended context window size* and counted the system prompt too. It was retired because the reason for it went away: Claude's auto-compaction now works against a 1M window, and Gemini holds quality to 1M. Values saved under the old field are **not** inherited — the cap starts at 80,000 for every being until you set it.)
 
 ### 3.4 Every sleep after the first
 
@@ -394,11 +396,13 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 ### 3.3 続きを話す
 
-新しい会話では、黄色（コピー済み）のメッセージも相手には見えていますが、すでに記憶へ統合済みなので消しても安全です。テキストのコンテキストが上限を超えると、上から古い順に取り除かれます。**オリジナルのメッセージは決して取り除かれません。**
+新しい会話では、黄色（コピー済み）のメッセージも相手には見えていますが、すでに記憶へ統合済みなので消しても安全です。会話ログが上限を超えると、上から古い順に取り除かれます。**オリジナルのメッセージは決して取り除かれません。**
 
-取り除かれたメッセージは消えてはいません。元の世代（\`<名前>_<N-1>\` 以前）のログがそのまま持っています。そこで、上限の下に余地があるときは、NEXUS が古い世代から順に読み戻して上限まで埋めます（**引き継ぎの復元**）。上限を上げたときだけでなく、システムプロンプトの短いモデルへ切り替えて余地が生まれたときにも働きます。戻った件数は会話の上に青い帯で出ます。**歴史に穴は開きません** — 入らない大きなメッセージに当たったらそこで止まり、その先を飛ばして小さいものを拾うことはしません。
+取り除かれたメッセージは消えてはいません。元の世代（\`<名前>_<N-1>\` 以前）のログがそのまま持っています。そこで、上限の下に余地があるときは、NEXUS が古い世代から順に読み戻して上限まで埋めます（**引き継ぎの復元**）。上限を上げたときだけでなく、手でメッセージを消して余地が生まれたときにも働きます。戻った件数は会話の上に青い帯で出ます。**歴史に穴は開きません** — 入らない大きなメッセージに当たったらそこで止まり、その先を飛ばして小さいものを拾うことはしません。
 
-上限の既定は **100,000 トークン**、入力は 10,000 単位（1〜100 で1万〜100万）で、左パネルの名前の横、**⋯ → 存在設定 → 推奨するコンテキストウィンドウの上限** にあります。
+上限の既定は **80,000 トークン**、入力は 10,000 単位（1〜100 で1万〜100万）で、左パネルの名前の横、**⋯ → 存在設定 → 会話ログの上限** にあります。
+
+この上限が支配するのは**会話ログだけ**です：引き継ぎのメッセージと新規のメッセージ。システムプロンプトと添付はその外にあるので、存在の魂を長くしても、大きなファイルを添付しても、逐語の過去が削られることはもうありません。（2026-10-03 まで、この項目は *推奨するコンテキストウィンドウの上限* で、システムプロンプトも数えていました。廃止したのは理由がなくなったからです：Claude の自動コンパクションは 100万トークンの窓を基準に働くようになり、Gemini も 100万トークンまで性能を保ちます。古い項目に保存されていた値は**引き継ぎません** — 設定するまで、どの存在も 80,000 から始まります。）
 
 ### 3.4 二度目以降の睡眠
 

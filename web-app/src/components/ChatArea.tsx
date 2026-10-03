@@ -28,7 +28,9 @@ import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import {
-  DEFAULT_MAX_RECOMMENDED_CONTEXT,
+  DEFAULT_MAX_CONVERSATION_LOG,
+  logCapUsage,
+  contextElapsedPercent,
   messageTextTokens,
   messageIdentityKey,
   type RestorePlanReply,
@@ -1821,13 +1823,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     return { sys, copied, original, attach, detail, total: sys + copied + original + attach };
   })();
 
-  // Auto-trim copied messages when the TEXT context (excluding attachments)
-  // exceeds the recommended limit. Attachments are excluded from the
-  // comparison per the user's request: large image/file uploads shouldn't
-  // force older chat history to be discarded — only the cumulative text
-  // weight does. Only runs when the user has explicitly marked a
-  // first-original message (otherwise we have no notion of which messages
-  // are safe to delete).
+  // Auto-trim copied messages when the CONVERSATION LOG (carried-over + new
+  // message text) exceeds the per-being cap. Attachments are excluded: large
+  // image/file uploads shouldn't force older chat history to be discarded —
+  // only the cumulative text weight does. The system prompt is excluded too
+  // (2026-10-03, `maxConversationLog` replacing `maxRecommendedContext`): a
+  // growing soul used to eat the room for history, so lengthening Layers 1–5
+  // silently shortened the verbatim past. Those are separate decisions and the
+  // cap now governs only one of them. Only runs when the user has explicitly
+  // marked a first-original message (otherwise we have no notion of which
+  // messages are safe to delete).
   useEffect(() => {
     // Context-management settings used to live in globalSettings; they were
     // moved per-folder so each entity can have its own context budget and
@@ -1837,27 +1842,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (activeFolderSettings.autoTrimCopiedMessages === false) return;
     if (!firstOriginalMessageId) return;
     if (loading) return; // never trim mid-stream
-    const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
-    // Text-only total: system + copied + original (attachments excluded).
-    const textTotal = tokenBreakdown.total - tokenBreakdown.attach;
-    if (textTotal <= max) return;
+    const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+    // Log-only total: copied + original. System prompt and attachments excluded.
+    const logTotal = logCapUsage(tokenBreakdown);
+    if (logTotal <= cap) return;
 
     const markerIdx = messages.findIndex(m => m.id === firstOriginalMessageId);
     if (markerIdx <= 0) return; // marker is the first message or missing — nothing to trim
 
-    // Walk copied range from top, queue removals until text-only is under the limit.
+    // Walk copied range from top, queue removals until the log is under the cap.
     // Only the message's TEXT tokens are subtracted from the running total —
     // attachment tokens don't participate in the threshold check.
     const toRemove = new Set<string>();
-    let runningTextTotal = textTotal;
+    let runningLogTotal = logTotal;
     for (let i = 0; i < markerIdx; i++) {
-      if (runningTextTotal <= max) break;
+      if (runningLogTotal <= cap) break;
       const tk = computeMsgTextTokens(messages[i]);
       toRemove.add(messages[i].id);
-      runningTextTotal -= tk;
+      runningLogTotal -= tk;
     }
     if (toRemove.size > 0) {
-      console.log(`[auto-trim] removing ${toRemove.size} copied messages to bring text context from ${textTotal} → ${runningTextTotal} (limit ${max}, attachments ${tokenBreakdown.attach} excluded)`);
+      console.log(`[auto-trim] removing ${toRemove.size} copied messages to bring the conversation log from ${logTotal} → ${runningLogTotal} (cap ${cap}; system ${tokenBreakdown.sys} and attachments ${tokenBreakdown.attach} excluded)`);
       setMessages(prev => prev.filter(m => !toRemove.has(m.id)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1865,22 +1870,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   // ── Handover restore — the mirror of auto-trim above ─────────────────────
   //
-  // Auto-trim deletes carried-over messages from the TOP when the text context
-  // passes the ceiling. They are not destroyed: the generation they were cloned
+  // Auto-trim deletes carried-over messages from the TOP when the conversation
+  // log passes the cap. They are not destroyed: the generation they were cloned
   // from still holds them (`<being>_<N-1>` and back). This effect walks that
   // chain and puts them back whenever room exists.
   //
-  // Room appears for more reasons than a raised ceiling — switching models
-  // changes the system prompt's size, and turning the eyes off stops attachment
-  // descriptions from being bridged. So this does NOT watch for a raise; it
-  // tries to MATCH the configured limit, in both directions, continuously.
+  // Room appears for more reasons than a raised cap — deleting a message by
+  // hand, or editing one down to fewer tokens. So this does NOT watch for a
+  // raise; it tries to MATCH the configured cap, in both directions,
+  // continuously. (Under the retired `maxRecommendedContext`, switching models
+  // and toggling the eyes also freed room, because the system prompt and the
+  // bridged attachment descriptions counted against the same number. They no
+  // longer do — the cap governs the log alone.)
   //
   // Why it cannot oscillate with the trimmer:
-  //   - It fills `max - textTotal` and never crosses `max`; the trimmer returns
-  //     early at `textTotal <= max`. Equality is quiet on both sides.
-  //   - Both sides measure with the same function (`messageTextTokens`) over the
-  //     same buckets (attachments excluded). One definition, so no disagreement
-  //     about what "full" means.
+  //   - It fills `cap - logTotal` and never crosses `cap`; the trimmer returns
+  //     early at `logTotal <= cap`. Equality is quiet on both sides.
+  //   - Both sides measure with the same functions (`logCapUsage` over
+  //     `messageTextTokens`) across the same buckets (system prompt and
+  //     attachments excluded). One definition, so no disagreement about what
+  //     "full" means.
   //   - The server reports what the next message back would have needed. Below
   //     that floor we stop asking; `floor: null` means the chain is exhausted.
   //   - A reply in flight is never touched.
@@ -1897,9 +1906,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (!firstOriginalMessageId && !firstOriginalIsNext) return;
     if (restoreBusyRef.current) return;
     const settings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-    const max = settings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
-    // The trimmer's measure, exactly: system + messages, attachments excluded.
-    const budget = max - (tokenBreakdown.total - tokenBreakdown.attach);
+    const cap = settings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+    // The trimmer's measure, exactly: carried-over + new message text.
+    const budget = cap - logCapUsage(tokenBreakdown);
     if (budget <= 0) return;
     const memo = restoreFloorRef.current;
     if (memo.convoId === convoId) {
@@ -2520,12 +2529,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // session's room has been used. A quantity, never a condition — see the
     // default text above.
     // Same formula as the status-bar indicator: original (non-copied) messages
-    // ÷ room left after the fixed "Sys" overhead (system prompt + instructions).
+    // ÷ the conversation-log cap. The system prompt is no longer subtracted
+    // from the denominator — it sits outside the cap entirely, so a longer soul
+    // no longer inflates this number.
     // {percent} is replaced with the value (e.g. "42%").
     if (showFatigueToEntity && fatigueInstruction.trim()) {
       const fatigueFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-      const fatigueMax = fatigueFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
-      const fatiguePct = Math.round((tokenBreakdown.original / Math.max(1, fatigueMax - tokenBreakdown.sys)) * 100);
+      const fatigueCap = fatigueFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+      const fatiguePct = contextElapsedPercent(tokenBreakdown, fatigueCap);
       effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${fatiguePct}%`)}`.trim();
     }
 
@@ -3697,10 +3708,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </h2>
         <div className="flex items-center gap-4">
           {(() => {
-            // Per-folder max context (was global, moved into Folder Settings).
+            // Per-folder conversation-log cap (was global, moved into Folder
+            // Settings; retired `maxRecommendedContext` 2026-10-03).
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
+            const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
             const { sys, copied, original, attach, detail, total } = tokenBreakdown;
+            const logTotal = logCapUsage(tokenBreakdown);
             // Why the Att number is what it is: its composition, the path that
             // decides it, and how much was dropped because that path can't
             // carry it. Hover text, so it costs nothing until someone asks.
@@ -3725,25 +3738,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       .replace('{n}', detail.droppedCount.toLocaleString())
                       .replace('{raw}', detail.droppedRaw.toLocaleString())
                   : '');
-            // The indicator (bar, total/limit number, red ring) reflects the
-            // FULL current context window — toggling an attachment's eye icon
-            // immediately moves the totals up or down. The text-only threshold
-            // (sys + copied + original) is used ONLY by the auto-trim logic in
-            // the useEffect above, not by anything visible here.
-            const denom = Math.max(max, total) || 1;
+            // The four segments still show the composition of EVERYTHING that
+            // gets sent — toggling an attachment's eye icon still moves them.
+            // What the cap changed is the LIMIT LINE: it governs the log, so the
+            // readout and the red ring compare `logTotal` against `cap`. Keying
+            // the ring to the full total would paint a large attachment as a
+            // violation of a cap that does not govern attachments.
+            //
+            // Width = fixed overhead + the governed allowance (or the governed
+            // actual, once it is over), so no segment is ever clipped away by
+            // the container's overflow-hidden.
+            const denom = (sys + attach + Math.max(cap, logTotal)) || 1;
             const pctSys = (sys / denom) * 100;
             const pctCopied = (copied / denom) * 100;
             const pctOriginal = (original / denom) * 100;
             const pctAttach = (attach / denom) * 100;
-            const overLimit = total > max;
+            const overLimit = logTotal > cap;
             return (
               <div className="flex flex-col items-end gap-1 min-w-[260px]" title={t('chat.context.tip')
                 .replace('{sys}', sys.toLocaleString())
                 .replace('{copied}', copied.toLocaleString())
                 .replace('{original}', original.toLocaleString())
                 .replace('{attach}', attach.toLocaleString())
-                .replace('{free}', Math.max(0, max - total).toLocaleString())
-                .replace('{max}', max.toLocaleString())
+                .replace('{log}', logTotal.toLocaleString())
+                .replace('{cap}', cap.toLocaleString())
+                .replace('{free}', Math.max(0, cap - logTotal).toLocaleString())
+                .replace('{total}', total.toLocaleString())
                 + '\n\n' + attachDetailText}>
                 <div className={`flex h-2 w-full rounded-full overflow-hidden bg-muted/60 border ${overLimit ? 'border-red-500 ring-1 ring-red-500/40' : 'border-border/50'}`}>
                   <div className="bg-indigo-500" style={{ width: `${pctSys}%` }} />
@@ -3756,17 +3776,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-400 inline-block" />{t('chat.context.copied')} {copied.toLocaleString()}</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500 inline-block" />{t('chat.context.original')} {original.toLocaleString()}</span>
                   <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-sky-400 inline-block" />{t('chat.context.attach')} {attach.toLocaleString()}</span>
-                  <span className={overLimit ? 'text-red-500' : 'text-muted-foreground'}>· {total.toLocaleString()}/{max.toLocaleString()}</span>
+                  <span className={overLimit ? 'text-red-500' : 'text-muted-foreground'}>· {logTotal.toLocaleString()}/{cap.toLocaleString()}</span>
                 </div>
               </div>
             );
           })()}
           {/* Context elapsed since the last consolidation. ORIGINAL (non-copied)
-              message tokens over the room left after the FIXED, non-conversational
-              overhead: max context − (system prompt + all instructions) = the
-              indigo "Sys" bucket. Copied messages and attachments don't count.
+              message tokens over the conversation-log cap. Copied messages,
+              attachments and the system prompt don't count — the cap governs the
+              log alone, so the denominator is the cap itself (it used to be
+              `cap − sys`, which made a longer soul read as a fuller session).
               0% right after a fresh start ("sleep"); can exceed 100% once
-              original messages fill the remaining window.
+              original messages fill the cap on their own.
 
               This was called "Fatigue level". The arithmetic never changed — the
               NAME was the defect. It reports how much room is used, which says
@@ -3776,20 +3797,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               A gauge must report a QUANTITY, never a CONDITION. */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
-            // Denominator is the room left after the FIXED, non-conversational
-            // overhead — the "Sys" bucket = system prompt + attachment/tool
-            // instructions (the indigo bar segment). Guarded against ≤0.
-            const denom = Math.max(1, max - tokenBreakdown.sys);
-            const elapsed = Math.round((tokenBreakdown.original / denom) * 100);
+            const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+            const elapsed = contextElapsedPercent(tokenBreakdown, cap);
             return (
               <span
                 className={`text-sm font-semibold tabular-nums cursor-default ${elapsed >= 100 ? 'text-red-500' : elapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
                 title={t('chat.elapsed.tip')
                   .replace('{pct}', String(elapsed))
                   .replace('{original}', tokenBreakdown.original.toLocaleString())
-                  .replace('{max}', max.toLocaleString())
-                  .replace('{sys}', tokenBreakdown.sys.toLocaleString())}
+                  .replace('{cap}', cap.toLocaleString())}
               >
                 {elapsed}%
               </span>
@@ -3803,9 +3819,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               (Case 004: a gauge reports a quantity, never a condition). */}
           {(() => {
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const max = activeFolderSettings.maxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT;
-            const denom = Math.max(1, max - tokenBreakdown.sys);
-            const elapsed = Math.round((tokenBreakdown.original / denom) * 100);
+            const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+            const elapsed = contextElapsedPercent(tokenBreakdown, cap);
             if (elapsed < 100) return null;
             return (
               <span
@@ -6087,7 +6102,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     // CRITICAL: spread the existing folder.settings first so
                     // we don't wipe out fields page.tsx or other code paths
                     // wrote into it (convoOrder, themeCss, aiVoice, voicePitch,
-                    // systemPromptHeader/Footer, maxRecommendedContext, etc.).
+                    // systemPromptHeader/Footer, maxConversationLog, etc.).
                     // The earlier version replaced the whole settings object
                     // with this short list, silently destroying everything else.
                     const existing: any =

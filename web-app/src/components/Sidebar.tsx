@@ -10,11 +10,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
 import {
-  DEFAULT_MAX_RECOMMENDED_CONTEXT,
-  CONTEXT_UNIT,
-  CONTEXT_MIN_UNITS,
-  CONTEXT_MAX_UNITS,
-  clampContextUnits,
+  DEFAULT_MAX_CONVERSATION_LOG,
+  LOG_CAP_UNIT,
+  LOG_CAP_MIN_UNITS,
+  LOG_CAP_MAX_UNITS,
+  clampLogCapUnits,
 } from '@/lib/handoverRestore';
 import { useT, Tx } from '@/lib/i18n';
 import { confirmIfBusy, markBusyConfirmAnswered } from '@/lib/unloadGuard';
@@ -232,8 +232,8 @@ export default function Sidebar({
   // Per-folder context-management settings. Moved here from global Preferences
   // so each AI entity / persona can have its own token budget, auto-trim
   // policy, and identity-layer compression threshold (since longer-lived
-  // characters often want bigger windows than throwaway conversations).
-  const [folderMaxRecommendedContext, setFolderMaxRecommendedContext] = useState<number>(DEFAULT_MAX_RECOMMENDED_CONTEXT);
+  // characters often want to keep more log than throwaway conversations).
+  const [folderMaxConversationLog, setFolderMaxConversationLog] = useState<number>(DEFAULT_MAX_CONVERSATION_LOG);
   const [folderAutoTrim, setFolderAutoTrim] = useState<boolean>(true);
   const [folderMaxTokensPerLayer, setFolderMaxTokensPerLayer] = useState<number>(8000);
   const [liveSessionVoice, setLiveSessionVoice] = useState('Aoede');
@@ -762,7 +762,16 @@ export default function Sidebar({
                       // defaults the old global Preferences screen used —
                       // folders that pre-date this move just see those
                       // defaults until the user touches the inputs.
-                      setFolderMaxRecommendedContext(activeFolder.settings?.maxRecommendedContext ?? DEFAULT_MAX_RECOMMENDED_CONTEXT);
+                      //
+                      // `maxConversationLog` deliberately does NOT fall back to
+                      // the retired `maxRecommendedContext`. That key capped a
+                      // different quantity (system prompt + messages) against a
+                      // different reference (an assumed context window), so its
+                      // stored numbers were chosen for a question nobody is
+                      // asking here. Inheriting them would hand every being a
+                      // cap it was never given — quietly, and looking exactly
+                      // like a value someone picked.
+                      setFolderMaxConversationLog(activeFolder.settings?.maxConversationLog ?? DEFAULT_MAX_CONVERSATION_LOG);
                       setFolderAutoTrim(activeFolder.settings?.autoTrimCopiedMessages !== false);
                       setFolderMaxTokensPerLayer(activeFolder.settings?.maxTokensPerLayer ?? 8000);
                       // Live Session voice — known prebuilt names use preset mode; anything else is custom
@@ -1245,10 +1254,10 @@ export default function Sidebar({
                   <div>
                     <div className="flex items-baseline justify-between mb-1">
                       <label className="text-xs font-medium text-muted-foreground">
-                        {t('folder.context.maxLabel')}
+                        {t('folder.logcap.label')}
                       </label>
                       <span className="text-xs font-mono text-indigo-500">
-                        {(folderMaxRecommendedContext || 0).toLocaleString()} {t('folder.context.tokens')}
+                        {(folderMaxConversationLog || 0).toLocaleString()} {t('folder.context.tokens')}
                       </span>
                     </div>
                     {/* Edited in units of 10k tokens: 1 → 10k, 100 → 1M. A number
@@ -1261,17 +1270,17 @@ export default function Sidebar({
                     <div className="flex items-center gap-2">
                       <input
                         type="number"
-                        min={CONTEXT_MIN_UNITS}
-                        max={CONTEXT_MAX_UNITS}
+                        min={LOG_CAP_MIN_UNITS}
+                        max={LOG_CAP_MAX_UNITS}
                         step={1}
-                        value={Math.round((folderMaxRecommendedContext || DEFAULT_MAX_RECOMMENDED_CONTEXT) / CONTEXT_UNIT)}
-                        onChange={(e) => setFolderMaxRecommendedContext(clampContextUnits(parseInt(e.target.value, 10)) * CONTEXT_UNIT)}
+                        value={Math.round((folderMaxConversationLog || DEFAULT_MAX_CONVERSATION_LOG) / LOG_CAP_UNIT)}
+                        onChange={(e) => setFolderMaxConversationLog(clampLogCapUnits(parseInt(e.target.value, 10)) * LOG_CAP_UNIT)}
                         className="w-24 p-2 bg-background border border-border rounded-lg text-sm font-mono"
                       />
-                      <span className="text-[10px] text-muted-foreground">{t('folder.context.units')}</span>
+                      <span className="text-[10px] text-muted-foreground">{t('folder.logcap.units')}</span>
                     </div>
                     <div className="text-[10px] text-muted-foreground mt-1">
-                      {t('folder.context.help')}
+                      <Tx k="folder.logcap.help" />
                     </div>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer text-sm">
@@ -1354,17 +1363,26 @@ export default function Sidebar({
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ folder: activeFolder.name, content: ttsDict }),
                     }).catch(() => {});
+                    // Drop the retired `maxRecommendedContext` on the way out.
+                    // `saveFolder` writes the settings object WHOLE (no deep
+                    // merge), so omitting the key here is what actually removes
+                    // it from beings/<name>/settings.json — and only when the
+                    // person pressed Save on this folder, never as a sweep
+                    // across other beings' data.
+                    const { maxRecommendedContext: _retiredContextCap, ...keptFolderSettings } =
+                      (activeFolder.settings || {}) as Record<string, any>;
+                    void _retiredContextCap;
                     await fetch('/api/folders', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({
                         name: activeFolder.name,
                         settings: {
-                          ...activeFolder.settings,
+                          ...keptFolderSettings,
                           customCss,
                           aiVoice: folderVoice,
                           voicePitch: folderVoicePitch,
-                          maxRecommendedContext: folderMaxRecommendedContext,
+                          maxConversationLog: folderMaxConversationLog,
                           autoTrimCopiedMessages: folderAutoTrim,
                           maxTokensPerLayer: folderMaxTokensPerLayer,
                           liveSessionVoice: liveVoiceMode === 'custom' ? liveCustomVoice.trim() : liveSessionVoice,

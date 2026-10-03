@@ -383,7 +383,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               Settings → Context Management) so each AI entity can have its
               own context window size, auto-trim policy, and identity-layer
               compression threshold. The fields now live in Sidebar.tsx
-              under folder.settings.maxRecommendedContext /
+              under folder.settings.maxConversationLog /
               autoTrimCopiedMessages / maxTokensPerLayer. */}
 
           {/* The Appearance/Theme block used to live here. Removed because

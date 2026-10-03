@@ -74,10 +74,11 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const [currentConvoId, setCurrentConvoId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
-  // NOTE: maxRecommendedContext, autoTrimCopiedMessages, and
-  // maxTokensPerLayer were moved out of globalSettings into per-folder
-  // settings (Folder Settings → Context Management). Old user_settings.json
-  // files that still have those keys are loaded harmlessly — nothing reads
+  // NOTE: the context-management keys (now maxConversationLog and
+  // autoTrimCopiedMessages, plus maxTokensPerLayer) were moved out of
+  // globalSettings into per-folder settings (Folder Settings → Context
+  // Management). Old user_settings.json files that still carry them — including
+  // the retired `maxRecommendedContext` — are loaded harmlessly: nothing reads
   // them from here anymore.
   const [globalSettings, setGlobalSettings] = useState<any>({
     userName: 'Anonymous',
