@@ -103,12 +103,18 @@ export function resolveBridge(
 }
 
 /**
- * Provider families whose wire format is the Anthropic content-block spec,
- * which has `image` blocks and nothing else — no audio block type, no video
- * block type. Every one of the three send sites that builds those blocks
- * (`api/chat/route.ts`: the OAuth/Agent-SDK path, the Kimi/MiMo adapter, and
- * the Claude API-key path) filters on `mimeType.startsWith('image/')` with no
- * else branch, so an audio or video attachment is dropped in silence.
+ * Provider families whose wire format is the Anthropic content-block spec.
+ * Anthropic's own spec has `image` blocks and nothing else — no audio block
+ * type, no video block type — and two of the three send sites that build
+ * those blocks (`api/chat/route.ts`: the OAuth/Agent-SDK path and the Claude
+ * API-key path) still filter on `mimeType.startsWith('image/')` with no else
+ * branch, so audio and video are dropped in silence there.
+ *
+ * The third site, the Kimi/MiMo adapter, is no longer purely image-only:
+ * MiMo's endpoint accepts an undocumented `video` block (measured 2026-10-03)
+ * and the adapter now sends it for video-capable MiMo models. Membership in
+ * this list therefore no longer means "images only" by itself — the per-kind
+ * branches in wireCarriesMedia() below are what decide.
  *
  * Gemini (`inlineData`, any mime) and the OpenAI-compatible path (`image_url`
  * + `input_audio` + `video_url`) really do carry all three, so they are not
@@ -154,7 +160,20 @@ export function wireCarriesMedia(kind: MediaKind, ctx: DeliveryContext): boolean
   if (kind !== 'image' && kind !== 'audio' && kind !== 'video') return true;
   const family = String(ctx.aiName || '').toLowerCase();
   if (!family) return true;  // unknowable in advance — claim nothing
-  if (ANTHROPIC_SHAPED_FAMILIES.some((f) => family.includes(f))) return kind === 'image';
+  if (ANTHROPIC_SHAPED_FAMILIES.some((f) => family.includes(f))) {
+    if (kind === 'image') return true;
+    // MiMo is the one Anthropic-shaped family with a real video block — same
+    // `source` envelope as `image`, type renamed (measured; see the V2.6 note
+    // in modelVision.ts for the four shapes that silently dropped). Gated on
+    // the MODEL, not the family: mimo-v2.5-pro 404s on it, and Kimi has no
+    // measured video surface at all — neither is in VIDEO_CAPABLE_MODELS, so
+    // both fall through to false and keep their honest "won't arrive" label.
+    // This must stay in lockstep with the adapter's own isVideoCapable() gate
+    // in `streamViaAnthropicCompat`: if this said yes where the adapter says
+    // no, the UI would promise delivery for bytes it then drops.
+    if (kind === 'video' && family.includes('mimo')) return isVideoCapable(ctx.specificModel);
+    return false;
+  }
   if (family.includes('local')) return localWireCarries(kind);
   return true;
 }

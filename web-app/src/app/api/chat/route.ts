@@ -3206,6 +3206,34 @@ async function streamViaAnthropicCompat(args: {
         // the resized image natively, so nothing is lost.
         const img = await shrinkImageForClaude(media.base64Data, media.mimeType);
         contentArr.push({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } });
+      } else if (
+        provider === 'mimo'
+        && media.mimeType?.startsWith('video/')
+        && isVideoCapable(model)
+      ) {
+        // MiMo's Anthropic endpoint takes a native video block that is NOT in
+        // Anthropic's published spec: the `image` envelope with the type
+        // renamed. Measured 2026-10-03 — a 2 s clip (red then blue) raised
+        // input_tokens 29 → 139 and the model answered "solid red first, then
+        // solid blue". Four other shapes (`video_url`, `video`/{url},
+        // `video`/url, `input_video`) left input_tokens at the text-only
+        // baseline, and two of them ANSWERED ANYWAY with invented colors — a
+        // confident 200 over bytes that never arrived. See modelVision.ts.
+        //
+        // Gated on isVideoCapable(model), which is also what the UI reads via
+        // wireCarriesMedia(): mimo-v2.5-pro 404s on this block ("No endpoints
+        // found that support image input") and Kimi has no measured video
+        // surface, so neither is on that list and neither gets sent one. The
+        // two gates must stay in lockstep or the UI promises what we drop.
+        //
+        // No downscale pass (unlike images): there is no video equivalent of
+        // shrinkImageForClaude here, so the clip goes up at its original size
+        // and byte limits are the provider's to enforce — loudly, not
+        // silently. Token cost itself is mild: ≈13.5/s after a ~83-token
+        // first frame. Only video/mp4 was measured; other containers are
+        // passed through as-is rather than guessed at.
+        if (media.name) contentArr.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
+        contentArr.push({ type: 'video', source: { type: 'base64', media_type: media.mimeType, data: media.base64Data } });
       }
     }
     if (m.content) contentArr.push({ type: 'text', text: m.content });

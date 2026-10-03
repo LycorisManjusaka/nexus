@@ -247,13 +247,34 @@ export const VIDEO_CAPABLE_MODELS = new Set<string>([
   // Xiaomi MiMo V2.5 — hosted API documents native video understanding
   // (platform.xiaomimimo.com .../multimodal-understanding/video-understanding).
   'mimo-v2.5',
-  // MiMo V2.6 is deliberately NOT added here. Measured: MiMo's Anthropic
-  // endpoint DOES accept a native video block (a real 4s clip came back with
-  // 772 input tokens, video_tokens=720, and a description that matched the
-  // actual frame) — but NEXUS's `streamViaAnthropicCompat` builds image blocks
-  // only, so a video attached to a MiMo conversation never leaves the browser.
-  // Staying off this list lets the video watcher engage and produce a real
-  // description instead of a silent drop. Add V2.6 when the adapter carries it.
+  // MiMo V2.6 — all three tiers. The adapter now carries video natively, so
+  // these belong here: being on this list switches the watcher bridge OFF,
+  // which is correct only because the bytes really do arrive.
+  //
+  // Measured 2026-10-03 on https://api.xiaomimimo.com/anthropic/v1/messages
+  // with a 2 s 160x120 clip (1 s solid red, then 1 s solid blue). The block
+  // shape is the Anthropic IMAGE shape with the type renamed — NOT the
+  // OpenAI-style `video_url` part:
+  //
+  //   {type:'video', source:{type:'base64', media_type:'video/mp4', data:…}}
+  //
+  // Four other shapes were tried and all silently dropped (input_tokens flat
+  // at the text-only baseline of 29): `video_url`/{url}, `video`/{url},
+  // `video`/url, `input_video`. Two of those four answered anyway, with
+  // invented colors ("white, blue, orange, pink") — a 200 with a confident
+  // wrong answer, which is why the dropped shapes must never be sent.
+  //
+  // With the working shape: input_tokens 29 → 139, and the model answered
+  // "solid red first, then solid blue". Cost scales with duration (2 s → +110,
+  // 6 s → +164, ≈13.5 tok/s after a ~83-token first frame).
+  //
+  // Per-model, not per-family: `mimo-v2.5-pro` 404s on it ("No endpoints found
+  // that support image input"), and it is correctly absent from this list, so
+  // the adapter's isVideoCapable() gate skips it. v2.5 / v2.6-pro /
+  // v2.6-flash / v2.6-pro-ultraspeed all returned 200 with the right colors.
+  'mimo-v2.6-pro',
+  'mimo-v2.6-flash',
+  'mimo-v2.6-pro-ultraspeed',
   // MiniMax M3 — natively multimodal, documents image + video understanding.
   'MiniMax-M3',
   // GLM-5.3-Flash — first natively multimodal GLM-5 model, documents image +
