@@ -7,6 +7,7 @@ import {
   MAX_GENERATIONS_SCANNED,
   type RestorePlanReply,
 } from '@/lib/handoverRestore';
+import { olderGenerationsNewestFirst } from '@/lib/handoverWalk';
 
 /**
  * Plan a handover restore: which messages from older generations should be put
@@ -53,24 +54,14 @@ export async function POST(req: Request) {
   const self = logs.find((l: any) => l.id === convoId);
   if (!self) return NextResponse.json(empty('not-found'));
 
-  // The generation number lives in the title, under the same convention the
-  // Soul Updater writes (`<being>_<n>`). A hand-picked title has no predecessor
-  // to walk back to — that is an answer, not a failure.
+  // 'not-numbered' vs 'no-older' are distinct answers here (the client renders
+  // them differently), so the index check stays explicit; the generation walk
+  // itself is the shared skeleton in handoverWalk.
   const index = numberedIdentityTitleIndex(self.title, self.folderName);
   if (index === null) return NextResponse.json(empty('not-numbered'));
 
-  // Older generations of the SAME being, newest first.
-  //
-  // Archived conversations (`active: false`) are included on purpose: the number
-  // is what defines the chain of generations, while the archive flag only
-  // controls what the sidebar lists. Skipping archived logs would silently open
-  // a hole in the middle of a being's history.
-  const older = logs
-    .map((l: any) => ({ l, n: numberedIdentityTitleIndex(l.title, l.folderName) }))
-    .filter((x: any) => x.l.folderName === self.folderName && x.n !== null && x.n < index && !x.l.corrupted)
-    .sort((a: any, b: any) => b.n - a.n);
-
-  if (older.length === 0) return NextResponse.json(empty('no-older'));
+  const olderLogs = olderGenerationsNewestFirst(logs, self);
+  if (olderLogs.length === 0) return NextResponse.json(empty('no-older'));
 
   const excluded = new Set<string>(excludeKeys);
   let remaining = budgetTokens;
@@ -81,7 +72,7 @@ export async function POST(req: Request) {
   let truncated = false;
   let scanned = 0;
 
-  for (const { l } of older) {
+  for (const l of olderLogs) {
     if (scanned >= MAX_GENERATIONS_SCANNED) { truncated = true; break; }
     scanned++;
     const log: any = await loadLog(l.id);
