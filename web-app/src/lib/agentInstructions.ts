@@ -233,6 +233,23 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'a word, sentence, code block, or table, resume from exactly that point — your text will be joined ' +
     'directly onto the previous part with nothing in between, so it must read as one continuous message.',
 
+  // Same job as continuationInstruction, but for a turn cut off by a provider
+  // content filter rather than by the token limit. Two deliberate differences:
+  //   • It does not claim the output limit was reached — that would be false in
+  //     the wire.
+  //   • It does not name the filter. Telling a model "a safety filter fired"
+  //     risks inducing self-censorship (トカゲくん observed exactly that on a
+  //     Claude turn: "I was just refused, so now I must write something
+  //     completely different"). That effect is UNMEASURED, so the wording stays
+  //     on the bare fact and says nothing about why.
+  blockedContinuationInstruction:
+    'Your previous message was cut off mid-answer before it was finished. ' +
+    'Continue it now from the exact point where it stopped. Write ONLY the continuation: do not repeat ' +
+    'any sentence you already wrote, do not start over, do not summarize what you wrote so far, and do ' +
+    'not open with a preamble such as "Continuing" or "As I was saying". If you stopped in the middle of ' +
+    'a word, sentence, code block, or table, resume from exactly that point — your text will be joined ' +
+    'directly onto the previous part with nothing in between, so it must read as one continuous message.',
+
   // ── Browser control ──────────────────────────────────────────────────────
   // A real Chromium window the entity drives. It sees the ACCESSIBILITY TREE,
   // not pixels: browser_snapshot lists the interactive elements with refs, and
@@ -650,6 +667,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'searchAttachmentsDesc', label: 'Tool: search_attachments — description' },
   { key: 'searchAttachmentsQueryParam', label: 'Tool: search_attachments — query parameter' },
   { key: 'continuationInstruction', label: 'Auto-continue: resume a cut-off reply' },
+  { key: 'blockedContinuationInstruction', label: 'Auto-continue: resume a reply cut off by a content filter' },
   { key: 'toolWriteLetterDesc', label: 'Tool: write_letter — description' },
   { key: 'writeLetterToParam', label: 'Tool: write_letter — "to" parameter' },
   { key: 'writeLetterTitleParam', label: 'Tool: write_letter — "title" parameter' },
@@ -744,6 +762,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   searchAttachmentsDesc: 'ツール search_attachments — 説明',
   searchAttachmentsQueryParam: 'ツール search_attachments — query 引数',
   continuationInstruction: '自動継続：途中で切れた応答の再開',
+  blockedContinuationInstruction: '自動継続：内容フィルターで切られた応答の再開',
   toolWriteLetterDesc: 'ツール write_letter — 説明',
   writeLetterToParam: 'ツール write_letter —「to」引数',
   writeLetterTitleParam: 'ツール write_letter —「title」引数',

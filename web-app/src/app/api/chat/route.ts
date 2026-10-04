@@ -6624,19 +6624,27 @@ export async function POST(req: Request) {
       });
 
       // Auto-continue when the model reports finishReason="MAX_TOKENS".
-      // We re-call with the partial assistant turn as a prefill; Gemini will
-      // continue that turn instead of starting a new one. CRITICAL details:
-      //   1) We must REPLACE the previous prefill (not append) — Gemini
-      //      rejects consecutive model turns.
-      //   2) The prefill carries rawModelParts (with thoughtSignature)
-      //      verbatim — thinking-capable models reject prefills that have
+      // We re-call with the partial as the model's own turn FOLLOWED BY a user
+      // turn asking for the continuation; Gemini continues that answer instead
+      // of starting a new one. CRITICAL details:
+      //   1) We must REPLACE the previous pair (not append) — Gemini rejects
+      //      consecutive model turns.
+      //   2) The model turn carries rawModelParts (with thoughtSignature)
+      //      verbatim — thinking-capable models reject continuations that have
       //      been stripped or rebuilt as plain { text: ... }.
+      //   3) The request must NOT END with that model turn. A bare prefill is
+      //      400 "Requests ending with a model turn are not supported" on
+      //      gemini-3.5-flash-lite and newer (measured 2026-10-04 across seven
+      //      models; 3.1-* and 3.5-flash still accept it). This block was
+      //      prefill-only until then, so MAX_TOKENS auto-continuation had been
+      //      silently broken on 3.6/3.7/3.8 — found via ふわふわ's report of the
+      //      safety-stop retry failing. See gemini-prefill-rejected.md.
       // Increased from 2 to 5 so longer responses survive multiple cuts.
       const MAX_CONTINUATIONS = 5;
       // A mid-stream safety/content-filter stop is a BLOCK, not a token cap, so
       // it gets its own (lower) retry budget: a genuinely-blocked turn must not
       // burn the full continuation allowance re-hitting the same filter.
-      // Empirically re-prompting with the partial as prefill continues past the
+      // Empirically re-prompting with the partial continues past the
       // filter (it fires on the in-progress span, not the whole turn) — which is
       // why retrying works at all. 3 matches what a human presses "Continue"
       // before giving up.
@@ -6895,10 +6903,10 @@ export async function POST(req: Request) {
             let lastBlockReason: string | null = null;
             let lastPartCount = 0;
             // Accumulated raw model parts from prior continuations. When we
-            // continue, we replace the trailing prefill model turn with one
-            // containing every part the model has emitted so far (text,
-            // thought, thoughtSignature). This preserves signature continuity
-            // and avoids stacking consecutive model turns.
+            // continue, we replace the trailing model turn (and the user turn
+            // that follows it) with one containing every part the model has
+            // emitted so far (text, thought, thoughtSignature). This preserves
+            // signature continuity and avoids stacking consecutive model turns.
             let cumulativeContinuationParts: any[] = [];
             let lastIterationWasContinuation = false;
             // Sum of every iteration's usageMetadata so the final cache_usage
@@ -7307,8 +7315,10 @@ export async function POST(req: Request) {
               //   • A safety/content filter cut the turn mid-stream. These are
               //     BLOCKS (finishReason SAFETY / RECITATION / … — see
               //     GEMINI_BLOCK_REASONS), retried on a separate, smaller budget.
-              // Both re-prefill the partial as the model's own turn so Gemini
-              // continues past the stop instead of restarting. A silent stop
+              // Both re-send the partial as the model's own turn followed by a
+              // user turn asking for the continuation (NOT a bare prefill —
+              // that is a 400 on 3.5-flash-lite and newer), so Gemini continues
+              // past the stop instead of restarting. A silent stop
               // (null/STOP with truncated text) matches NEITHER and is not
               // auto-continued — we can't tell it from a normal end.
               const fr = String(finishReason || '').toUpperCase();
@@ -7319,14 +7329,33 @@ export async function POST(req: Request) {
               if ((canContinueTrunc || canContinueBlock) && rawModelParts.length > 0) {
                 // Accumulate THIS iteration's raw parts into the running prefill.
                 cumulativeContinuationParts = [...cumulativeContinuationParts, ...rawModelParts];
-                // If we already added a prefill model turn last time, replace it.
-                // Otherwise, this is the first continuation — append fresh.
+                // If we already added a continuation PAIR last time, drop BOTH
+                // entries before re-appending. Dropping only the model turn
+                // (slice(0,-1), what this did until 2026-10-04) would leave the
+                // stale user instruction in place and stack a second model turn
+                // directly after it — re-breaking the very shape fixed below.
                 if (lastIterationWasContinuation) {
-                  contents = contents.slice(0, -1);
+                  contents = contents.slice(0, -2);
                 }
+                // The partial goes back as the model's own turn, FOLLOWED BY a
+                // user turn asking for the continuation. A request whose last
+                // entry is a model turn (a bare prefill) is rejected with 400
+                // "Requests ending with a model turn are not supported" on
+                // gemini-3.5-flash-lite and newer — measured across all seven
+                // models; see gemini-prefill-rejected.md. Real thought parts and
+                // thoughtSignature survive this shape (measured: resumed from
+                // mid-sentence after the comma).
                 contents = [
                   ...contents,
                   { role: 'model', parts: cumulativeContinuationParts.slice() },
+                  {
+                    role: 'user',
+                    parts: [{
+                      text: canContinueBlock
+                        ? I.blockedContinuationInstruction
+                        : I.continuationInstruction,
+                    }],
+                  },
                 ];
                 lastIterationWasContinuation = true;
                 if (canContinueBlock) {
