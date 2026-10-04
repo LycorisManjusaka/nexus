@@ -2088,6 +2088,13 @@ async function streamClaudeViaAgentSDK(args: {
         // swapped mid-turn, so the reply you are reading came from a different
         // model than the one selected. That has to be visible.
         let refusalFallback: any = null;
+        // Second, casing-independent source for category/explanation. The OAuth
+        // assistant frame carries the raw Anthropic Message, whose `stop_details`
+        // keeps snake_case single-word keys (category, explanation) — immune to
+        // the camelCase/snake drift that broke the system envelope below. If the
+        // SDK renames the envelope fields again, the category still surfaces here.
+        // Defensive: stays null if the live object does not carry it.
+        let refusalStopOauth: any = null;
         // Text of a locally-fabricated "isApiErrorMessage" assistant message
         // (see below) — the CLI's own authoritative explanation for a hard
         // stop that never touched the API, so it's the most trustworthy note
@@ -2364,24 +2371,33 @@ async function streamClaudeViaAgentSDK(args: {
               const sysAny: any = msg as any;
               const sub = sysAny.subtype;
               if (sub === 'model_refusal_no_fallback' || sub === 'model_refusal_fallback') {
-                refusalDetail = {
-                  category: sysAny.api_refusal_category ?? null,
-                  explanation: sysAny.api_refusal_explanation ?? null,
-                };
+                // The claude-agent-sdk delivers these envelope fields in
+                // camelCase (apiRefusalCategory, apiRefusalExplanation,
+                // originalModel, refusedUserMessageUuid) — confirmed field-by-
+                // field from a live session file 2026-10-04. sdk.d.ts declares
+                // snake_case, but the wire object is camelCase, so reading only
+                // snake made category/explanation ALWAYS null; the notice then
+                // wrongly said "no category was returned" for ~2 weeks of
+                // reasoning_extraction refusals. Read camelCase first, then snake
+                // as a fallback for any older/future CLI that uses it.
+                const refCat = sysAny.apiRefusalCategory ?? sysAny.api_refusal_category ?? null;
+                const refExp = sysAny.apiRefusalExplanation ?? sysAny.api_refusal_explanation ?? null;
+                const refReq = sysAny.requestId ?? sysAny.request_id ?? '-';
+                refusalDetail = { category: refCat, explanation: refExp };
                 if (sub === 'model_refusal_fallback') {
                   refusalFallback = {
-                    from: sysAny.original_model,
-                    to: sysAny.fallback_model,
+                    from: sysAny.originalModel ?? sysAny.original_model,
+                    to: sysAny.fallbackModel ?? sysAny.fallback_model,
                     scope: sysAny.scope || 'session',
                   };
                 }
                 console.log(
-                  `${oauthTag} ${sub} category=${sysAny.api_refusal_category || '-'}`
-                  + ` request_id=${sysAny.request_id || '-'}`
+                  `${oauthTag} ${sub} category=${refCat || '-'}`
+                  + ` request_id=${refReq}`
                   + (sub === 'model_refusal_fallback'
-                      ? ` ${sysAny.original_model} -> ${sysAny.fallback_model} scope=${sysAny.scope || 'session'}`
+                      ? ` ${refusalFallback.from || '?'} -> ${refusalFallback.to || '?'} scope=${refusalFallback.scope}`
                       : '')
-                  + ` explanation=${JSON.stringify(sysAny.api_refusal_explanation || '').slice(0, 300)}`
+                  + ` explanation=${JSON.stringify(refExp || '').slice(0, 300)}`
                 );
               }
             }
@@ -2393,6 +2409,10 @@ async function streamClaudeViaAgentSDK(args: {
             // above) but capture authoritative usage if present.
             if (msg.type === 'assistant' || msg.type === 'user') {
               harvestOauthBlocks((msg as any).message?.content);
+              // Casing-independent second source for a refusal's category (see
+              // refusalStopOauth). Raw Anthropic Message → snake_case stop_details.
+              const sd = (msg as any).message?.stop_details;
+              if (sd && (sd.category || sd.explanation)) refusalStopOauth = sd;
             }
             // Tool-call evidence for the per-message report. The SDK hands us
             // complete assistant blocks, so `input` is already parsed here —
@@ -2536,8 +2556,16 @@ async function streamClaudeViaAgentSDK(args: {
             notes.push(language === 'ja'
               ? 'Anthropicの安全分類器がこのターンを止めた（stop_reason: refusal）。'
               : 'an Anthropic safety classifier stopped this turn (stop_reason: refusal).');
-            notes.push(describeRefusal(refusalDetail?.category, refusalDetail?.explanation, language, producedContent));
-            if (!refusalDetail) {
+            notes.push(describeRefusal(
+              refusalDetail?.category ?? refusalStopOauth?.category,
+              refusalDetail?.explanation ?? refusalStopOauth?.explanation,
+              language, producedContent));
+            // Fires only when NEITHER source carried a category/explanation —
+            // not merely when the envelope object is present-but-empty.
+            const haveRefusalDetail =
+              (refusalDetail && (refusalDetail.category || refusalDetail.explanation))
+              || (refusalStopOauth && (refusalStopOauth.category || refusalStopOauth.explanation));
+            if (!haveRefusalDetail) {
               notes.push(language === 'ja'
                 ? '（構造化された詳細は届かなかった——古いCLIか、分類器の判定がその経路に乗らなかった場合。）'
                 : '(No structured detail arrived — an older CLI, or a refusal that did not travel that lane.)');
@@ -2571,13 +2599,13 @@ async function streamClaudeViaAgentSDK(args: {
                 + (local
                     ? '（適用範囲は local ——このサブエージェント／傍らの応答だけで、会話のモデルは変わっていない。）'
                     : '（適用範囲は session ——この会話のモデルがその場で差し替わった。）')
-                + ` ${describeRefusal(refusalDetail?.category, refusalDetail?.explanation, language)}`
+                + ` ${describeRefusal(refusalDetail?.category ?? refusalStopOauth?.category, refusalDetail?.explanation ?? refusalStopOauth?.explanation, language)}`
                 + ' 拒否された試行は、フォールバック試行の料金とは別に計上される——出力が始まった後の拒否か、課金カテゴリだった場合。'
               : `A safety classifier refused the first attempt, so Claude Code retried on a different vessel: ${f.from || '?'} → ${f.to || '?'}.`
                 + (local
                     ? ' (Scope "local" — only this subagent / side response came from the fallback; the conversation model is unchanged.)'
                     : ' (Scope "session" — the model for this conversation was swapped in place.)')
-                + ` ${describeRefusal(refusalDetail?.category, refusalDetail?.explanation, language)}`
+                + ` ${describeRefusal(refusalDetail?.category ?? refusalStopOauth?.category, refusalDetail?.explanation ?? refusalStopOauth?.explanation, language)}`
                 + ' The refused attempt is billed on top of the fallback request when it arrived mid-stream or its category is a billed one.' });
           }
           if (notes.length > 0) {
@@ -6498,6 +6526,23 @@ export async function POST(req: Request) {
       //      been stripped or rebuilt as plain { text: ... }.
       // Increased from 2 to 5 so longer responses survive multiple cuts.
       const MAX_CONTINUATIONS = 5;
+      // A mid-stream safety/content-filter stop is a BLOCK, not a token cap, so
+      // it gets its own (lower) retry budget: a genuinely-blocked turn must not
+      // burn the full continuation allowance re-hitting the same filter.
+      // Empirically re-prompting with the partial as prefill continues past the
+      // filter (it fires on the in-progress span, not the whole turn) — which is
+      // why retrying works at all. 3 matches what a human presses "Continue"
+      // before giving up.
+      const MAX_SAFETY_RETRIES = 3;
+      // finishReason values that mean "a filter cut the turn", as opposed to a
+      // normal end (STOP) or a token cap (MAX_TOKENS). A silent stop sets none of
+      // these — we deliberately do NOT auto-continue that case (indistinguishable
+      // from a normal end; the manual Continue button covers it). MALFORMED_/
+      // UNEXPECTED_ tool calls are excluded too: continuing cannot fix them.
+      const GEMINI_BLOCK_REASONS = new Set([
+        'SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'SPII',
+        'BLOCKLIST', 'LANGUAGE', 'IMAGE_SAFETY', 'OTHER',
+      ]);
       const geminiModelId = specificModel?.includes('gemini') ? specificModel : 'gemini-3.5-flash';
 
       // ── Layer 1: Creativity analysis ────────────────────────────────────────
@@ -6729,6 +6774,7 @@ export async function POST(req: Request) {
           try {
             let contents = [...fullContents];
             let continuationAttempts = 0;
+            let safetyRetries = 0;
             let toolIterations = 0;
             let totalVisibleEmitted = 0;
             let lastFinishReason: string | null = null;
@@ -6754,6 +6800,28 @@ export async function POST(req: Request) {
               { promptTokenCount: 0, candidatesTokenCount: 0, cachedContentTokenCount: 0 };
             // Grounding citations deduped across the whole turn.
             const cumGeminiSourceMap = new Map<string, { url: string; title?: string }>();
+
+            // Durable record of a mid-stream safety/content stop, written into the
+            // TOOL HISTORY (not a transient notice) so the occurrence — and the
+            // exact finishReason — survive in the saved log and can be measured
+            // after the fact. Same `kind:'event'` shape as automatic compaction.
+            const recordGeminiStop = (
+              reason: string | null | undefined,
+              action: 'auto-continue' | 'stopped',
+              extra: Record<string, unknown> = {},
+            ) => {
+              try {
+                enqueue({
+                  type: 'tool_call',
+                  call: {
+                    name: 'gemini safety stop',
+                    kind: 'event',
+                    at: Date.now(),
+                    input: { finishReason: reason ?? null, action, ...extra },
+                  },
+                });
+              } catch {}
+            };
 
             while (true) {
               if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
@@ -7124,13 +7192,24 @@ export async function POST(req: Request) {
                 continue; // loop — model will continue with the function responses visible
               }
 
-              // 2) No function calls, but output was truncated → continuation prefill.
-              // Gemini reports this as finishReason "MAX_TOKENS" (string) — but
-              // some SDK paths surface it as the enum value or even a lowercased
-              // form, so match defensively.
+              // 2) No function calls, but the turn stopped short → continuation
+              // prefill. Two causes, two budgets:
+              //   • MAX_TOKENS — hit the output cap. finishReason "MAX_TOKENS"
+              //     (some SDK paths surface the enum or a lowercased form, so
+              //     match defensively).
+              //   • A safety/content filter cut the turn mid-stream. These are
+              //     BLOCKS (finishReason SAFETY / RECITATION / … — see
+              //     GEMINI_BLOCK_REASONS), retried on a separate, smaller budget.
+              // Both re-prefill the partial as the model's own turn so Gemini
+              // continues past the stop instead of restarting. A silent stop
+              // (null/STOP with truncated text) matches NEITHER and is not
+              // auto-continued — we can't tell it from a normal end.
               const fr = String(finishReason || '').toUpperCase();
               const truncated = fr === 'MAX_TOKENS' || fr.includes('MAX_TOKEN');
-              if (truncated && continuationAttempts < MAX_CONTINUATIONS && rawModelParts.length > 0) {
+              const blocked = GEMINI_BLOCK_REASONS.has(fr);
+              const canContinueTrunc = truncated && continuationAttempts < MAX_CONTINUATIONS;
+              const canContinueBlock = blocked && safetyRetries < MAX_SAFETY_RETRIES;
+              if ((canContinueTrunc || canContinueBlock) && rawModelParts.length > 0) {
                 // Accumulate THIS iteration's raw parts into the running prefill.
                 cumulativeContinuationParts = [...cumulativeContinuationParts, ...rawModelParts];
                 // If we already added a prefill model turn last time, replace it.
@@ -7143,13 +7222,33 @@ export async function POST(req: Request) {
                   { role: 'model', parts: cumulativeContinuationParts.slice() },
                 ];
                 lastIterationWasContinuation = true;
-                continuationAttempts++;
-                console.log(`[gemini] continuation ${continuationAttempts}/${MAX_CONTINUATIONS} — finishReason=${finishReason}, cumulative parts=${cumulativeContinuationParts.length}, visible so far=${totalVisibleEmitted}c`);
+                if (canContinueBlock) {
+                  safetyRetries++;
+                  // Record the occurrence in the tool history (durable, structured),
+                  // not as a transient notice — she asked for the record to live
+                  // THERE so a silent auto-retry past a filter still shows itself
+                  // and the finishReason stays measurable in the saved log.
+                  recordGeminiStop(finishReason, 'auto-continue', { attempt: safetyRetries, max: MAX_SAFETY_RETRIES });
+                  console.log(`[gemini] safety-continue ${safetyRetries}/${MAX_SAFETY_RETRIES} — finishReason=${finishReason}, visible so far=${totalVisibleEmitted}c`);
+                } else {
+                  continuationAttempts++;
+                  console.log(`[gemini] continuation ${continuationAttempts}/${MAX_CONTINUATIONS} — finishReason=${finishReason}, cumulative parts=${cumulativeContinuationParts.length}, visible so far=${totalVisibleEmitted}c`);
+                }
                 continue;
               }
 
               if (truncated) {
                 console.warn(`[gemini] truncated but cannot continue: continuationAttempts=${continuationAttempts}/${MAX_CONTINUATIONS}, rawModelParts=${rawModelParts.length}`);
+              }
+              if (blocked) {
+                // Terminal block: either no partial to prefill, or the retry
+                // budget is spent. Record it so the saved log shows the answer
+                // ended on a filter, not a normal STOP.
+                recordGeminiStop(finishReason, 'stopped', {
+                  retries: safetyRetries,
+                  reason: rawModelParts.length > 0 ? 'retry budget exhausted' : 'no partial to continue',
+                });
+                console.warn(`[gemini] blocked and cannot continue: safetyRetries=${safetyRetries}/${MAX_SAFETY_RETRIES}, rawModelParts=${rawModelParts.length}, finishReason=${finishReason}`);
               }
 
               // 3) Done
