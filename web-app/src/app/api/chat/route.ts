@@ -2140,6 +2140,10 @@ async function streamClaudeViaAgentSDK(args: {
         // available when present and must not be gated by anyToolUsed/
         // producedContent the way the generic empty-turn note is.
         let apiErrorMessage: string | null = null;
+        // HTTP status of that error (400 = request too large / malformed,
+        // 404 = model unavailable, 5xx = upstream). Surfaced alongside the text
+        // because the text alone can be misleading — see the branch below.
+        let apiErrorStatus: number | null = null;
         // Set by canUseTool when a file op is blocked for being outside the
         // workspace (Full PC access OFF) — the classic "stops after saying it'll
         // read a file" cause.
@@ -2517,20 +2521,66 @@ async function streamClaudeViaAgentSDK(args: {
               // content, it was already streamed" assumption two blocks up is
               // false for this one case, so without this branch the text is
               // discarded entirely and the turn just stops with no reason.
-              if ((msg as any).isApiErrorMessage === true) {
+              // MEASURED 2026-10-05 (probe: forced a 404 through the SDK and
+              // dumped the delivered object's keys): the SDK stream uses
+              // SNAKE_CASE (`is_api_error_message`) while the session .jsonl the
+              // same binary writes uses camelCase (`isApiErrorMessage`). Reading
+              // only camel meant this branch, landed 2026-09-01, NEVER FIRED —
+              // every hard API stop was silent in the UI for a month. Same bug
+              // class as 謡's apiRefusalCategory/api_refusal_category. Read BOTH:
+              // measured spelling first, camel kept as the session-file form.
+              const isApiErr = (msg as any).is_api_error_message === true
+                || (msg as any).isApiErrorMessage === true;
+              if (isApiErr) {
                 const blocks = (msg as any).message?.content;
                 const text = Array.isArray(blocks)
                   ? blocks.filter((b: any) => b?.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n').trim()
                   : '';
                 const errCode = (msg as any).error;
-                console.log(`${oauthTag} api_error_message error=${errCode || '-'} text=${JSON.stringify(text).slice(0, 300)}`);
-                if (text) apiErrorMessage = text;
+                const status = (msg as any).api_error_status ?? (msg as any).apiErrorStatus;
+                // `errorDetails`, when present, carries the RAW upstream body —
+                // which matters because Claude Code's own prose breakdown is
+                // computed as chars÷4 and therefore understates the conversation
+                // badly ("this conversation is only ~468088 tokens" for a body
+                // that Anthropic counted at 1,209,404). The raw message has the
+                // true numbers; prefer it and keep the prose as context.
+                const details = typeof (msg as any).errorDetails === 'string' ? (msg as any).errorDetails : '';
+                // Shape is `400 {"type":"error","error":{...,"message":"..."},...}`
+                // — parse the JSON after the first brace rather than pattern-
+                // matching the body, so an embedded quote cannot truncate it.
+                let upstream = '';
+                const brace = details.indexOf('{');
+                if (brace >= 0) {
+                  try {
+                    const parsed = JSON.parse(details.slice(brace));
+                    const um = parsed?.error?.message ?? parsed?.message;
+                    if (typeof um === 'string') upstream = um.trim();
+                  } catch { /* not JSON — fall back to the prose text below */ }
+                }
+                console.log(`${oauthTag} api_error_message status=${status ?? '-'} error=${errCode || '-'} upstream=${JSON.stringify(upstream).slice(0, 200)} text=${JSON.stringify(text).slice(0, 300)}`);
+                if (typeof status === 'number') apiErrorStatus = status;
+                if (upstream) apiErrorMessage = text ? `${upstream} — ${text}` : upstream;
+                else if (text) apiErrorMessage = text;
               }
             } else if (msg.type === 'result') {
               // Result message signals the end of this query. SDK closes after.
               const errAny: any = msg as any;
               resultSubtype = errAny.subtype || 'success';
               resultErrorText = errAny.error || '';
+              // SECOND SOURCE for a hard API stop. Measured 2026-10-05: on a
+              // forced 404 the result carried is_error=true, api_error_status=404
+              // and the explanation in `result` — while `subtype` stayed
+              // "success". So subtype is NOT a reliable failure flag; is_error is.
+              // Only fills gaps left by the assistant-message branch above.
+              if (errAny.is_error === true) {
+                const rStatus = errAny.api_error_status ?? errAny.apiErrorStatus;
+                if (typeof rStatus === 'number' && apiErrorStatus === null) apiErrorStatus = rStatus;
+                const rText = typeof errAny.result === 'string' ? errAny.result.trim() : '';
+                if (rText && !apiErrorMessage) apiErrorMessage = rText;
+                if (!apiErrorMessage && !resultErrorText && typeof rStatus === 'number') {
+                  apiErrorMessage = `the API returned HTTP ${rStatus} with no explanation`;
+                }
+              }
               // The SDK also lists any permission denials from this run — if a
               // file op was denied and we didn't already record it via canUseTool,
               // surface it as the last tool error so the stop notice can name it.
@@ -2601,6 +2651,7 @@ async function streamClaudeViaAgentSDK(args: {
             refusalFallback = null;
             lastStopReason = null;
             apiErrorMessage = null;
+            apiErrorStatus = null;
             producedContent = false;
             res = await consume(null);
           }
@@ -2630,12 +2681,32 @@ async function streamClaudeViaAgentSDK(args: {
           // known literal strings to an actionable note; anything else is
           // shown verbatim since it's already the CLI's own human-readable text.
           if (apiErrorMessage) {
-            if (apiErrorMessage === 'Prompt is too long') {
-              notes.push('the context window is full and automatic compaction could not run — trim or summarize this conversation to shrink its context, then resend.');
+            // MEASURED 2026-10-05: the real text is never the bare literal
+            // "Prompt is too long" — it is "prompt is too long: 1000616 tokens >
+            // 1000000 maximum" (upstream) or "Prompt is too long · the request is
+            // ~N tokens (limit M) ..." (the CLI's prose). An exact-equality test
+            // could not match either, so loosen it to a prefix match and KEEP the
+            // numbers, which are the only actionable part: they say how far over
+            // the request was. 820,000 of conversation-log cap overshot the 1M
+            // ceiling by 616 tokens — without the numbers that is invisible.
+            // String() because apiErrorMessage is only ever assigned inside the
+            // nested consume() closure, so TS narrows it to `never` here.
+            const aem = String(apiErrorMessage);
+            const tooLong = /prompt is too long/i.test(aem);
+            if (tooLong) {
+              // TWO written forms carry the numbers and only one may be present:
+              //  - upstream (errorDetails):  "...: 1000616 tokens > 1000000 maximum"
+              //  - the CLI's prose:          "...is ~1209404 tokens (limit 1000000)..."
+              // The SDK stream was measured WITHOUT errorDetails on a 404, so the
+              // prose form may be all we get — match both or the numbers vanish.
+              const over = /(\d[\d,]{4,})\s*tokens?\s*>\s*(\d[\d,]{4,})/i.exec(aem)
+                || /~?(\d[\d,]{4,})\s*tokens?\s*\(\s*limit\s*(\d[\d,]{4,})/i.exec(aem);
+              const sizes = over ? ` The request was ${over[1]} tokens against a ${over[2]} limit.` : '';
+              notes.push(`the request was too large for the model${apiErrorStatus ? ` (HTTP ${apiErrorStatus})` : ''}.${sizes} Nothing was charged — a rejected request bills zero. Lower the conversation-log cap (maxConversationLog) and resend; restored messages are not lost, they stay in the generations they came from. NOTE: NEXUS's own token estimate runs 13–25% BELOW Anthropic's count, and the gap widens the further back a restore reaches, so the setting is not the number the API sees.`);
             } else if (/^Autocompact is thrashing/.test(apiErrorMessage)) {
               notes.push(apiErrorMessage);
             } else {
-              notes.push(`Claude Code stopped the turn itself: "${apiErrorMessage}"`);
+              notes.push(`Claude Code stopped the turn itself${apiErrorStatus ? ` (HTTP ${apiErrorStatus})` : ''}: "${apiErrorMessage}"`);
             }
           }
           if (/max.?turns/i.test(sub)) {
