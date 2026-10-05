@@ -345,6 +345,14 @@ function resolveOpenAIRoute(family: string, model: string, keys: any): { url: st
   if (f.includes('chatgpt') || f.includes('openai') || f.includes('gpt')) return { url: 'https://api.openai.com/v1/chat/completions', headers: bearer(keys.openai), model, label: 'OpenAI' };
   if (f.includes('mimo'))    return { url: 'https://api.xiaomimimo.com/v1/chat/completions', headers: bearer(keys.mimo), model, label: 'MiMo' };
   if (f.includes('bytedance')) return { url: 'https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions', headers: bearer(keys.bytedance), model, label: 'ByteDance' };
+  // Meta Model API, OpenAI-compatible surface. No reasoning_effort is pinned
+  // here on purpose: unlike the auto-select preflight (which caps max_tokens at
+  // 512 and therefore MUST ask for 'minimal' or Muse Spark spends the whole
+  // budget thinking and returns null), a subagent sends no cap at all, and the
+  // server default is generous — measured 2026-10-05: 8,686 output tokens with
+  // finish_reason 'stop', nothing truncated. A subagent is doing real work, so
+  // the model's default depth is the right default.
+  if (f.includes('meta'))    return { url: 'https://api.meta.ai/v1/chat/completions', headers: bearer(keys.meta), model, label: 'Meta (Muse Spark)' };
   if (f.includes('local'))   return { url: `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`, headers: {}, model, label: 'Local' };
   return null;
 }

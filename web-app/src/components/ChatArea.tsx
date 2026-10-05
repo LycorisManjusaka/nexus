@@ -205,6 +205,17 @@ ByteDance | seed-2-0-pro-260328          | on  | Seed 2.0 Pro
 ByteDance | seed-2-0-lite-260428         | on  | Seed 2.0 Lite
 ByteDance | seed-2-0-mini-260428         | on  | Seed 2.0 Mini
 ByteDance | seed-2-0-code-preview-260328 | on  | Seed 2.0 Code
+
+# ── Meta (Muse Spark, api.meta.ai) — always reasons; the on/off column is ──
+# advisory: OFF sends reasoning_effort 'minimal', which still thinks. The
+# -contributor rows are 12.5x cheaper on input AND opt Meta into training on
+# those turns, so they are deliberately left OFF in this table — "Fill all"
+# must not silently enrol anyone. (No backticks anywhere in this table: it is
+# a template literal, and a stray backtick closes the string.)
+Meta     | muse-spark-1.3               | on  | Muse Spark 1.3
+Meta     | muse-spark-1.2               | on  | Muse Spark 1.2
+Meta     | muse-spark-1.1               | on  | Muse Spark 1.1
+Meta     | muse-spark-1.3-contributor   | off | Muse Spark 1.3 (Contributor — Meta trains on it)
 `;
 
 // Parsed { family, model, label } rows for the Subagent model dropdown, derived
@@ -283,6 +294,10 @@ const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   ChatGPT: 'gpt-5.6-terra',
   MiMo: 'mimo-v2.6-pro',
   ByteDance: 'seed-2-0-pro-260328',
+  // Standard tier on purpose. The `-contributor` id is 12.5x cheaper on input
+  // but lets Meta train on the prompts AND completions of every turn it runs,
+  // so it is never a default — it has to be picked by hand.
+  Meta: 'muse-spark-1.3',
   Local: '',
 };
 
@@ -310,11 +325,15 @@ function modelBelongsToFamily(model: string | undefined | null, aiName: string):
     case 'ChatGPT':    return m.startsWith('gpt');
     case 'MiMo':       return m.startsWith('mimo');
     case 'ByteDance':  return m.startsWith('seed');
+    // Meta ids are `muse-*` (`sam-*` exists on the same API but is not offered
+    // here — it requires an input_image/input_video part, so it is not a chat
+    // model). `dola-seed-*` belongs to ByteDance and is matched above.
+    case 'Meta':       return m.startsWith('muse-');
     // A local model id is anything that isn't one of the cloud families above.
     // `digitalocean/` is called out separately because it hosts several
     // families, not just GLM.
     case 'Local':      return !m.startsWith('digitalocean/')
-      && !['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Grok', 'Kimi', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance']
+      && !['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Grok', 'Kimi', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Meta']
         .some((f) => modelBelongsToFamily(model, f));
     default:           return false;
   }
@@ -4838,7 +4857,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   the same thing: NEXUS's own web_search/web_fetch. The web_search
                   / web_fetch description editors live inside this check for
                   consistency with the other per-tool description editors. */}
-              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'ByteDance' || localAiName === 'Local') && (
+              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Kimi' || localAiName === 'Minimax' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'MiMo' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local') && (
                 <div>
                   <label className="flex items-start gap-2 cursor-pointer">
                     <input
@@ -5424,7 +5443,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     }}
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                   >
-                    {['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Kimi', 'Grok', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Local'].map(m => (
+                    {['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Kimi', 'Grok', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Meta', 'Local'].map(m => (
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
@@ -5688,6 +5707,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </div>
                 )}
 
+                {localAiName === 'Meta' && (
+                  <div className="mb-4">
+                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.meta.label')}</label>
+                    <select
+                      value={specificModel}
+                      onChange={(e) => setSpecificModel(e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                    >
+                      {/* The tier is part of the MODEL ID on this API, not an
+                          account switch — so the choice is made here, once per
+                          turn, and the label has to say what it costs you. The
+                          non-money cost is in the option text on purpose: a
+                          footnote under the dropdown is not consent. */}
+                      <option value="muse-spark-1.3">Muse Spark 1.3 (vision, 1M context)</option>
+                      <option value="muse-spark-1.2">Muse Spark 1.2 (vision, 1M context)</option>
+                      <option value="muse-spark-1.1">Muse Spark 1.1 (vision, 1M context)</option>
+                      <option value="muse-spark-1.3-contributor">Muse Spark 1.3 — Contributor: 12.5x cheaper, Meta trains on your prompts AND replies</option>
+                      <option value="muse-spark-1.2-contributor">Muse Spark 1.2 — Contributor: 12.5x cheaper, Meta trains on your prompts AND replies</option>
+                    </select>
+                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                      {renderRich(t('model.meta.help'))}
+                    </div>
+                  </div>
+                )}
+
                 {localAiName === 'GLM' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.glm.providerLabel')}</label>
@@ -5880,7 +5924,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </div>
                     </>
                   )}
-                  {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Kimi' || localAiName === 'Cohere') && (
+                  {/* Meta is in this list even though its reasoning cannot be
+                      switched off, because the toggle still does something real
+                      there: ON sends reasoning_effort 'high', OFF sends
+                      'minimal'. Hiding it would leave no way to ask Muse Spark
+                      for a fast, cheap turn — reasoning tokens bill at the
+                      output rate, and a short prompt measured 7,641 of them at
+                      default depth against ~23 at 'minimal'. The label text for
+                      this family says so (model.meta.help). */}
+                  {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Kimi' || localAiName === 'Cohere' || localAiName === 'Meta') && (
                     <div className="col-span-2 flex items-center gap-2 mt-2">
                       <input
                         type="checkbox"

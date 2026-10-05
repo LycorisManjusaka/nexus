@@ -42,6 +42,7 @@ const SIMPLE_PROVIDERS: { id: string; ph: string; help?: boolean; url?: string }
   { id: 'openai',       ph: 'sk-...',   help: true, url: 'https://platform.openai.com/settings/organization/api-keys' },
   { id: 'mimo',         ph: '...',      help: true, url: 'https://platform.xiaomimimo.com/console/api-keys' },
   { id: 'bytedance',    ph: '...',      help: true, url: 'https://console.byteplus.com/ark/region:ap-southeast-1/apiKey?apikey=%7B%7D' },
+  { id: 'meta',         ph: 'LLM_...',  help: true, url: 'https://developer.meta.com/ai/products/meta-model-api/' },
 ];
 
 export default function SettingsModal({ onClose, globalSettings, setGlobalSettings }: any) {
@@ -65,6 +66,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const [keys, setKeys] = useState<any>({
     gemini: '', claude: '', qwen: '', deepseek: '', glm: '', grok: '',
     kimi: '', cohere: '', minimax: '', openai: '', mimo: '', bytedance: '',
+    meta: '',
     digitalocean: '',
     claudeAuthMode: 'api-key', claudeOAuthToken: '',
     lmStudioPath: '',

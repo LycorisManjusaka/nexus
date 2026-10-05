@@ -46,7 +46,7 @@ function canonFamily(stored?: string | null): string {
     minimax: 'MiniMax', chatgpt: 'ChatGPT', openai: 'ChatGPT', claude: 'Claude',
     gemini: 'Gemini', kimi: 'Kimi', glm: 'GLM', grok: 'Grok', qwen: 'Qwen',
     deepseek: 'DeepSeek', cohere: 'Cohere', mimo: 'MiMo', bytedance: 'ByteDance',
-    local: 'Local',
+    meta: 'Meta', local: 'Local',
   };
   const key = (stored || '').toLowerCase().trim();
   return map[key] || (stored || 'Unknown');
@@ -75,6 +75,12 @@ function familyFromModelId(id?: string | null): string {
   if (k.startsWith('command')) return 'Cohere';
   if (k.startsWith('mimo')) return 'MiMo';
   if (k.startsWith('dola-') || k.startsWith('seed-') || k.startsWith('doubao')) return 'ByteDance';
+  // Meta Model API ids. `sam-` is matched too so an old log that used the
+  // segmentation model is attributed rather than silently falling into
+  // 'Unknown' — it is not offered in the chat dropdown (it demands an
+  // input_image/input_video part), but attribution is cheap and a wrong
+  // 'Unknown' is not.
+  if (k.startsWith('muse-') || k.startsWith('sam-')) return 'Meta';
   return 'Unknown';
 }
 

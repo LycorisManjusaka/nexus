@@ -150,6 +150,23 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'mimo-v2.6-pro',
   'mimo-v2.6-flash',
   'mimo-v2.5',
+
+  // ── Meta (Muse Spark) ────────────────────────────────────────────────────────
+  // Measured 2026-10-05 against api.meta.ai/v1/chat/completions with a generated
+  // solid-red 64x64 PNG as an `image_url` data URI: ALL THREE generations —
+  // muse-spark-1.3, 1.2 and 1.1 — returned "Red" (27 prompt tokens each). The
+  // two `-contributor` ids are the same weights on the training-opt-in tier, so
+  // they see too. Audio and video are deliberately absent from the sets below:
+  // Meta serves those on separate products, not on this endpoint
+  // (`muse-voice-transcribe-1.0` 404s on /chat/completions, `muse-image-1.0`
+  // answers "image models are only supported on the /v1/responses API", and
+  // `sam-3.1` demands an `input_image`/`input_video` content part). The ears /
+  // watcher bridges therefore keep covering those modalities for this family.
+  'muse-spark-1.3',
+  'muse-spark-1.2',
+  'muse-spark-1.1',
+  'muse-spark-1.3-contributor',
+  'muse-spark-1.2-contributor',
 ]);
 
 /**

@@ -127,6 +127,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.keys.bytedance.label': 'ByteDance / BytePlus API Key',
   'settings.keys.bytedance.help':
     'Get one at `console.byteplus.com` (BytePlus ModelArk). Required for the ByteDance Seed family — Seed 2.0 Pro / Lite / Mini / Code.',
+  'settings.keys.meta.label': 'Meta Model API Key',
+  'settings.keys.meta.help':
+    'Get one at the Meta Developer Console (`developer.meta.com`). Required for the Meta Muse Spark family. Self-serve, and new accounts come with $20 of free credit. This is the **token-metered Meta Model API** — it is NOT the Muse Code subscription, which only works through Meta’s own CLI and cannot be used as a key here.',
 
   // ── Preferences → VRChat & Audio ─────────────────────────────────────────
   'settings.audio.heading': 'VRChat & Audio Routing',
@@ -1230,6 +1233,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.bytedance.help':
     'Served by BytePlus ModelArk at `ark.ap-southeast.bytepluses.com/api/v3` (key in Preferences). ModelArk calls a model by its **versioned Model ID** (the display name won’t work). Known IDs are suggested above — pick one, or paste a newer snapshot / your own `ep-…` endpoint ID. Seed 2.0 accepts image input natively (no Eyes bridge needed). Reasoning is built-in; no thinking toggle is sent.',
 
+  'model.meta.label': 'Meta (Muse Spark) Model',
+  'model.meta.help':
+    'Served by the Meta Model API at `api.meta.ai/v1` (key in Preferences). All three generations accept image input natively, so no Eyes bridge is needed, and the context window is 1M tokens.\n**Audio and video do not reach this family** and are marked as not arriving: a video part is rejected with an error, and audio is worse — the endpoint accepts it and bills for it by duration, yet the model answers "I cannot hear any attached audio" even for a plain tone. Turn on Ears / Watcher and those files are transcribed or described instead, which does work.\n**Reasoning cannot be turned off** on this family — the API rejects an "off" setting outright. The Thinking Mode toggle therefore selects depth: ON is deep, OFF is the shallowest setting the model accepts. OFF is worth using for short turns, because reasoning tokens are billed at the **output** rate: one short prompt spent about 7,600 reasoning tokens at full depth and about 23 at the shallow setting. The reasoning **text** is never returned by this provider in any form, so the thinking panel stays empty even when the meta bar says thinking was on — that is the provider hiding it, not NEXUS dropping it.\n**Contributor rows:** input costs 12.5x less, and in exchange **Meta trains on both your prompts and the replies**, with a far lower rate limit (about 60 requests/minute and roughly 250k tokens/day, against 3,000/minute for the standard rows). The tier is part of the model ID here, not an account setting, so it applies to exactly the turns you pick it for.\nPrompt caching is on automatically: NEXUS tags each request with its conversation id, which cuts repeated context to $0.15 per 1M instead of $1.25.',
+
   'model.glm.providerLabel': 'GLM Provider',
   'model.glm.label': 'GLM Model',
   'model.glm.notOnDO': '{model} (not on DigitalOcean — pick one below)',
@@ -1611,6 +1618,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.keys.bytedance.label': 'ByteDance / BytePlus APIキー',
   'settings.keys.bytedance.help':
     '`console.byteplus.com`（BytePlus ModelArk）で取得します。ByteDance Seed ファミリー — Seed 2.0 Pro / Lite / Mini / Code に必要です。',
+  'settings.keys.meta.label': 'Meta Model API キー',
+  'settings.keys.meta.help':
+    'Meta の開発者コンソール（`developer.meta.com`）で取得します。Meta の Muse Spark ファミリーに必要です。審査なしで自分で取れて、新規アカウントには 20 ドル分の無料クレジットが付きます。これは **トークン従量制の Meta Model API** です — Muse Code のサブスクリプションとは別物で、あちらは Meta 自身の CLI 経由でしか動かないため、ここのキーには使えません。',
 
   // ── Preferences → VRChat & Audio ─────────────────────────────────────────
   'settings.audio.heading': 'VRChat・音声の出力先',
@@ -2674,6 +2684,10 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.bytedance.ph': '例: seed-2-0-pro-260328（または ep-… のエンドポイント ID）',
   'model.bytedance.help':
     'BytePlus ModelArk の `ark.ap-southeast.bytepluses.com/api/v3` が提供します（キーは設定で）。ModelArk はモデルを **バージョン付きのモデル ID** で呼び出します（表示名では動きません）。既知の ID を上に候補として挙げています — そこから選ぶか、より新しいスナップショットや自分の `ep-…` エンドポイント ID を貼り付けてください。Seed 2.0 は画像入力にネイティブ対応しています（「目」ブリッジは不要）。推論は内蔵で、思考モードの指定は送られません。',
+
+  'model.meta.label': 'Meta（Muse Spark）モデル',
+  'model.meta.help':
+    'Meta Model API の `api.meta.ai/v1` が提供します（キーは設定で）。3世代すべて画像入力にネイティブ対応しているので「目」ブリッジは不要で、文脈は 100 万トークンです。\n**音声と動画はこのファミリーには届きません**。そう表示されます: 動画はエラーで拒否され、音声はもっと悪く、エンドポイントは受け取って長さに応じて課金するのに、モデルは単純な純音でも「音声が添付されていない」と答えます。「耳」「監視者」を有効にすれば、代わりに書き起こし・説明に置き換わり、そちらは実際に動きます。\n**このファミリーは推論を切れません** — API が「切る」指定を拒否します。そのため思考モードの切り替えは深さの選択になります: ON は深く、OFF はモデルが受け付ける最も浅い設定です。短いやり取りでは OFF に意味があります。推論トークンは **出力側の単価** で課金されるためで、短い質問1つで、深いときは約 7,600 トークン、浅いときは約 23 トークンでした。推論の **本文** はこのプロバイダーからどんな形でも返ってきません。だからメタ表示が「思考あり」と出ていても思考パネルは空のままです — これはプロバイダーが隠しているのであって、NEXUS が捨てているのではありません。\n**Contributor の行**: 入力が 12.5 分の1 になり、その代わりに **Meta があなたの入力と返答の両方を学習に使います**。レート制限もかなり低くなります（毎分 60 リクエスト・1日あたり約 25 万トークン程度。標準の行は毎分 3,000）。ここでは層がモデル ID の一部なのでアカウント設定ではなく、選んだそのやり取りにだけ適用されます。\nプロンプトキャッシュは自動で効きます: NEXUS が各リクエストに会話 ID を付けるので、繰り返される文脈は 100 万トークンあたり 1.25 ドルではなく 0.15 ドルになります。',
 
   'model.glm.providerLabel': 'GLM のプロバイダー',
   'model.glm.label': 'GLM モデル',

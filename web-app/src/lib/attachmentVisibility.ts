@@ -175,6 +175,33 @@ export function wireCarriesMedia(kind: MediaKind, ctx: DeliveryContext): boolean
     return false;
   }
   if (family.includes('local')) return localWireCarries(kind);
+  // Meta (Muse Spark) is on the OpenAI-compatible path, where the default
+  // below would claim all three modalities. Images are real — all three
+  // generations named the colour of a generated PNG. The other two are not,
+  // and audio is the nastier of the pair because it does NOT fail loudly:
+  //
+  //   • audio — the endpoint ACCEPTS an `input_audio` part, returns 200, and
+  //     BILLS for it proportionally to duration (measured 2026-10-05:
+  //     prompt_tokens +6 / +27 / +102 / +377 for 0.25 / 2 / 8 / 30 seconds —
+  //     a straight line at ~12.6 tokens per second, which is an
+  //     interpretation-free check that the bytes were encoded, not dropped at
+  //     the edge). The model nevertheless cannot perceive them: asked the same
+  //     question about 3 s of digital silence and 3 s of a 440 Hz sine, with
+  //     reasoning at 'medium' and finish_reason 'stop', it answered "I cannot
+  //     hear any attached audio" to BOTH — identical answers for inputs a
+  //     hearing model distinguishes immediately. So: paid for, not delivered.
+  //     Returning true here would print "this arrives" over a silent drop the
+  //     user is charged for, which is the exact shape this module exists to
+  //     prevent. False sends it through the ears bridge instead, which works.
+  //     (This was nearly shipped the other way round: the model's own "NO
+  //     AUDIO" report alone looked like proof of a drop, and the duration
+  //     slope showed the bytes really were being encoded and charged. Both
+  //     halves were needed to describe it correctly.)
+  //   • video — a `video_url` part is rejected outright (400 "The request
+  //     contains invalid parameters"), so this one at least fails loudly; it
+  //     is false so NEXUS says so up front instead of surfacing a provider
+  //     error. Meta serves video on other products, not on this endpoint.
+  if (family.includes('meta')) return kind === 'image';
   return true;
 }
 

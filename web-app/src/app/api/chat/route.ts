@@ -3149,6 +3149,7 @@ async function runModelSelectorPreflight(args: {
   const isOpenAI    = fam.includes('openai') || fam.includes('chatgpt');
   const isMimo      = fam.includes('mimo');
   const isBytedance = fam.includes('bytedance');
+  const isMeta      = fam.includes('meta');
   const isDashScope = isQwen || isDeepSeek;
   // DeepSeek direct vs via DashScope (only deepseek-v3.2 lives on DashScope).
   const useDeepSeekDirect = isDeepSeek && !!specificModel && specificModel !== 'deepseek-v3.2';
@@ -3169,6 +3170,7 @@ async function runModelSelectorPreflight(args: {
     : isOpenAI    ? 'https://api.openai.com/v1/chat/completions'
     : isMimo      ? 'https://api.xiaomimimo.com/v1/chat/completions'
     : isBytedance ? 'https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions'
+    : isMeta      ? 'https://api.meta.ai/v1/chat/completions'
     : isLocal     ? `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`
     : null;
   if (!url) return null;
@@ -3183,6 +3185,7 @@ async function runModelSelectorPreflight(args: {
     : isOpenAI    ? keys.openai
     : isMimo      ? keys.mimo
     : isBytedance ? keys.bytedance
+    : isMeta      ? keys.meta
     : null; // Local has no auth
   if (!isLocal && !apiKey) return null;
 
@@ -3227,6 +3230,19 @@ async function runModelSelectorPreflight(args: {
   else if (isGLM || (isKimi && !selKimiK3) || useDeepSeekDirect) extra.thinking = { type: 'disabled' };
   if (selKimiK3) extra.reasoning_effort = 'max';
   if (isCohere) extra.reasoning_effort = 'none';
+  // Meta (Muse Spark) MUST get an explicit 'minimal' here, and this is not a
+  // latency preference — without it the selector returns nothing at all.
+  // Measured 2026-10-05 against api.meta.ai: reasoning cannot be switched off
+  // (`reasoning_effort: 'none'` 400s with "Supported values: [minimal, low,
+  // medium, high, xhigh, max]", and the Anthropic-surface equivalent
+  // `thinking: {type:'disabled'}` 400s through the same code path), so the model
+  // always spends output tokens thinking BEFORE it emits anything. This selector
+  // caps max_tokens at 512; at effort 'low' a trivial prompt burned all 64 of a
+  // 64-token budget on reasoning and came back `content: null,
+  // finish_reason: 'length'`. At 'minimal' the same prompt spent 23 reasoning
+  // tokens and answered. Same exception family as glm-5.3 and kimi-k3 above:
+  // the toggle maps onto depth, never onto silence.
+  if (isMeta) extra.reasoning_effort = 'minimal';
   // OpenAI GPT-5 family: DO NOT set `reasoning_effort` here. This selector always
   // sends a forced `select_model` function tool, and gpt-5.x on
   // /v1/chat/completions 400s when `reasoning_effort` is combined with function
@@ -3249,6 +3265,7 @@ async function runModelSelectorPreflight(args: {
     // V2.6 replaced the V2.5 series; v2.5-pro/v2.5 are deprecated 2026-10-21.
     isMimo     ? 'mimo-v2.6-pro' :
     isBytedance ? 'seed-2-0-pro-260328' :
+    isMeta     ? 'muse-spark-1.3' :
                  'local-model'
   ));
   // api.deepseek.com serves a tiny, frequently-renamed catalog; retired Flash
@@ -3290,7 +3307,21 @@ async function runModelSelectorPreflight(args: {
         },
       },
     }],
-    tool_choice: { type: 'function', function: { name: 'select_model' } },
+    // Meta is the one provider here that cannot be forced. api.meta.ai accepts
+    // ONLY `tool_choice: "auto"` and 400s on everything else — measured
+    // 2026-10-05, all three other forms rejected with the same message
+    // ("only \"auto\" is supported for tool_choice. \"none\", \"required\", and
+    // named function choices are not currently supported"). Forcing it here is
+    // what every other family needs, so the field is dropped for Meta only
+    // rather than dropped for everyone.
+    //
+    // Omitting it is safe for this model rather than merely tolerable: with the
+    // field absent and the same enum tool attached, it called select_model 6/6
+    // with a valid index, where the forced form was 0/2 (both HTTP 400 — i.e.
+    // auto-select would have been dead on arrival for this family). The text
+    // fallback above (pull the last integer out of the reply) still backs it up
+    // if a future version answers in prose instead.
+    ...(isMeta ? {} : { tool_choice: { type: 'function', function: { name: 'select_model' } } }),
     stream: false,
   };
   // LM Studio's max_tokens uses -1 to mean "unlimited" — but we explicitly
@@ -4555,6 +4586,37 @@ export async function POST(req: Request) {
     // api/v3). Reasoning is built into the Seed family; no documented on/off
     // thinking parameter is sent (like MiniMax / MiMo) to avoid a 400.
     const isBytedance = aiName.toLowerCase().includes('bytedance');
+    // Meta's Muse Spark family on the Meta Model API (api.meta.ai/v1), reached
+    // over its OpenAI-compatible surface with a Bearer key.
+    //
+    // WHY the OpenAI surface and not the Anthropic one — Meta ships BOTH, and
+    // Kimi/MiMo were deliberately moved to the Anthropic adapter above, so this
+    // is a decision that needs its measurement written down (2026-10-05):
+    //   • Tool calls: the reason Kimi was moved does NOT reproduce here.
+    //     OpenAI surface 7/7 and 6/7 (the one miss was finish_reason 'length' on
+    //     a deliberately tiny 400-token budget, not a malformed call), Anthropic
+    //     surface 7/7. No reliability gap to buy.
+    //   • Reasoning depth: only the OpenAI surface accepts `reasoning_effort`.
+    //     The Anthropic surface rejects it ("unknown parameter") and offers only
+    //     `thinking.budget_tokens`, which it floors at 1024 — i.e. there is no
+    //     way to ask that surface for shallow thinking, which the selector and
+    //     any short turn need.
+    //   • Thinking text: NEITHER surface returns readable reasoning. The OpenAI
+    //     one reports a `reasoning_tokens` count only; the Anthropic one returns
+    //     `redacted_thinking` blocks whose `data` is an opaque 5.5 KB blob. So
+    //     the Anthropic surface buys no visible thought either — see the
+    //     modelThinkingFlag note below.
+    //   • Prompt caching: this looked like the Anthropic surface's one real
+    //     advantage and it was wrong. First measurement said the OpenAI surface
+    //     never caches (cached_tokens 0 on three identical calls) while
+    //     `cache_control` on the Anthropic surface worked (3614 input → 45, with
+    //     cache_read 3569). The missing piece was a parameter, not a capability:
+    //     with `prompt_cache_key` the OpenAI surface caches too. Isolated with a
+    //     control — two FRESH unique ~5.8k-token prefixes in one session, the
+    //     only difference being the parameter: without it [0, 0, 0], with it
+    //     [0, 5105, 5105]. That key is sent below; cached input is $0.15 against
+    //     $1.25, so it is worth 88% of the input bill on long conversations.
+    const isMeta      = aiName.toLowerCase().includes('meta');
     // Anything routed through DashScope shares the same base URL + Bearer key.
     const isDashScope = isQwen || isDeepSeek;
 
@@ -4583,6 +4645,14 @@ export async function POST(req: Request) {
       isMinimax      ? true :
       isMimo         ? true :
       isBytedance    ? true :
+      // Muse Spark cannot be silenced (see isMeta above: 'none' is not an
+      // accepted reasoning_effort on any of its surfaces), so the toggle set to
+      // OFF still runs at 'minimal' and still spends reasoning tokens. Report
+      // that as thinking ON — same rule as Fable/Opus-5.5/glm-5.3/Grok. Note
+      // this flag is about WHETHER it reasoned, not about whether you can read
+      // it: the reasoning text is never returned by this provider in either
+      // dialect, so there is nothing for the thinking panel to show.
+      isMeta         ? true :
       // Grok is split: the suffix-selected ids (4.20 / 4.1-fast / code-fast)
       // carry "reasoning" in the name, while grok-4.3/4.5/4.6/4.7 always
       // reason and follow the shared toggle through `reasoning_effort` (OFF
@@ -4948,7 +5018,7 @@ export async function POST(req: Request) {
     // user-configured tool instruction. Workspace file discovery is on-demand
     // only — the AI calls Glob when it needs to see what files exist.
     let enhancedSystemPrompt = systemPrompt;
-    if (toolUseEnabled && (isClaude || isGemini || isLocal || isQwen || isDeepSeek || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance)) {
+    if (toolUseEnabled && (isClaude || isGemini || isLocal || isQwen || isDeepSeek || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance || isMeta)) {
       // File listing removed: the AI discovers workspace contents on demand via
       // Glob (the only supported listing tool). Injecting the full list every
       // turn wasted context tokens and violated the on-demand tool model.
@@ -7596,7 +7666,7 @@ export async function POST(req: Request) {
         betrayalSend,
       });
     }
-    else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
+    else if (isLocal || isDashScope || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance || isMeta) {
       // ----- OpenAI-compatible: LM Studio (Local), DashScope (Qwen / DeepSeek
       //       V3.2), DeepSeek's first-party API, or Z.AI (GLM family) -----
       // All speak the same /chat/completions JSON protocol; only the full URL,
@@ -7673,6 +7743,11 @@ export async function POST(req: Request) {
           error: `ByteDance (Seed) requires the BytePlus API key in Preferences.`,
         }, { status: 400 });
       }
+      if (isMeta && !keys.meta) {
+        return NextResponse.json({
+          error: `Meta (Muse Spark) requires the Meta Model API key in Preferences (from the Meta Developer Console).`,
+        }, { status: 400 });
+      }
 
       // Full URL of the chat-completions endpoint. We build it once instead
       // of "base + /v1/chat/completions" because each provider has a slightly
@@ -7700,7 +7775,9 @@ export async function POST(req: Request) {
                         ? 'https://api.xiaomimimo.com/v1/chat/completions'
                         : isBytedance
                           ? 'https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions'
-                          : `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`;
+                          : isMeta
+                            ? 'https://api.meta.ai/v1/chat/completions'
+                            : `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`;
       const authHeaders: Record<string, string> = useDeepSeekDirect
         ? { Authorization: `Bearer ${keys.deepseek}` }
         : isDashScope
@@ -7721,7 +7798,12 @@ export async function POST(req: Request) {
                         ? { Authorization: `Bearer ${keys.mimo}` }
                         : isBytedance
                           ? { Authorization: `Bearer ${keys.bytedance}` }
-                          : {};
+                          // Measured 2026-10-05: api.meta.ai takes the key as a
+                          // Bearer token and nothing else — `x-api-key` with the
+                          // same key returns 401 invalid_api_key.
+                          : isMeta
+                            ? { Authorization: `Bearer ${keys.meta}` }
+                            : {};
       let localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
         isGrok     ? 'grok-4.7' :
@@ -7733,6 +7815,7 @@ export async function POST(req: Request) {
         isOpenAI   ? 'gpt-5.6-terra' :
         isMimo     ? 'mimo-v2.6-pro' :
         isBytedance ? 'seed-2-0-pro-260328' :
+        isMeta     ? 'muse-spark-1.3' :
                      'local-model'
       ));
       // DeepSeek's direct API (api.deepseek.com) serves only 'deepseek-flash'
@@ -7815,7 +7898,7 @@ export async function POST(req: Request) {
       // all reject any single `data:` URI larger than 20 MiB with a 400.
       // Catch it here and return a clear error naming the offending file(s)
       // instead of letting the user see the cryptic upstream message.
-      if (isDashScope || useDeepSeekDirect || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance) {
+      if (isDashScope || useDeepSeekDirect || isGLM || isGrok || isKimi || isCohere || isMinimax || isOpenAI || isMimo || isBytedance || isMeta) {
         const DATA_URI_MAX = 20 * 1024 * 1024; // 20 MiB hard limit
         const tooBig: string[] = [];
         for (const m of processedMessages) {
@@ -8418,7 +8501,15 @@ export async function POST(req: Request) {
           top_p: effectiveLocalTopP,
           ...(seedEnabled ? { seed: seedValue } : {}),
         };
-        if (typeof modelParams.topK === 'number') requestBody.top_k = modelParams.topK;
+        // `top_k` is a non-standard extension, and Meta's API rejects unknown
+        // parameters outright instead of ignoring them: measured 2026-10-05,
+        // `top_k: 40` returns 400 "unknown parameter `top_k`". Every turn would
+        // fail for anyone who has Top-K set in the model panel, so the field is
+        // simply never put on Meta's wire. (temperature, top_p, seed,
+        // presence_penalty, frequency_penalty and stream_options.include_usage
+        // were all measured accepted, including temperature at the Creativity
+        // Control maximum of 2.0, so nothing else needs stripping here.)
+        if (typeof modelParams.topK === 'number' && !isMeta) requestBody.top_k = modelParams.topK;
         // OpenAI GPT-5 reasoning models reject any non-default `temperature` /
         // `top_p` / `top_k` (only the model default is allowed) and 400 if they
         // are present. Strip the sampling knobs entirely — Creativity Control's
@@ -8607,6 +8698,40 @@ export async function POST(req: Request) {
         // toggle to the two valid values.
         if (isCohere) {
           requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'none';
+        }
+        // Meta (Muse Spark). Two fields, both measured 2026-10-05 against
+        // api.meta.ai — see the long isMeta note where the family is detected.
+        if (isMeta) {
+          // Depth, not on/off. The accepted vocabulary came from the API's own
+          // 400 ("Supported values: [minimal, low, medium, high, xhigh, max]"),
+          // and 'none' is NOT in it — this model cannot be silenced. So the
+          // shared toggle maps onto the two ends, same as glm-5.3 / Grok:
+          // ON → 'high', OFF → 'minimal' (the shallowest value it will accept).
+          //
+          // OFF genuinely matters here, and not only for latency. Reasoning
+          // tokens bill at the OUTPUT rate ($4.25/1M): a 700-word essay with no
+          // effort set spent 7,641 reasoning tokens against 1,045 of answer and
+          // took 82 s, while 'minimal' answers a short prompt in ~1.5 s for ~23.
+          // 'xhigh' and 'max' are never sent — the same reasoning that keeps
+          // Grok off 'xhigh' applies, and nothing here measured them as better.
+          requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'minimal';
+          // Prompt caching on this surface is OPT-IN per request and silent when
+          // absent: with no `prompt_cache_key` an identical 5.8k-token prefix
+          // reported cached_tokens [0, 0, 0] across three calls; with one it
+          // reported [0, 5105, 5105]. Cached input is $0.15 against $1.25, so on
+          // a long conversation this field is most of the input bill.
+          //
+          // The value only has to be STABLE for a stable prefix — it is a
+          // routing hint, and a wrong guess costs a miss, never an error. The
+          // conversation id is exactly that: NEXUS rebuilds the same system
+          // prompt + history prefix for the same conversation every turn. It is
+          // an opaque local uuid, so this leaks no content and no identity.
+          // Falls back to the being folder when a conversation has no id yet
+          // (first turn of an unsaved chat); if even that is missing the field
+          // is omitted rather than sent as a constant that every conversation in
+          // the install would collide on.
+          const cacheKeySeed = String(convoId || folderName || '').trim();
+          if (cacheKeySeed) requestBody.prompt_cache_key = `nexus:${cacheKeySeed}`;
         }
         // OpenAI GPT-5 family uses the standard `reasoning_effort` field. Map the
         // shared Thinking-Mode toggle to high (on) / minimal (off).
@@ -8859,6 +8984,7 @@ export async function POST(req: Request) {
         : isMinimax ? 'minimax'
         : isMimo ? 'mimo'
         : isBytedance ? 'bytedance'
+        : isMeta ? 'meta'
         : isQwen ? 'qwen'
         : isLocal ? 'local'
         : 'oai';
