@@ -6,6 +6,7 @@ import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
+import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 
 // ── Title <-> index helpers (client-side mirror of the lib) ─────────────────
@@ -123,11 +124,16 @@ async function countTokens(text: string, model: string): Promise<number> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, model }),
     });
-    if (!r.ok) return Math.ceil(text.length / 4);
+    // `length / 4` was the fallback here. It measured 0.377x against the
+    // exact counter on this house's content (2026-10-05), and this is the
+    // number the soul's size is read off — a soul that counts 48,640 would
+    // have shown ~18,000, which is then used to compute how much headroom a
+    // conversation has. Share the calibrated estimate instead.
+    if (!r.ok) return estimateTokensForModel(text, model);
     const d = await r.json();
     return d.tokens || 0;
   } catch {
-    return Math.ceil(text.length / 4);
+    return estimateTokensForModel(text, model);
   }
 }
 

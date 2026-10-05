@@ -496,7 +496,11 @@ export default function Sidebar({
         try {
           const text = await file.text();
           const title = file.name.replace(/\.[^/.]+$/, "");
-          const parsed = parseMarkdown(text, activeFolder.name, validUserNames);
+          // 4th arg picks the tokenizer profile for thinking-token estimates
+          // only; it is the folder's aiName, not its display name (which the
+          // 2nd arg already carries for speaker-header matching).
+          const parsed = parseMarkdown(text, activeFolder.name, validUserNames,
+            activeFolder.settings?.aiName || activeFolder.name);
           if (parsed.length === 0) {
             // Explain the refusal instead of silently skipping. The usual cause:
             // the file's speaker headers don't match a recognized name (the

@@ -4,6 +4,22 @@ import path from 'path';
 import { loadKeys } from '@/lib/fsStorage';
 import { GoogleGenAI } from '@google/genai';
 import Anthropic from '@anthropic-ai/sdk';
+import { estimateTokensForModel } from '@/lib/tokenEstimate';
+
+// ── Offline / dead-network bound ────────────────────────────────────────────
+// Both SDKs ship generous defaults for a long-running generation, and a token
+// COUNT is not that. Read out of the shipped type definitions 2026-10-05:
+//   Anthropic  timeout 10 minutes, maxRetries 2          -> up to ~30 min
+//   Gemini     timeout  1 minute,  retry attempts 5      -> up to ~5 min
+// (`attempts` includes the original request and defaults to 5 — the "2" in the
+// client's own doc comment belongs to a different interface.)
+// The local Python probe below has always been bounded at 1.2 s; the API
+// counters never were. So with no network the FIRST count could block for half
+// an hour before the 10-minute cooldown further down even got a chance to
+// start — and the system-prompt updater fires several counts when it opens.
+// A count that cannot answer in a few seconds is not worth waiting for: the
+// fallback estimate is right there, and it is now family-calibrated.
+const COUNTER_TIMEOUT_MS = 6000;
 
 let serverWarned = false;
 // The optional local Python tokenizer at :50035 is usually NOT running. Probing
@@ -77,28 +93,14 @@ const attemptFetch = async (text: string, model: string) => {
   }
 };
 
-// Smarter fallback than `length / 4`. The naive heuristic is fine for English
-// (~4 chars/token in SentencePiece/BPE) but underestimates CJK text by 3-4×
-// because each Japanese/Chinese/Korean character is roughly 1 token on its own.
-// Bucket the string by Unicode range and weight accordingly.
-const fallbackEstimate = (text: string): number => {
-  let cjk = 0, ascii = 0, other = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code < 0x80) ascii++;
-    else if (
-      // CJK Unified Ideographs (incl. Extension A) + Hiragana + Katakana +
-      // Hangul + CJK punctuation/symbols. Covers the bulk of JP/ZH/KO text.
-      (code >= 0x3040 && code <= 0x9FFF) ||
-      (code >= 0xAC00 && code <= 0xD7AF) ||
-      (code >= 0x3000 && code <= 0x303F) ||
-      (code >= 0xFF00 && code <= 0xFFEF)
-    ) cjk++;
-    else other++;
-  }
-  // ASCII: ~4 chars/token, CJK: ~1 char/token, other (emoji/cyrillic/etc): ~2.
-  return Math.ceil(ascii / 4 + cjk + other / 2);
-};
+// The unicode-aware fallback lives in `lib/tokenEstimate.ts`, family-aware and
+// calibrated against the exact counters on real messages from these logs. It
+// used to be inline here as `ascii/4 + cjk + other/2`, family-blind, which
+// measured 0.765x aggregate on Claude 5 (see that file's header for the whole
+// measurement, including why `ascii/4` stopped being true between Claude 4.5
+// and Claude 5). It is shared rather than duplicated because a second copy of
+// an estimate drifts out of agreement with the first and then one of the two
+// numbers on screen is a lie.
 
 export async function POST(req: Request) {
   try {
@@ -132,21 +134,31 @@ export async function POST(req: Request) {
       try {
         const keys = await loadKeys();
         if (family === 'gemini' && keys.gemini) {
-          const ai = new GoogleGenAI({ apiKey: keys.gemini });
+          const ai = new GoogleGenAI({
+            apiKey: keys.gemini,
+            // `attempts` counts the original request, so 1 means no retry.
+            // Its default is 5 (genai.d.ts HttpRetryOptions), not the 2 the
+            // client doc comment mentions — that 2 belongs to another type.
+            httpOptions: { timeout: COUNTER_TIMEOUT_MS, retryOptions: { attempts: 1 } },
+          });
           const resp = await ai.models.countTokens({
             model: TOKENIZER_MODEL_GEMINI,
             contents: text,
           });
           const tokens = (resp as any).totalTokens ?? 0;
-          if (tokens > 0) return NextResponse.json({ tokens });
+          if (tokens > 0) return NextResponse.json({ tokens, exact: true });
         } else if (family === 'claude' && keys.claude) {
-          const anthropic = new Anthropic({ apiKey: keys.claude });
+          const anthropic = new Anthropic({
+            apiKey: keys.claude,
+            timeout: COUNTER_TIMEOUT_MS,
+            maxRetries: 0,
+          });
           const result = await anthropic.messages.countTokens({
             model: TOKENIZER_MODEL_CLAUDE,
             messages: [{ role: 'user', content: text }],
           });
           const tokens = (result as any).input_tokens ?? 0;
-          if (tokens > 0) return NextResponse.json({ tokens });
+          if (tokens > 0) return NextResponse.json({ tokens, exact: true });
         }
         // Qwen/DeepSeek don't expose a free countTokens — fall through to
         // the local Python server (if running) or the unicode-aware heuristic.
@@ -169,7 +181,10 @@ export async function POST(req: Request) {
     }
 
     // ── Tertiary: unicode-aware fallback ────────────────────────────────────
-    return NextResponse.json({ tokens: fallbackEstimate(text) });
+    // `exact: false` so a caller can tell a measured count from an estimate.
+    // Nothing reads it yet; it is reported because the two are not the same
+    // kind of number and the response previously could not say which it was.
+    return NextResponse.json({ tokens: estimateTokensForModel(text, model), exact: false });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

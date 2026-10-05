@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { estimateTokensForModel } from './tokenEstimate';
 
 function escapeRegExp(string: string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -60,7 +61,16 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
   return md.trim() + '\n';
 }
 
-export function parseMarkdown(markdown: string, customAiName?: string, validUserNames: string[] = []) {
+/**
+ * `tokenModel` is the folder's `aiName` ("Claude", "Gemini", …) and is used
+ * ONLY to pick a tokenizer profile for the thinking-token estimate. It is
+ * separate from `customAiName`, which is the folder NAME used to recognise
+ * speaker headers — for a folder called "Cairn" those two differ, and feeding
+ * the folder name to the estimator would silently select the wrong profile.
+ * Message `tokens` stay 0 here on purpose: the caller recounts them against
+ * the exact counter, which this pure function cannot reach.
+ */
+export function parseMarkdown(markdown: string, customAiName?: string, validUserNames: string[] = [], tokenModel?: string) {
   // Split on CRLF or LF so a "[Name]:\r" header from a Windows-edited file still
   // matches the header regex (a stray trailing \r otherwise breaks recognition).
   const lines = markdown.split(/\r?\n/);
@@ -184,7 +194,7 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       ...(parsedTimestamp !== null ? { timestamp: parsedTimestamp } : {}),
       tokens: 0,
       ...(parsedThought
-        ? { thoughtProcess: parsedThought, thinkingTokens: Math.ceil(parsedThought.length / 4) }
+        ? { thoughtProcess: parsedThought, thinkingTokens: estimateTokensForModel(parsedThought, tokenModel) }
         : {}),
     });
   };

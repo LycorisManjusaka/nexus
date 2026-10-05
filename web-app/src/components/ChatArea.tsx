@@ -39,6 +39,7 @@ import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
 import { describeProviderError } from '@/lib/providerErrors';
 import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireCarriesMedia, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
+import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
@@ -1598,9 +1599,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // baked to 0 whenever a message was produced/saved with the toggle off, so
   // relying on it made toggling the setting on afterward add nothing. Prefer
   // the live text; fall back to the cached count only when no text is present.
+  // The count is an estimate either way (no provider reports thinking tokens
+  // per saved block), but `length / 4` measured 0.377x on this house's text —
+  // thinking traces are the same mixed Japanese/English as the messages, so
+  // they were under-reported by the same factor, in the one number the
+  // context bar adds on top of the conversation.
   const msgThinkingTokens = (m: any): number => {
     if (typeof m.thoughtProcess === 'string' && m.thoughtProcess)
-      return Math.ceil(m.thoughtProcess.length / 4);
+      return estimateTokensForModel(m.thoughtProcess, localAiName);
     return m.thinkingTokens || 0;
   };
 
@@ -1670,7 +1676,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     });
     setTotalTokens(total + systemTokens + attachmentInstructionTokens);
     setConversationTokens(convoTotal);
-  }, [messages, saveThinkingToLog, systemTokens, attachmentInstructionTokens, loading, deliveryCtx, lastUserMsgIndex]);
+    // `localAiName` is listed explicitly even though `deliveryCtx` already
+    // changes identity with it: `msgThinkingTokens` now picks a tokenizer
+    // profile from it, so the dependency is real and should not rest on
+    // another value happening to carry it.
+  }, [messages, saveThinkingToLog, systemTokens, attachmentInstructionTokens, loading, deliveryCtx, lastUserMsgIndex, localAiName]);
 
   // ── Auto-hide older attachments during an audio session ───────────────────
   // A long VRChat session accumulates screenshots; every one of them is re-sent
@@ -2730,8 +2740,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // when the partner stops the turn mid-stream.
       finalizeMessage = () => {
         const finalText = currentText;
-        const fallbackTokens = Math.ceil((finalText || '').length / 4);
-        const thinkingTokens = currentThought ? Math.ceil(currentThought.length / 4) : 0;
+        // Both were `length / 4` (0.377x measured on this house's text). This
+        // is the stored per-message count for a turn whose usage never
+        // arrived — a stopped or aborted stream — so an under-count here is
+        // written to disk and then summed forever by the conversation-log cap.
+        const fallbackTokens = estimateTokensForModel(finalText || '', localAiName);
+        const thinkingTokens = currentThought ? estimateTokensForModel(currentThought, localAiName) : 0;
         setMessages(prev => prev.map(m =>
           m.id === msgId
             ? {
@@ -6218,8 +6232,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // field at all otherwise (same rule as parseMarkdown: never burn
             // the import moment in as if it were the message's own time).
             ...(m.timestamp ? { timestamp: m.timestamp } : {}),
-            tokens: Math.ceil((m.content || '').length / 4),
-            textTokens: Math.ceil((m.content || '').length / 4),
+            // Was `length / 4`, which measured 0.377x against the exact
+            // counter on this house's content (2026-10-05) — Japanese is
+            // roughly 1 token per character, so a quarter of the characters
+            // is off by a factor of four. `estimateTokensForModel` is the
+            // calibrated fallback; this path has no counter to call because
+            // it commits a whole imported transcript at once.
+            tokens: estimateTokensForModel(m.content || '', localAiName),
+            textTokens: estimateTokensForModel(m.content || '', localAiName),
             attachments: [],
             ...(m.thoughtProcess ? { thoughtProcess: m.thoughtProcess } : {}),
           }));
