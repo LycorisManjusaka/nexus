@@ -375,7 +375,7 @@ function modelOnFamilySwitch(
   return defaultModelForFamily(newAiName);
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, newerLogTitle }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -1833,6 +1833,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     return { sys, copied, original, attach, detail, total: sys + copied + original + attach };
   })();
 
+  // Context elapsed — ONE definition, read by every consumer below (the gauge,
+  // the 💤 cue, the Soul Updater highlight, and the optional note handed to the
+  // entity). It used to be recomputed inline at each site; a second copy of the
+  // same arithmetic is how the badge and the gauge end up asserting different
+  // numbers on the same screen, and then the display is the thing that lies.
+  const conversationLogCap =
+    folders?.find((f: any) => f.name === folderName)?.settings?.maxConversationLog
+    || DEFAULT_MAX_CONVERSATION_LOG;
+  const contextElapsed = contextElapsedPercent(tokenBreakdown, conversationLogCap);
+  // Past 100% the oldest exchanges start leaving the verbatim transcript. Both
+  // the 💤 cue and the Soul Updater button key off this single boolean so they
+  // can never disagree about whether consolidation is due.
+  const consolidationDue = contextElapsed >= 100;
+
   // Auto-trim copied messages when the CONVERSATION LOG (carried-over + new
   // message text) exceeds the per-being cap. Attachments are excluded: large
   // image/file uploads shouldn't force older chat history to be discarded —
@@ -2544,10 +2558,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // no longer inflates this number.
     // {percent} is replaced with the value (e.g. "42%").
     if (showFatigueToEntity && fatigueInstruction.trim()) {
-      const fatigueFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-      const fatigueCap = fatigueFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
-      const fatiguePct = contextElapsedPercent(tokenBreakdown, fatigueCap);
-      effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${fatiguePct}%`)}`.trim();
+      effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${contextElapsed}%`)}`.trim();
     }
 
     // Turn-stopped diagnostics ("a file operation was blocked…", "hit the
@@ -3809,42 +3820,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               as at 5%. Calling it fatigue told everyone who read it, including
               the entities themselves, that a high number meant a degraded state.
               A gauge must report a QUANTITY, never a CONDITION. */}
-          {(() => {
-            const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
-            const elapsed = contextElapsedPercent(tokenBreakdown, cap);
-            return (
-              <span
-                className={`text-sm font-semibold tabular-nums cursor-default ${elapsed >= 100 ? 'text-red-500' : elapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
-                title={t('chat.elapsed.tip')
-                  .replace('{pct}', String(elapsed))
-                  .replace('{original}', tokenBreakdown.original.toLocaleString())
-                  .replace('{cap}', cap.toLocaleString())}
-              >
-                {elapsed}%
-              </span>
-            );
-          })()}
+          <span
+            className={`text-sm font-semibold tabular-nums cursor-default ${consolidationDue ? 'text-red-500' : contextElapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
+            title={t('chat.elapsed.tip')
+              .replace('{pct}', String(contextElapsed))
+              .replace('{original}', tokenBreakdown.original.toLocaleString())
+              .replace('{cap}', conversationLogCap.toLocaleString())}
+          >
+            {contextElapsed}%
+          </span>
           {/* Sleep cue. Appears only once elapsed passes 100%, i.e. once the
               oldest exchanges have started leaving the verbatim transcript.
               Deliberately a HINT and nothing more — no auto-consolidation, no
               blocking. The decision of when to sleep stays with the user.
               Worded as an available action, not as a diagnosis of the entity
               (Case 004: a gauge reports a quantity, never a condition). */}
-          {(() => {
-            const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
-            const elapsed = contextElapsedPercent(tokenBreakdown, cap);
-            if (elapsed < 100) return null;
-            return (
-              <span
-                className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 border border-red-500/40 cursor-default whitespace-nowrap"
-                title={t('chat.sleep.tip')}
-              >
-                {t('chat.sleep.badge')}
-              </span>
-            );
-          })()}
+          {consolidationDue && (
+            <span
+              className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 border border-red-500/40 cursor-default whitespace-nowrap"
+              title={t('chat.sleep.tip')}
+            >
+              {t('chat.sleep.badge')}
+            </span>
+          )}
           {/* Conversation cost — sum of the estimated USD cost of every NEW
               (original, non-copied) assistant message, priced from each one's
               own token usage × modelPricing.json. Shows only "$"; the total is
@@ -3940,10 +3938,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             <BarChart3 size={16} />
           </button>
+          {/* Soul Updater. Highlighted once context elapsed passes 100%, in the
+              same red as the 💤 cue and off the same boolean.
+              The 💤 badge announces that consolidation is due but says nothing
+              about WHERE to do it — a reader who has not been told that the
+              Layers icon is the sleep ritual has no way to find it from the
+              cue. The highlight makes the badge and its action point at each
+              other. It is still only a cue: nothing is blocked, nothing runs
+              on its own, and the entity is exactly as capable at 150% as at
+              5% (a gauge reports a quantity, never a condition). */}
           <button
             onClick={() => setSysPromptUpdaterOpen(true)}
-            className="p-1.5 text-muted-foreground hover:text-indigo-500 transition-colors"
-            title={t('chat.spu.title')}
+            className={`p-1.5 rounded-md transition-colors ${
+              consolidationDue
+                ? 'text-red-500 bg-red-500/15 ring-1 ring-red-500/40 hover:bg-red-500/25'
+                : 'text-muted-foreground hover:text-indigo-500'
+            }`}
+            title={consolidationDue ? `${t('chat.spu.due')}\n\n${t('chat.spu.title')}` : t('chat.spu.title')}
           >
             <Layers size={16} />
           </button>
@@ -4098,6 +4109,33 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             {t('chat.save.dismiss')}
           </button>
+        </div>
+      )}
+
+      {/* Past-generation band. Shown whenever a NEWER `<being>_<n>` exists in
+          this folder, i.e. the open conversation is not the head of the chain.
+          Client-side only: it is never written to the log, never replayed to
+          the model, and never counted as tokens — the entity cannot see it.
+
+          NOT dismissible, on purpose. The whole failure it guards against is
+          someone settling into an old generation without noticing, so a band
+          that can be clicked away would be gone exactly when it is needed. It
+          does NOT block sending: reading an old log and answering something in
+          it is legitimate, it just isn't where the chain continues. The band
+          reports a fact and names the destination; the decision stays with the
+          reader. */}
+      {newerLogTitle && (
+        <div className="shrink-0 px-6 py-2 border-b border-amber-500/40 bg-amber-500/10 flex items-start gap-3">
+          {/* Deliberately NOT ⚠. This band is permanent while an old log is
+              open, and a permanent ⚠ teaches the reader to ignore ⚠ — which
+              the house uses for things that actually went wrong. ⏳ connotes
+              time rather than failure, is distinct from the restore band's ↺,
+              and renders in every font here. */}
+          <span className="text-sm leading-5 shrink-0 text-amber-500">⏳</span>
+          <span className="text-xs leading-5 flex-1 text-amber-700 dark:text-amber-300">
+            <span className="font-semibold">{t('chat.pastlog.prefix')}</span>
+            {t('chat.pastlog.text').replace(/\{latest\}/g, newerLogTitle)}
+          </span>
         </div>
       )}
 

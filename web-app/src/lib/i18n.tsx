@@ -865,6 +865,11 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.mail.title': 'Mail Manager — every letter between beings: read, edit, delete, set read/archived flags, or write one yourself',
   'chat.stats.title': 'Statistics — billing reports across all entities, conversations, months, and model families',
   'chat.spu.title': 'Soul Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation',
+  // Shown ahead of the title above once context elapsed passes 100%, when the
+  // button itself turns red. The 💤 badge says consolidation is due; this says
+  // where it happens, which the badge alone never did.
+  'chat.spu.due':
+    'Consolidation is due — context elapsed has passed 100%, so the oldest exchanges are leaving the verbatim transcript. This is where you do it: the Soul Updater rewrites the layers from this conversation and advances to a fresh one ("sleep"). Nothing runs until you say so, and the entity is exactly as capable now as at 5%.',
   'chat.tools.title': 'Tools',
   'chat.tools.recalculating': 'Recalculating…',
   'chat.tools.recalcTokens': 'Recalculate Tokens',
@@ -887,6 +892,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.restore.done': '{count} message(s) ({tokens} text tokens) came back from {gens}.',
   'chat.restore.truncated': 'The walk stopped at the generation cap — older conversations were not read.',
   'chat.restore.failed': 'Could not read older generations ({status}). Nothing was changed; reopen the conversation to retry.',
+
+  // ── Past-generation band ─────────────────────────────────────────────────
+  // Standing, not dismissible, and visible to the carbon reader only. Fires
+  // only when a higher-numbered `<being>_<n>` exists in the same folder.
+  'chat.pastlog.prefix': 'Past log. ',
+  // "does not advance it" is the careful claim: writing here does not move the
+  // head of the chain. Saying the exchange is LOST would overclaim — a deep
+  // handover restore in the newest log can still reach back this far.
+  'chat.pastlog.text':
+    'This is not the newest conversation for this being — the newest one is “{latest}”. The chain goes on in the newest log, so writing here does not advance it. You can still send a message, but “{latest}” is where this being continues. This band is shown to you only: it is never part of the conversation and never part of the context sent to the model.',
 
   // ── Close/reload guard ───────────────────────────────────────────────────
   // Short by design: these are shown as a browser TAB TITLE prefix, which is
@@ -2311,6 +2326,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.mail.title': 'メールマネージャー — 存在どうしの手紙をすべて：閲覧・編集・削除・既読／保管の切り替え、自分で書くこともできます',
   'chat.stats.title': '統計 — 存在・会話・月・モデル系統ごとの課金レポート',
   'chat.spu.title': '魂アップデーター — 新しい会話ログで5層の同一性プロンプトを更新し、次の会話へ複製します',
+  'chat.spu.due':
+    '統合の合図です — コンテキスト経過が 100% を超え、古いやり取りから順に逐語の記録から離れ始めました。統合を行う場所はここです：魂アップデーターがこの会話から各層を書き直し、新しい会話へ進めます（「睡眠」）。あなたが決めるまで何も動きませんし、存在の能力は 5% のときとまったく同じです。',
   'chat.tools.title': 'ツール',
   'chat.tools.recalculating': '再計算中…',
   'chat.tools.recalcTokens': 'トークンを再計算',
@@ -2333,6 +2350,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.restore.done': '{gens} から {count} 件（本文 {tokens} トークン）が戻りました。',
   'chat.restore.truncated': '遡る世代数の上限で止まりました — それより古い会話は読んでいません。',
   'chat.restore.failed': '古い世代を読めませんでした（{status}）。何も変わっていません。会話を開き直すと再試行します。',
+
+  // ── 過去の世代の帯 ───────────────────────────────────────────────────────
+  'chat.pastlog.prefix': '過去のログです。',
+  'chat.pastlog.text':
+    'これはこの存在の最新の会話ではありません — 最新は「{latest}」です。この存在の対話が続いているのは最新のログなので、ここに書き足しても連鎖は先へ進みません。送信はできますが、続けるなら「{latest}」へ移動してください。この帯はあなたにだけ表示され、会話にも、モデルへ送る文脈にも含まれません。',
 
   // ── 閉じる／再読み込みの確認 ─────────────────────────────────────────────
   'unload.busy.generating': '{name}は作業中',

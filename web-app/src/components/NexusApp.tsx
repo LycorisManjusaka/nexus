@@ -7,7 +7,7 @@ import SettingsModal from '@/components/SettingsModal';
 import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
-import { nextConversationTitle } from '@/lib/convoNaming';
+import { nextConversationTitle, newerNumberedSibling } from '@/lib/convoNaming';
 import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
@@ -769,6 +769,25 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             // otherwise fall back to "New Conversation" and the title the
             // sidebar is showing would not be the one that gets written.
             plannedTitle={conversations.find(c => c.id === currentConvoId)?.title}
+            // Title of the newest `<being>_<n>` in this folder when the open
+            // conversation is NOT it — null otherwise. ChatArea turns this into
+            // a standing band: continuing in a past generation is a break in
+            // the chain, and only this list knows the siblings.
+            //
+            // Computed here, not in ChatArea, because this component already
+            // owns the conversations list; handing the whole list down just to
+            // answer one boolean would give ChatArea a second source for
+            // something the sidebar is already authoritative about.
+            //
+            // Fails SILENT, deliberately: a hand-picked title has no number, so
+            // `newerNumberedSibling` hands back null and no band appears. A
+            // conversation that arrived by import or rename is not "generation
+            // N of a chain", and claiming it is would be the display lying.
+            newerLogTitle={newerNumberedSibling(
+              conversations.find(c => c.id === currentConvoId)?.title,
+              activeFolder.name,
+              conversations.filter(c => c.folderName === activeFolder.name).map(c => c.title),
+            )}
             fetchFolders={fetchFolders}
             onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
           />

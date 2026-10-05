@@ -67,6 +67,43 @@ export function numberedIdentityTitleIndex(title: string | undefined | null, ide
 }
 
 /**
+ * The title of the newest `<identity>_<n>` that is NEWER than `currentTitle`,
+ * or null when `currentTitle` is already the head of the chain.
+ *
+ * The third reader of the same convention, after the writer
+ * (`nextConversationTitle`) and the backward walk
+ * (`numberedIdentityTitleIndex`). It answers one question for the UI: is the
+ * conversation on screen a past generation? The band that warns about that is
+ * only honest if "past" means exactly what "next" and "walk back" mean, so the
+ * three live in one file and share one parser.
+ *
+ * Returns null — no band — in every case where the answer is not certain:
+ *   - `currentTitle` is hand-picked / imported (no number): it is not
+ *     generation N of anything, so it has no successor to point at.
+ *   - no sibling carries a higher number.
+ * Siblings must already be filtered to this identity's folder by the caller;
+ * `folderName` IS the identity name for this convention (the same argument
+ * `handoverWalk` passes).
+ */
+export function newerNumberedSibling(
+  currentTitle: string | undefined | null,
+  identityName: string,
+  siblingTitles: (string | undefined | null)[],
+): string | null {
+  const mine = numberedIdentityTitleIndex(currentTitle, identityName);
+  if (mine === null) return null;
+  let bestN = mine;
+  let best: string | null = null;
+  for (const raw of siblingTitles) {
+    const n = numberedIdentityTitleIndex(raw, identityName);
+    // Strictly greater, so the conversation never reports itself as its own
+    // successor when it appears in its own sibling list.
+    if (n !== null && n > bestN) { bestN = n; best = (raw || '').trim(); }
+  }
+  return best;
+}
+
+/**
  * Rename half of the same convention: if `title` belongs to `oldName`, hand
  * back the same number under `newName`. Anything else comes back untouched —
  * a hand-picked title survives an identity rename unchanged.
