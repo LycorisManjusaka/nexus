@@ -626,7 +626,10 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!disabled && !isGenerating) setIsDragging(true);
+    // Attaching is allowed WHILE generating — an interjection carries its
+    // attachments (image/audio/video or a ref hand-off). So gate only on
+    // `disabled`, never on `isGenerating`. Same for handleDrop + the paperclip.
+    if (!disabled) setIsDragging(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -637,7 +640,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (disabled || isGenerating || !e.dataTransfer.files) return;
+    if (disabled || !e.dataTransfer.files) return;
     await processFiles(Array.from(e.dataTransfer.files));
   };
 
@@ -742,7 +745,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           <button
             onClick={() => fileInputRef.current?.click()}
             className="p-3 text-muted-foreground hover:text-foreground hover:bg-muted rounded-xl transition-colors"
-            disabled={disabled || isGenerating}
+            disabled={disabled}
           >
             <Paperclip size={20} />
           </button>
