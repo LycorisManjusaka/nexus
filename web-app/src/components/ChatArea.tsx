@@ -2164,7 +2164,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // and never appended to the conversation log. (The old dedicated interject
     // input box is gone — sending normally while they work IS the interjection.)
     if (injectTurnId) {
-      await sendInterjection(text);
+      await sendInterjection(text, attachments);
       return;
     }
 
@@ -2462,15 +2462,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Send a mid-turn interjection to the running turn. Fire-and-forget POST to
   // /api/chat/inject; the backend queues it and the tool loop folds it in at
   // its next model-call boundary.
-  const sendInterjection = async (text: string) => {
+  const sendInterjection = async (text: string, attachments?: any[]) => {
     const trimmed = text.trim();
-    if (!trimmed || !injectTurnId) return;
+    // Attachments ride along. They are slimmed to what the server needs: the
+    // browser already stored each payload under a content hash at attach time,
+    // so `ref` is the normal case and no bytes are re-uploaded. `dataUrl` is
+    // only present when that upload failed, and the server externalizes it.
+    // `fileObj` (a File handle) is deliberately NOT sent — it does not survive
+    // JSON, and including it would make the body look like it carried a payload
+    // it cannot.
+    const files = (attachments || []).map((a: any) => ({
+      name: a?.name,
+      type: a?.type,
+      size: a?.size,
+      isText: a?.isText === true,
+      ...(a?.ref ? { ref: a.ref } : {}),
+      ...(a?.dataUrl ? { dataUrl: a.dataUrl } : {}),
+      ...(a?.textData ? { textData: a.textData } : {}),
+    }));
+    if ((!trimmed && files.length === 0) || !injectTurnId) return;
     setInterjectStatus(t('chat.interject.sent'));
     try {
       const r = await fetch('/api/chat/inject', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId: injectTurnId, text: trimmed }),
+        body: JSON.stringify({ turnId: injectTurnId, text: trimmed, attachments: files }),
       });
       if (!r.ok) setInterjectStatus(t('chat.interject.queueFailedEnded'));
     } catch {

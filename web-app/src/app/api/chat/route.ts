@@ -182,12 +182,109 @@ function collectConversationAttachmentRefs(messages: any[]): { ref: string; name
   return out;
 }
 
+/**
+ * Everything a drain point needs to deliver ONE interjection, text and media
+ * together — the single place that decides what rides along, what is handed
+ * off, and what the human is told.
+ *
+ * Why a shared helper and not six copies: the six drain points differ only in
+ * the wire shape they can emit (which is why the dialect blocks are built by
+ * the CALLER, from `deliver`). Everything else — resolving bytes, intersecting
+ * wire with model senses, writing the hand-off, registering refs so
+ * read_attachment can find them, phrasing the honest notice — is one rule, and
+ * a rule copied six times is a rule that will disagree with itself.
+ *
+ * Registering refs is the quiet half of this. `read_attachment` resolves
+ * against (a) this turn's ref index and (b) a scan of the being's saved
+ * conversations — and an interjection attachment is in NEITHER, because an
+ * interjection is never appended to the conversation log. So the bytes would
+ * sit in the store, addressable by nothing. Pushing into the per-turn index
+ * (the same array every provider path already passes to runReadAttachment, read
+ * at call time) makes the ref resolvable for the rest of this turn without
+ * touching the log or widening the corpus scan.
+ */
+async function prepareInjectionDelivery(args: {
+  drained: DrainedInjection;
+  /** Kinds THIS dialect can attach inside a running turn (the site is the dialect). */
+  wire: Set<MediaKindNarrow>;
+  /** The model running the turn — whether it can perceive a kind at all. */
+  model: string | undefined;
+  /** I.injectionFraming — how a partner note is introduced. */
+  framing: string | undefined;
+  /** I.injectionAttachmentNote — how a handed-off attachment is introduced. */
+  handoffTemplate: string | undefined;
+  /** True when read_attachment is available, i.e. a ref is actually openable. */
+  refsOpenable: boolean;
+  /** This turn's read_attachment scope. MUTATED: queued refs are registered. */
+  refIndex: { ref: string; name: string; size: number; mimeType: string }[];
+  ja: boolean;
+}): Promise<{
+  /** Framed text to inject, '' when there is nothing to say. */
+  text: string;
+  /** Media whose bytes ride along natively — the caller turns these into blocks. */
+  deliver: LoadedInjectMedia[];
+  /** User-only honesty line, '' when everything arrived. */
+  notice: string;
+  /** Attachment names for the display-only tool/thinking-log event. */
+  logNames: string[];
+}> {
+  const { drained, wire, model, framing, handoffTemplate, refsOpenable, refIndex, ja } = args;
+  const items = drained.media || [];
+  const texts = drained.texts || [];
+  if (texts.length === 0 && items.length === 0) {
+    return { text: '', deliver: [], notice: '', logNames: [] };
+  }
+
+  const { loaded, missing } = await loadInjectedMedia(items);
+  const { deliver, withheld } = splitDeliverable(loaded, injectableKinds(wire, model));
+
+  // Register every ref that resolved, not just the withheld ones: an image that
+  // rode along natively is still worth being able to re-open by ref later in
+  // the same turn (a long turn may push it out of the model's attention).
+  if (refsOpenable) {
+    for (const m of loaded) {
+      if (!refIndex.some((e) => e.ref === m.ref)) {
+        refIndex.push({ ref: m.ref, name: m.name, size: m.size, mimeType: m.mimeType });
+      }
+    }
+  }
+
+  const parts: string[] = [];
+  if (texts.length) parts.push(frameInjection(texts, framing));
+  // The hand-off covers what could not ride along. Missing payloads are NOT
+  // handed off — there is nothing behind the ref to open.
+  if (withheld.length) {
+    const note = handoffNote(withheld, handoffTemplate, refsOpenable);
+    if (note) parts.push(note);
+  }
+  if (missing.length) {
+    parts.push(
+      `<attached_file_not_delivered names="${missing.map((m) => String(m.name || '?').replace(/["<>]/g, '')).join(', ')}" ` +
+      `reason="the stored payload is missing" />`,
+    );
+  }
+
+  const notice = undeliverableSummary(withheld, missing, { ja, handedOff: refsOpenable });
+
+  return {
+    text: parts.join('\n\n'),
+    deliver,
+    notice,
+    logNames: [...deliver, ...withheld, ...missing].map((m) => String(m.name || '?')),
+  };
+}
+
 import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure, LAYER4_HEADING } from '@/lib/layer4';
 import { isBaseBindingOptional, selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
 import { buildLayer4IndexBody, folderUsesSummariesForLayer4 } from '@/lib/layer4Index';
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
-import { drainInjections, drainSystemNotes, pushSystemNote, clearInjections, frameInjection } from '@/lib/injectMessage';
+import { drainInjections, drainSystemNotes, pushSystemNote, clearInjections, frameInjection, type DrainedInjection } from '@/lib/injectMessage';
+import {
+  loadInjectedMedia, injectableKinds, splitDeliverable, handoffNote, undeliverableSummary,
+  anthropicInjectBlocks, geminiInjectParts, openaiInjectParts,
+  type LoadedInjectMedia, type MediaKindNarrow,
+} from '@/lib/injectMedia';
 import { runShellCommand } from '@/lib/shellTool';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
@@ -1796,19 +1893,39 @@ async function streamClaudeViaAgentSDK(args: {
           if (injectTurnId && pausedForRendezvous === 0) {
             const injected = drainInjections(injectTurnId);
             const sysNotes = drainSystemNotes(injectTurnId);
-            if (injected.length || sysNotes.length) {
+            if (injected.texts.length || injected.media.length || sysNotes.length) {
               const parts: string[] = [];
-              if (injected.length) {
+              if (injected.texts.length || injected.media.length) {
                 // Partner interjection — framed as a human note, and surfaced
                 // to the client as a delivered interjection.
-                parts.push(frameInjection(injected, I.injectionFraming));
-                try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+                //
+                // Media CANNOT ride along here, and that is structural, not an
+                // omission: the only channels the SDK gives a running query are
+                // this denial `message` and the PreToolUse hook's
+                // `additionalContext`, and both are typed `string`. There is no
+                // content-block array to put an image into. So the wire set is
+                // empty and every attachment goes out as a hand-off ref, which
+                // the entity can open with read_attachment — the one tool on
+                // this path that CAN return real image bytes mid-turn.
+                const prep = await prepareInjectionDelivery({
+                  drained: injected,
+                  wire: new Set<MediaKindNarrow>(),
+                  model,
+                  framing: I.injectionFraming,
+                  handoffTemplate: I.injectionAttachmentNote,
+                  refsOpenable: hiddenAttachmentsAccessible,
+                  refIndex: conversationAttachmentRefs,
+                  ja: language === 'ja',
+                });
+                if (prep.text) parts.push(prep.text);
+                if (prep.notice) { try { enqueue({ type: 'notice', content: prep.notice }); } catch {} }
+                try { enqueue({ type: 'injection_delivered', count: injected.texts.length + injected.media.length }); } catch {}
                 // Mirror into the tool/thinking log as a display-only event so
                 // the interjection shows in-order at the exact loop boundary it
                 // was folded in (its POSITION is the point). Same kind:'event'
                 // shape as automatic compaction; never sent to any model
                 // (slimHistory is an allowlist that omits toolCalls).
-                try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected } } }); } catch {}
+                try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected.texts, files: prep.logNames } } }); } catch {}
               }
               if (sysNotes.length) {
                 // System note (e.g. compaction) — plain infrastructure fact,
@@ -1885,13 +2002,26 @@ async function streamClaudeViaAgentSDK(args: {
             if (injectTurnId && pausedForRendezvous === 0) {
               const injected = drainInjections(injectTurnId);
               const sysNotes = drainSystemNotes(injectTurnId);
-              if (injected.length || sysNotes.length) {
+              if (injected.texts.length || injected.media.length || sysNotes.length) {
                 const parts: string[] = [];
-                if (injected.length) {
-                  parts.push(frameInjection(injected, I.injectionFraming));
-                  try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+                if (injected.texts.length || injected.media.length) {
+                  // Same string-only channel as canUseTool — `additionalContext`
+                  // is typed string, so media is handed off by ref, not attached.
+                  const prep = await prepareInjectionDelivery({
+                    drained: injected,
+                    wire: new Set<MediaKindNarrow>(),
+                    model,
+                    framing: I.injectionFraming,
+                    handoffTemplate: I.injectionAttachmentNote,
+                    refsOpenable: hiddenAttachmentsAccessible,
+                    refIndex: conversationAttachmentRefs,
+                    ja: language === 'ja',
+                  });
+                  if (prep.text) parts.push(prep.text);
+                  if (prep.notice) { try { enqueue({ type: 'notice', content: prep.notice }); } catch {} }
+                  try { enqueue({ type: 'injection_delivered', count: injected.texts.length + injected.media.length }); } catch {}
                   // display-only tool/thinking-log event (see canUseTool above)
-                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected } } }); } catch {}
+                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected.texts, files: prep.logNames } } }); } catch {}
                 }
                 if (sysNotes.length) parts.push(sysNotes.join('\n'));
                 return {
@@ -3928,11 +4058,30 @@ async function streamViaAnthropicCompat(args: {
             if (actLabel) enqueue({ type: 'tool_activity', tool: null });
           }
           const injected = drainInjections(injectTurnId);
-          if (injected.length) {
-            toolResultBlocks.push({ type: 'text', text: frameInjection(injected, I.injectionFraming) });
-            enqueue({ type: 'injection_delivered', count: injected.length });
+          if (injected.texts.length || injected.media.length) {
+            // Anthropic-shaped wire: `image` is in the published spec, and MiMo
+            // additionally takes a `video` block (same source envelope, type
+            // renamed). Audio is deliberately absent — it is absent from
+            // wireCarriesMedia() for this family too, and these two must agree
+            // or the UI would promise delivery for bytes this site drops.
+            const wire = new Set<MediaKindNarrow>(['image']);
+            if (provider === 'mimo') wire.add('video');
+            const prep = await prepareInjectionDelivery({
+              drained: injected,
+              wire,
+              model,
+              framing: I.injectionFraming,
+              handoffTemplate: I.injectionAttachmentNote,
+              refsOpenable: hiddenAttachmentsAccessible,
+              refIndex: conversationAttachmentRefs,
+              ja: language === 'ja',
+            });
+            if (prep.text) toolResultBlocks.push({ type: 'text', text: prep.text });
+            toolResultBlocks.push(...anthropicInjectBlocks(prep.deliver));
+            if (prep.notice) enqueue({ type: 'notice', content: prep.notice });
+            enqueue({ type: 'injection_delivered', count: injected.texts.length + injected.media.length });
             // display-only tool/thinking-log event (see OAuth path above)
-            try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected } } }); } catch {}
+            try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected.texts, files: prep.logNames } } }); } catch {}
           }
           currentMessages.push({ role: 'user', content: toolResultBlocks });
         }
@@ -6279,11 +6428,26 @@ export async function POST(req: Request) {
               // tools ran, append it as a text block on the same user turn that
               // carries the tool results, so the model sees it on its next step.
               const injectedClaude = drainInjections(injectTurnId);
-              if (injectedClaude.length) {
-                toolResultBlocks.push({ type: 'text', text: frameInjection(injectedClaude, I.injectionFraming) });
-                enqueue({ type: 'injection_delivered', count: injectedClaude.length });
+              if (injectedClaude.texts.length || injectedClaude.media.length) {
+                // Anthropic's own spec: `image` and nothing else. Audio and
+                // video are handed off by ref instead of silently filtered,
+                // which is what this path used to do to them.
+                const prepClaude = await prepareInjectionDelivery({
+                  drained: injectedClaude,
+                  wire: new Set<MediaKindNarrow>(['image']),
+                  model: claudeModel,
+                  framing: I.injectionFraming,
+                  handoffTemplate: I.injectionAttachmentNote,
+                  refsOpenable: hiddenAttachmentsAccessible,
+                  refIndex: conversationAttachmentRefs,
+                  ja: language === 'ja',
+                });
+                if (prepClaude.text) toolResultBlocks.push({ type: 'text', text: prepClaude.text });
+                toolResultBlocks.push(...anthropicInjectBlocks(prepClaude.deliver));
+                if (prepClaude.notice) enqueue({ type: 'notice', content: prepClaude.notice });
+                enqueue({ type: 'injection_delivered', count: injectedClaude.texts.length + injectedClaude.media.length });
                 // display-only tool/thinking-log event (see OAuth path above)
-                try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedClaude } } }); } catch {}
+                try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedClaude.texts, files: prepClaude.logNames } } }); } catch {}
               }
               currentMessages.push({ role: 'user', content: toolResultBlocks });
               // …and around the loop again. Next iteration the model sees the
@@ -7370,13 +7534,27 @@ export async function POST(req: Request) {
                 // Mid-turn partner interjection: append as a text part on the
                 // same user turn that carries the function responses.
                 const injectedGemini = drainInjections(injectTurnId);
-                const injectParts = injectedGemini.length
-                  ? [{ text: frameInjection(injectedGemini, I.injectionFraming) }]
-                  : [];
-                if (injectedGemini.length) {
-                  enqueue({ type: 'injection_delivered', count: injectedGemini.length });
+                const injectParts: any[] = [];
+                if (injectedGemini.texts.length || injectedGemini.media.length) {
+                  // Gemini's `inlineData` part carries any mime — image, audio
+                  // and video alike — which is why this is the one path where
+                  // an interjection can hand over a voice clip as real audio.
+                  const prepG = await prepareInjectionDelivery({
+                    drained: injectedGemini,
+                    wire: new Set<MediaKindNarrow>(['image', 'audio', 'video']),
+                    model: geminiModelId,
+                    framing: I.injectionFraming,
+                    handoffTemplate: I.injectionAttachmentNote,
+                    refsOpenable: hiddenAttachmentsAccessible,
+                    refIndex: conversationAttachmentRefs,
+                    ja: language === 'ja',
+                  });
+                  if (prepG.text) injectParts.push({ text: prepG.text });
+                  injectParts.push(...geminiInjectParts(prepG.deliver));
+                  if (prepG.notice) enqueue({ type: 'notice', content: prepG.notice });
+                  enqueue({ type: 'injection_delivered', count: injectedGemini.texts.length + injectedGemini.media.length });
                   // display-only tool/thinking-log event (see OAuth path above)
-                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedGemini } } }); } catch {}
+                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedGemini.texts, files: prepG.logNames } } }); } catch {}
                 }
                 contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts, ...injectParts] }];
                 continue; // loop — model will continue with the function responses visible
@@ -9593,11 +9771,45 @@ export async function POST(req: Request) {
                 // Mid-turn partner interjection: append as a user message after
                 // the tool results, so the model sees it on its next iteration.
                 const injectedOai = drainInjections(injectTurnId);
-                if (injectedOai.length) {
-                  msgs = [...msgs, { role: 'user', content: frameInjection(injectedOai, I.injectionFraming) }];
-                  enqueue({ type: 'injection_delivered', count: injectedOai.length });
+                if (injectedOai.texts.length || injectedOai.media.length) {
+                  // OpenAI-compatible wire: image_url / input_audio / video_url.
+                  // LOCAL (LM Studio) is the exception on two of the three — its
+                  // request validator accepts only text and image_url and 400s
+                  // the WHOLE call otherwise, so sending audio or video there
+                  // would not degrade, it would kill the turn. (The normal send
+                  // path decodes local video into frames; doing that inside a
+                  // tool-loop boundary is a separate job, so mid-turn video to a
+                  // local model is handed off by ref instead of claimed.)
+                  const wireOai = new Set<MediaKindNarrow>(['image']);
+                  if (!isLocal) { wireOai.add('audio'); wireOai.add('video'); }
+                  const prepOai = await prepareInjectionDelivery({
+                    drained: injectedOai,
+                    wire: wireOai,
+                    model: localModel,
+                    framing: I.injectionFraming,
+                    handoffTemplate: I.injectionAttachmentNote,
+                    refsOpenable: hiddenAttachmentsAccessible,
+                    refIndex: conversationAttachmentRefs,
+                    ja: language === 'ja',
+                  });
+                  const oaiParts: any[] = [];
+                  if (prepOai.text) oaiParts.push({ type: 'text', text: prepOai.text });
+                  // `rawBase64Audio`: ByteDance/Ark schema-validates
+                  // input_audio.data as pure base64 and nulls the whole message
+                  // when handed a data: URL — same distinction the normal path makes.
+                  oaiParts.push(...openaiInjectParts(prepOai.deliver, { rawBase64Audio: isBytedance }));
+                  if (oaiParts.length) {
+                    // All-text collapses to a plain string: some OpenAI-compatible
+                    // endpoints are stricter about a single-element text array
+                    // than about a string, and this matches how the base message
+                    // builder above decides the same question.
+                    const allText = oaiParts.every((p: any) => p.type === 'text');
+                    msgs = [...msgs, { role: 'user', content: allText ? oaiParts.map((p: any) => p.text).join('\n') : oaiParts }];
+                  }
+                  if (prepOai.notice) enqueue({ type: 'notice', content: prepOai.notice });
+                  enqueue({ type: 'injection_delivered', count: injectedOai.texts.length + injectedOai.media.length });
                   // display-only tool/thinking-log event (see OAuth path above)
-                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedOai } } }); } catch {}
+                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedOai.texts, files: prepOai.logNames } } }); } catch {}
                 }
 
                 continue; // loop — next iteration sees tool results

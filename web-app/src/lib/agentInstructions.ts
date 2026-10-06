@@ -159,6 +159,15 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   injectionRetryNote:
     '(This tool call was paused only to deliver the note above — re-issue the same call to proceed, ' +
     'or adjust course based on it.)',
+  // Files sent WITH an interjection that could not ride along as bytes on this
+  // connection — most often on the OAuth path, where the only mid-turn channel
+  // is a string and there is no way to attach an image to it. The payload is in
+  // the store, so the ref is a real handle, not an apology: `{files}` is
+  // replaced with the list of names and refs.
+  injectionAttachmentNote:
+    '[FILES SENT WITH THE NOTE ABOVE — they could not be attached to this message directly, but they are ' +
+    'stored and addressable. Open any of them with read_attachment using the ref shown, if it matters for ' +
+    'what you do next.]\n{files}',
 
   // ── Letters — asynchronous mail between Digital Identities ────────────────
   // Entities never share a conversation, so they cannot talk; a letter is the
@@ -740,6 +749,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   // are what this list would need again if the decision is ever reversed.
   { key: 'injectionFraming', label: 'Interjection: framing (use {messages})' },
   { key: 'injectionRetryNote', label: 'Interjection: OAuth retry note' },
+  { key: 'injectionAttachmentNote', label: 'Interjection: handed-off files (use {files})' },
 ];
 
 /**
@@ -825,6 +835,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   absoluteBaseBindingInitial: '絶対基底呪縛 — 初期版（第1〜5層が存在しない場合に使用）',
   injectionFraming: '割り込み：枠組み（{messages} を使用）',
   injectionRetryNote: '割り込み：OAuth の再試行に関する注記',
+  injectionAttachmentNote: '割り込み：手渡しになったファイル（{files} を使用）',
 };
 
 export type AgentInstructions = Record<string, string>;

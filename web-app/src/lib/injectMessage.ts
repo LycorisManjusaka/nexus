@@ -18,7 +18,33 @@
 // Stored on globalThis so Next.js dev hot-reload doesn't orphan a queue
 // mid-turn (same pattern as the AskQuestion rendezvous + saveLog write-locks).
 
-interface Queued { texts: string[]; ts: number }
+/**
+ * One media attachment riding along with an interjection.
+ *
+ * Only the REF is queued, never the bytes. The browser already externalized
+ * every attachment into the content-addressed store at attach time (see
+ * InputArea.processFiles → uploadAttachment), so the payload is on disk before
+ * the interjection is even sent, and holding a second copy of a 20 MB video in
+ * a globalThis map for the length of a turn would be pure waste.
+ *
+ * `kind` is resolved once, at the endpoint, from the mime type — so every drain
+ * point asks the same question of the same answer instead of re-sniffing.
+ */
+export interface InjectedMedia {
+  ref: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: 'image' | 'audio' | 'video';
+}
+
+/** What one drained interjection carries. */
+export interface DrainedInjection {
+  texts: string[];
+  media: InjectedMedia[];
+}
+
+interface Queued { texts: string[]; media: InjectedMedia[]; ts: number }
 const _g = globalThis as any;
 if (!_g.__nx_inject_pending) _g.__nx_inject_pending = new Map<string, Queued>();
 const pending: Map<string, Queued> = _g.__nx_inject_pending;
@@ -50,31 +76,47 @@ function pruneStale() {
   }
 }
 
-/** Queue an interjection for a running turn. Returns false on empty input. */
-export function pushInjection(turnId: string, text: string): boolean {
-  if (!turnId || typeof text !== 'string' || !text.trim()) return false;
+/**
+ * Queue an interjection for a running turn. Returns false on empty input —
+ * which now means "no text AND no media", because an attachment with no
+ * covering sentence is a complete message ("look at this").
+ */
+export function pushInjection(turnId: string, text: string, media?: InjectedMedia[]): boolean {
+  if (!turnId) return false;
+  const body = typeof text === 'string' ? text.trim() : '';
+  const files = Array.isArray(media) ? media.filter((m) => m && typeof m.ref === 'string' && m.ref) : [];
+  if (!body && files.length === 0) return false;
   pruneStale();
-  const entry = pending.get(turnId) || { texts: [], ts: Date.now() };
-  entry.texts.push(text.trim());
+  const entry = pending.get(turnId) || { texts: [], media: [], ts: Date.now() };
+  if (body) entry.texts.push(body);
+  if (files.length) entry.media.push(...files);
   entry.ts = Date.now();
   pending.set(turnId, entry);
   return true;
 }
 
-/** Take and remove all queued interjections for a turn (empty array if none). */
-export function drainInjections(turnId: string): string[] {
-  if (!turnId) return [];
+/**
+ * Take and remove everything queued for a turn.
+ *
+ * Returns an OBJECT, not a string array: media has to travel with the text it
+ * was sent alongside, and the two must be drained in one atomic step or a
+ * second drain at the next tool boundary would deliver the image without its
+ * sentence (or vice versa).
+ */
+export function drainInjections(turnId: string): DrainedInjection {
+  const empty: DrainedInjection = { texts: [], media: [] };
+  if (!turnId) return empty;
   const entry = pending.get(turnId);
-  if (!entry || entry.texts.length === 0) return [];
+  if (!entry || (entry.texts.length === 0 && entry.media.length === 0)) return empty;
   pending.delete(turnId);
-  return entry.texts;
+  return { texts: entry.texts, media: entry.media };
 }
 
 /** Queue a system note (infrastructure fact) for a running turn. */
 export function pushSystemNote(turnId: string, text: string): boolean {
   if (!turnId || typeof text !== 'string' || !text.trim()) return false;
   pruneStale();
-  const entry = sysPending.get(turnId) || { texts: [], ts: Date.now() };
+  const entry = sysPending.get(turnId) || { texts: [], media: [], ts: Date.now() };
   entry.texts.push(text.trim());
   entry.ts = Date.now();
   sysPending.set(turnId, entry);
