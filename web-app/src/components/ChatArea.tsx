@@ -6,7 +6,9 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { useDevice } from './DeviceProvider';
 import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
@@ -3604,6 +3606,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   const [toolsOpen, setToolsOpen] = useState(false);
+  // Export used to be two permanent icons (Markdown, JSON) side by side. They
+  // are the same action with a different file format, so they are one button
+  // with a two-item menu now — one toolbar slot instead of two.
+  const [exportOpen, setExportOpen] = useState(false);
+  // Mobile only: the icon row is collapsed by default (it does not fit next to
+  // the status bar on a phone) and this opens it as a second header row.
+  const [mobileToolbarOpen, setMobileToolbarOpen] = useState(false);
+  const { isMobile, setSidebarOpen, cameraSlot } = useDevice();
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
   // JSON export is async now (it re-fetches externalized attachment payloads to
@@ -3761,9 +3771,45 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   return (
     <div className="flex-1 flex flex-col h-full relative bg-background">
       {/* Header */}
-      <div className="h-14 border-b border-border flex items-center justify-between px-6 bg-secondary/30 backdrop-blur-md sticky top-0 z-10 shrink-0">
-        <h2 className="font-semibold text-lg flex items-center gap-2">
-          {title}
+      <div
+        className={
+          // z-30, not z-10. The camera panel in the row below carries
+          // `backdrop-blur-xl`, which makes it create a stacking context —
+          // and once it does, its own `z-10` applies even though it is not
+          // positioned. Two siblings at z-10 are ordered by DOM position, so
+          // the camera won, and every dropdown in this header (export, tools,
+          // SPU) was painted BEHIND it: visible for the ~10px that fit inside
+          // the header's own box, unreadable and unclickable below that.
+          // Raising the header above the content layer fixes all of them at
+          // once. Stays below the mobile drawer (z-50) and its backdrop (z-40)
+          // and below every modal (z-[100] and up), which must cover it.
+          isMobile
+            ? 'border-b border-border flex flex-wrap items-center px-3 pt-1 bg-secondary/30 backdrop-blur-md sticky top-0 z-30 shrink-0'
+            : 'h-14 border-b border-border flex items-center justify-between px-6 bg-secondary/30 backdrop-blur-md sticky top-0 z-30 shrink-0'
+        }
+      >
+        <h2
+          className={
+            isMobile
+              ? 'w-full min-w-0 flex items-center gap-2 font-semibold text-base py-1'
+              : 'font-semibold text-lg flex items-center gap-2'
+          }
+        >
+          {/* Mobile only: summons the conversation drawer. Lives in the header,
+              which is always rendered, so the list can never become
+              unreachable — a floating control could be scrolled away or
+              covered, this cannot. */}
+          {isMobile && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              title={t('layout.openSidebar')}
+              aria-label={t('layout.openSidebar')}
+              className="shrink-0 -ml-1.5 p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <Menu size={20} />
+            </button>
+          )}
+          <span className={isMobile ? 'truncate min-w-0' : ''}>{title}</span>
           {/* Copies /c/<folder>/<convoId> — the UUID form, which survives a
               rename. Title-based links would rot the moment this is renamed. */}
           <button
@@ -3780,8 +3826,57 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             {copiedLink === 'convo' ? <Check size={14} /> : <Link2 size={14} />}
           </button>
+          {/* Mobile only: the two numbers worth seeing without asking. The full
+              status bar collapses with the toolbar (it is too tall for a phone
+              header), but collapsing it must not take the elapsed reading with
+              it — that is the one signal that changes on its own and decides
+              when to sleep. A gauge reports a QUANTITY, never a condition: the
+              colour here marks how full the log is, nothing about capability. */}
+          {isMobile && (
+            <span
+              className={`shrink-0 ml-auto text-xs font-semibold tabular-nums ${
+                consolidationDue ? 'text-red-500' : contextElapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'
+              }`}
+              title={t('chat.elapsed.tip')
+                .replace('{pct}', String(contextElapsed))
+                .replace('{original}', tokenBreakdown.original.toLocaleString())
+                .replace('{cap}', conversationLogCap.toLocaleString())}
+            >
+              {contextElapsed}%
+            </span>
+          )}
+          {isMobile && consolidationDue && (
+            <span
+              className="shrink-0 text-[10px] font-semibold uppercase tracking-wider px-1 py-0.5 rounded bg-red-500/15 text-red-500 border border-red-500/40 whitespace-nowrap"
+              title={t('chat.sleep.tip')}
+            >
+              {t('chat.sleep.badge')}
+            </span>
+          )}
+          {/* Mobile only: reveals the status bar and the icon row as extra
+              header rows. One control for both — on a phone they are the same
+              question ("show me the chrome"), and two toggles would cost more
+              width than they save. */}
+          {isMobile && (
+            <button
+              onClick={() => setMobileToolbarOpen(v => !v)}
+              title={t('layout.toggleToolbar')}
+              aria-label={t('layout.toggleToolbar')}
+              aria-expanded={mobileToolbarOpen}
+              className={`shrink-0 -mr-1 p-1.5 rounded-md transition-colors ${
+                mobileToolbarOpen
+                  ? 'bg-muted text-foreground'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+            >
+              <MoreHorizontal size={20} />
+            </button>
+          )}
         </h2>
-        <div className="flex items-center gap-4">
+        <div className={isMobile ? 'w-full flex flex-col' : 'flex items-center gap-4'}>
+          {/* The status bar: context gauge, elapsed, sleep cue, cost. Always
+              visible — on mobile as its own row beneath the title. */}
+          <div className={isMobile ? (mobileToolbarOpen ? `w-full flex flex-wrap items-center justify-end gap-2 pb-1` : `hidden`) : `contents`}>
           {(() => {
             // Per-folder conversation-log cap (was global, moved into Folder
             // Settings; retired `maxRecommendedContext` 2026-10-03).
@@ -3927,6 +4022,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               </span>
             );
           })()}
+          </div>
+          {/* The icon row. On mobile it becomes its own full-width header row,
+              collapsed by default — it cannot fit beside the status bar on a
+              phone. On desktop the wrapper is `display:contents`, so it is
+              layout-transparent and the parent gap-4 spacing is unchanged. */}
+          <div className={isMobile ? (mobileToolbarOpen ? `w-full flex flex-wrap items-center gap-1 pb-1` : `hidden`) : `contents`}>
           <button onClick={handleToggleAllAttachments} className={`p-1.5 transition-colors ${hasVisibleAttachments ? 'text-muted-foreground hover:text-red-400' : 'text-red-400 hover:text-muted-foreground'}`} title={hasVisibleAttachments ? t('chat.attach.hideAll') : t('chat.attach.showAll')}>
             {hasVisibleAttachments ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
@@ -4065,17 +4166,48 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           <button onClick={() => setIsPromptModalOpen(true)} className="p-1.5 text-muted-foreground hover:text-indigo-500 transition-colors" title={t('chat.editPrompt.title')}>
             <Settings2 size={16} />
           </button>
-          <button onClick={handleExport} className="p-1.5 text-muted-foreground hover:text-foreground transition-colors" title={t('chat.exportMd.title')}>
-            <Download size={16} />
-          </button>
-          <button
-            onClick={handleExportJson}
-            disabled={isExportingJson}
-            className="p-1.5 text-muted-foreground hover:text-foreground transition-colors text-[10px] font-bold tracking-wider disabled:opacity-50 disabled:cursor-not-allowed"
-            title={t('chat.exportJson.title')}
-          >
-            {isExportingJson ? '…' : 'JSON'}
-          </button>
+          {/* One export control. The format is picked in the menu instead of
+              costing a second permanent icon for what is the same action. */}
+          <div className="relative">
+            <button
+              onClick={() => setExportOpen(v => !v)}
+              disabled={isExportingJson}
+              className="p-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title={t('chat.export.title')}
+              aria-haspopup="menu"
+              aria-expanded={exportOpen}
+            >
+              {isExportingJson ? <span className="text-[10px] font-bold">…</span> : <Download size={16} />}
+            </button>
+            {exportOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
+                <div
+                  role="menu"
+                  className="absolute right-0 mt-1 z-20 min-w-[220px] max-w-[calc(100vw-2rem)] bg-card border border-border rounded-lg shadow-lg overflow-hidden"
+                >
+                  <button
+                    role="menuitem"
+                    onClick={() => { setExportOpen(false); handleExport(); }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground"
+                  >
+                    <Download size={14} />
+                    {t('chat.exportMd.title')}
+                  </button>
+                  <button
+                    role="menuitem"
+                    onClick={() => { setExportOpen(false); handleExportJson(); }}
+                    disabled={isExportingJson}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground border-t border-border disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="text-[10px] font-bold tracking-wider w-[14px] text-center">{'{}'}</span>
+                    {t('chat.exportJson.title')}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+          </div>
         </div>
       </div>
 
@@ -4498,7 +4630,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       </div>
 
       </div>
-      <CameraPanel folderName={folderName} enabled={cameraEnabled} signal={cameraSignal} />
+      {/* Desktop: its own column, right here, exactly as before.
+          Mobile: the same element, portalled into the slot the sidebar
+          registers. A portal rather than lifting state up to NexusApp —
+          cameraSignal is computed in THIS component, so moving the state
+          would move the signal too; moving only the rendered output keeps the
+          playback machine where its inputs are. Renders nothing at all until
+          the slot exists (and CameraPanel itself renders nothing when the
+          camera is off), so no empty strip ever appears. */}
+      {isMobile
+        ? (cameraSlot
+            ? createPortal(
+                <CameraPanel folderName={folderName} enabled={cameraEnabled} signal={cameraSignal} variant="inline" />,
+                cameraSlot,
+              )
+            : null)
+        : <CameraPanel folderName={folderName} enabled={cameraEnabled} signal={cameraSignal} />}
       </div>
 
       {/* System Prompt Modal */}

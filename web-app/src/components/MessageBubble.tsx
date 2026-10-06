@@ -11,12 +11,14 @@ import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
 import { useT } from '@/lib/i18n';
+import { useDevice } from './DeviceProvider';
 import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 import { attachmentTokens, attachmentKind, undeliverableReason } from '@/lib/attachmentVisibility';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
+  const { isMobile } = useDevice();
   const isUser = msg.role === 'user';
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(msg.content);
@@ -1591,8 +1593,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             `no-hover:` on the bar is not decoration — see globals.css. In a
             remote session the browser reports no hover-capable pointer, and a
             hover-revealed bar is then unreachable at all. */}
+        {/* Vertical on mobile. This bar sits OUTSIDE the bubble
+            (`left-full` / `right-full`), and on a phone the bubble takes
+            almost the whole width — a horizontal row of six buttons simply
+            runs off the screen. Stacked, the bar is one button wide and fits
+            in the margin that is actually there. */}
         {!isEditing && (
-          <div className={`absolute bottom-2 transition-opacity flex gap-1 ${
+          <div className={`absolute bottom-2 transition-opacity flex gap-1 ${isMobile ? 'flex-col' : ''} ${
             globalSettings?.alwaysShowHoverControls === true
               ? 'opacity-100'
               : 'opacity-0 group-hover/bubble:opacity-100 no-hover:opacity-100'

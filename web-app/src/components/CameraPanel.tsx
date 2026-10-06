@@ -29,6 +29,15 @@ interface CameraPanelProps {
   folderName: string;
   enabled: boolean;
   signal: CameraSignal;
+  /**
+   * Where this is being rendered, which is the only thing that differs.
+   * 'column' — its own full-height column to the right of the conversation
+   *            (desktop; the original and the default).
+   * 'inline' — inside the conversation drawer on mobile: full panel width,
+   *            height following the asset rather than the viewport.
+   * The playback machine above is identical either way.
+   */
+  variant?: 'column' | 'inline';
 }
 
 function randomPick<T>(arr: T[], exclude?: T): T {
@@ -40,7 +49,7 @@ function randomPick<T>(arr: T[], exclude?: T): T {
 
 const EMPTY_MANIFEST: CameraManifest = { states: {}, transitions: {} };
 
-export default function CameraPanel({ folderName, enabled, signal }: CameraPanelProps) {
+export default function CameraPanel({ folderName, enabled, signal, variant = 'column' }: CameraPanelProps) {
   const t = useT();
   const [manifest, setManifest] = useState<CameraManifest | null>(null);
   const [currentFile, setCurrentFile] = useState<string | null>(null);
@@ -220,8 +229,18 @@ export default function CameraPanel({ folderName, enabled, signal }: CameraPanel
     ? `/api/camera-file?folder=${encodeURIComponent(folderName)}&file=${encodeURIComponent(currentFile)}`
     : null;
 
+  const inline = variant === 'inline';
+  const shellClass = inline
+    ? 'w-full flex flex-col items-center justify-center bg-secondary/30 border-t border-border overflow-hidden'
+    : 'w-64 sm:w-72 h-full flex flex-col items-center justify-center bg-secondary/30 backdrop-blur-xl border-l border-border shadow-2xl z-10 shrink-0 overflow-hidden';
+  // Inline: the width is the panel's, the height is whatever the asset needs
+  // (capped by the slot, so a tall portrait cannot swallow the list above it).
+  const mediaClass = inline
+    ? 'w-full h-auto max-h-full object-contain'
+    : 'max-w-full max-h-full object-contain';
+
   return (
-    <aside className="w-64 sm:w-72 h-full flex flex-col items-center justify-center bg-secondary/30 backdrop-blur-xl border-l border-border shadow-2xl z-10 shrink-0 overflow-hidden">
+    <aside className={shellClass}>
       {src ? (
         kind === 'video' ? (
           <video
@@ -232,14 +251,14 @@ export default function CameraPanel({ folderName, enabled, signal }: CameraPanel
             playsInline
             loop={loopCurrent}
             onEnded={handleEnded}
-            className="max-w-full max-h-full object-contain"
+            className={mediaClass}
           />
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
-          <img key={currentFile} src={src} alt="" className="max-w-full max-h-full object-contain" />
+          <img key={currentFile} src={src} alt="" className={mediaClass} />
         )
       ) : (
-        <p className="text-xs text-muted-foreground text-center px-4">{t('camera.empty')}</p>
+        <p className="text-xs text-muted-foreground text-center px-4 py-3">{t('camera.empty')}</p>
       )}
     </aside>
   );

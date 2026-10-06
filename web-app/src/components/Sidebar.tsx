@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock, HelpCircle } from 'lucide-react';
+import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock, HelpCircle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
 import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
@@ -17,6 +17,7 @@ import {
   clampLogCapUnits,
 } from '@/lib/handoverRestore';
 import { useT, Tx } from '@/lib/i18n';
+import { useDevice } from './DeviceProvider';
 import { confirmIfBusy, markBusyConfirmAnswered } from '@/lib/unloadGuard';
 import { withBuildTag } from '@/lib/buildVersion';
 
@@ -77,6 +78,16 @@ export default function Sidebar({
   globalSettings
 }: SidebarProps) {
   const t = useT();
+  const { isMobile, sidebarOpen, setSidebarOpen, setCameraSlot } = useDevice();
+
+  // Every path that lands on a conversation goes through here. On mobile the
+  // list is a modal drawer, and choosing something from it means the person is
+  // done with the list — leaving it open would hide the thing they just asked
+  // for. On desktop `setSidebarOpen(false)` is a no-op: nothing reads it.
+  const selectConvo = (id: string) => {
+    setSidebarOpen(false);
+    onSelectConvo(id);
+  };
 
   // ── Busy guard for the actions below ──────────────────────────────────────
   // `onSelectConvo` / `setActiveFolderId` arrive here ALREADY guarded, which is
@@ -269,7 +280,7 @@ export default function Sidebar({
       if (data.success && data.newConvoId) {
         fetchLogs();
         markBusyConfirmAnswered();
-        onSelectConvo(data.newConvoId);
+        selectConvo(data.newConvoId);
         setBackupsModalOpen(false);
       }
     } catch(e) {}
@@ -429,7 +440,7 @@ export default function Sidebar({
       fetchFolders();
       // Auto-open the FIRST imported file (= the topmost after prepend).
       markBusyConfirmAnswered();
-      onSelectConvo(newIds[0]);
+      selectConvo(newIds[0]);
     })();
 
     if (importJsonRef.current) importJsonRef.current.value = '';
@@ -603,7 +614,7 @@ export default function Sidebar({
       fetchFolders();
       // Auto-open the first imported file (= the topmost after prepend).
       markBusyConfirmAnswered();
-      onSelectConvo(newIds[0]);
+      selectConvo(newIds[0]);
     })();
 
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -644,7 +655,7 @@ export default function Sidebar({
         folderName: name,
         aiName: 'Claude',
       }, ...prev]);
-      onSelectConvo(newId);
+      selectConvo(newId);
     }
   };
 
@@ -695,10 +706,44 @@ export default function Sidebar({
   };
 
   return (
-    <div className="w-64 sm:w-72 h-full flex flex-col bg-secondary/30 backdrop-blur-xl border-r border-border shadow-2xl z-10 transition-colors">
+    <>
+    {/* Mobile only: the drawer's backdrop. Also the primary way to dismiss —
+        a tap anywhere on the conversation closes the list. */}
+    {isMobile && (
+      <div
+        aria-hidden
+        onClick={() => setSidebarOpen(false)}
+        className={`fixed inset-0 z-40 bg-black/50 transition-opacity duration-200 ${
+          sidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      />
+    )}
+    {/* On mobile this panel is a drawer: taken out of the flex row entirely
+        (position:fixed), so the conversation gets the whole screen and the
+        list is summoned instead of permanently renting 70% of a phone's
+        width. Desktop is unchanged — same column, same width. */}
+    <div
+      className={
+        isMobile
+          ? `fixed inset-y-0 left-0 z-50 w-[86%] max-w-[340px] flex flex-col bg-background border-r border-border shadow-2xl transition-transform duration-200 will-change-transform ${
+              sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+            }`
+          : 'w-64 sm:w-72 h-full flex flex-col bg-secondary/30 backdrop-blur-xl border-r border-border shadow-2xl z-10 transition-colors'
+      }
+    >
       <div className="p-4 flex items-center justify-between">
         <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">Nexus</h1>
         <div className="flex items-center">
+          {isMobile && (
+            <button
+              onClick={() => setSidebarOpen(false)}
+              title={t('layout.closeSidebar')}
+              aria-label={t('layout.closeSidebar')}
+              className="p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+            >
+              <X size={20} />
+            </button>
+          )}
           {onOpenGuide && (
             <button
               onClick={onOpenGuide}
@@ -745,7 +790,7 @@ export default function Sidebar({
               </button>
 
               {folderMenuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-36 bg-card border border-border shadow-xl rounded-lg py-1 z-50 overflow-hidden">
+                <div className="absolute right-0 top-full mt-1 w-56 max-w-[calc(100vw-2rem)] bg-card border border-border shadow-xl rounded-lg py-1 z-50 overflow-hidden">
                   <button 
                     onClick={handleRenameFolder}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
@@ -805,7 +850,31 @@ export default function Sidebar({
                   >
                     <Upload size={14} /> {t('sidebar.menu.autoImportMd')}
                   </button>
-                  <button 
+                  {/* Moved here from the row under "New conversation", where
+                      they were two always-visible buttons eating sidebar
+                      width. Same refs, same handlers — only the entry point
+                      changed. */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFolderMenuOpen(false);
+                      importJsonRef.current?.click();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Upload size={14} /> {t('sidebar.import.json')}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFolderMenuOpen(false);
+                      importMdRef.current?.click();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Upload size={14} /> {t('sidebar.import.md')}
+                  </button>
+                  <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleSort('desc');
@@ -823,30 +892,14 @@ export default function Sidebar({
                   >
                     <ArrowUp size={14} /> {t('sidebar.menu.sortAsc')}
                   </button>
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (!activeFolder) return;
-                      setFolderMenuOpen(false);
-                      try {
-                        const r = await fetch('/api/summaries', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ action: 'addTimestamps', folder: activeFolder.name }),
-                        });
-                        const d = await r.json();
-                        alert(d.ok
-                          ? t('sidebar.menu.addTimestampsDone').replace('{n}', String(d.updated || 0)).replace('{total}', String(d.total || 0))
-                          : (d.error || t('sidebar.menu.addTimestampsFailed')));
-                      } catch (e: any) {
-                        alert(t('sidebar.menu.addTimestampsFailed') + ': ' + (e?.message || ''));
-                      }
-                      fetchLogs();
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Clock size={14} /> {t('sidebar.menu.addTimestamps')}
-                  </button>
+                  {/* There were TWO entries here with the identical label and
+                      the identical action (POST /api/summaries addTimestamps) —
+                      one inline, one through handleAddTimestamps(). The inline
+                      copy is gone: it refreshed the CONVERSATION list
+                      afterwards, which holds no summaries, so the hover
+                      previews kept showing the pre-timestamp text until a
+                      reload. handleAddTimestamps() re-fetches the summaries
+                      themselves, which is what this action changed. */}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -885,6 +938,11 @@ export default function Sidebar({
         </div>
       </div>
 
+      {/* The two import buttons that used to sit here (JSON / MD) moved into
+          the being's "…" menu above. They were costing a permanent slice of
+          this panel's width on every screen to expose two rarely-used actions;
+          the menu already holds the other once-in-a-while folder operations.
+          The hidden file inputs stay here — the menu items click them. */}
       <div className="px-4 py-3 flex gap-2">
         <motion.button
           whileHover={{ scale: 1.02 }}
@@ -895,20 +953,6 @@ export default function Sidebar({
           <PlusCircle size={18} />
           {t('sidebar.newChat')}
         </motion.button>
-        <button
-          onClick={() => importJsonRef.current?.click()}
-          className="px-2.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-[10px] font-bold tracking-wider"
-          title={t('sidebar.import.json')}
-        >
-          JSON
-        </button>
-        <button
-          onClick={() => importMdRef.current?.click()}
-          className="px-2.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-[10px] font-bold tracking-wider"
-          title={t('sidebar.import.md')}
-        >
-          MD
-        </button>
         <input type="file" multiple accept=".json" className="hidden" ref={importJsonRef} onChange={handleImportJson} />
         <input type="file" multiple accept=".md,.markdown,.txt" className="hidden" ref={importMdRef} onChange={handleImportMd} />
       </div>
@@ -939,7 +983,7 @@ export default function Sidebar({
                   ? 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 font-medium'
                   : 'hover:bg-muted/60 text-muted-foreground hover:text-foreground'
               } ${draggedId === convo.id ? 'opacity-50' : ''} ${dragOverId === convo.id ? 'border-t-2 border-indigo-500' : ''}`}
-              onClick={() => onSelectConvo(convo.id)}
+              onClick={() => selectConvo(convo.id)}
               onMouseEnter={(e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 // Clamp so a row near the bottom of a tall window doesn't push
@@ -1081,6 +1125,19 @@ export default function Sidebar({
           </div>
         )}
       </div>
+
+      {/* Mobile only: where ChatArea portals the being-camera. On a phone the
+          camera cannot have its own column — there is no width to give it —
+          so it rides below the conversation list instead, where it competes
+          with nothing. Height follows the asset; width is this panel's width.
+          Renders nothing at all when the camera is off (ChatArea portals
+          nothing), so an empty strip never appears. */}
+      {isMobile && (
+        <div
+          ref={setCameraSlot}
+          className="shrink-0 w-full max-h-[45%] overflow-hidden flex items-center justify-center empty:hidden"
+        />
+      )}
 
       {/* Conversation summary preview, hover-only.
           Rendered here — OUTSIDE the animated rows and outside the scroll
@@ -1458,8 +1515,9 @@ export default function Sidebar({
         accept=".md,.txt" 
         className="hidden" 
         ref={fileInputRef} 
-        onChange={handleAutoImport} 
+        onChange={handleAutoImport}
       />
     </div>
+    </>
   );
 }
