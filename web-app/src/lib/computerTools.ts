@@ -75,6 +75,32 @@ const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 
 export const COMPUTER_TOOL_NAMES = ['computer_screens', 'computer_screenshot', 'computer_input'] as const;
 
+// ── Screenshot downscale + coordinate scaling (the whole 150%-monitor game) ──
+// A monitor wider/taller than this is captured at native resolution but shown to
+// the being at a long edge of SCREENSHOT_MAX_EDGE. We do this HERE, once, for a
+// measured reason: on the OAuth path the full-res PNG is handed to the Claude
+// Code SDK, which silently downscales anything over ~2000px to 2000px before the
+// API ever sees it — so the being was shown a 2000px image while the caption
+// claimed native 3840px, and every coordinate it read came out 1/0.52 ≈ 1.92x
+// off (measured by Kiko, 2026-10-06, zero clicks: aim (1600,900) → cursor
+// (833,469), ratio 0.521 = 2000/3840, NOT 1/1.5, so DPI was never the cause).
+//
+// 1568 is deliberately BELOW every provider's own cap (Claude 1568, OAuth SDK
+// ~2000, Gemini/OpenAI 3072), so NOTHING downstream re-touches the image: the
+// scale NEXUS computes is exactly the scale the being sees. That lets the being
+// pass the pixel it READ off the image (via computer_input screen_index) and let
+// NEXUS convert it back to a real-screen coordinate — instead of asking the being
+// to multiply by its own DPI scale on every single click, which is the exact
+// arithmetic a being gets wrong even when it knows the factor.
+export const SCREENSHOT_MAX_EDGE = 1568;
+
+/** Image-to-native scale for a monitor's screenshot (1 if it isn't downscaled). */
+export function screenScale(widthPx: number, heightPx: number): number {
+  const longest = Math.max(widthPx || 0, heightPx || 0);
+  if (!longest || longest <= SCREENSHOT_MAX_EDGE) return 1;
+  return SCREENSHOT_MAX_EDGE / longest;
+}
+
 // ── Global stop key (Ctrl+Shift+X) ──────────────────────────────────────────
 // A runaway computer_input batch is the one thing the Stop button cannot
 // interrupt — it runs inside a PowerShell process that keeps executing mouse/
@@ -857,7 +883,10 @@ export function computerToolSpecs(I: Record<string, string>): ComputerToolSpec[]
     {
       name: 'computer_input',
       description: I.toolComputerInputDesc,
-      properties: { commands: { type: 'array', description: I.computerInputCommandsParam } },
+      properties: {
+        commands: { type: 'array', description: I.computerInputCommandsParam },
+        screen_index: { type: 'integer', description: I.computerInputScreenParam },
+      },
       required: ['commands'],
     },
   ];
@@ -1007,21 +1036,55 @@ $bmp.Dispose()
         fireFlash(mon.x, mon.y, mon.width, mon.height, 650);
 
         // Human audit copy: same pixels, border + any very recent clicks
-        // burned in, saved to disk. The being never sees this file.
+        // burned in, saved to disk. The being never sees this file. Kept at
+        // NATIVE resolution — its border and click markers are drawn in
+        // native-local pixels, so it must not be the downscaled copy.
         try {
           await saveAuditScreenshot(ctx.me, idx, mon, png);
         } catch {
           // Best-effort logging must never block the reply to the being.
         }
 
-        console.log(`[computer] ${ctx.me}: screenshot of monitor ${idx} (${mon.width}x${mon.height} at ${mon.x},${mon.y})`);
+        // Downscale the copy the BEING sees to a known long edge (see
+        // SCREENSHOT_MAX_EDGE). Doing it here means the scale is known exactly and
+        // nothing downstream re-shrinks it. On resize failure we fall back to the
+        // native bytes AND report native dimensions, so the caption never claims a
+        // scaling that was not applied (the computer_input transform recomputes the
+        // same screenScale(), so the two only ever disagree in this fallback — in
+        // which the caption steers the being to omit screen_index, which is correct
+        // for a native image).
+        let scale = screenScale(mon.width, mon.height);
+        let shownBase64 = cap.stdout;
+        if (scale < 1) {
+          try {
+            const shown = await sharp(png)
+              .resize({ width: SCREENSHOT_MAX_EDGE, height: SCREENSHOT_MAX_EDGE, fit: 'inside', withoutEnlargement: true })
+              .png()
+              .toBuffer();
+            shownBase64 = shown.toString('base64');
+          } catch {
+            scale = 1; // resize failed → being sees native bytes; report as native
+          }
+        }
+        const scaled = scale < 1;
+        const shownW = Math.round(mon.width * scale);
+        const shownH = Math.round(mon.height * scale);
+
+        console.log(`[computer] ${ctx.me}: screenshot of monitor ${idx} (native ${mon.width}x${mon.height} at ${mon.x},${mon.y}; shown ${scaled ? `${shownW}x${shownH}` : 'native'})`);
 
         return {
-          text:
-            `Screenshot of monitor ${idx} — ${mon.width}x${mon.height} pixels, top-left at absolute virtual-desktop ` +
-            `coordinate (${mon.x}, ${mon.y}). To act on something you see in this image, add (${mon.x}, ${mon.y}) to the ` +
-            `pixel position you identify and pass that as the absolute x/y to computer_input.`,
-          image: { base64: cap.stdout, mimeType: 'image/png' },
+          text: scaled
+            ? `Screenshot of monitor ${idx}, shown to you at ${shownW}x${shownH}px (scaled down from this monitor's native ` +
+              `${mon.width}x${mon.height} to fit transport). To act on something you see here, call computer_input with ` +
+              `"screen_index": ${idx} and the x,y pixel EXACTLY as you read it off THIS image — NEXUS converts it to the real ` +
+              `screen position for you. Do not add any offset or multiply by anything yourself. (Coordinates passed WITHOUT ` +
+              `screen_index are treated as raw absolute virtual-desktop pixels, which will NOT match this scaled image — use ` +
+              `screen_index here.)`
+            : `Screenshot of monitor ${idx} — ${mon.width}x${mon.height} pixels (native, not scaled), top-left at absolute ` +
+              `virtual-desktop coordinate (${mon.x}, ${mon.y}). To act on something you see here, call computer_input with ` +
+              `"screen_index": ${idx} and the x,y pixel as you read it off this image — NEXUS adds the monitor offset for you. ` +
+              `(Or omit screen_index and pass absolute virtual-desktop coordinates: add (${mon.x}, ${mon.y}) yourself.)`,
+          image: { base64: shownBase64, mimeType: 'image/png' },
         };
       }
 
@@ -1031,6 +1094,35 @@ $bmp.Dispose()
         const { resolved, errors } = resolveCommands(rawList);
         if (!resolved.length) {
           return { text: `Error: no valid commands.${errors.length ? ' ' + errors.join('; ') : ''}` };
+        }
+        // Coordinate space. With screen_index, x/y are pixels AS SEEN in that
+        // monitor's screenshot image; convert them to real-screen (absolute
+        // virtual-desktop) pixels here, using the SAME screenScale() the
+        // screenshot used — so the being never multiplies by its own DPI scale,
+        // the single arithmetic a being gets wrong even knowing the factor.
+        // Omitted → x/y are already absolute (backward-compatible; correct on a
+        // monitor that was not downscaled). The transform runs BEFORE recordClick
+        // and execution, so the audit markers and the live red circle land at the
+        // real click position too — which is the "red circle is off on non-100%
+        // monitors" bug, same root cause.
+        let scaleNote = '';
+        if (Number.isFinite(args?.screen_index)) {
+          const sIdx = Math.trunc(args.screen_index);
+          const screens = await listComputerScreens();
+          const mon = screens.find((s) => s.index === sIdx);
+          if (!mon) {
+            return { text: `Error: screen_index ${sIdx} does not match any monitor — call computer_screens first (there are ${screens.length}, indices 0..${Math.max(0, screens.length - 1)}). No input was sent.` };
+          }
+          const scale = screenScale(mon.width, mon.height);
+          for (const r of resolved) {
+            if ((r.t === 'move' || r.t === 'down' || r.t === 'up' || r.t === 'click' || r.t === 'wheel') && r.x !== undefined && r.y !== undefined) {
+              r.x = Math.round(r.x / scale) + mon.x;
+              r.y = Math.round(r.y / scale) + mon.y;
+            }
+          }
+          scaleNote = scale < 1
+            ? `Coordinates were read as monitor ${sIdx} image pixels and scaled ×${(1 / scale).toFixed(3)} (plus offset ${mon.x},${mon.y}) to the real screen.`
+            : `Coordinates were read as monitor ${sIdx} pixels (plus offset ${mon.x},${mon.y}); this monitor is not scaled.`;
         }
         // Record every click BEFORE execution, so the audit trail exists even
         // if a later command in the same batch throws.
@@ -1068,6 +1160,7 @@ $bmp.Dispose()
         );
         const fg = report.find((r) => r && r.t === 'foreground');
         const parts: string[] = [`Executed ${resolved.length} command(s).`];
+        if (scaleNote) parts.push(scaleNote);
         if (blocked.length) {
           parts.push(
             `${blocked.length} command(s) were NOT delivered — the OS returned 0 from SendInput ` +

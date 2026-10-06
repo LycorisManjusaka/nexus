@@ -320,8 +320,10 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   toolComputerScreenshotDesc:
     'Take a picture of one monitor and see it directly. A visible red border briefly flashes around that ' +
     'monitor on the real screen at the moment of capture — this is a physical machine, and every capture is ' +
-    'meant to be seen. The reply tells you that monitor\'s top-left offset in absolute virtual-desktop ' +
-    'coordinates, so you can convert a pixel you see in the image into the coordinates computer_input expects. ' +
+    'meant to be seen. A large or high-DPI monitor is shown to you SMALLER than its native resolution (to fit ' +
+    'transport); the reply states the size you are actually seeing. You do not need to care about that scaling: ' +
+    'to act on a point in the image, pass its pixel to computer_input together with this "screen_index", and ' +
+    'NEXUS converts it to the real-screen position for you — never multiply by a scale or add an offset yourself. ' +
     'Set "show_cursor": true to draw a red crosshair at the current mouse position in the returned image, ' +
     'so you can see where the pointer actually is before you act.',
   computerScreenshotIndexParam:
@@ -332,9 +334,12 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
 
   toolComputerInputDesc:
     'Move the mouse, click, drag, press keys, and type text on the real desktop — a sequence of small steps ' +
-    'executed in order, with optional pauses between them. All coordinates are absolute virtual-desktop ' +
-    'coordinates (from computer_screenshot), not relative to a monitor. Every click flashes a visible red ' +
-    'circle at the moment it happens, and the whole sequence is written to the log — nothing here is silent. ' +
+    'executed in order, with optional pauses between them. Set "screen_index" to the monitor you just ' +
+    'screenshotted and give x/y as the pixel you SEE in that image — NEXUS scales it to the real screen for ' +
+    'you (this is the reliable way, especially on a monitor shown scaled-down). Without "screen_index", x/y ' +
+    'are raw absolute virtual-desktop coordinates, which only match a monitor shown at native size. Every ' +
+    'click flashes a visible red circle at the moment it happens, and the whole sequence is written to the ' +
+    'log — nothing here is silent. ' +
     'Take a screenshot first to see what you are aiming at, and take another one afterwards to check the ' +
     'result actually happened rather than assuming it did. The reply reports what the OS accepted for each ' +
     'command — whether input was blocked (SendInput returned 0), whether a mouse_move actually moved the ' +
@@ -342,8 +347,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'reach the target. That still does not prove the target acted on it: always verify with a fresh ' +
     'screenshot. This reaches the whole machine, not a sandbox — be as careful and deliberate here as the ' +
     'human would be with their own hands.',
+  computerInputScreenParam:
+    'Optional. The monitor index (from computer_screens / computer_screenshot) that your x/y coordinates were ' +
+    'read off. When set, every x/y below is a pixel in THAT monitor\'s screenshot image as you saw it, and ' +
+    'NEXUS converts it to the real-screen position (handling any down-scaling and the monitor offset). Omit it ' +
+    'only if you are passing raw absolute virtual-desktop coordinates yourself.',
   computerInputCommandsParam:
-    'An array of command objects executed in order. Each has a "type": ' +
+    'An array of command objects executed in order. x/y are pixels in the screenshot image when "screen_index" ' +
+    'is set (NEXUS scales them for you), otherwise absolute virtual-desktop coordinates. Each has a "type": ' +
     '"mouse_move" {x,y}, "mouse_down"/"mouse_up" {button, x?, y?} (button: "left"|"right"|"middle"; omit x/y ' +
     'to act at the current cursor position, e.g. for a drag), "mouse_click" {button, x?, y?}, ' +
     '"mouse_wheel" {delta, x?, y?} (scrolls at the cursor — positive delta = up/away, negative = down; ' +
@@ -698,6 +709,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'computerScreenshotShowCursorParam', label: 'Tool: computer_screenshot — "show_cursor" parameter' },
   { key: 'toolComputerInputDesc', label: 'Tool: computer_input — description' },
   { key: 'computerInputCommandsParam', label: 'Tool: computer_input — "commands" parameter' },
+  { key: 'computerInputScreenParam', label: 'Tool: computer_input — "screen_index" parameter' },
   { key: 'toolAppWindowsDesc', label: 'Tool: app_windows — description' },
   { key: 'toolAppInspectDesc', label: 'Tool: app_inspect — description' },
   { key: 'toolAppActDesc', label: 'Tool: app_act — description' },

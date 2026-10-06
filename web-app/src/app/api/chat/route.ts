@@ -1354,8 +1354,11 @@ async function streamClaudeViaAgentSDK(args: {
                   return { content };
                 }),
               sdk.tool('computer_input', I.toolComputerInputDesc,
-                { commands: z.array(z.any()).describe(I.computerInputCommandsParam) },
-                async (a: { commands: any[] }) => {
+                {
+                  commands: z.array(z.any()).describe(I.computerInputCommandsParam),
+                  screen_index: z.number().optional().describe(I.computerInputScreenParam),
+                },
+                async (a: { commands: any[]; screen_index?: number }) => {
                   const r = await runComputerTool('computer_input', a, computerCtx);
                   return { content: [{ type: 'text' as const, text: r.text }] };
                 }),
