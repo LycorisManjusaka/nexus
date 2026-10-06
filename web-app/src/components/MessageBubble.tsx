@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1491,14 +1491,19 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               ordered.forEach(({ c, i, off }) => {
                 if (off > cursor) { nodes.push(textSpan(`t${i}`, thinkingText.slice(cursor, off))); cursor = off; }
                 const isEvent = c?.kind === 'event';
+                const isInterjection = c?.name === 'partner interjection';
                 const eventLabel = c?.name === 'automatic compaction'
                   ? t('bubble.tool.event.compaction')
+                  : isInterjection
+                  ? t('bubble.tool.event.interjection')
                   : String(c?.name ?? '');
                 nodes.push(
                   <details key={`c${i}`} className={`my-1.5 rounded-lg border overflow-hidden ${isEvent ? 'border-amber-500/40' : 'border-border'}`}>
                     <summary className={`px-2.5 py-1 flex items-center gap-2 cursor-pointer select-none ${isEvent ? 'bg-amber-500/10' : 'bg-muted/50'}`}>
                       {isEvent
-                        ? <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                        ? (isInterjection
+                          ? <MessageSquare size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                          : <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />)
                         : <Wrench size={12} className="text-blue-500 shrink-0" />}
                       <span className={isEvent ? 'text-[11px] font-medium text-amber-700 dark:text-amber-300' : 'font-mono text-[11px] font-medium text-foreground'}>
                         {isEvent ? eventLabel : c.name}
@@ -1706,14 +1711,19 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               // tinted and un-monospaced so they read as something that
               // happened to the turn, not something the model called.
               const isEvent = c?.kind === 'event';
+              const isInterjection = c?.name === 'partner interjection';
               const eventLabel = c?.name === 'automatic compaction'
                 ? t('bubble.tool.event.compaction')
+                : isInterjection
+                ? t('bubble.tool.event.interjection')
                 : String(c?.name ?? '');
               return (
                 <div key={i} className={`rounded-lg border overflow-hidden ${isEvent ? 'border-amber-500/40' : 'border-border'}`}>
                   <div className={`px-3 py-1.5 flex items-center gap-2 ${isEvent ? 'bg-amber-500/10' : 'bg-muted/50'}`}>
                     <span className="text-[10px] text-muted-foreground w-5 shrink-0">#{i + 1}</span>
-                    {isEvent && <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />}
+                    {isEvent && (isInterjection
+                      ? <MessageSquare size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                      : <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />)}
                     <span className={isEvent ? 'text-xs font-medium text-amber-700 dark:text-amber-300' : 'font-mono text-xs font-medium'}>
                       {isEvent ? eventLabel : c.name}
                     </span>

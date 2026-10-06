@@ -422,6 +422,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // Not a tool the entity called — Anthropic's own automatic compaction, listed
   // in place so you can see which two tool calls it happened between.
   'bubble.tool.event.compaction': 'automatic compaction (Anthropic-side)',
+  'bubble.tool.event.interjection': 'partner interjection (delivered mid-turn)',
   'bubble.tool.copyJson': 'Copy the whole report as JSON',
   'bubble.tool.truncated':
     'Arguments truncated for storage — original was {n} characters.',
@@ -1908,6 +1909,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   // どのツール呼び出しとどのツール呼び出しの間で起きたかが分かるよう、
   // 同じ並びの中にそのまま置く。
   'bubble.tool.event.compaction': '自動コンパクション（Anthropic 側）',
+  'bubble.tool.event.interjection': '相棒の割り込み（ターン途中で配達）',
   'bubble.tool.copyJson': 'レポート全体を JSON でコピー',
   'bubble.tool.truncated':
     '保存のため引数を切り詰めました — 元は {n} 文字でした。',

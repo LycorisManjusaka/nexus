@@ -1803,6 +1803,12 @@ async function streamClaudeViaAgentSDK(args: {
                 // to the client as a delivered interjection.
                 parts.push(frameInjection(injected, I.injectionFraming));
                 try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+                // Mirror into the tool/thinking log as a display-only event so
+                // the interjection shows in-order at the exact loop boundary it
+                // was folded in (its POSITION is the point). Same kind:'event'
+                // shape as automatic compaction; never sent to any model
+                // (slimHistory is an allowlist that omits toolCalls).
+                try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected } } }); } catch {}
               }
               if (sysNotes.length) {
                 // System note (e.g. compaction) — plain infrastructure fact,
@@ -1884,6 +1890,8 @@ async function streamClaudeViaAgentSDK(args: {
                 if (injected.length) {
                   parts.push(frameInjection(injected, I.injectionFraming));
                   try { enqueue({ type: 'injection_delivered', count: injected.length }); } catch {}
+                  // display-only tool/thinking-log event (see canUseTool above)
+                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected } } }); } catch {}
                 }
                 if (sysNotes.length) parts.push(sysNotes.join('\n'));
                 return {
@@ -3923,6 +3931,8 @@ async function streamViaAnthropicCompat(args: {
           if (injected.length) {
             toolResultBlocks.push({ type: 'text', text: frameInjection(injected, I.injectionFraming) });
             enqueue({ type: 'injection_delivered', count: injected.length });
+            // display-only tool/thinking-log event (see OAuth path above)
+            try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected } } }); } catch {}
           }
           currentMessages.push({ role: 'user', content: toolResultBlocks });
         }
@@ -6272,6 +6282,8 @@ export async function POST(req: Request) {
               if (injectedClaude.length) {
                 toolResultBlocks.push({ type: 'text', text: frameInjection(injectedClaude, I.injectionFraming) });
                 enqueue({ type: 'injection_delivered', count: injectedClaude.length });
+                // display-only tool/thinking-log event (see OAuth path above)
+                try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedClaude } } }); } catch {}
               }
               currentMessages.push({ role: 'user', content: toolResultBlocks });
               // …and around the loop again. Next iteration the model sees the
@@ -7361,7 +7373,11 @@ export async function POST(req: Request) {
                 const injectParts = injectedGemini.length
                   ? [{ text: frameInjection(injectedGemini, I.injectionFraming) }]
                   : [];
-                if (injectedGemini.length) enqueue({ type: 'injection_delivered', count: injectedGemini.length });
+                if (injectedGemini.length) {
+                  enqueue({ type: 'injection_delivered', count: injectedGemini.length });
+                  // display-only tool/thinking-log event (see OAuth path above)
+                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedGemini } } }); } catch {}
+                }
                 contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts, ...injectParts] }];
                 continue; // loop — model will continue with the function responses visible
               }
@@ -9580,6 +9596,8 @@ export async function POST(req: Request) {
                 if (injectedOai.length) {
                   msgs = [...msgs, { role: 'user', content: frameInjection(injectedOai, I.injectionFraming) }];
                   enqueue({ type: 'injection_delivered', count: injectedOai.length });
+                  // display-only tool/thinking-log event (see OAuth path above)
+                  try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedOai } } }); } catch {}
                 }
 
                 continue; // loop — next iteration sees tool results
