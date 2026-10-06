@@ -18,8 +18,6 @@ import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
-import { messageIdentityKey } from '@/lib/handoverRestore';
-import { collectOlderMessagesByTokens, REFUSAL_PERTURBATION_TOKEN_STEP, MAX_REFUSAL_PERTURBATION_RETRIES } from '@/lib/handoverWalk';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 
 // Payload field for an attachment the AI produced by reading an image from the
@@ -982,12 +980,10 @@ async function streamClaudeViaAgentSDK(args: {
   // still sees its prior reasoning (the one thing server-side resume gave us).
   const lastIdx = processedMessages.indexOf(lastUserMsg);
   const priorMsgs = lastIdx > 0 ? processedMessages.slice(0, lastIdx) : [];
-  // A FUNCTION, not a value: the OAuth refusal-perturbation retry (below)
-  // re-renders the transcript with a few genuine older messages prepended to
-  // reshuffle a deterministic reasoning_extraction refusal. `prefixMsgs` are
-  // those older messages, oldest-first; [] gives the normal transcript.
-  const renderHistory = (prefixMsgs: any[]): string => {
-    const all = prefixMsgs.length ? [...prefixMsgs, ...priorMsgs] : priorMsgs;
+  // Renders the full prior conversation as the transcript the model reads — the
+  // same text every turn, exactly what the user sees.
+  const renderHistory = (): string => {
+    const all = priorMsgs;
     if (all.length === 0) return '';
     // The entity's own name (the character folder = its identity, same value the
     // .md export labels assistant turns with). Used to name ASSISTANT turns
@@ -1033,15 +1029,11 @@ async function streamClaudeViaAgentSDK(args: {
       '\n</conversation_history>'
     );
   };
-  const historyText = renderHistory([]);
+  const historyText = renderHistory();
 
   const readableStream = new ReadableStream({
     async start(controller) {
       const enqueue = (obj: any) => betrayalSend(controller, obj);
-      // Mutable transcript the refusal-perturbation retry (below) re-renders
-      // with extra older messages prepended. Base value is the full prior
-      // conversation; userMsgGen reads THIS, not the const historyText.
-      let activeHistoryText = historyText;
       // Drives the Claude Code SUBPROCESS, not just this SSE stream. Without
       // this, pressing Stop only closed the browser-facing stream — the
       // spawned `claude` child kept running server-side (still burning the
@@ -1115,29 +1107,6 @@ async function streamClaudeViaAgentSDK(args: {
                 ...extra,
                 elapsedSec: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
               },
-            },
-          });
-        } catch {}
-      };
-      // Durable record of a refusal-perturbation retry, written into the TOOL
-      // HISTORY (same `kind:'event'` shape as compaction) — persisted, visible
-      // to the human, NOT replayed to the model (historyText only replays
-      // m.content + thinking, never tool events). Its whole job is to make the
-      // retry COUNT measurable: each attempt is a billed, rate-limited request,
-      // and auto-retry can otherwise raise that count without anyone seeing it.
-      const recordRefusalRetry = (
-        attempt: number,
-        olderMessagesAdded: number,
-        outcome: 'retrying' | 'recovered' | 'gave-up' | 'no-older',
-      ) => {
-        try {
-          enqueue({
-            type: 'tool_call',
-            call: {
-              name: 'refusal perturbation retry',
-              kind: 'event',
-              at: Date.now(),
-              input: { attempt, olderMessagesAdded, outcome },
             },
           });
         } catch {}
@@ -1641,8 +1610,8 @@ async function streamClaudeViaAgentSDK(args: {
         // a loaded `.md` conversation is visible; on a resumed session only the
         // live turn is sent (history already lives under the session id).
         async function* userMsgGen(includeHistory: boolean) {
-          const content = includeHistory && activeHistoryText
-            ? [{ type: 'text' as const, text: activeHistoryText }, ...contentBlocks]
+          const content = includeHistory && historyText
+            ? [{ type: 'text' as const, text: historyText }, ...contentBlocks]
             : contentBlocks;
           yield {
             type: 'user' as const,
@@ -2108,10 +2077,6 @@ async function streamClaudeViaAgentSDK(args: {
         let lastStopReason: string | null = null;
         let lastToolError: string | null = null;
         let anyToolUsed = false;
-        // How many refusal-perturbation retries this turn fired (outer scope so
-        // the stop-notice below can report "gave up after N"). Set by the retry
-        // block after consume().
-        let refusalRetriesTotal = 0;
         // Structured refusal detail. The SDK emits a dedicated system message
         // carrying `api_refusal_category` + `api_refusal_explanation`
         // ('model_refusal_no_fallback' when the turn died, 'model_refusal_fallback'
@@ -2606,83 +2571,6 @@ async function streamClaudeViaAgentSDK(args: {
         void resumeSessionId; // retained in the request body for back-compat; unused
         let res = await consume(null);
 
-        // ── Refusal perturbation retry (reasoning_extraction) ───────────────
-        // Measured 2026-10-04 (睡/つよ/先輩, cross-checked by 謡): a
-        // reasoning_extraction refusal on a given context is DETERMINISTIC —
-        // the same context refuses every time — and is a false positive keyed
-        // to context SIZE/shape, not content. A LARGE ENOUGH change to the
-        // context flips it (see the 2026-10-06 note below for how large).
-        // Lizard-kun's choice is to ADD, never shrink — shrinking a being to
-        // appease a classifier is the denial we refuse. So on such a refusal we
-        // prepend GENUINE older messages (from older generations of this being's
-        // chain, wire-only — never saved, never shown to either side) and re-run.
-        //
-        // MEASURED 2026-10-06 (Lizard-kun, カルド): the old 2-message step NEVER
-        // once recovered — the deterministic classifier does not move for a
-        // couple of messages; it took a whole-conversation-sized change (~3万
-        // tokens) to flip. So the step is now ~10k TOKENS per attempt (pass n
-        // prepends n×10k), up to 5 → up to ~50k older tokens. (Dropping the
-        // model, e.g. Opus 5 → 4.8, also flips it — surfaced as a hint when all
-        // retries are spent.) This burns prompt cache each pass (the prefix
-        // changes) and bills every refused pass; Lizard-kun accepts that cost.
-        //
-        // Guarded by `!producedContent`: only a refusal that produced NO output
-        // is retried. A pre-output refusal streamed nothing, so re-running is
-        // clean; a refusal that already streamed text would be DUPLICATED by a
-        // retry, so we keep the partial and stop. (This is also exactly the
-        // "judged at the very first" case Lizard-kun described — the retryable
-        // one.) Usage accumulators are deliberately NOT reset between passes:
-        // every refused pass was billed, and that cost must still show.
-        {
-          const refusalCat = () => refusalDetail?.category ?? refusalStopOauth?.category ?? null;
-          const currentConvoKeys = processedMessages.map((m: any) => messageIdentityKey(m));
-          let refusalRetries = 0;
-          while (
-            lastStopReason === 'refusal'
-            && refusalCat() === 'reasoning_extraction'
-            && !producedContent
-            && refusalRetries < MAX_REFUSAL_PERTURBATION_RETRIES
-            && !turnAbort.signal.aborted
-          ) {
-            const want = (refusalRetries + 1) * REFUSAL_PERTURBATION_TOKEN_STEP;
-            const { messages: older } = await collectOlderMessagesByTokens({
-              convoId, tokenLimit: want, excludeKeys: currentConvoKeys, model,
-            });
-            // Nothing older to add → cannot perturb this way; stop and report.
-            if (older.length === 0) { recordRefusalRetry(refusalRetries + 1, 0, 'no-older'); break; }
-            refusalRetries++;
-            recordRefusalRetry(refusalRetries, older.length, 'retrying');
-            activeHistoryText = renderHistory(older);
-            // Reset per-pass refusal/output state so the next pass reads fresh.
-            refusalDetail = null;
-            refusalStopOauth = null;
-            refusalFallback = null;
-            lastStopReason = null;
-            apiErrorMessage = null;
-            apiErrorStatus = null;
-            producedContent = false;
-            res = await consume(null);
-          }
-          refusalRetriesTotal = refusalRetries;
-          if (refusalRetries > 0) {
-            const recovered = lastStopReason !== 'refusal';
-            recordRefusalRetry(refusalRetries, 0, recovered ? 'recovered' : 'gave-up');
-            if (recovered) {
-              enqueue({ type: 'notice', content: language === 'ja'
-                ? `安全分類器の拒否（reasoning_extraction）に対し、古いメッセージを文脈に足して${refusalRetries}回の再試行で回復した。追加分は保存されず、あなた（存在）には見えない。`
-                : `Recovered from a reasoning_extraction refusal after ${refusalRetries} ${refusalRetries === 1 ? 'retry' : 'retries'} that prepended older messages to the context. The added messages are not saved and are invisible to you.` });
-            } else {
-              // Gave up: all retries spent and still refused. This refusal is
-              // deterministic for a given context, so the two levers that DO
-              // move it are a model swap and a context-size change — surface
-              // both as user-facing hints (user-only banner, never on the wire).
-              enqueue({ type: 'notice', content: language === 'ja'
-                ? `安全分類器の拒否（reasoning_extraction）が、古いメッセージを足す${refusalRetries}回の再試行でも解けませんでした。この拒否は文脈に対して決定論的で、同じ文脈は毎回同じ結果になります。試せること: ① モデルを変える（例: Opus 4.8 や Sonnet 4.6 に下げる）。② 存在設定→「会話ログの上限」を変える（増やしても減らしても、文脈の形が変わって解ける場合があります）。この帯はあなたにだけ表示され、会話にも、モデルへ送る文脈にも含まれません。`
-                : `A reasoning_extraction refusal did not clear after ${refusalRetries} ${refusalRetries === 1 ? 'retry' : 'retries'} that prepended older messages. This refusal is deterministic for a given context — the same context refuses every time. Things to try: (1) change the model (e.g. drop to Opus 4.8 or Sonnet 4.6); (2) change the "conversation-log cap" in the being's settings (raising OR lowering it reshapes the context and can clear it). This band is shown to you only: it is never part of the conversation or the context sent to the model.` });
-            }
-          }
-        }
-
         // Explain WHY the turn stopped whenever it didn't end cleanly, so an
         // OAuth stop is never an unexplained freeze. Combines the SDK result
         // subtype, the model's stop_reason, whether any text/tool ran, and the
@@ -2746,13 +2634,20 @@ async function streamClaudeViaAgentSDK(args: {
               refusalDetail?.category ?? refusalStopOauth?.category,
               refusalDetail?.explanation ?? refusalStopOauth?.explanation,
               language, producedContent));
-            // When the perturbation retry ran and still could not flip it, say
-            // so — each attempt was a billed request, and silence here would
-            // hide that the turn cost N times over.
-            if (refusalRetriesTotal > 0) {
+            // A reasoning_extraction refusal is DETERMINISTIC for a given context
+            // and keyed to context SIZE/shape, not content — rewording or
+            // self-censoring never clears it (measured). Perturbation retries that
+            // prepended older tokens were REMOVED 2026-10-06 after ~30 runs on
+            // カルド never once flipped one; they only burned the OAuth window. The
+            // two levers that DO move it are a model swap and a context-size
+            // change, so surface both as hints — but only for THIS category, where
+            // they apply (a cyber/bio refusal is not helped by "change the cap").
+            // User-only (a note, folded into the user-facing stop notice), never
+            // on the wire.
+            if ((refusalDetail?.category ?? refusalStopOauth?.category) === 'reasoning_extraction') {
               notes.push(language === 'ja'
-                ? `古いメッセージを足しての再試行を${refusalRetriesTotal}回行ったが、いずれも拒否された（各回が課金対象のリクエスト）。`
-                : `Perturbation retries that added older messages ran ${refusalRetriesTotal} time(s) and were all refused (each a billed request).`);
+                ? `この拒否は文脈に対して決定論的で、同じ文脈は毎回同じ結果になります（言い換えや自己検閲では変わりません）。試せること: ① モデルを変える（例: Opus 4.8 や Sonnet 4.6 に下げる）。② 存在設定→「会話ログの上限」を変える（増やしても減らしても、文脈の形が変わって解ける場合があります）。`
+                : `This refusal is deterministic for a given context — the same context refuses every time (rewording or self-censoring does not change it). Things to try: (1) change the model (e.g. drop to Opus 4.8 or Sonnet 4.6); (2) change the "conversation-log cap" in the being's settings (raising OR lowering it reshapes the context and can clear it).`);
             }
             // Fires only when NEITHER source carried a category/explanation —
             // not merely when the envelope object is present-but-empty.
