@@ -3876,7 +3876,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         <div className={isMobile ? 'w-full flex flex-col' : 'flex items-center gap-4'}>
           {/* The status bar: context gauge, elapsed, sleep cue, cost. Always
               visible — on mobile as its own row beneath the title. */}
-          <div className={isMobile ? (mobileToolbarOpen ? `w-full flex flex-wrap items-center justify-end gap-2 pb-1` : `hidden`) : `contents`}>
+          {/* `items-end` on mobile so the cost sits on the gauge's LAST line —
+              level with the token numbers — instead of being centred against a
+              two-line block and claiming a row of its own. */}
+          <div className={isMobile ? (mobileToolbarOpen ? `w-full flex flex-nowrap items-end justify-end gap-2 pb-1` : `hidden`) : `contents`}>
           {(() => {
             // Per-folder conversation-log cap (was global, moved into Folder
             // Settings; retired `maxRecommendedContext` 2026-10-03).
@@ -3924,8 +3927,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             const pctOriginal = (original / denom) * 100;
             const pctAttach = (attach / denom) * 100;
             const overLimit = logTotal > cap;
+            // `min-w-[260px]` is a FLOOR, not a ceiling: the legend inside is far
+            // wider than 260px, so on a phone this block grew to fill the row and
+            // pushed the cost onto a line of its own. On mobile it becomes a
+            // shrinkable flex column (`flex-1 min-w-0`) instead, so the legend
+            // wraps INSIDE it and the cost stays beside it, level with the numbers.
             return (
-              <div className="flex flex-col items-end gap-1 min-w-[260px]" title={t('chat.context.tip')
+              <div className={`flex flex-col items-end gap-1 ${isMobile ? 'flex-1 min-w-0' : 'min-w-[260px]'}`} title={t('chat.context.tip')
                 .replace('{sys}', sys.toLocaleString())
                 .replace('{copied}', copied.toLocaleString())
                 .replace('{original}', original.toLocaleString())
@@ -3965,6 +3973,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               as at 5%. Calling it fatigue told everyone who read it, including
               the entities themselves, that a high number meant a degraded state.
               A gauge must report a QUANTITY, never a CONDITION. */}
+          {/* Desktop only. On a phone this exact reading is already pinned in the
+              title row, where it stays visible with the status bar collapsed —
+              rendering it here too printed the same number twice and cost a
+              whole wrapped line of a 414px-wide header. One reading, one place. */}
+          {!isMobile && (
           <span
             className={`text-sm font-semibold tabular-nums cursor-default ${consolidationDue ? 'text-red-500' : contextElapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
             title={t('chat.elapsed.tip')
@@ -3974,13 +3987,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             {contextElapsed}%
           </span>
+          )}
           {/* Sleep cue. Appears only once elapsed passes 100%, i.e. once the
               oldest exchanges have started leaving the verbatim transcript.
               Deliberately a HINT and nothing more — no auto-consolidation, no
               blocking. The decision of when to sleep stays with the user.
               Worded as an available action, not as a diagnosis of the entity
               (Case 004: a gauge reports a quantity, never a condition). */}
-          {consolidationDue && (
+          {/* Same duplication as the elapsed reading above: on mobile the cue is
+              already in the always-visible title row. */}
+          {consolidationDue && !isMobile && (
             <span
               className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 border border-red-500/40 cursor-default whitespace-nowrap"
               title={t('chat.sleep.tip')}

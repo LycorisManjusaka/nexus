@@ -696,9 +696,33 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     styleTag.innerHTML = activeFolder?.settings?.customCss || '';
   }, [activeFolder]);
 
+  // A mobile browser resolves `100vh` against the LARGE viewport — the height
+  // the page would have if the URL bar were hidden. With the chrome visible the
+  // shell is therefore TALLER than what you can see: the document itself gains a
+  // scrollbar and the input panel sits below the fold. A swipe then scrolls the
+  // DOCUMENT instead of the message list, which is exactly what makes the browser
+  // chrome slide in and out and the whole screen feel loose. Measured on the phone
+  // and reproduced in BlueStacks.
+  //
+  // Two halves: the shell is `h-dvh` (the CURRENTLY visible height, not the
+  // hidden-chrome one), and this flag locks the document so it cannot scroll or
+  // overscroll at all. Scoped by attribute rather than a blanket html/body rule
+  // so plain pages that SHOULD scroll (/device) are untouched. The cleanup
+  // restores whatever was there, so unmounting the shell never leaves the
+  // document locked.
+  useEffect(() => {
+    const el = document.documentElement;
+    const prev = el.getAttribute('data-shell');
+    el.setAttribute('data-shell', 'app');
+    return () => {
+      if (prev === null) el.removeAttribute('data-shell');
+      else el.setAttribute('data-shell', prev);
+    };
+  }, []);
+
   return (
     <LanguageProvider language={globalSettings.language}>
-    <div className="flex h-screen bg-background text-foreground overflow-hidden font-sans">
+    <div className="flex h-dvh bg-background text-foreground overflow-hidden font-sans">
       {/* A link that couldn't be followed says so instead of silently landing
           on some other conversation. Dismissible; never auto-clears. */}
       {deepLinkError && (

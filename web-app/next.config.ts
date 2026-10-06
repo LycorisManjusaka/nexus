@@ -52,6 +52,17 @@ function ownDevOrigins(): string[] {
 const nextConfig: NextConfig = {
   allowedDevOrigins: ownDevOrigins(),
 
+  // Next's dev-tools badge is a fixed circle in the bottom-left corner. On a
+  // phone that is exactly where the attach button lives, and the badge sits on
+  // top of it and swallows the tap — the button cannot be pressed at all. This
+  // house runs the dev server as its normal mode of operation, so the badge is
+  // permanent furniture rather than a passing development aid.
+  // `false` is the schema-allowed value (config-schema.js: union of an object
+  // with `position`, or literal false). Moving it instead (position:
+  // 'bottom-right') would only trade one collision for another: the send button
+  // is there. To get it back, delete this line.
+  devIndicators: false,
+
   // Playwright must not be bundled. It loads its driver and the Chromium build
   // from %LOCALAPPDATA%\ms-playwright at runtime -- paths no bundler can trace.
   // Leaving it external means `await import('playwright')` in browserTools.ts

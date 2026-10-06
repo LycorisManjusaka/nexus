@@ -150,6 +150,22 @@
   }
 }
 
+/* The app shell owns the whole viewport and scrolls INSIDE itself, so the
+   document must never scroll. Without this a mobile browser lets a swipe that
+   starts anywhere drag the page, which slides the URL bar in and out and shifts
+   everything vertically; `overscroll-behavior` also kills pull-to-refresh and
+   stops an inner list that has hit its end from chaining its scroll to the
+   document. Deliberately UNLAYERED: an `@layer base` rule loses to Tailwind
+   utilities, and body already carries `min-h-full`.
+   Set by NexusApp on mount only, so /device and any other plain page keeps its
+   normal scrolling. */
+html[data-shell="app"],
+html[data-shell="app"] body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 @layer base {
 
   .prose,
