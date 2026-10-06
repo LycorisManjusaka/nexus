@@ -199,6 +199,12 @@ export interface ComputerToolCtx {
    *  only when native exceeds it, so the scale NEXUS reports matches what the
    *  model receives. Omit -> DEFAULT_SCREENSHOT_MAX_EDGE (2000). */
   maxEdge?: number;
+  /** This model reports click coordinates in a fixed 0–1000 normalized space
+   *  (not real image pixels) — e.g. the ByteDance Seed 2.x family. When set,
+   *  computer_input recovers the image pixel as (reported / 1000 × monitor
+   *  dimension) before applying the screen_index offset. Requires screen_index
+   *  (NEXUS needs the monitor size to un-normalize). See reportsNormalizedCoords. */
+  normalizedCoords?: boolean;
 }
 
 export interface ComputerToolResult {
@@ -1124,15 +1130,28 @@ $bmp.Dispose()
             return { text: `Error: screen_index ${sIdx} does not match any monitor — call computer_screens first (there are ${screens.length}, indices 0..${Math.max(0, screens.length - 1)}). No input was sent.` };
           }
           const scale = screenScale(mon.width, mon.height, ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE);
+          // Normalized-coordinate models (Seed 2.x) report x,y in a 0–1000 space
+          // that ignores image size; recover the real-screen pixel directly as
+          // (reported / 1000 × monitor dimension). screenScale cancels out here
+          // (the model never saw pixels), so the normalized branch does NOT use
+          // `scale` at all — it is an exact identity, no fitted constant.
+          const normalized = ctx.normalizedCoords === true;
           for (const r of resolved) {
             if ((r.t === 'move' || r.t === 'down' || r.t === 'up' || r.t === 'click' || r.t === 'wheel') && r.x !== undefined && r.y !== undefined) {
-              r.x = Math.round(r.x / scale) + mon.x;
-              r.y = Math.round(r.y / scale) + mon.y;
+              if (normalized) {
+                r.x = Math.round((r.x / 1000) * mon.width) + mon.x;
+                r.y = Math.round((r.y / 1000) * mon.height) + mon.y;
+              } else {
+                r.x = Math.round(r.x / scale) + mon.x;
+                r.y = Math.round(r.y / scale) + mon.y;
+              }
             }
           }
-          scaleNote = scale < 1
-            ? `Coordinates were read as monitor ${sIdx} image pixels and scaled ×${(1 / scale).toFixed(3)} (plus offset ${mon.x},${mon.y}) to the real screen.`
-            : `Coordinates were read as monitor ${sIdx} pixels (plus offset ${mon.x},${mon.y}); this monitor is not scaled.`;
+          scaleNote = normalized
+            ? `Coordinates were read as a 0–1000 normalized position and mapped to monitor ${sIdx} (${mon.width}×${mon.height}, plus offset ${mon.x},${mon.y}) on the real screen.`
+            : scale < 1
+              ? `Coordinates were read as monitor ${sIdx} image pixels and scaled ×${(1 / scale).toFixed(3)} (plus offset ${mon.x},${mon.y}) to the real screen.`
+              : `Coordinates were read as monitor ${sIdx} pixels (plus offset ${mon.x},${mon.y}); this monitor is not scaled.`;
         }
         // Record every click BEFORE execution, so the audit trail exists even
         // if a later command in the same batch throws.

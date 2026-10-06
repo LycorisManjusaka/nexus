@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
-import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel } from '@/lib/modelVision';
+import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
@@ -9418,7 +9418,7 @@ export async function POST(req: Request) {
                       // delivers a real image the same way Read does for an image
                       // file: eyes-bridge description for text-only models,
                       // pendingImageInjects for vision-capable ones.
-                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I });
+                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I, normalizedCoords: reportsNormalizedCoords(localModel) });
                       if (cr.image) {
                         if (useEyes) {
                           const eyesResult = await describeImage({

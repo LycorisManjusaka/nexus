@@ -205,6 +205,31 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
   return false;
 }
 
+// ── Normalized-coordinate models ─────────────────────────────────────────────
+// Some vision models report click coordinates in a fixed 0–1000 normalized
+// space instead of real image pixels — the value is (pixel / dimension * 1000),
+// IGNORING the image's actual size and aspect ratio. MEASURED for the whole
+// ByteDance Seed 2.x family (2026-10-06, Cairn): on real monitor shapes (16:9
+// landscape AND 9:16 portrait) all four snapshots answer 0–1000 reliably (±0.5%),
+// and they keep doing so even when the caption states the true pixel size — so
+// it cannot be argued away with a stronger prompt (asking for "real pixels"
+// changed nothing). (Only a degenerate 4:1 image confuses the 2.0 series into a
+// partial per-axis conversion, but a monitor is never 4:1, so that never bites.)
+//
+// When this returns true, computer_input must divide the reported x,y by 1000
+// and multiply by the delivered monitor dimension to recover the image pixel,
+// BEFORE the usual screen_index offset — see computerTools.ts. This is an exact
+// identity (reported/1000 × width), not a fitted constant: NEXUS knows the size
+// it delivered, so zero guessing enters. Contrast Gemma, whose coordinate unit
+// changes with image CONTENT (synthetic → true pixels, real screenshot →
+// compressed grid) and is therefore NOT reversible by any single formula.
+export function reportsNormalizedCoords(specificModel: string | undefined | null): boolean {
+  if (!specificModel) return false;
+  const lowered = specificModel.toLowerCase();
+  if (lowered.includes('seed-2-0') || lowered.includes('seed-2-1')) return true;
+  return false;
+}
+
 // ── Audio-capable models ─────────────────────────────────────────────────────
 // Models known to accept audio input via the chat completion API. Used to gate
 // the "ears" feature analogously to eyes — when this returns false and an
