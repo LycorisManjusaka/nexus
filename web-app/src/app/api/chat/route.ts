@@ -6155,7 +6155,11 @@ export async function POST(req: Request) {
                     // delivers a real image the same way Read does for an image
                     // file — a two-element content array (text caption + image
                     // block) so the being actually sees the monitor.
-                    const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
+                    // Claude API-key path: the Anthropic API resizes images over
+                    // 1568px (long edge) server-side, so NEXUS pre-shrinks to 1568
+                    // here — otherwise the being reads a 1568px image while NEXUS
+                    // thinks it is bigger, and every screen_index click lands off.
+                    const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I, maxEdge: 1568 });
                     if (cr.image) {
                       resultContent = [
                         { type: 'text', text: cr.text },

@@ -76,29 +76,34 @@ const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 export const COMPUTER_TOOL_NAMES = ['computer_screens', 'computer_screenshot', 'computer_input'] as const;
 
 // ── Screenshot downscale + coordinate scaling (the whole 150%-monitor game) ──
-// A monitor wider/taller than this is captured at native resolution but shown to
-// the being at a long edge of SCREENSHOT_MAX_EDGE. We do this HERE, once, for a
-// measured reason: on the OAuth path the full-res PNG is handed to the Claude
-// Code SDK, which silently downscales anything over ~2000px to 2000px before the
-// API ever sees it — so the being was shown a 2000px image while the caption
-// claimed native 3840px, and every coordinate it read came out 1/0.52 ≈ 1.92x
-// off (measured by Kiko, 2026-10-06, zero clicks: aim (1600,900) → cursor
-// (833,469), ratio 0.521 = 2000/3840, NOT 1/1.5, so DPI was never the cause).
+// A monitor whose long edge exceeds the active provider's image cap is captured
+// at native resolution but shown to the being downscaled to that cap. We do this
+// HERE, once, so the scale NEXUS computes is EXACTLY the scale the model sees —
+// which lets the being pass the pixel it READ off the image (via computer_input
+// screen_index) and have NEXUS convert it back to a real-screen coordinate,
+// instead of asking the being to multiply by its own DPI scale on every click.
 //
-// 1568 is deliberately BELOW every provider's own cap (Claude 1568, OAuth SDK
-// ~2000, Gemini/OpenAI 3072), so NOTHING downstream re-touches the image: the
-// scale NEXUS computes is exactly the scale the being sees. That lets the being
-// pass the pixel it READ off the image (via computer_input screen_index) and let
-// NEXUS convert it back to a real-screen coordinate — instead of asking the being
-// to multiply by its own DPI scale on every single click, which is the exact
-// arithmetic a being gets wrong even when it knows the factor.
-export const SCREENSHOT_MAX_EDGE = 1568;
+// The cap is PER-PROVIDER, and we only shrink when native EXCEEDS it — so a
+// monitor that already fits (e.g. a 1920px 100% monitor) passes through at 1:1
+// with no quality loss (Lizard-kun, 2026-10-06: a blanket 1568 cap needlessly
+// blurred his perfect 100% monitor). The cap must sit at or below each provider's
+// OWN invisible shrink, or the coordinate mapping breaks downstream:
+//   • OAuth (Claude Code SDK): 2000 — MEASURED. The SDK silently downscales
+//     anything over ~2000px before the API sees it (Kiko, 2026-10-06, zero
+//     clicks: aim (1600,900) -> cursor (833,469), ratio 0.521 = 2000/3840, NOT
+//     1/1.5, so DPI was never the cause). This is the DEFAULT.
+//   • Claude API-key: 1568 — the Anthropic API resizes >1568px long edge server
+//     side, so NEXUS must pre-shrink to 1568 there (passed as ctx.maxEdge).
+//   • Gemini / OpenAI-compatible / Kimi / MiMo: left at the 2000 default —
+//     coordinate-safe; their real caps are UNMEASURED for computer-use, so raise
+//     with evidence, never by guess.
+export const DEFAULT_SCREENSHOT_MAX_EDGE = 2000;
 
 /** Image-to-native scale for a monitor's screenshot (1 if it isn't downscaled). */
-export function screenScale(widthPx: number, heightPx: number): number {
+export function screenScale(widthPx: number, heightPx: number, maxEdge: number = DEFAULT_SCREENSHOT_MAX_EDGE): number {
   const longest = Math.max(widthPx || 0, heightPx || 0);
-  if (!longest || longest <= SCREENSHOT_MAX_EDGE) return 1;
-  return SCREENSHOT_MAX_EDGE / longest;
+  if (!longest || longest <= maxEdge) return 1;
+  return maxEdge / longest;
 }
 
 // ── Global stop key (Ctrl+Shift+X) ──────────────────────────────────────────
@@ -190,6 +195,10 @@ export interface ComputerToolCtx {
   me: string;
   /** Resolved (per-Entity overridable) instruction strings. */
   instructions?: Record<string, string>;
+  /** Provider image long-edge cap (px). Screenshot is downscaled to this
+   *  only when native exceeds it, so the scale NEXUS reports matches what the
+   *  model receives. Omit -> DEFAULT_SCREENSHOT_MAX_EDGE (2000). */
+  maxEdge?: number;
 }
 
 export interface ComputerToolResult {
@@ -1046,19 +1055,20 @@ $bmp.Dispose()
         }
 
         // Downscale the copy the BEING sees to a known long edge (see
-        // SCREENSHOT_MAX_EDGE). Doing it here means the scale is known exactly and
+        // the provider cap). Doing it here means the scale is known exactly and
         // nothing downstream re-shrinks it. On resize failure we fall back to the
         // native bytes AND report native dimensions, so the caption never claims a
         // scaling that was not applied (the computer_input transform recomputes the
         // same screenScale(), so the two only ever disagree in this fallback — in
         // which the caption steers the being to omit screen_index, which is correct
         // for a native image).
-        let scale = screenScale(mon.width, mon.height);
+        const maxEdge = ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE;
+        let scale = screenScale(mon.width, mon.height, maxEdge);
         let shownBase64 = cap.stdout;
         if (scale < 1) {
           try {
             const shown = await sharp(png)
-              .resize({ width: SCREENSHOT_MAX_EDGE, height: SCREENSHOT_MAX_EDGE, fit: 'inside', withoutEnlargement: true })
+              .resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
               .png()
               .toBuffer();
             shownBase64 = shown.toString('base64');
@@ -1113,7 +1123,7 @@ $bmp.Dispose()
           if (!mon) {
             return { text: `Error: screen_index ${sIdx} does not match any monitor — call computer_screens first (there are ${screens.length}, indices 0..${Math.max(0, screens.length - 1)}). No input was sent.` };
           }
-          const scale = screenScale(mon.width, mon.height);
+          const scale = screenScale(mon.width, mon.height, ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE);
           for (const r of resolved) {
             if ((r.t === 'move' || r.t === 'down' || r.t === 'up' || r.t === 'click' || r.t === 'wheel') && r.x !== undefined && r.y !== undefined) {
               r.x = Math.round(r.x / scale) + mon.x;
