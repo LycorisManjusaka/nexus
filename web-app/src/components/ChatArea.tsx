@@ -2832,6 +2832,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 thoughtProcess: currentThought || undefined,
                 continuationCount: continuationCount || undefined,
                 attachments: toolAttachments.length ? [...toolAttachments] : (m.attachments || []),
+                // Surface tool calls DURING streaming (not just at finalize) so
+                // the thinking panel can show them inline in realtime. Copied
+                // (not the live ref) so React sees a new array each frame. Still
+                // display-only — never added to slimHistory.
+                ...(toolCalls.length ? { toolCalls: [...toolCalls] } : {}),
                 ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
                 ...(chosenModelFamily ? {
                   modelFamily: chosenModelFamily,
@@ -2967,7 +2972,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // the sequence is the whole point. MessageBubble separates the
                 // two; nothing else reads this list.
                 if (data.call && typeof data.call.name === 'string') {
-                  toolCalls.push(data.call);
+                  // Record WHERE in the thinking stream this call arrived — the
+                  // current length of the accumulated thinking text. The thinking
+                  // panel uses it to splice the tool chip in at the exact point
+                  // the model paused to call it, preserving the think→call→think
+                  // order. currentThought only ever appends (never rewritten), so
+                  // the offset is a stable anchor. Hidden-thinking vessels
+                  // (ChatGPT, Muse Spark) have empty currentThought → every
+                  // offset is 0 → chips render in arrival order, which is what we
+                  // want. Display-only: slimHistory is an allowlist that never
+                  // names toolCalls, so this is never sent to any model.
+                  toolCalls.push({ ...data.call, thinkingOffset: currentThought.length });
                 }
               } else if (data.type === 'session_id') {
                 // Claude OAuth path emits this so we can resume the

@@ -395,6 +395,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'bubble.desc.errorHeading': 'Bridge model reported an error',
   'bubble.desc.noText': '(no description text)',
   'bubble.thoughtProcess': 'Thought Process',
+  // Panel title when this model hides its thinking (ChatGPT, Meta Muse Spark):
+  // there is no thinking text, so the panel shows only the tool calls — the one
+  // window into what an opaque model actually did.
+  'bubble.thoughtProcess.toolsOnly': 'Tool activity (this model hides its thinking)',
   'bubble.thinking.include': 'Include this thinking in context',
   'bubble.thinking.exclude': 'Exclude this thinking from context',
   'bubble.thinking.excludedBadge': 'EXCLUDED',
@@ -1876,6 +1880,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'bubble.desc.errorHeading': 'ブリッジのモデルがエラーを返しました',
   'bubble.desc.noText': '（説明テキストなし）',
   'bubble.thoughtProcess': '思考プロセス',
+  // このモデルが思考を見せないとき（ChatGPT・Meta Muse Spark）のパネル見出し。
+  // 思考テキストが無いのでツール呼び出しだけを表示する——不透明なモデルが
+  // 実際に何をしたかを見られる唯一の窓。
+  'bubble.thoughtProcess.toolsOnly': 'ツールの動き（このモデルは思考を見せません）',
   'bubble.thinking.include': 'この思考を文脈に含める',
   'bubble.thinking.exclude': 'この思考を文脈から外す',
   'bubble.thinking.excludedBadge': '除外',

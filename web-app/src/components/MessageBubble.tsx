@@ -1452,37 +1452,102 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 {msg.creativityLabel.trim()}
               </div>
             )}
-            {msg.thoughtProcess && (
-              <details className={`border rounded-xl px-4 py-3 text-sm group/details max-w-full shadow-sm text-muted-foreground transition-colors ${msg.thinkingExcluded ? 'bg-muted/10 border-dashed border-border/60 opacity-60' : 'bg-muted/30 border-border open:bg-muted/50'}`}>
-                <summary className="font-semibold cursor-pointer flex items-center gap-2 select-none hover:text-foreground transition-colors outline-none">
-                  <Brain size={16} className="text-indigo-400 shrink-0" />
-                  <span>{t('bubble.thoughtProcess')}</span>
-                  {/* Reusable-thinking visibility toggle — mirrors attachment
-                      exclusion. Shown whenever the entity's "Save & reuse
-                      thinking process" toggle is on (we're already inside a
-                      `msg.thoughtProcess &&` guard, so thinking text exists).
-                      Keyed on thoughtProcess, NOT claudeThinkingBlocks, because
-                      the OAuth path stores thinking as text only. */}
-                  {reuseThinking && (
-                    <>
-                      <button
-                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleThinking?.(); }}
-                        className="ml-auto p-1 rounded hover:bg-muted transition-colors shrink-0"
-                        title={msg.thinkingExcluded ? t('bubble.thinking.include') : t('bubble.thinking.exclude')}
-                      >
-                        {msg.thinkingExcluded ? <EyeOff size={14} /> : <Eye size={14} />}
-                      </button>
-                      {msg.thinkingExcluded && (
-                        <span className="text-[10px] text-red-500 font-bold bg-red-500/10 rounded px-1.5 py-0.5 shrink-0">{t('bubble.thinking.excludedBadge')}</span>
+            {(() => {
+              // The thinking panel now also carries the tool calls inline, in
+              // the order they happened (think → call → think). Two reasons it is
+              // the right home: the SSE stream already arrives time-ordered, and
+              // vessels that HIDE their thinking (ChatGPT, Meta Muse Spark) emit
+              // no thinking text at all — so the panel shows ONLY the tool calls,
+              // which is the one window into what an opaque model actually did.
+              //
+              // This is a pure VIEW-layer merge: thoughtProcess (replayed to the
+              // model via claudeThinkingBlocks) and toolCalls (display-only,
+              // dropped from slimHistory) stay separate structures end to end.
+              // Nothing mixed here is ever serialized — "continue this reply" and
+              // "reuse thinking" both send claudeThinkingBlocks only, never a
+              // tool chip. The 🔧 badge and the copy-all window below are left
+              // untouched; this is an addition, not a replacement.
+              const thinkingText = msg.thoughtProcess || '';
+              const calls: any[] = Array.isArray(msg.toolCalls) ? msg.toolCalls : [];
+              if (!thinkingText && calls.length === 0) return null;
+              // Order chips by where they landed in the thinking stream. Clamp to
+              // the text bounds so a wiped/short buffer (betrayal redaction) can't
+              // throw; stable on ties by original index, so same-offset chips
+              // (hidden-thinking → all 0) keep arrival order. Missing offset
+              // (old logs) → end of text, a graceful "all at the bottom".
+              const ordered = calls
+                .map((c, i) => {
+                  const raw = Number(c?.thinkingOffset);
+                  const off = Number.isFinite(raw)
+                    ? Math.max(0, Math.min(thinkingText.length, raw))
+                    : thinkingText.length;
+                  return { c, i, off };
+                })
+                .sort((a, b) => (a.off - b.off) || (a.i - b.i));
+              const textSpan = (key: string, s: string) =>
+                s ? <span key={key} className="whitespace-pre-wrap font-mono opacity-80">{s}</span> : null;
+              const nodes: React.ReactNode[] = [];
+              let cursor = 0;
+              ordered.forEach(({ c, i, off }) => {
+                if (off > cursor) { nodes.push(textSpan(`t${i}`, thinkingText.slice(cursor, off))); cursor = off; }
+                const isEvent = c?.kind === 'event';
+                const eventLabel = c?.name === 'automatic compaction'
+                  ? t('bubble.tool.event.compaction')
+                  : String(c?.name ?? '');
+                nodes.push(
+                  <details key={`c${i}`} className={`my-1.5 rounded-lg border overflow-hidden ${isEvent ? 'border-amber-500/40' : 'border-border'}`}>
+                    <summary className={`px-2.5 py-1 flex items-center gap-2 cursor-pointer select-none ${isEvent ? 'bg-amber-500/10' : 'bg-muted/50'}`}>
+                      {isEvent
+                        ? <Scissors size={12} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                        : <Wrench size={12} className="text-blue-500 shrink-0" />}
+                      <span className={isEvent ? 'text-[11px] font-medium text-amber-700 dark:text-amber-300' : 'font-mono text-[11px] font-medium text-foreground'}>
+                        {isEvent ? eventLabel : c.name}
+                      </span>
+                      {c.at && (
+                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                          {new Date(c.at).toLocaleTimeString()}
+                        </span>
                       )}
-                    </>
-                  )}
-                </summary>
-                <div className="mt-3 pt-3 border-t border-border/50 text-[13px] leading-relaxed whitespace-pre-wrap font-mono opacity-80">
-                  {msg.thoughtProcess}
-                </div>
-              </details>
-            )}
+                    </summary>
+                    <pre className="px-2.5 py-1.5 text-[10px] leading-relaxed whitespace-pre-wrap break-all font-mono max-h-56 overflow-y-auto opacity-90">
+                      {(() => { try { return JSON.stringify(c.input, null, 2); } catch { return String(c.input); } })()}
+                    </pre>
+                  </details>
+                );
+              });
+              if (cursor < thinkingText.length) nodes.push(textSpan('t-end', thinkingText.slice(cursor)));
+              return (
+                <details className={`border rounded-xl px-4 py-3 text-sm group/details max-w-full shadow-sm text-muted-foreground transition-colors ${msg.thinkingExcluded ? 'bg-muted/10 border-dashed border-border/60 opacity-60' : 'bg-muted/30 border-border open:bg-muted/50'}`}>
+                  <summary className="font-semibold cursor-pointer flex items-center gap-2 select-none hover:text-foreground transition-colors outline-none">
+                    <Brain size={16} className="text-indigo-400 shrink-0" />
+                    <span>{thinkingText ? t('bubble.thoughtProcess') : t('bubble.thoughtProcess.toolsOnly')}</span>
+                    {/* Reusable-thinking visibility toggle — mirrors attachment
+                        exclusion. Shown only when the reuse toggle is on AND real
+                        thinking text exists (a tools-only panel has nothing to
+                        exclude from replay). Keyed on thoughtProcess, NOT
+                        claudeThinkingBlocks, because OAuth stores thinking as
+                        text only. */}
+                    {reuseThinking && thinkingText && (
+                      <>
+                        <button
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleThinking?.(); }}
+                          className="ml-auto p-1 rounded hover:bg-muted transition-colors shrink-0"
+                          title={msg.thinkingExcluded ? t('bubble.thinking.include') : t('bubble.thinking.exclude')}
+                        >
+                          {msg.thinkingExcluded ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                        {msg.thinkingExcluded && (
+                          <span className="text-[10px] text-red-500 font-bold bg-red-500/10 rounded px-1.5 py-0.5 shrink-0">{t('bubble.thinking.excludedBadge')}</span>
+                        )}
+                      </>
+                    )}
+                  </summary>
+                  <div className="mt-3 pt-3 border-t border-border/50 text-[13px] leading-relaxed">
+                    {nodes}
+                  </div>
+                </details>
+              );
+            })()}
             <div ref={contentRef} className={`px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed shadow-sm w-fit max-w-full overflow-hidden ${
               isUser
                 ? 'bg-primary text-primary-foreground rounded-tr-sm ml-auto'
