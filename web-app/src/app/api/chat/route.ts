@@ -218,6 +218,9 @@ async function prepareInjectionDelivery(args: {
   /** This turn's read_attachment scope. MUTATED: queued refs are registered. */
   refIndex: { ref: string; name: string; size: number; mimeType: string }[];
   ja: boolean;
+  /** Image-sense override for local models whose vision only the LM Studio
+   *  catalog knows (isVisionCapable can't match the id). undefined = registry. */
+  visionOverride?: boolean;
 }): Promise<{
   /** Framed text to inject, '' when there is nothing to say. */
   text: string;
@@ -228,7 +231,7 @@ async function prepareInjectionDelivery(args: {
   /** Attachment names for the display-only tool/thinking-log event. */
   logNames: string[];
 }> {
-  const { drained, wire, model, framing, handoffTemplate, refsOpenable, refIndex, ja } = args;
+  const { drained, wire, model, framing, handoffTemplate, refsOpenable, refIndex, ja, visionOverride } = args;
   const items = drained.media || [];
   const texts = drained.texts || [];
   if (texts.length === 0 && items.length === 0) {
@@ -236,7 +239,7 @@ async function prepareInjectionDelivery(args: {
   }
 
   const { loaded, missing } = await loadInjectedMedia(items);
-  const { deliver, withheld } = splitDeliverable(loaded, injectableKinds(wire, model));
+  const { deliver, withheld } = splitDeliverable(loaded, injectableKinds(wire, model, visionOverride));
 
   // Register every ref that resolved, not just the withheld ones: an image that
   // rode along natively is still worth being able to re-open by ref later in
@@ -7916,6 +7919,12 @@ export async function POST(req: Request) {
                           : isMeta
                             ? { Authorization: `Bearer ${keys.meta}` }
                             : {};
+      // Local models only: the LM Studio catalog's `vision` flag is the sole
+      // truth for whether this engine has eyes (isVisionCapable can't match
+      // the id). Set in the resolve block below; passed to injection delivery
+      // so a vision-capable local model receives mid-turn images natively
+      // instead of being handed a ref. Stays false for every cloud family.
+      let localModelVisionCapable = false;
       let localModel = isKimi ? resolveKimiModel(specificModel) : (specificModel || (
         isGLM      ? 'glm-4.7' :
         isGrok     ? 'grok-4.7' :
@@ -8001,6 +8010,10 @@ export async function POST(req: Request) {
           if (!current || (current.loadedContext < targetCtx)) {
             await loadLocalModel(localModel, targetCtx);
           }
+          // Read the catalog's vision flag for the resolved model (not gated on
+          // `loaded` — the flag is known from `lms ls` whether in VRAM or not).
+          const metaForModel = (lm.meta || []).find((m) => m.id === localModel);
+          localModelVisionCapable = !!(metaForModel && metaForModel.vision);
         }
       }
 
@@ -9791,6 +9804,10 @@ export async function POST(req: Request) {
                     refsOpenable: hiddenAttachmentsAccessible,
                     refIndex: conversationAttachmentRefs,
                     ja: language === 'ja',
+                    // Local vision models (e.g. Gemma) are default-denied by the
+                    // id-substring registry; feed the catalog truth so they get
+                    // the image natively. undefined for cloud (registry decides).
+                    visionOverride: isLocal ? localModelVisionCapable : undefined,
                   });
                   const oaiParts: any[] = [];
                   if (prepOai.text) oaiParts.push({ type: 'text', text: prepOai.text });

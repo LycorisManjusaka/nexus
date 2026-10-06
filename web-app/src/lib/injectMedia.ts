@@ -76,9 +76,19 @@ export async function loadInjectedMedia(
 export function injectableKinds(
   wire: Set<MediaKindNarrow>,
   model: string | undefined,
+  // Explicit image-sense override. isVisionCapable() is a PURE function that
+  // can only match a local model id by a naming substring (-vl / vision /
+  // mmproj), so a local vision model like `gemma-4-26b-a4b-qat` is default-
+  // denied and its image would fall to hand-off even though the engine really
+  // has eyes. The only source of truth for a local model's vision is the LM
+  // Studio catalog (`lms ls --json`'s `vision` flag), which is async and not
+  // reachable from here — so the local call site reads it and passes it in.
+  // `undefined` = no override, use the registry (every cloud path).
+  visionOverride?: boolean,
 ): Set<MediaKindNarrow> {
   const out = new Set<MediaKindNarrow>();
-  if (wire.has('image') && isVisionCapable(model)) out.add('image');
+  const canSee = visionOverride === undefined ? isVisionCapable(model) : visionOverride;
+  if (wire.has('image') && canSee) out.add('image');
   if (wire.has('audio') && isAudioCapable(model)) out.add('audio');
   if (wire.has('video') && isVideoCapable(model)) out.add('video');
   return out;
