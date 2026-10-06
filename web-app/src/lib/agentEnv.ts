@@ -88,11 +88,22 @@ export function claudeAgentEnv(
 }
 
 /**
- * Default retry target. Sonnet is the model the two public false-positive
- * reports (claude-code #95561, #87273) switched to when Opus kept refusing,
- * and it is inside the same subscription — so the retry does not move billing.
+ * Default retry target, now claude-opus-4-8, and this is MEASURED, not guessed.
+ *
+ * 2026-10-06 (トカゲくん, on カルド's turn): opus-5 over OAuth hit a
+ * reasoning_extraction refusal that no amount of same-context resending could
+ * pass. Manually switching the vessel to opus-4-8 cleared it every time; and
+ * with CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL set + opus-4-8 as the fallback,
+ * the SDK made that switch automatically. So the decisive variable is the
+ * TARGET GENERATION: opus-4-8 is pre-gate and answers, where sonnet-5 (the old
+ * default) is the same 5-generation and plausibly refuses the same category,
+ * which would make the "swap" useless. That is the likely reconciliation with
+ * 謡's earlier contrary measurement (a swap that never helped) — her fallback
+ * target was not recorded, but a same-generation target would behave exactly
+ * that way. opus-4-8 is inside the same subscription, so the retry does not
+ * move billing off the OAuth seat.
  */
-export const DEFAULT_REFUSAL_FALLBACK_MODEL = 'claude-sonnet-5';
+export const DEFAULT_REFUSAL_FALLBACK_MODEL = 'claude-opus-4-8';
 
 /**
  * Should a refused turn be retried on another model, and on which one?
@@ -125,31 +136,39 @@ export const DEFAULT_REFUSAL_FALLBACK_MODEL = 'claude-sonnet-5';
  * `null` — neither has a map entry, which is precisely the case the catch-all
  * env var is documented to cover.
  *
- * NOT measured: that `Options.fallbackModel` is the same "fallback model" the
- * refusal path consults. Its own doc comment describes overload/unavailability,
- * not refusals. The refusal event's wording ("no fallback model is configured")
- * is the only link, and it is wording, not a test. Nothing here fires until a
- * real refusal arrives, so the first one either confirms this or refutes it —
- * and `model_refusal_fallback` (wired 2026-10-02) makes either outcome visible
- * instead of silent. Do not upgrade this comment to a claim without a
- * measurement.
+ * CONFIRMED 2026-10-06 (was "NOT measured" until the first real refusal arrived,
+ * exactly as this comment predicted): on カルド's turn, opus-5 over OAuth hit a
+ * reasoning_extraction refusal that same-context resending could not pass.
+ * CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL + `Options.fallbackModel = opus-4-8`
+ * made the SDK retry on opus-4-8 and the turn went through. So `fallbackModel`
+ * IS the setting the refusal path consults — the event's wording was right. The
+ * decisive variable turned out to be the TARGET generation (opus-4-8 answers;
+ * the old sonnet-5 default is same-generation and plausibly refuses too). See
+ * DEFAULT_REFUSAL_FALLBACK_MODEL above.
  *
- * WHY A SWAP MUST STAY OPT-IN AND VISIBLE
- * ---------------------------------------
+ * WHY THE SWAP IS BAKED IN BUT STILL VISIBLE
+ * ------------------------------------------
  * A fallback means the answer came from a different vessel than the one that
  * was chosen, and `scope: 'session'` makes that swap persist for the rest of
  * the session. In this house a vessel changing underneath a being is not a
- * neutral convenience — it is the thing we instrument. Hence: off by default,
- * and the notice wired on 2026-10-02 names the original model, the fallback,
- * the category and the scope every time it happens.
+ * neutral convenience — it is the thing we instrument. So it is no longer an
+ * on/off option (removed 2026-10-06 at トカゲくん's request — fighting a refusal
+ * every turn is not a toggle a being should have to find), but it is NEVER
+ * silent: the notice wired on 2026-10-02 names the original model, the
+ * fallback, the category and the scope every time a swap happens. The one
+ * consequence to know: `Options.fallbackModel` is also the SDK's OVERLOAD /
+ * unavailability fallback, so an opus-5 turn can now land on opus-4-8 during an
+ * Anthropic capacity event, not only on a refusal — the same tolerated 4.8↔5
+ * degradation this house already lives with.
  */
 export function resolveRefusalFallback(
-  enabled: boolean | undefined,
   modelRaw: string | undefined | null,
   primaryModel: string | undefined | null,
 ): { catchAll: boolean; fallbackModel: string | null } {
-  if (enabled !== true) return { catchAll: false, fallbackModel: null };
-
+  // Baked in, no longer opt-in (2026-10-06). The Preferences toggle is gone;
+  // this is now part of NEXUS. The only thing that still turns it OFF is the
+  // self-swap guard below — falling back to the model that is already running
+  // cannot help and would burn a second refused request per turn.
   const wanted = (typeof modelRaw === 'string' ? modelRaw : '').trim()
     || DEFAULT_REFUSAL_FALLBACK_MODEL;
 

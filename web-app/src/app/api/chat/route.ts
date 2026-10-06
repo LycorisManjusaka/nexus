@@ -908,15 +908,16 @@ async function streamClaudeViaAgentSDK(args: {
   // documents (an `Options.fallbackModel` at all, and the catch-all env var for
   // categories absent from the binary's fallback map) have to agree, and
   // keeping the rule in one function is what stops them from drifting apart.
-  // Off unless Preferences opts in; see resolveRefusalFallback() for what is
-  // measured about this and what is not.
+  // Baked in since 2026-10-06 (no longer a Preferences toggle); see
+  // resolveRefusalFallback() for what is measured and the one consequence
+  // (overload fallback) to know. keys.claudeRefusalFallbackModel is still read
+  // as an optional TARGET override; blank falls to opus-4-8.
   //
   // Named ...Retry, not ...Fallback: `refusalFallback` further down is the
   // OBSERVATION (the swap that actually happened, which the notice reports).
   // Two same-named things in one function is how a measurement starts
   // describing itself — this one is the request, that one is the event.
   const refusalRetry = resolveRefusalFallback(
-    keys?.claudeRefusalFallback,
     keys?.claudeRefusalFallbackModel,
     model,
   );
@@ -1506,7 +1507,6 @@ async function streamClaudeViaAgentSDK(args: {
                   // scope:'local' per the SDK: only this side-question's answer
                   // came from elsewhere, the session model is untouched.
                   const childRefusalRetry = resolveRefusalFallback(
-                    keys?.claudeRefusalFallback,
                     keys?.claudeRefusalFallbackModel,
                     childModel,
                   );
@@ -8626,8 +8626,22 @@ export async function POST(req: Request) {
         // `reasoning_effort` field. Per Cohere's docs, only "none" and "high"
         // are accepted (no medium/low gradations). Map the same boolean UI
         // toggle to the two valid values.
+        //
+        // EXCEPTION — Command A Vision has no reasoning support at all. Cohere's
+        // compat backend maps `reasoning_effort` onto an internal `thinking`
+        // param, and the vision model 400s with "`thinking` parameter is not
+        // supported with the specified model" the moment anything enables it.
+        // Measured 2026-10-06 against api.cohere.ai/compatibility:
+        //   command-a-vision + reasoning_effort:'high'     → 400 (above message)
+        //   command-a-vision + reasoning_effort:'none'     → 200
+        //   command-a-vision + reasoning_effort omitted    → 200
+        // So for the vision model the Thinking-Mode toggle is forced OFF
+        // ('none') regardless of the UI — a-plus and a-reasoning accept 'high'
+        // normally, so the force is model-scoped, not family-wide.
         if (isCohere) {
-          requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'none';
+          const isCohereVision = /vision/i.test(String(requestBody.model || ''));
+          requestBody.reasoning_effort =
+            (!isCohereVision && modelParams.qwenEnableThinking !== false) ? 'high' : 'none';
         }
         // Meta (Muse Spark). Two fields, both measured 2026-10-05 against
         // api.meta.ai — see the long isMeta note where the family is detected.

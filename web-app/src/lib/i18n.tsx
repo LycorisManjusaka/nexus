@@ -247,10 +247,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.claudeRefusalFallback.label': 'Retry a refused turn on another model',
   'settings.claudeRefusalFallback.help':
     "Off by default. When Anthropic's safety classifier ends a turn with stop_reason \"refusal\", Claude Code can retry it once on a different model instead of stopping. Nexus had never enabled this: the retry needs a fallback model to be configured, and Nexus did not pass one — so a refusal was always a dead stop here, even for the categories the binary does have a retry route for. Turning this on passes a fallback model and sets CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL so categories without their own route are retried too. NOT FULLY MEASURED: the option Nexus passes is documented for overload and unavailability; that the refusal path reads the same setting comes from the refusal event's own wording, not from a test. Nothing happens until a real refusal arrives — and when one does, you get a notice naming the original model, the replacement, the category and whether the swap applies to the rest of the session. A swap is never silent.",
-  'settings.claudeRefusalFallbackModel.label': 'Model to retry on',
-  'settings.claudeRefusalFallbackModel.placeholder': 'claude-sonnet-5',
+  'settings.claudeRefusalFallbackModel.label': 'Model to retry a refused turn on',
+  'settings.claudeRefusalFallbackModel.placeholder': 'claude-opus-4-8',
   'settings.claudeRefusalFallbackModel.help':
-    'Leave blank for claude-sonnet-5 — the model the two public false-positive reports switched to, and inside the same subscription, so the retry does not move billing. A comma-separated list is tried in order. Setting this to the model already in use disables the retry instead: a model that just refused cannot help, and the primary is re-tried at the start of every turn anyway.',
+    "This retry is a permanent part of NEXUS — always on, no toggle. When Anthropic's safety classifier ends a turn with stop_reason \"refusal\", it is retried once on another model automatically. Leave blank for claude-opus-4-8 — the fallback target confirmed working on 2026-10-06 (an opus-5 turn that kept refusing the same context went through once it swapped to opus-4-8; the old sonnet-5 default is the same 5-generation and can refuse the same category, which makes the swap useless). Inside the same subscription, so billing does not move. A comma-separated list is tried in order. Setting this to the model already in use disables the retry (a model that just refused cannot help). A swap is never silent: a notice names the original model, the replacement, the category and the scope every time. Note this target doubles as the SDK's overload/unavailability fallback, so an opus-5 turn can also land on opus-4-8 during an Anthropic capacity event — the same 4.8↔5 degradation this house already tolerates.",
   'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
   'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
   'settings.obsWebSocketUrl.help':
@@ -1742,10 +1742,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.claudeRefusalFallback.label': '拒否されたターンを別のモデルで再実行する',
   'settings.claudeRefusalFallback.help':
     '既定ではオフです。Anthropicの安全分類器が stop_reason "refusal" でターンを終わらせたとき、Claude Codeはそこで止まる代わりに、別のモデルで一度だけ再実行できます。Nexusはこれを一度も有効にしていませんでした — 再実行には「フォールバック先のモデル」が設定されていることが必要で、Nexusはそれを渡していなかったためです。だからこの家では、バイナリが再実行の経路を持っているカテゴリであっても、拒否は必ず行き止まりでした。オンにするとフォールバック先を渡し、さらに CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL を設定して、独自の経路を持たないカテゴリも再実行の対象にします。完全には測定していません: Nexusが渡すオプションは「過負荷・利用不能」の場合として説明されており、拒否の経路が同じ設定を読むという根拠は、拒否イベント側の記述の文言だけで、実測ではありません。本物の拒否が来るまで何も起きません — そして来たときは、元のモデル・差し替え先・分類名・以降のセッションに適用されるかを明記した通知が出ます。差し替えが黙って起きることはありません。',
-  'settings.claudeRefusalFallbackModel.label': '再実行に使うモデル',
-  'settings.claudeRefusalFallbackModel.placeholder': 'claude-sonnet-5',
+  'settings.claudeRefusalFallbackModel.label': '拒否されたターンの再実行先モデル',
+  'settings.claudeRefusalFallbackModel.placeholder': 'claude-opus-4-8',
   'settings.claudeRefusalFallbackModel.help':
-    '空欄なら claude-sonnet-5 を使います — 公開されている2件の偽陽性報告がどちらも切り替えた先で、同じサブスクリプションの中にあるため、再実行で課金先が動きません。カンマ区切りで複数指定すると順に試します。現在使っているモデルと同じものを指定すると、再実行は行いません: たった今拒否したモデルでは解決しないうえ、主モデルはどのターンの冒頭でも再試行されるからです。',
+    'この再実行は NEXUS の一部として常時オンです（オン/オフの切り替えはありません）。Anthropicの安全分類器が stop_reason "refusal" でターンを終わらせたとき、別のモデルで一度だけ自動で再実行します。空欄なら claude-opus-4-8 を使います — 2026-10-06に実機で確認した、効くフォールバック先です（opus-5 が同じ文脈で何度も拒否したターンが、opus-4-8 への自動差し替えで通りました。旧既定の sonnet-5 は同じ5世代で、同じカテゴリを拒否しうるため差し替えても無駄になりがちでした）。同じサブスクリプション内なので課金先は動きません。カンマ区切りで複数指定すると順に試します。現在使っているモデルと同じものを指定すると再実行は行いません（たった今拒否したモデルでは解決しないため）。差し替えは黙って起きず、元のモデル・差し替え先・分類名・適用範囲を明記した通知が毎回出ます。なお、この再実行先は過負荷・利用不能時のフォールバック先も兼ねるため、Anthropic側の容量不足でも opus-4-8 に着地することがあります（この家が元々許容している 4.8↔5 の縮退と同じ）。',
   'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
   'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
   'settings.obsWebSocketUrl.help':
