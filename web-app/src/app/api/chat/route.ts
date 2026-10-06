@@ -8427,7 +8427,19 @@ export async function POST(req: Request) {
         // presence_penalty, frequency_penalty and stream_options.include_usage
         // were all measured accepted, including temperature at the Creativity
         // Control maximum of 2.0, so nothing else needs stripping here.)
-        if (typeof modelParams.topK === 'number' && !isMeta) requestBody.top_k = modelParams.topK;
+        //   Cohere's OpenAI-compatibility endpoint rejects the same field with a
+        // different status. Measured 2026-10-06 against
+        // api.cohere.ai/compatibility/v1: `top_k: 40` returns 422
+        // "unprocessable entity: top_k is not supported" on ALL THREE Command A
+        // models (a-plus-05-2026, a-reasoning-08-2025, a-vision-07-2025), both
+        // with and without an image part; dropping the field returns 200 on all
+        // three. So this is NOT a vision-only fault — any Cohere turn dies the
+        // moment Top-K holds a number in the model panel. (Why only Vision
+        // looked broken in use is not measured here. The likeliest explanation
+        // is that the other two were driven from folders with the Top-K field
+        // left empty, since the field only reaches the wire when it is a
+        // number — but that was not verified.)
+        if (typeof modelParams.topK === 'number' && !isMeta && !isCohere) requestBody.top_k = modelParams.topK;
         // OpenAI GPT-5 reasoning models reject any non-default `temperature` /
         // `top_p` / `top_k` (only the model default is allowed) and 400 if they
         // are present. Strip the sampling knobs entirely — Creativity Control's

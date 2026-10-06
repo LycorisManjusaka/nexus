@@ -114,8 +114,15 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'moonshotai/Kimi-K2.6',
 
   // ── Cohere ─────────────────────────────────────────────────────────────────
-  // Only the dedicated vision variant.
+  // Two of the three Command A models take image parts. Measured 2026-10-06 on
+  // api.cohere.ai/compatibility/v1 with solid-colour PNGs: a-vision answered
+  // 3/3 (green/blue/yellow), and a-plus answered 3/3 once the budget was large
+  // enough — a-plus streams its reasoning into `content` unseparated, so a
+  // short max_tokens is eaten before it reaches the answer (likely the same
+  // root as its runaway-output behaviour in use). a-reasoning is text-only and
+  // returns 400 "image content is not supported for this model".
   'command-a-vision-07-2025',
+  'command-a-plus-05-2026',
 
   // ── MiniMax ────────────────────────────────────────────────────────────────
   // M3 is natively multimodal (image + video understanding, 1M context, MSA
