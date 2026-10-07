@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { SNIFF_BYTES, TEXT_MAX_BYTES, MEDIA_EXT, looksLikeText } from '@/lib/textSniff';
 import { useT } from '@/lib/i18n';
+import { useDevice } from './DeviceProvider';
 
 // Who's speaking in THIS browser. Kept in localStorage, not read back from
 // local_data/user_identity.json — that file is a single shared mirror the
@@ -32,6 +33,8 @@ function writeLocalIdentity(name: string, style: string) {
 
 const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenerating, disabled, aiName, vrchatMode, globalSettings, convoId }: any, ref: any) {
   const t = useT();
+  // Enter means different things on the two layouts — see handleKeyDown.
+  const { isMobile } = useDevice();
   const [text, setText] = useState('');
   const [userName, setUserName] = useState('');
   // Which VRChat transcript file is being cleared right now ('kohai' | 'ear').
@@ -666,7 +669,26 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     try { if (draftKey) localStorage.removeItem(draftKey); } catch { /* ignore */ }
   };
 
+  /**
+   * Enter sends on desktop; on mobile it is just a newline.
+   *
+   * A soft keyboard's return key is the ONLY newline key a phone has — there is
+   * no modifier to reach for — so binding it to send makes a multi-line message
+   * impossible to type without discovering Shift+Enter on a keyboard that
+   * doesn't show a Shift. Worse, the send is one keystroke away from every
+   * paragraph break: a half-written message leaves before it's finished. Mobile
+   * therefore sends by the button only (the same contract the phone web apps
+   * use), and the button is always on screen next to the field.
+   *
+   * The split is by DEVICE, not by whether a physical keyboard is attached: a
+   * tablet with a Bluetooth keyboard gets the mobile rule and has to tap send.
+   * That is the accepted cost of classifying from the User-Agent — the browser
+   * cannot tell us which keyboard produced a keystroke, and the alternative
+   * (guessing from key timing or `pointer: coarse`) would be a worse signal that
+   * fails silently. See lib/deviceClass.ts for why resolution is never consulted.
+   */
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isMobile) return; // let the textarea insert the newline itself
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -809,7 +831,9 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             disabled={disabled}
-            placeholder={isGenerating ? t('chat.interject.placeholder') : t('input.placeholder')}
+            placeholder={isGenerating
+              ? t('chat.interject.placeholder')
+              : t(isMobile ? 'input.placeholder.mobile' : 'input.placeholder')}
             className="w-full max-h-48 min-h-[44px] bg-transparent resize-none pb-3 pt-1 px-2 outline-none text-sm overflow-y-auto"
             rows={1}
           />

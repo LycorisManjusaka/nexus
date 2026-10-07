@@ -854,6 +854,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
 
   // ── Input area ───────────────────────────────────────────────────────────
   'input.placeholder': 'Send a message... (Shift+Enter for newline)',
+  // Mobile: Enter inserts a newline and the button is the only way to send, so
+  // the desktop hint would describe the wrong key. Nothing replaces it — the
+  // send button sits next to the field, and a narrow screen truncates anyway.
+  'input.placeholder.mobile': 'Send a message...',
   'input.stop': 'Stop Generating',
   'input.speakerTitle':
     'Who is speaking — shared by every open conversation, and by the voice changer',
@@ -2343,6 +2347,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   // ── 入力欄 ───────────────────────────────────────────────────────────────
   'input.placeholder': 'メッセージを送る…（Shift+Enter で改行）',
+  // モバイルでは Enter は改行で、送信は送信ボタンだけ——PC の案内は別のキーの
+  // 説明になってしまうので置かない（送信ボタンは入力欄の隣に常にある）。
+  'input.placeholder.mobile': 'メッセージを送る…',
   'input.stop': '生成を止める',
   'input.speakerTitle':
     '現在の話者 — 開いているすべての会話とボイスチェンジャーで共有されます',
