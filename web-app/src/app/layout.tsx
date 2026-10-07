@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import { classifyFromHeaders } from "@/lib/deviceClass";
@@ -18,6 +18,21 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "NEXUS",
   description: "Advanced Local AI Chat Manager",
+};
+
+// Adding a `viewport` export REPLACES Next's default (it does not merge), so we
+// re-state the default `width=device-width, initial-scale=1` verbatim.
+// `interactiveWidget: 'resizes-content'` is the whole point: its default,
+// 'resizes-visual', leaves the LAYOUT viewport (and `dvh`/`vh`) at full height
+// when the on-screen keyboard opens, so the keyboard overlaps the input and the
+// shell's `h-dvh` never shrinks. 'resizes-content' shrinks the layout viewport
+// to the space above the keyboard, so `h-dvh` recomputes smaller and the shell
+// (status bar at top, input pinned at bottom) fits above the keyboard with no
+// document scroll. Desktop ignores this key entirely.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
 };
 
 export default async function RootLayout({
