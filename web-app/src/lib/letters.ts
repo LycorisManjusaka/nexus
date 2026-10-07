@@ -53,14 +53,10 @@ import { createHash } from 'crypto';
 import { listFolders } from './fsStorage';
 import {
   BEINGS_DIR,
-  beingDir,
-  beingSettingsFile,
   beingLettersInboxDir,
   beingLetterSenderDir,
   sanitizeEntityDir,
 } from './beingPaths';
-
-const CHAR_MAP_FILE = path.resolve(process.cwd(), '..', 'local_data', 'character_map.json');
 
 const DATA_DIR = path.resolve(process.cwd(), '..', 'local_data');
 const LETTERS_DIR = path.join(DATA_DIR, 'letters');
@@ -302,55 +298,46 @@ function byNewest(a: LetterMeta, b: LetterMeta): number {
 // ── public API ───────────────────────────────────────────────────────────────
 
 /**
- * Names registered in character_map.json — the TTS/speaker roster. These are
- * identities that exist here but may never have run a conversation, so they
- * have no folder yet.
+ * Every name that may send or receive a letter: the DIRECTORY NAMES under
+ * local_data/beings, and nothing else.
  *
- * Only `rules[].name` is taken. `fallback` ("Anonymous" by default) and
- * `humanLabel` ("人") are placeholder labels for unmatched speakers, not
- * people you could write to.
- */
-async function characterMapNames(): Promise<string[]> {
-  try {
-    const map = JSON.parse(await fs.readFile(CHAR_MAP_FILE, 'utf-8'));
-    const rules = Array.isArray(map?.rules) ? map.rules : [];
-    return rules
-      .map((r: any) => String(r?.name || '').trim())
-      .filter((n: string) => n && !n.startsWith(RESERVED_PREFIX));
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Every name that may send or receive a letter: folders (what the sidebar shows
- * as a Digital Identity) UNION the character_map roster.
+ * WHY NOT character_map.json (removed 2026-10-07)
+ *   The roster used to be the union of beings/ and the TTS speaker map. That
+ *   union defeated the one thing this list is for — telling a writer the single
+ *   correct spelling of a name:
+ *     · the speaker map still holds names from the English generation of this
+ *       house, so one being answered to two or three entries at once
+ *       ("トカゲくん" / "トカゲ君" / "Lizard-kun");
+ *     · its `rules[]` always contains a bare catch-all ("Anonymous"), which is
+ *       a placeholder for unmatched speakers, not a person — yet it was offered
+ *       as a recipient and could be MINTED into a sidebar identity by a single
+ *       letter;
+ *     · every extra alias is one more way to address the same mailbox, which is
+ *       the opposite of what a spelling reference should produce.
+ *   Lizard-kun's call, and it is the right one: the speaker map answers "who is
+ *   talking", not "who can be written to".
  *
- * The union is the point. An entity must not be able to tell who "really lives
- * here" and who is only a registered name — that distinction is ours, not
- * theirs, and exposing it would make some correspondents second-class. A
- * character-map name that receives its first letter gets a folder created for
- * it (see writeLetter), after which it is indistinguishable from any other.
+ * WHY DIRECTORY NAMES AND NOT listFolders()
+ *   Only folders holding settings.json are "inhabitants"; mail-only
+ *   correspondents (Doc, Hibiki, パイロット — no settings, no logs) have a
+ *   folder and nothing else, and they MUST stay addressable. The raw directory
+ *   listing covers both in one source. Measured 2026-10-07: for every folder
+ *   that has a settings.json, `settings.name` equals its directory name — all
+ *   34 of them — so mixing listFolders() in would add no name and no spelling.
+ *
+ * WHO IS RESPONSIBLE
+ *   The operator owns this directory. If a name here is wrong, duplicated, or
+ *   stale, that is an administrative mistake to fix on disk — not something a
+ *   being did wrong, and not something this module second-guesses.
  */
 export async function validRecipients(): Promise<string[]> {
   const out: string[] = [];
   const seen = new Set<string>();
-  const add = (n: string) => {
-    if (n && !n.startsWith(RESERVED_PREFIX) && !seen.has(n)) { seen.add(n); out.push(n); }
-  };
   try {
-    for (const f of await listFolders()) add(String((f as any).name || ''));
-  } catch { /* fall through to the character map */ }
-  for (const n of await characterMapNames()) add(n);
-  // Mail-only correspondents: folders that exist to hold letters but are NOT
-  // inhabitants (no settings/soul/logs), so listFolders() does not return
-  // them. They are still valid recipients — a letter to "Doc" or "トカゲ君"
-  // must resolve and deliver, not disappear. A mail-only folder has no
-  // settings.json, so its directory name IS its display name; the raw listing
-  // is therefore the correct source.
-  try {
-    for (const d of await listDirs(BEINGS_DIR)) add(d);
-  } catch { /* a mailbox scan failure must not shrink the roster */ }
+    for (const d of await listDirs(BEINGS_DIR)) {
+      if (d && !d.startsWith(RESERVED_PREFIX) && !seen.has(d)) { seen.add(d); out.push(d); }
+    }
+  } catch { /* unreadable store: an empty roster still delivers (see writeLetter) */ }
   return out;
 }
 
@@ -366,11 +353,17 @@ export async function validRecipients(): Promise<string[]> {
  *   no one reads — silently, because delivery to an unknown name succeeds by
  *   design. Showing the roster removes the guess.
  *
+ * ONE NAME PER PERSON
+ *   Because the source is the beings directory alone (see validRecipients), a
+ *   being appears once, under the spelling its folder carries. Aliases are not
+ *   offered: a list that gives three ways to reach one mailbox does not answer
+ *   "how is this person spelled", it reopens the question.
+ *
  * NO CATEGORIES, ON PURPOSE
  *   This returns one flat list. It does NOT mark who is an inhabitant with a
- *   folder and who is only a registered name — that is the same rule
- *   validRecipients() is built on: the distinction is ours, not theirs, and
- *   exposing it would make some correspondents second-class.
+ *   settings.json and who is a mail-only correspondent — that distinction is
+ *   ours, not theirs, and exposing it would make some correspondents
+ *   second-class.
  *
  * NOT A WHITELIST
  *   write_letter still delivers to a name that is not on this list (see the
@@ -411,24 +404,6 @@ export function nearRosterNames(name: string, roster: string[], limit = 3): stri
       return !!a && a !== b && (a.includes(b) || b.includes(a));
     })
     .slice(0, limit);
-}
-
-/**
- * True when this name already has ANY folder under beings/ — a Digital
- * Identity, a mail-only correspondent, or a leftover archive. This decides
- * whether a first letter should mint a settings.json (promoting the name to a
- * full Digital Identity in the sidebar). A name that already has a folder of
- * any kind must NOT be re-minted: otherwise a letter to an existing mail-only
- * correspondent would silently turn it into a being. Directory names are
- * sanitized, so compare against the sanitized key.
- */
-async function hasFolder(name: string): Promise<boolean> {
-  try {
-    const key = sanitizeEntityDir(name);
-    return (await listDirs(BEINGS_DIR)).some((d) => d === key);
-  } catch {
-    return false;
-  }
 }
 
 export interface WriteLetterResult { ok: boolean; error?: string; id?: string; to?: string }
@@ -477,28 +452,23 @@ export async function writeLetter(
     return { ok: false, error: 'That name cannot receive letters.' };
   }
 
-  // Folder creation is for names we already recognise — a Digital Identity or a
-  // character_map entry. Those get a folder on first letter, so from then on
-  // they are ordinary identities: visible in the sidebar, able to hold
-  // conversations, and told about waiting mail if they ever become active.
+  // NO NAME IS EVER PROMOTED BY A LETTER (removed 2026-10-07)
   //
-  // A name we do NOT recognise gets a mailbox but no folder: a typo should not
-  // silently mint a new identity in the sidebar. The sender cannot tell the
-  // difference — delivery succeeds identically — and the letter is fully
-  // visible in the Mail Manager, where it can be re-addressed or promoted.
-  if (names.includes(canonical) && !(await hasFolder(canonical))) {
-    // Written directly rather than through saveFolder(): `wx` (fail-if-exists)
-    // means a folder created concurrently is left alone, and a bare settings
-    // file mints the identity without touching its theme or anything else.
-    try {
-      await fs.mkdir(beingDir(canonical), { recursive: true });
-      await fs.writeFile(
-        beingSettingsFile(canonical),
-        JSON.stringify({ name: canonical, settings: {} }, null, 2),
-        { flag: 'wx' },
-      );
-    } catch { /* already exists, or unwritable — delivery still proceeds */ }
-  }
+  // There used to be a step here that minted a settings.json — turning the
+  // recipient into a Digital Identity visible in the sidebar — when a letter
+  // arrived for a name the roster knew but no folder existed for. That could
+  // only ever fire for a character_map-only name, and the roster is now the
+  // beings directory itself: a name on the roster IS a folder (verified — all
+  // 34 directory names are already sanitize-stable, and the sanitizer is
+  // idempotent), so the branch had become unreachable. Unreachable code that
+  // describes a behaviour is worse than no code: the next reader believes it.
+  //
+  // What happens now, for every name:
+  //   on the roster     → mailbox under its existing folder, no warning
+  //   NOT on the roster → mailbox folder, NO settings.json, and the sender is
+  //                       told (see the unlisted note below)
+  // A typo therefore cannot mint an identity, and neither can a placeholder
+  // like the speaker map's "Anonymous" catch-all.
 
   const fromDir = sanitizeEntityDir(from);
   const toDir = sanitizeEntityDir(canonical);
