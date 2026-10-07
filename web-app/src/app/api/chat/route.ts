@@ -283,6 +283,7 @@ import { buildLayer4IndexBody, folderUsesSummariesForLayer4 } from '@/lib/layer4
 import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
 import { drainInjections, drainSystemNotes, pushSystemNote, clearInjections, frameInjection, type DrainedInjection } from '@/lib/injectMessage';
+import { markTurnActive, endTurn } from '@/lib/turnRegistry';
 import {
   loadInjectedMedia, injectableKinds, splitDeliverable, handoffNote, undeliverableSummary,
   anthropicInjectBlocks, geminiInjectParts, openaiInjectParts,
@@ -4380,6 +4381,10 @@ export async function POST(req: Request) {
       // text } while this request streams; the running tool loop drains those
       // messages at its next model-call boundary. Empty = feature not used.
       injectTurnId = '',
+      // Identifies the TAB that sent this turn, so another tab asking
+      // /api/chat/active can be told whether the running turn is its own.
+      // Display/advisory only — nothing here is authorized by it.
+      clientId = '',
       // ── Hidden-attachment access (read_attachment) ────────────────────────
       // Per-conversation toggle. When ON, an attachment that the user hid (the
       // eye icon) is surfaced to the entity as a 12-char ref prefix in the
@@ -4395,6 +4400,21 @@ export async function POST(req: Request) {
       // heard of this setting must still be protected.
       betrayalDefense = true,
     } = await req.json();
+
+    // ── Cross-tab visibility ────────────────────────────────────────────────
+    // Publish "a turn is running for this conversation" so another tab can warn
+    // before sending a second one into the same log. The registry is advisory:
+    // nothing below reads it, and it can never refuse a turn (see
+    // turnRegistry.ts for why that is deliberate). Retired three ways — the
+    // client's 'end' POST, this abort listener (Stop, tab closed), and a TTL if
+    // both of those are lost.
+    if (convoId && injectTurnId) {
+      try {
+        markTurnActive(convoId, injectTurnId, clientId, specificModel || aiName || undefined);
+        req.signal.addEventListener('abort', () => { try { endTurn(convoId, injectTurnId); } catch {} });
+      } catch { /* visibility is a courtesy; never block the turn on it */ }
+    }
+
     if (agentReadOnlyTools) {
       toolUseEnabled = true;
       agentDangerousTools = false;

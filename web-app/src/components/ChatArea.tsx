@@ -69,6 +69,18 @@ const MAX_JS_STRING_LENGTH = 536_870_888;
 // to be fatal. Used to warn while saving still works, and to gate sending.
 const SAVE_SIZE_WARN_THRESHOLD = Math.floor(MAX_JS_STRING_LENGTH * 0.9);
 
+// ── This tab's identity ──────────────────────────────────────────────────────
+// Sent with every turn so the server-side turn registry can tell a tab whether
+// a running turn is its own. Module scope, not a ref: each browser tab runs its
+// own copy of this module, so the value is per-tab and survives ChatArea
+// remounting (which happens on every conversation switch) — a per-component id
+// would make the same tab look like a different one after switching away and
+// back. Never rendered, so there is no hydration mismatch to worry about.
+const TAB_CLIENT_ID = `tab_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+// How often to tell the server "still running". Mirrors HEARTBEAT_MS in
+// turnRegistry.ts; the TTL there is ~3x this, so one dropped beat is harmless.
+const TURN_HEARTBEAT_MS = 8_000;
+
 const DEFAULT_CREATIVITY_INSTRUCTION =
 `Based on the conversation and this message, call set_creativity with the single most appropriate value for C:
 
@@ -415,7 +427,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   //   'error' — the turn on screen is NOT on disk; the user must act.
   //   'warn'  — the save succeeded, but the conversation is near the size
   //             ceiling and the next attachment is likely to break it.
-  const [saveError, setSaveError] = useState<{ level: 'warn' | 'error'; text: string } | null>(null);
+  // `kind: 'conflict'` additionally renders an escape hatch in the banner — the
+  // only save failure the user can resolve from here (by choosing which copy
+  // wins). Everything else is informational.
+  const [saveError, setSaveError] = useState<{ level: 'warn' | 'error'; text: string; kind?: 'conflict' } | null>(null);
   // Handover restore report — see the restore effect below. Kept separate from
   // `saveError` on purpose: that banner means "what you see is not on disk", and
   // putting a success report in it would make the prefix lie.
@@ -872,6 +887,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // needlessly churns bytes that rclone/Mercurial then have to re-sync. With
   // this flag, updatedAt only advances when the user actually changes something.
   const skipNextAutoSaveRef = useRef(false);
+  // ── Optimistic-concurrency base ───────────────────────────────────────────
+  // The `updatedAt` this tab last SAW on disk — set when the conversation is
+  // loaded, advanced on every successful save from the value the server reports
+  // writing. Sent with each save so the server can refuse one whose base has
+  // moved (another tab wrote in between). null = unguarded, which is correct
+  // only for a conversation with no file yet; the first successful save fills
+  // it in.
+  const baseUpdatedAtRef = useRef<number | null>(null);
+  // Every updatedAt THIS tab has successfully written. The auto-save is allowed
+  // to have several requests in flight at once (`savesInFlightRef` is a
+  // counter, not a mutex), so two of our own saves can carry the same base and
+  // the second comes back 409 — MEASURED, and a false alarm: the "other" writer
+  // is us. When the refused save's disk value is one of ours, adopt it and
+  // re-run instead of accusing another tab. Bounded; only the recent tail can
+  // ever be the disk head.
+  const ownWritesRef = useRef<number[]>([]);
+  // ── Cross-tab turn visibility ─────────────────────────────────────────────
+  // While a turn runs, this tab beats to /api/chat/active so other tabs can see
+  // it; on finish it retires the entry. `foreignTurn` is what we were last told
+  // about a turn running SOMEWHERE ELSE on this conversation — used to warn and
+  // to hold back a second send. Null means "nothing known", which is also what
+  // a failed probe leaves behind: not knowing must never block sending.
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const activeTurnKeyRef = useRef<{ convoId: string; turnId: string } | null>(null);
+  const [foreignTurn, setForeignTurn] = useState<{ label?: string; startedAt?: number } | null>(null);
+  // Bumped to re-fire the auto-save effect on demand — used by the conflict
+  // banner's "overwrite with this tab" escape hatch, which clears the base
+  // (one unguarded save) and then needs the effect to actually run again.
+  const [saveNonce, setSaveNonce] = useState(0);
   const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
   const [systemTokens, setSystemTokens] = useState(0);
   // Token count for the tool instruction when tool-use is enabled, otherwise 0.
@@ -1275,6 +1319,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // `<identity>_<n>` name the sidebar assigned, so the name on screen is
           // the name that gets saved on the first message.
           if (plannedTitleRef.current) setTitle(plannedTitleRef.current);
+          // No file on disk yet, so there is no base to guard against. The
+          // first successful save adopts the updatedAt the server reports.
+          baseUpdatedAtRef.current = null;
           setConvoIsLoading(false);
           return;
         }
@@ -1334,6 +1381,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // state below re-fires the auto-save effect; this flag makes that one
         // run skip its POST so the file's mtime/contents stay untouched.
         skipNextAutoSaveRef.current = true;
+        // Record the version this tab is now working from. Every save below
+        // carries it, so a save built on a snapshot another tab has already
+        // superseded is refused instead of silently overwriting.
+        baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
         const loadedMessages = (data.messages || []).map((m: any) => ({ ...m, autoPlay: false }));
         setMessages(loadedMessages);
         setTitle(data.title || 'New Conversation');
@@ -1557,6 +1608,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       try {
         body = JSON.stringify({
           id: convoId,
+          // The version this tab started from. `undefined` is dropped by
+          // JSON.stringify, so a tab with no base sends an unguarded save —
+          // which is right only for a conversation that has no file yet.
+          baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
           logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
@@ -1595,12 +1650,59 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body
       })
-        .then(res => {
+        .then(async res => {
+          if (res.status === 409) {
+            // Another tab (or browser) wrote this conversation after we loaded
+            // it. The save was REFUSED, so their work is intact — and so is
+            // ours, on screen. Nothing is merged automatically: only the human
+            // can know whether the divergence is an append or a deletion.
+            let info: any = null;
+            try { info = (await res.json())?.conflict; } catch {}
+
+            // Was the "other" writer actually us? Two of this tab's own saves
+            // can race (several may be in flight at once). That is not a
+            // conflict: adopt the value we wrote and let the effect re-run with
+            // the current state, which is the state that should be on disk.
+            if (typeof info?.diskUpdatedAt === 'number' && ownWritesRef.current.includes(info.diskUpdatedAt)) {
+              baseUpdatedAtRef.current = info.diskUpdatedAt;
+              setSaveNonce(n => n + 1);
+              return;
+            }
+
+            const where = info?.messageCount != null
+              ? t('chat.save.conflictDiskCount').replace('{n}', String(info.messageCount))
+              : '';
+            setSaveError({
+              level: 'error',
+              kind: 'conflict',
+              text: t('chat.save.conflictBody').replace('{disk}', where),
+            });
+            return;
+          }
           if (!res.ok) {
             setSaveError({
               level: 'error',
               text: `The server rejected this save (HTTP ${res.status}). Nothing on screen has been lost, but this turn is not on disk yet.`
             });
+            return;
+          }
+          // Advance the base to what the server actually wrote. Skipping this
+          // would make the very next save look stale against our own write.
+          try {
+            const j = await res.json();
+            if (typeof j?.updatedAt === 'number') {
+              baseUpdatedAtRef.current = j.updatedAt;
+              // Remember it so a racing save of our own isn't mistaken for
+              // another tab. Keep only the recent tail — anything older can no
+              // longer be the disk head.
+              ownWritesRef.current.push(j.updatedAt);
+              if (ownWritesRef.current.length > 16) ownWritesRef.current = ownWritesRef.current.slice(-16);
+            }
+          } catch {
+            // A successful save whose body we can't read leaves the base
+            // behind. Clear it rather than keep a known-stale number: an
+            // unguarded next save is better than one that always 409s.
+            baseUpdatedAtRef.current = null;
           }
         })
         .catch(err => {
@@ -1620,7 +1722,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2184,6 +2286,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       return;
     }
 
+    // ── Another tab may be mid-turn on this same conversation ───────────────
+    // This tab has no injectTurnId for THEIR turn, so the text above would be
+    // sent as a brand-new message — and whichever tab finishes last writes its
+    // own message array over the other's. MEASURED: an answer saved by one tab
+    // vanished when the other saved, and the same-day backup was overwritten
+    // too, leaving no way back.
+    //
+    // Asked fresh rather than read off the banner, which can be ~10s stale.
+    // And it ASKS instead of refusing: the registry can be wrong in the
+    // "someone is running" direction (a tab killed at the OS level holds its
+    // entry until the TTL), and a wrong refusal would make the conversation
+    // unusable for half a minute with no way to override.
+    const foreign = await probeForeignTurn();
+    if (foreign) {
+      const secs = foreign.startedAt ? Math.max(0, Math.round((Date.now() - foreign.startedAt) / 1000)) : null;
+      const ok = window.confirm(
+        t('chat.crossTab.confirmSend')
+          .replace('{label}', foreign.label || t('chat.crossTab.unknownModel'))
+          .replace('{secs}', secs != null ? String(secs) : '?')
+      );
+      if (!ok) return;
+    }
+
     // Pre-flight size check. Attachments are persisted as inline base64, so
     // every one of them counts against V8's ~512 MB max-string-length ceiling
     // for the whole conversation. Warn HERE — before the model is called and
@@ -2473,7 +2598,83 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setStallIdleSeconds(null);
     setInjectTurnId(null);
     setInterjectStatus(null);
+    // Stop beating and retire this conversation's registry entry — otherwise
+    // other tabs keep being told a turn is running for up to the TTL.
+    retireTurnRegistration();
   };
+
+  // ── Turn registry: publish, retire, probe ─────────────────────────────────
+  // All three are best-effort. The registry only ever answers a question, and
+  // the real protection against two tabs clobbering each other is the save
+  // guard (optimistic concurrency in /api/logs) — so a failed beat, a lost
+  // 'end', or an unreachable probe must never stop a turn or block a send.
+  const beginTurnRegistration = (cid: string, turnId: string) => {
+    activeTurnKeyRef.current = { convoId: cid, turnId };
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = setInterval(() => {
+      const k = activeTurnKeyRef.current;
+      if (!k) return;
+      fetch('/api/chat/active', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ convoId: k.convoId, turnId: k.turnId, event: 'beat' }),
+      }).catch(() => { /* a dropped beat costs nothing until the TTL */ });
+    }, TURN_HEARTBEAT_MS);
+  };
+
+  const retireTurnRegistration = () => {
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    const k = activeTurnKeyRef.current;
+    activeTurnKeyRef.current = null;
+    if (!k) return;
+    fetch('/api/chat/active', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ convoId: k.convoId, turnId: k.turnId, event: 'end' }),
+    }).catch(() => { /* the server's abort listener and the TTL both cover this */ });
+  };
+
+  /** Is a turn running elsewhere on this conversation? Stores AND returns it. */
+  const probeForeignTurn = async (): Promise<{ label?: string; startedAt?: number } | null> => {
+    try {
+      const r = await fetch(`/api/chat/active?convoId=${encodeURIComponent(convoId)}&clientId=${encodeURIComponent(TAB_CLIENT_ID)}`);
+      if (!r.ok) return null;
+      const j = await r.json();
+      // The server decides "mine" — this tab does not re-derive it.
+      const foreign = j?.active && !j?.mine ? { label: j.label, startedAt: j.startedAt } : null;
+      setForeignTurn(foreign);
+      return foreign;
+    } catch {
+      return null;
+    }
+  };
+
+  // Keep `foreignTurn` current. Mirrors the runtime-flags probe (mount, window
+  // focus, tab becoming visible) and adds a slow interval, because unlike a
+  // server flag this can change while the tab just sits there. Skipped while
+  // THIS tab is generating — the answer would be "yes, you", and sending is
+  // already unavailable then.
+  useEffect(() => {
+    if (!convoId) return;
+    let cancelled = false;
+    const read = () => { if (!cancelled && !loading) probeForeignTurn(); };
+    read();
+    const iv = setInterval(read, 10_000);
+    const onVisible = () => { if (document.visibilityState === 'visible') read(); };
+    window.addEventListener('focus', read);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+      window.removeEventListener('focus', read);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [convoId, loading]);
+
+  // Leaving (conversation switch, tab close) must not leave this tab's entry
+  // behind — another tab would be told a turn is running for up to the TTL.
+  // Safe on unmount only: everything it touches is a ref.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => { retireTurnRegistration(); }, []);
 
   // Send a mid-turn interjection to the running turn. Fire-and-forget POST to
   // /api/chat/inject; the backend queues it and the tool loop folds it in at
@@ -2535,6 +2736,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // input can address this specific turn.
     const turnId = `turn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     setInjectTurnId(turnId);
+    // Tell other tabs this conversation is busy, and keep saying so while the
+    // stream runs. The server also registers the turn itself (chat route), so
+    // this only has to keep the entry from expiring.
+    beginTurnRegistration(convoId, turnId);
     setInterjectStatus(null);
 
     // Continuing: reuse the existing message's id so every streaming update
@@ -2708,7 +2913,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         browserAllowAnyHost, browserCompact,
         computerControlEnabled,
         appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId,
+        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId, clientId: TAB_CLIENT_ID,
         // Absolute Base Binding — HINTS, not controls. The route injects the
         // Binding whatever these say (lib/baseBinding.ts); `baseBindingMode` is
         // honoured only when the server process carries the developer
@@ -3265,6 +3470,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setStallIdleSeconds(null);
     setInjectTurnId(null);
     setInterjectStatus(null);
+    // Stop beating and retire this conversation's registry entry — otherwise
+    // other tabs keep being told a turn is running for up to the TTL.
+    retireTurnRegistration();
   };
 
   const handleRerun = async (msgId: string) => {
@@ -4311,6 +4519,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             </span>
             {saveError.text}
           </span>
+          {/* Conflict escape hatch. A refused save protected the OTHER tab's
+              work, which is the right default — but this tab may be the one
+              holding a finished turn that now cannot reach disk. So the human
+              gets to choose which copy wins, explicitly. One unguarded save:
+              the base is cleared, then re-adopted from what the server writes. */}
+          {saveError.kind === 'conflict' && (
+            <button
+              type="button"
+              onClick={() => {
+                baseUpdatedAtRef.current = null;
+                setSaveError(null);
+                setSaveNonce(n => n + 1);
+              }}
+              className="px-2 py-0.5 text-[10px] font-semibold rounded transition-colors shrink-0 bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25"
+              title={t('chat.save.conflictOverwriteTitle')}
+            >
+              {t('chat.save.conflictOverwrite')}
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setSaveError(null)}
@@ -4323,6 +4550,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             {t('chat.save.dismiss')}
           </button>
+        </div>
+      )}
+
+      {/* Another tab/browser/device is mid-turn on THIS conversation. Not
+          dismissible on purpose: it disappears on its own when their turn ends
+          (or within the registry TTL if that tab died), and a notice you can
+          hide is exactly the one you hide before sending the message that
+          overwrites their answer. Blue, not amber — this is a fact about where
+          the conversation is being used, not a fault. */}
+      {foreignTurn && !loading && (
+        <div className="shrink-0 px-6 py-2 border-b border-blue-500/40 bg-blue-500/10 flex items-start gap-3">
+          <span className="text-sm leading-5 shrink-0 text-blue-500">⏳</span>
+          <span className="text-xs leading-5 flex-1 text-blue-700 dark:text-blue-300">
+            <span className="font-semibold">{t('chat.crossTab.bannerPrefix')}</span>
+            {t('chat.crossTab.bannerBody').replace('{label}', foreignTurn.label || t('chat.crossTab.unknownModel'))}
+          </span>
         </div>
       )}
 

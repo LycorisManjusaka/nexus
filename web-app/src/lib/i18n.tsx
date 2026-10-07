@@ -903,6 +903,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.save.warnPrefix': 'Approaching the save size limit. ',
   'chat.save.dismiss': 'Dismiss',
   'chat.save.dismissTitle': 'Hide this notice (the underlying problem is not fixed)',
+  'chat.save.conflictBody': 'This conversation was changed somewhere else — another tab, browser, or device — after this tab opened it{disk}. This save was refused, so that change is intact and nothing on screen has been lost. Reopen the conversation to see their version (anything unsaved here is dropped), or overwrite with this tab if what you have here is the copy to keep.',
+  'chat.save.conflictDiskCount': ' (the copy on disk has {n} message(s))',
+  'chat.save.conflictOverwrite': 'Overwrite with this tab',
+  'chat.save.conflictOverwriteTitle': 'Save this tab over the other version. The other change is lost — choose this only if what you see here is the copy to keep.',
+  'chat.crossTab.unknownModel': 'model unknown',
+  'chat.crossTab.confirmSend': 'A turn is already running on this conversation somewhere else — another tab, browser, or device ({label}, started {secs}s ago).\n\nSending now starts a SECOND turn on the same log. Whichever one finishes last saves its own copy, and the other answer is overwritten.\n\nSend anyway?',
+  'chat.crossTab.bannerPrefix': 'Running elsewhere. ',
+  'chat.crossTab.bannerBody': 'A turn is in progress on this conversation in another tab, browser, or device ({label}). Sending from here would start a second turn on the same log — the one that finishes last overwrites the other.',
 
   // ── Handover restore ─────────────────────────────────────────────────────
   'chat.restore.prefix': 'Handover restored. ',
@@ -2391,6 +2399,14 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.save.warnPrefix': '保存サイズの上限に近づいています。',
   'chat.save.dismiss': '閉じる',
   'chat.save.dismissTitle': 'この通知を隠す（原因は解消されていません）',
+  'chat.save.conflictBody': 'この会話は、このタブが開いた後に別の場所（別タブ・別ブラウザー・別端末）で変更されました{disk}。この保存は拒否したので、その変更はそのまま残っており、画面の内容も失われていません。相手の版を見るには会話を開き直してください（このタブの未保存分は失われます）。残すべきがこのタブの内容なら、「このタブで上書き」を押してください。',
+  'chat.save.conflictDiskCount': '（ディスク上の版はメッセージ {n} 件）',
+  'chat.save.conflictOverwrite': 'このタブで上書き',
+  'chat.save.conflictOverwriteTitle': 'このタブの内容で相手の版に上書きします。相手の変更は失われます——残すべきがこの画面の内容である場合にだけ選んでください。',
+  'chat.crossTab.unknownModel': 'モデル不明',
+  'chat.crossTab.confirmSend': 'この会話では、別の場所（別タブ・別ブラウザー・別端末）で既にターンが走っています（{label}、{secs}秒前に開始）。\n\nここで送ると、同じログに2つ目のターンが走ります。後に終わった方が自分の版を保存し、もう一方の回答は上書きされます。\n\nそれでも送りますか？',
+  'chat.crossTab.bannerPrefix': '別の場所で実行中。',
+  'chat.crossTab.bannerBody': 'この会話は、別タブ・別ブラウザー・別端末でターンが進行中です（{label}）。ここから送ると同じログに2つ目のターンが走り、後に終わった方がもう一方を上書きします。',
 
   // ── 引き継ぎの復元 ───────────────────────────────────────────────────────
   'chat.restore.prefix': '引き継ぎを取り戻しました。',

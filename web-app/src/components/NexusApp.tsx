@@ -457,7 +457,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
       await fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, logData: data }),
+        // A rename changes metadata, not content: keep updatedAt so an open
+        // ChatArea's save-guard base stays valid and the sidebar's "latest"
+        // ordering doesn't treat renaming as new activity.
+        body: JSON.stringify({ id, logData: data, preserveUpdatedAt: true }),
       });
       // Reconcile in the background (in case the server normalized anything)
       fetchLogs();
@@ -484,7 +487,8 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
       await fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, logData: data }),
+        // Metadata, same as rename — see preserveUpdatedAt in /api/logs.
+        body: JSON.stringify({ id, logData: data, preserveUpdatedAt: true }),
       });
       fetchLogs();
     } catch (e) {
@@ -526,7 +530,8 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         await fetch('/api/logs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: t.id, logData: data }),
+          // Renumbering is a rename in bulk — same reasoning.
+          body: JSON.stringify({ id: t.id, logData: data, preserveUpdatedAt: true }),
         });
       } catch (e) {
         console.error('normalize rename failed for', t.id, e);

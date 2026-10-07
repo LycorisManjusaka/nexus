@@ -949,7 +949,56 @@ async function externalizeInlineAttachments(logData: any): Promise<number> {
   return moved;
 }
 
-export async function saveLog(convoId: string, logData: any) {
+/**
+ * What a save attempt did. Existing callers ignore the return value, which is
+ * why the conflict path has to be OPT-IN (`expectedUpdatedAt`) rather than a
+ * new default: a save that silently started failing would be worse than the
+ * overwrite it prevents.
+ */
+export interface SaveLogResult {
+  ok: boolean;
+  /** Present only when the save was REFUSED because disk moved underneath. */
+  conflict?: { diskUpdatedAt: number; title?: string; messageCount?: number };
+  /**
+   * The `updatedAt` actually written. The client needs this as the base for its
+   * NEXT save — without it, the first successful guarded save would make every
+   * following one look stale.
+   */
+  writtenUpdatedAt?: number;
+}
+
+/** How much of a log file's head is read to answer metadata questions. */
+const HEADER_WINDOW_BYTES = 4096;
+
+/**
+ * Read the `updatedAt` already on disk without parsing the whole file.
+ *
+ * `serializeLogHeaderFirst` hoists updatedAt into the first few fields (measured
+ * at byte offset ~125 on a real log), so the same 4 KB header window the rest of
+ * this module uses is enough. Returns null when the field isn't in that window —
+ * callers must treat null as "cannot tell", never as "unchanged".
+ */
+async function readHeaderWindow(filePath: string): Promise<{ updatedAt: number | null; active: boolean | null; title: string | null }> {
+  const out: { updatedAt: number | null; active: boolean | null; title: string | null } = { updatedAt: null, active: null, title: null };
+  try {
+    const fh = await fs.open(filePath, 'r');
+    const buf = Buffer.alloc(HEADER_WINDOW_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEADER_WINDOW_BYTES, 0);
+    await fh.close();
+    const head = buf.subarray(0, bytesRead).toString('utf-8');
+    const ua = head.match(/"updatedAt"\s*:\s*(\d+)/);
+    if (ua) out.updatedAt = Number(ua[1]);
+    const ac = head.match(/"active"\s*:\s*(true|false)/);
+    if (ac) out.active = ac[1] === 'true';
+    const ti = head.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (ti) { try { out.title = JSON.parse(`"${ti[1]}"`); } catch { out.title = null; } }
+  } catch {
+    // Missing file is the normal "creating a new conversation" case.
+  }
+  return out;
+}
+
+export async function saveLog(convoId: string, logData: any, opts?: { expectedUpdatedAt?: number }): Promise<SaveLogResult> {
   await ensureDirs();
   const folderName = logData.folderName || 'Default';
 
@@ -957,6 +1006,45 @@ export async function saveLog(convoId: string, logData: any) {
   // interleave bytes on disk. Both the main write and the backup write happen
   // under the same lock.
   return withWriteLock(`log:${convoId}`, async () => {
+    // ── Optimistic concurrency ────────────────────────────────────────────
+    // Two tabs (or two browsers) on the same conversation each hold their own
+    // copy of the message array in memory, and the auto-save fires on ANY of
+    // ~50 fields — so ticking one checkbox in tab A writes tab A's stale array
+    // over whatever tab B appended. MEASURED: an answer saved by B vanished
+    // when A toggled a single setting, and the same-day auto-backup was
+    // overwritten too, leaving no recovery path at all.
+    //
+    // So a caller that knows which version it started from can say so, and a
+    // save whose base no longer matches disk is REFUSED rather than merged.
+    // Merging is not attempted on purpose: nothing here can know whether two
+    // divergent message arrays are an append or a deletion.
+    //
+    // This runs INSIDE the write lock (so compare-then-write is atomic) and
+    // BEFORE the move-away cleanup below (so a refused save does not delete
+    // another being's copy on its way out).
+    if (typeof opts?.expectedUpdatedAt === 'number') {
+      const existingPath = path.join(beingLogsDir(folderName), `${convoId}.json`);
+      const head = await readHeaderWindow(existingPath);
+      if (head.updatedAt !== null && head.updatedAt !== opts.expectedUpdatedAt) {
+        let messageCount: number | undefined;
+        try {
+          const full = JSON.parse(await fs.readFile(existingPath, 'utf-8'));
+          if (Array.isArray(full?.messages)) messageCount = full.messages.length;
+        } catch {
+          // Counting is a courtesy for the warning text; failing to count must
+          // not turn a clean refusal into an error.
+        }
+        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}`);
+        return { ok: false, conflict: { diskUpdatedAt: head.updatedAt, title: head.title ?? undefined, messageCount } };
+      }
+      // head.updatedAt === null means the file is absent (new conversation) or
+      // the field fell outside the header window. Both PASS: a guard that
+      // cannot read the base must not start rejecting real saves.
+      if (head.updatedAt === null) {
+        try { if ((await fs.stat(existingPath)).isFile()) console.warn(`[saveLog] ${convoId}: updatedAt not in header window — conflict check skipped`); } catch {}
+      }
+    }
+
     // Move-away cleanup: remove old copies of this convoId under any OTHER
     // being (compare by the sanitized on-disk key, since that's the actual
     // directory identity — two display names that sanitize to the same key
@@ -980,15 +1068,8 @@ export async function saveLog(convoId: string, logData: any) {
     // which would otherwise silently revert a "Mark inactive" toggle a few
     // seconds later. A save that says nothing about `active` must not change it.
     if (logData.active === undefined) {
-      try {
-        const fh = await fs.open(filePath, 'r');
-        const buf = Buffer.alloc(4096);
-        const { bytesRead } = await fh.read(buf, 0, 4096, 0);
-        await fh.close();
-        const head = buf.subarray(0, bytesRead).toString('utf-8');
-        const m = head.match(/"active"\s*:\s*(true|false)/);
-        if (m) logData.active = m[1] === 'true';
-      } catch {}
+      const head = await readHeaderWindow(filePath);
+      if (head.active !== null) logData.active = head.active;
     }
     // Convert any old-format inline payloads before serializing, so a restored
     // backup or an imported JSON export doesn't get written back inline.
@@ -1060,6 +1141,8 @@ export async function saveLog(convoId: string, logData: any) {
     // paths, OAuth included), so a single call here catches every footer edit.
     // Best-effort and de-duplicated — see backupFooterIfChanged.
     await backupFooterIfChanged(folderName);
+
+    return { ok: true, writtenUpdatedAt: logData.updatedAt };
   });
 }
 
