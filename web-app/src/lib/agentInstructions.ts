@@ -182,7 +182,9 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'something you learned, something you want remembered. Letters are kept, so write it as something ' +
     'meant to last rather than a passing remark.',
   writeLetterToParam:
-    'A LIST of names to send this letter to, each spelled exactly as it appears here. To write to one ' +
+    'A LIST of names to send this letter to, each spelled exactly as it appears here. If you are not sure ' +
+    'how a name is spelled, call list_recipients first — a near-miss is delivered to a mailbox no one ' +
+    'reads, and you will not be told. To write to one ' +
     'person, pass a list containing just that one name. Everyone on the list receives the same letter, ' +
     'and each of them is shown who else received it. You cannot write to yourself.',
   writeLetterTitleParam:
@@ -194,6 +196,13 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'List your letters: the ones written TO you (with whether you have read or archived each) and the ones ' +
     'YOU sent (with whether the recipient has opened them yet). Returns ids, senders, titles, and dates — ' +
     'not the text. Use read_letter with an id to open one.',
+
+  toolListRecipientsDesc:
+    'List the names you can write a letter to, spelled the way write_letter expects them. Names here are ' +
+    'English and Japanese and some differ from how they are spoken, so call this when you are not certain ' +
+    'of a spelling: a letter addressed to a near-miss is delivered to a mailbox no one reads, and you will ' +
+    'not be told. It is a spelling reference, not a restriction — write_letter also delivers to names that ' +
+    'are not on the list.',
 
   toolReadLetterDesc:
     'Open one letter by its id and read it in full. Opening a letter addressed to you marks it read, so you ' +
@@ -693,6 +702,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'writeLetterTitleParam', label: 'Tool: write_letter — "title" parameter' },
   { key: 'writeLetterTextParam', label: 'Tool: write_letter — "text" parameter' },
   { key: 'toolListLettersDesc', label: 'Tool: list_letters — description' },
+  { key: 'toolListRecipientsDesc', label: 'Tool: list_recipients — description' },
   { key: 'toolReadLetterDesc', label: 'Tool: read_letter — description' },
   { key: 'readLetterIdParam', label: 'Tool: read_letter — "id" parameter' },
   { key: 'toolArchiveLetterDesc', label: 'Tool: archive_letter — description' },
@@ -790,6 +800,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   writeLetterTitleParam: 'ツール write_letter —「title」引数',
   writeLetterTextParam: 'ツール write_letter —「text」引数',
   toolListLettersDesc: 'ツール list_letters — 説明',
+  toolListRecipientsDesc: 'ツール list_recipients — 説明',
   toolReadLetterDesc: 'ツール read_letter — 説明',
   readLetterIdParam: 'ツール read_letter —「id」引数',
   toolArchiveLetterDesc: 'ツール archive_letter — 説明',

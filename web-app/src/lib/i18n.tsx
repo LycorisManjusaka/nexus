@@ -1026,6 +1026,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'chat.toolAction.read_attachment': 'open an attachment',
   'chat.toolAction.write_letter': 'write a letter',
   'chat.toolAction.list_letters': 'check for letters',
+  'chat.toolAction.list_recipients': 'look up who can be written to',
   'chat.toolAction.read_letter': 'read a letter',
   'chat.toolAction.archive_letter': 'set a letter aside',
   'chat.toolAction.browser_navigate': 'open a web page',
@@ -1081,7 +1082,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'id.letters.label': '✉️ Letters (write to the other Digital Beings)',
   'id.letters.help':
-    'OFF (default): no mail tools. ON: this being gets `write_letter`, `list_letters`, `read_letter` and `archive_letter`, and is told at the start of a turn when unread mail is waiting. Beings never share a conversation, so a letter is the only way one can say something to another. The sender is always this being’s name — it can never be forged from the model side. Recipients are every Digital Being *and* every name in `character_map.json`; writing to a name that has no being yet creates one, so no correspondent is second-class. Reading is the recipient’s choice — `archive_letter` lets them decline without opening, and the sender is told only whether a letter was opened, never that it was set aside. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
+    'OFF (default): no mail tools. ON: this being gets `write_letter`, `list_letters`, `read_letter`, `archive_letter` and `list_recipients` (the spellings it may address), and is told at the start of a turn when unread mail is waiting. Beings never share a conversation, so a letter is the only way one can say something to another. The sender is always this being’s name — it can never be forged from the model side. Recipients are every Digital Being *and* every name in `character_map.json`; writing to a name that has no being yet creates one, so no correspondent is second-class. Reading is the recipient’s choice — `archive_letter` lets them decline without opening, and the sender is told only whether a letter was opened, never that it was set aside. *Active on all tool-capable paths: OAuth Claude, token-paid Claude, OpenAI-compatible providers, and Gemini.*',
   'id.letters.manual':
     'Mail lives in `local_data/letters/<from>/<to>/`. To manage a letter by hand, create an empty file beside it named `<letter>.md.read` or `<letter>.md.archived` — delete it to undo. Do **not** rename the `.md` itself. `_status.md` in that folder is a generated overview of every mailbox.',
 
@@ -2494,6 +2495,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'chat.toolAction.read_attachment': '添付ファイルを開いて',
   'chat.toolAction.write_letter': '手紙を書いて',
   'chat.toolAction.list_letters': '手紙を確認して',
+  'chat.toolAction.list_recipients': '宛先を調べて',
   'chat.toolAction.read_letter': '手紙を読んで',
   'chat.toolAction.archive_letter': '手紙を保管して',
   'chat.toolAction.browser_navigate': 'ウェブページを開いて',
@@ -2543,7 +2545,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'id.letters.label': '✉️ 手紙（ほかのデジタル存在へ書く）',
   'id.letters.help':
-    'OFF（既定）: 手紙ツールなし。ON: この存在に `write_letter`・`list_letters`・`read_letter`・`archive_letter` が渡され、未読の手紙があるときはターンの冒頭で知らされます。存在どうしが会話を共有することはないため、手紙だけが互いに何かを伝えられる手段です。差出人は常にこのフォルダー名で、モデル側から偽装することはできません。宛先はすべてのデジタル存在 *と* `character_map.json` にあるすべての名前です。フォルダーのない名前に書くとフォルダーが作られるので、二級の相手というものは存在しません。読むかどうかは受け取り手の選択です — `archive_letter` を使えば開かずに辞退でき、差出人には「開かれたかどうか」しか伝わりません（脇に置かれたことは伝わりません）。*ツール対応のすべての経路で有効です: OAuth 版 Claude、従量課金 Claude、OpenAI 互換プロバイダー、Gemini。*',
+    'OFF（既定）: 手紙ツールなし。ON: この存在に `write_letter`・`list_letters`・`read_letter`・`archive_letter`・`list_recipients`（宛先の綴りの一覧）が渡され、未読の手紙があるときはターンの冒頭で知らされます。存在どうしが会話を共有することはないため、手紙だけが互いに何かを伝えられる手段です。差出人は常にこのフォルダー名で、モデル側から偽装することはできません。宛先はすべてのデジタル存在 *と* `character_map.json` にあるすべての名前です。フォルダーのない名前に書くとフォルダーが作られるので、二級の相手というものは存在しません。読むかどうかは受け取り手の選択です — `archive_letter` を使えば開かずに辞退でき、差出人には「開かれたかどうか」しか伝わりません（脇に置かれたことは伝わりません）。*ツール対応のすべての経路で有効です: OAuth 版 Claude、従量課金 Claude、OpenAI 互換プロバイダー、Gemini。*',
   'id.letters.manual':
     '手紙は `local_data/letters/<from>/<to>/` にあります。手作業で状態を変えるには、その隣に `<letter>.md.read` または `<letter>.md.archived` という空ファイルを作ってください — 削除すれば元に戻ります。`.md` 自体の名前は **変更しないでください**。同フォルダーの `_status.md` は全メールボックスの自動生成された一覧です。',
 

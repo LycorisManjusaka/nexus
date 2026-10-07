@@ -355,6 +355,65 @@ export async function validRecipients(): Promise<string[]> {
 }
 
 /**
+ * The roster as a CORRESPONDENT sees it: every name they may address, minus
+ * themselves, sorted for reading.
+ *
+ * WHY THIS EXISTS AT ALL
+ *   Names here are English and Japanese in the same list, and several beings
+ *   answer to spellings that differ from how they are spoken ("Doc", "トカゲ君",
+ *   "パイメロちゃん"). Until this tool, an entity composing a letter had to GUESS
+ *   the spelling, and a near-miss ("カナちゃん" for "カナ") delivers to a mailbox
+ *   no one reads — silently, because delivery to an unknown name succeeds by
+ *   design. Showing the roster removes the guess.
+ *
+ * NO CATEGORIES, ON PURPOSE
+ *   This returns one flat list. It does NOT mark who is an inhabitant with a
+ *   folder and who is only a registered name — that is the same rule
+ *   validRecipients() is built on: the distinction is ours, not theirs, and
+ *   exposing it would make some correspondents second-class.
+ *
+ * NOT A WHITELIST
+ *   write_letter still delivers to a name that is not on this list (see the
+ *   note there). This answers "how is that person spelled here", not "who am I
+ *   permitted to write to" — and the tool result says so, because an entity
+ *   that believed this list was exhaustive would stop writing to someone it was
+ *   right to write to.
+ *
+ * Self is removed rather than shown-and-refused: offering a choice the next
+ * call rejects is a false option. Compared both raw and sanitized, since the
+ * folder listing contributes directory names.
+ */
+export async function listRecipientsFor(me: string): Promise<string[]> {
+  const selfKey = sanitizeEntityDir(me || '');
+  return (await validRecipients())
+    .filter((n) => n !== me && (!selfKey || sanitizeEntityDir(n) !== selfKey))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Roster names that look like a near-miss for `name`: one string contains the
+ * other, case-insensitively.
+ *
+ * Deliberately crude. It is not a spell-checker and does not try to be — it
+ * catches the shape that has ACTUALLY gone wrong here, which is a display name
+ * used where a routing token belongs ("Castor（カストル）" for "Castor",
+ * "Private（プライベート）" for "Private"). An edit-distance match would also
+ * fire on genuinely different names, and a wrong suggestion in a warning is
+ * worse than no suggestion: it would send the writer to the wrong person with
+ * confidence.
+ */
+export function nearRosterNames(name: string, roster: string[], limit = 3): string[] {
+  const b = (name || '').trim().toLowerCase();
+  if (!b) return [];
+  return roster
+    .filter((r) => {
+      const a = (r || '').toLowerCase();
+      return !!a && a !== b && (a.includes(b) || b.includes(a));
+    })
+    .slice(0, limit);
+}
+
+/**
  * True when this name already has ANY folder under beings/ — a Digital
  * Identity, a mail-only correspondent, or a leftover archive. This decides
  * whether a first letter should mint a settings.json (promoting the name to a
@@ -715,7 +774,7 @@ export async function saveAnnounceState(convoId: string, state: AnnounceState): 
 // lesson as read_conversation/search_conversations. One executor, four thin
 // call sites, so a fix can never land on three paths out of four.
 
-export const LETTER_TOOL_NAMES = ['write_letter', 'list_letters', 'read_letter', 'archive_letter'] as const;
+export const LETTER_TOOL_NAMES = ['write_letter', 'list_letters', 'read_letter', 'archive_letter', 'list_recipients'] as const;
 
 export interface LetterToolCtx {
   /** The entity making the call — resolved from the conversation's folder. */
@@ -859,9 +918,61 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
           I.letterDeliveryConfirm || DEFAULT_LETTER_STRINGS.letterDeliveryConfirm,
           { to: delivered.join(', '), title, id: firstId },
         );
+
+        // A name that is NOT on the roster is still delivered — refusing would
+        // teach which names are "real", the exact distinction this module
+        // exists to hide. But the sender is now TOLD, because the failure it
+        // prevents is silent on both sides:
+        //
+        //   望月希子 addressed "Castor（カストル）" — the DISPLAY name, where the
+        //   routing token "Castor" belongs. NEXUS created that folder and filed
+        //   the letter in it. Castor cannot see it (his own mailbox is
+        //   elsewhere), and the sender is never told whether a letter was read,
+        //   by design. So the letter was neither lost nor delivered, and
+        //   NOBODY HAD A PATH TO FIND OUT. Reported by Doc, 2026-10-07.
+        //
+        // Delivery stays unconditional. Only the silence ends.
+        const unlisted = delivered.filter(
+          (n) => !roster.some((r) => r === n || r.toLowerCase() === n.toLowerCase()),
+        );
+        const notes: string[] = [];
         // Partial success is reported, never swallowed: the entity must know
         // which copies did not go out so it can decide whether to retry.
-        return failed.length ? `${confirm}\n\nNot delivered: ${failed.join('; ')}` : confirm;
+        if (failed.length) notes.push(`Not delivered: ${failed.join('; ')}`);
+        if (unlisted.length) {
+          notes.push([
+            ...unlisted.map((n) => {
+              const near = nearRosterNames(n, roster);
+              return near.length
+                ? `"${n}" is not a name registered here — did you mean ${near.map((x) => `"${x}"`).join(' or ')}?`
+                : `"${n}" is not a name registered here.`;
+            }),
+            'The letter WAS delivered, and writing to an unregistered name can be the right choice. ' +
+            'But no one is told when such a letter has no reader — so if you meant someone else, ' +
+            'call list_recipients for the exact spelling and send it again.',
+          ].join('\n'));
+        }
+        return notes.length ? `${confirm}\n\n${notes.join('\n\n')}` : confirm;
+      }
+
+      case 'list_recipients': {
+        const names = await listRecipientsFor(me);
+        if (names.length === 0) {
+          return 'No one else is registered here, so there is no one to write to yet.';
+        }
+        return [
+          `${names.length} name${names.length === 1 ? '' : 's'} you can write to, spelled exactly as write_letter expects them:`,
+          '',
+          ...names.map((n) => `- ${n}`),
+          '',
+          // Both caveats matter, and leaving either out would mislead. Without
+          // the first, an entity wonders why it is missing from the list it is
+          // reading. Without the second, it would treat the list as exhaustive
+          // and stop writing to someone it was right to write to — write_letter
+          // delivers to unlisted names by design.
+          'You are not on this list — you cannot write to yourself. The list is not a restriction either: ' +
+          'write_letter will also deliver to a name that is not here. It answers how someone is spelled, not who you may address.',
+        ].join('\n');
       }
 
       case 'list_letters': {

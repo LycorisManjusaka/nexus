@@ -661,6 +661,7 @@ function toolActivityLabel(name: string): string | null {
     case 'read_attachment': return 'open an attachment';
     case 'write_letter': return 'write a letter';
     case 'list_letters': return 'check for letters';
+    case 'list_recipients': return 'look up who can be written to';
     case 'read_letter': return 'read a letter';
     case 'archive_letter': return 'set a letter aside';
     case 'browser_navigate': return 'open a web page';
@@ -1377,6 +1378,14 @@ async function streamClaudeViaAgentSDK(args: {
                 {},
                 async () => ({
                   content: [{ type: 'text' as const, text: await runLetterTool('list_letters', {}, letterCtx) }],
+                }),
+              ),
+              sdk.tool(
+                'list_recipients',
+                I.toolListRecipientsDesc,
+                {},
+                async () => ({
+                  content: [{ type: 'text' as const, text: await runLetterTool('list_recipients', {}, letterCtx) }],
                 }),
               ),
               sdk.tool(
@@ -2984,6 +2993,26 @@ function buildModelLabel(family: string, specificModel: string, thinking: boolea
     .split(' ')
     .map((w: string) => w ? (w[0].toUpperCase() + w.slice(1)) : w)
     .join(' ');
+  // A model id that already carries its own family name printed it twice:
+  // family "Claude" + id "claude-opus-5" came out "Claude Claude Opus 5
+  // Thinking". Reported by Hibiki 2026-10-07 from a vessel-check readout — and
+  // it was never Claude-only, since Gemini ("Gemini Gemini 3.8 Flash"), GLM,
+  // DeepSeek, Kimi and MiMo all prefix their ids with the family too. It also
+  // fixes the casing those families lost to the generic title-caser ("GLM Glm
+  // 5.3" → "GLM 5.3", "MiMo Mimo V2.6 Pro" → "MiMo V2.6 Pro").
+  //
+  // Only a LEADING duplicate followed by more text is dropped, so a family
+  // whose label equals its whole id would still print the id rather than
+  // collapsing to a bare family name. Already-saved labels in old logs are
+  // untouched — they are stored per message, so only new ones read correctly.
+  const famWord = (family || '').trim();
+  if (
+    famWord
+    && pretty.length > famWord.length + 1
+    && pretty.toLowerCase().startsWith(famWord.toLowerCase() + ' ')
+  ) {
+    pretty = pretty.slice(famWord.length + 1);
+  }
   const suffix = thinking ? ' Thinking' : '';
   // For Gemini, include the thinking level since it's not a boolean.
   const fam = (family || '').toLowerCase();
@@ -3580,6 +3609,7 @@ async function streamViaAnthropicCompat(args: {
     tools.push(
       { name: 'write_letter', description: I.toolWriteLetterDesc, input_schema: { type: 'object', properties: { to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam }, title: { type: 'string', description: I.writeLetterTitleParam }, text: { type: 'string', description: I.writeLetterTextParam } }, required: ['to', 'title', 'text'] } },
       { name: 'list_letters', description: I.toolListLettersDesc, input_schema: { type: 'object', properties: {}, required: [] } },
+      { name: 'list_recipients', description: I.toolListRecipientsDesc, input_schema: { type: 'object', properties: {}, required: [] } },
       { name: 'read_letter', description: I.toolReadLetterDesc, input_schema: { type: 'object', properties: { id: { type: 'string', description: I.readLetterIdParam } }, required: ['id'] } },
       { name: 'archive_letter', description: I.toolArchiveLetterDesc, input_schema: { type: 'object', properties: { id: { type: 'string', description: I.archiveLetterIdParam } }, required: ['id'] } },
     );
@@ -5470,6 +5500,11 @@ export async function POST(req: Request) {
           input_schema: { type: 'object', properties: {}, required: [] },
         });
         claudeTools.push({
+          name: 'list_recipients',
+          description: I.toolListRecipientsDesc,
+          input_schema: { type: 'object', properties: {}, required: [] },
+        });
+        claudeTools.push({
           name: 'read_letter',
           description: I.toolReadLetterDesc,
           input_schema: {
@@ -6724,6 +6759,11 @@ export async function POST(req: Request) {
             {
               name: 'list_letters',
               description: I.toolListLettersDesc,
+              parameters: { type: 'OBJECT', properties: {} },
+            },
+            {
+              name: 'list_recipients',
+              description: I.toolListRecipientsDesc,
               parameters: { type: 'OBJECT', properties: {} },
             },
             {
@@ -8360,6 +8400,14 @@ export async function POST(req: Request) {
           function: {
             name: 'list_letters',
             description: I.toolListLettersDesc,
+            parameters: { type: 'object', properties: {}, required: [] },
+          },
+        });
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'list_recipients',
+            description: I.toolListRecipientsDesc,
             parameters: { type: 'object', properties: {}, required: [] },
           },
         });

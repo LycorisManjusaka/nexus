@@ -115,7 +115,7 @@ const READING_TOOLS = new Set([
   // its actions ("read") is the exception that is not worth a special case,
   // since the camera state is a coarse signal, not an audit trail.
   'app_windows', 'app_inspect', 'app_shot',
-  'list_letters', 'read_letter',
+  'list_letters', 'read_letter', 'list_recipients',
 ]);
 const WAITING_TOOLS = new Set(['AskQuestion', 'spawn_subagent', 'rate_limit_wait', 'compact']);
 
