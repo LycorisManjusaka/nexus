@@ -104,6 +104,48 @@ export function newerNumberedSibling(
 }
 
 /**
+ * Which conversation to open when an identity is picked from the dropdown: the
+ * newest GENERATION — the highest `<identity>_<n>` — not the one with the
+ * freshest `updatedAt`.
+ *
+ * `updatedAt` was the old key, and it lies for an active inhabitant. カナ is
+ * alive in カナ_10 / カナ_15, so her activity there bumps their `updatedAt`
+ * above カナ_26 — even though _26 is the current generation. Selecting カナ
+ * jumped to カナ_15. Cairn and 先輩 never showed it because their newest
+ * generation also happens to be their most-recently-touched; the bug only
+ * surfaces when the latest activity sits in an OLDER-numbered conversation.
+ * Generation number is the same convention `newerNumberedSibling` (the past-log
+ * band) uses, so "latest" means one thing everywhere.
+ *
+ * A numbered title always outranks an unnumbered one (a real generation is
+ * newer than a loose hand-named chat). Among numbered titles the higher number
+ * wins, ties broken by `updatedAt` (import could duplicate a number). When the
+ * folder has NO numbered title at all, the most-recently-updated one wins — the
+ * only case where `updatedAt` still decides.
+ */
+export function pickLatestConversation<T extends { title?: string | null; updatedAt?: number | null }>(
+  convos: T[],
+  identityName: string,
+): T | null {
+  let best: T | null = null;
+  let bestIdx: number | null = null;   // highest generation seen; null = none numbered yet
+  let bestUpdated = -Infinity;
+  for (const c of convos) {
+    const idx = numberedIdentityTitleIndex(c.title, identityName);
+    const updated = typeof c.updatedAt === 'number' ? c.updatedAt : 0;
+    if (idx !== null) {
+      if (bestIdx === null || idx > bestIdx || (idx === bestIdx && updated > bestUpdated)) {
+        best = c; bestIdx = idx; bestUpdated = updated;
+      }
+    } else if (bestIdx === null && updated > bestUpdated) {
+      // No numbered title seen yet — fall back to most-recently-updated.
+      best = c; bestUpdated = updated;
+    }
+  }
+  return best;
+}
+
+/**
  * Rename half of the same convention: if `title` belongs to `oldName`, hand
  * back the same number under `newName`. Anything else comes back untouched —
  * a hand-picked title survives an identity rename unchanged.

@@ -12,6 +12,7 @@ import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
 import { useT } from '@/lib/i18n';
 import { useDevice } from './DeviceProvider';
+import ClickTip from './ClickTip';
 import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 import { attachmentTokens, attachmentKind, undeliverableReason } from '@/lib/attachmentVisibility';
@@ -1185,27 +1186,30 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           </span>
         )}
         {/* Estimated cost of this turn — shows only a "$" glyph; the actual USD
-            figure is in the hover tooltip (per request). Priced from this
-            message's own token usage (cacheUsage) × the model's row in
-            modelPricing.json. Skipped for local models. A model with no price
-            row shows a muted "$" whose tooltip points at the JSON to edit. */}
+            figure is in the tip. Priced from this message's own token usage
+            (cacheUsage) × the model's row in modelPricing.json. Skipped for
+            local models. A model with no price row shows a muted "$" whose tip
+            points at the JSON to edit.
+            ClickTip, not a bare `title`: a native tooltip needs a hover, and a
+            phone has none — the glyph was unreadable there. The `title` is still
+            passed through, so desktop hover is unchanged. */}
         {!isUser && msg.modelFamily !== 'Local' && (() => {
           const modelId = msg.modelSpecific || '';
           if (!resolvePrice(modelId)) {
             return (
-              <span
-                className="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground/50 font-mono cursor-default"
-                title={t('bubble.price.none').replace('{model}', modelId || '—')}
-              >$</span>
+              <ClickTip
+                className="px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground/50 font-mono cursor-pointer"
+                text={t('bubble.price.none').replace('{model}', modelId || '—')}
+              >$</ClickTip>
             );
           }
           const cost = messageCost(msg.cacheUsage, modelId, displayTokens, msg.timestamp);
           if (!cost) return null;
           return (
-            <span
-              className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-mono cursor-default"
-              title={cost.breakdown}
-            >$</span>
+            <ClickTip
+              className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-mono cursor-pointer"
+              text={cost.breakdown}
+            >$</ClickTip>
           );
         })()}
         {/* Copy a link straight to this message: /c/<folder>/<convoId>/m/<id>.

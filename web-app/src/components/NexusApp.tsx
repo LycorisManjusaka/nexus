@@ -7,7 +7,7 @@ import SettingsModal from '@/components/SettingsModal';
 import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
-import { nextConversationTitle, newerNumberedSibling } from '@/lib/convoNaming';
+import { nextConversationTitle, newerNumberedSibling, pickLatestConversation } from '@/lib/convoNaming';
 import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
@@ -284,7 +284,11 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           if (saved) {
             setCurrentConvoId(saved.id);
           } else if (folderConvos.length > 0) {
-            const latest = folderConvos.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+            // "Latest" = newest GENERATION (highest <name>_<n>), NOT most-
+            // recently-touched. updatedAt lies for an active inhabitant: カナ is
+            // alive in カナ_10/_15, so those sorted ABOVE カナ_26 and selecting
+            // カナ opened カナ_15. See pickLatestConversation.
+            const latest = pickLatestConversation(folderConvos, activeFolder.name) ?? folderConvos[0];
             setCurrentConvoId(latest.id);
           } else {
             setCurrentConvoId(null);

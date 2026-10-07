@@ -9,6 +9,7 @@ import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { useDevice } from './DeviceProvider';
+import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
@@ -4007,7 +4008,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           {/* Conversation cost — sum of the estimated USD cost of every NEW
               (original, non-copied) assistant message, priced from each one's
               own token usage × modelPricing.json. Shows only "$"; the total is
-              in the hover tooltip. Copied and local-model messages are excluded;
+              in the tip (click/tap, and hover on desktop — a phone has no hover,
+              which left this glyph unreadable there). Copied and local-model
+              messages are excluded;
               messages on unpriced models are skipped (and flagged in the tip). */}
           {(() => {
             let total = 0;
@@ -4030,12 +4033,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               (anyUnpriced ? t('chat.cost.tipUnpriced') : '') +
               t('chat.cost.tipNote');
             return (
-              <span
-                className="text-sm font-semibold tabular-nums cursor-default text-emerald-600 dark:text-emerald-400"
-                title={tip}
+              <ClickTip
+                className="text-sm font-semibold tabular-nums cursor-pointer text-emerald-600 dark:text-emerald-400"
+                text={tip}
               >
                 $
-              </span>
+              </ClickTip>
             );
           })()}
           </div>
