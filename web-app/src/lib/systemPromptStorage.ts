@@ -90,7 +90,7 @@ export function parseTitleNumber(
 }
 
 // ── Per-entity layer file storage ───────────────────────────────────────────
-// Layout: local_data/system_prompts/<folder>/<folder>_<index>.md
+// Layout: local_data/beings/<folder>/soul/<folder>_<index>.md
 // One file per conversation index; the contents are the four `### **Layer N:`
 // blocks concatenated (NO header/footer/deletions — those are applied later).
 

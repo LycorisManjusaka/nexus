@@ -178,7 +178,7 @@ function splitOffChangelog(text: string): { changelog: string; core: string } {
 // moving material between the layers is the whole point of that pass. What
 // comes back has to be routed to a different place than the rest: Layers 1-3
 // go into the prompt file, Layer 4 goes into the individual summary files
-// under local_data/summaries/<entity>/.
+// under local_data/beings/<entity>/summaries/.
 //
 // Split at the Layer 4 heading — everything before it is Layers 1-3, and the
 // body after it holds the per-conversation entries. Tolerant of `##`/`###`, an
@@ -485,7 +485,7 @@ export default function SystemPromptUpdater({
   // for review and are NOT carried into the next conversation's prompt.
   const [updateLogs, setUpdateLogs] = useState('');
   // Everything ABOVE the first "## Layer 1" heading in the agent output — the
-  // changelog. Shown read-only, archived to local_data/changelogs/<folder>/
+  // changelog. Shown read-only, archived to local_data/beings/<folder>/changelogs/
   // <title>.md, and NEVER fed into any context window.
   const [changelogText, setChangelogText] = useState('');
   // Result of the last "Redistribute Layers 1-4" write (backup path + which
@@ -526,7 +526,7 @@ export default function SystemPromptUpdater({
   }, [rightLooksTruncated, streamingUpdate]);
 
   const [header, setHeader] = useState('');
-  // ── The entity's self-authored Layer 5 (workspaces/<Entity>/FOOTER.md).
+  // ── The entity's self-authored Layer 5 (beings/<Entity>/workspace/FOOTER.md).
   // Lives in a FILE and is injected at send time, which is exactly why the
   // updater agent used to be blind to it: the agent reads the STORED prompt, so
   // a footer baked into that prompt was visible and a FOOTER.md was not.
@@ -1390,7 +1390,7 @@ export default function SystemPromptUpdater({
       }
 
       // 1) Split off the CHANGELOG (everything above the first "## Layer 1").
-      //    It is shown read-only, archived to local_data/changelogs/<folder>/
+      //    It is shown read-only, archived to local_data/beings/<folder>/changelogs/
       //    <title>.md, and never enters any context window.
       // 2) From "## Layer 1" onward is the CORE; split off any trailing
       //    Abbreviations/Deletions logs so only the actual Layers 1-3 are saved.
@@ -2593,7 +2593,7 @@ export default function SystemPromptUpdater({
                   onClick={handleRedistribute}
                   disabled={busy || !redistributeAgent}
                   className="px-2.5 py-1 text-xs font-medium bg-purple-500/15 text-purple-600 dark:text-purple-300 hover:bg-purple-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
-                  title={t('spu.redistributeTitle').replace('{file}', AGENT_FILE_REDISTRIBUTE)}
+                  title={t('spu.redistributeTitle').replace('{file}', AGENT_FILE_REDISTRIBUTE).replace('{folder}', folderName)}
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
                   {t('spu.redistributeBtn')}
@@ -2774,7 +2774,7 @@ export default function SystemPromptUpdater({
             ) : null}
 
             {/* Changelog — everything above "## Layer 1" in the agent output.
-                Read-only. Archived to local_data/changelogs/<folder>/<title>.md
+                Read-only. Archived to local_data/beings/<folder>/changelogs/<title>.md
                 and NEVER fed into any context window (entity or updater agent). */}
             {changelogText && (
               <div className="mt-3">
@@ -2794,13 +2794,13 @@ export default function SystemPromptUpdater({
             )}
 
             {/* Redistribute result — what was actually written to
-                local_data/summaries/<entity>/, and where the snapshot went.
+                local_data/beings/<entity>/summaries/, and where the snapshot went.
                 Read-only; shown so a bulk write is auditable without opening a
                 file manager. */}
             {redistributeReport && (
               <div className="mt-3 border border-purple-500/30 bg-purple-500/[0.04] rounded p-2">
                 <div className="text-[10px] uppercase tracking-wider text-purple-600 dark:text-purple-300 font-semibold mb-1">
-                  Layer 4 write · summaries/{folderName}/
+                  Layer 4 write · beings/{folderName}/summaries/
                 </div>
                 <div className="text-[11px] font-mono leading-relaxed space-y-1">
                   <div className="text-muted-foreground">

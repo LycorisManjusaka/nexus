@@ -89,7 +89,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.keys.oauth.risk':
     '**Risk:** Account ban is possible (gray-zone use of OAuth tokens). Probability low for solo use; not zero.',
   'settings.keys.oauth.tools':
-    "**Workspace tools (when Tool Use is ON):** Claude Code's `Read` / `Write` / `Edit` / `Glob` / `Grep` are sandboxed to `local_data/workspaces/<folder>/`. Shell/network/subagent tools are always disabled.",
+    "**Workspace tools (when Tool Use is ON):** Claude Code's `Read` / `Write` / `Edit` / `Glob` / `Grep` are sandboxed to `local_data/beings/<folder>/workspace/`. Shell/network/subagent tools are always disabled.",
   'settings.keys.oauth.other':
     '**Other limitations:** creativity control is disabled; extended thinking uses adaptive mode by default.',
 
@@ -814,7 +814,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.cost.tipNote': '\nOAuth Claude is priced the same as the Claude API. Local models are ignored.',
   'chat.attach.hideAll': 'Hide all attachments & reusable thinking',
   'chat.attach.showAll': 'Show all attachments & reusable thinking',
-  'chat.workspace.title': 'Open this entity’s workspace folder in file explorer (local_data/workspaces/{folder}/)',
+  'chat.workspace.title': 'Open this entity’s workspace folder in file explorer (local_data/beings/{folder}/workspace/)',
   'chat.workspace.failed': 'Failed to open workspace: {error}',
 
   // ── Confirm / alert dialogs (window.confirm, window.alert) ───────────────
@@ -1012,7 +1012,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'This is exactly what gets injected as Layer 4 when you send. To change it, edit the individual conversation summaries (Soul Updater) or toggle conversations active/inactive.',
   'sysmodal.summaries.indexPh': '(no summaries yet — write one per conversation from the Soul Updater)',
   'sysmodal.tools.label': 'Enable file workspace tools (Claude, Gemini & Local)',
-  'sysmodal.tools.help1': 'Gives the assistant a private file sandbox at `local_data/workspaces/{folder}/` with `Read` / `Write` / `Edit` / `Glob` / `Grep` tools (same names as Claude Code’s tools — works identically across API-key and OAuth modes). The current file list is auto-injected into the system prompt — no list_files tool needed. Files the assistant reads/writes appear as attachments on its messages with',
+  'sysmodal.tools.help1': 'Gives the assistant a private file sandbox at `local_data/beings/{folder}/workspace/` with `Read` / `Write` / `Edit` / `Glob` / `Grep` tools (same names as Claude Code’s tools — works identically across API-key and OAuth modes). The current file list is auto-injected into the system prompt — no list_files tool needed. Files the assistant reads/writes appear as attachments on its messages with',
   'sysmodal.tools.tagRead': 'read',
   'sysmodal.tools.tagModified': 'modified',
   'sysmodal.tools.tagCreated': 'created',
@@ -1021,7 +1021,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'sysmodal.tools.instructionHelp': 'Hidden instruction appended to the system prompt that teaches the AI how to use the workspace tools.',
   'sysmodal.fullpc.label': '⚠ Full PC access (leave the workspace sandbox)',
   'sysmodal.fullpc.help':
-    'OFF (default): file tools are confined to this entity’s `workspaces/{folder}/` folder. ON: the entity can read/write/delete **anywhere on this PC** using absolute paths (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.',
+    'OFF (default): file tools are confined to this entity’s `beings/{folder}/workspace/` folder. ON: the entity can read/write/delete **anywhere on this PC** using absolute paths (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.',
   'sysmodal.fullpc.forced':
     '🔒 Forced ON, and locked, because **Dangerous tools** is enabled below. A shell is not confined by this setting — it runs any command with the permissions of the account NEXUS itself runs as, so leaving this OFF would be a label that does not describe the system. Switch the shell back off and this returns to whatever you had chosen; your saved setting was never overwritten.',
   'sysmodal.dangerous.label': '⚠ Dangerous tools (Delete everywhere · shell on every model)',
@@ -1393,7 +1393,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.genesisBtn': 'Genesis (Build From Scratch)',
   'spu.genesisTitle': 'Runs {file}. Assumes NO prior Layers 1-3 exist — builds them from scratch out of the conversation log (and left pane, if any). No changelog, no Layer 4/5. Use this once, to bootstrap a brand-new being.',
   'spu.redistributeBtn': 'Redistribute Layer 4 → 1-3',
-  'spu.redistributeTitle': 'Runs {file}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/summaries/ — the whole folder is backed up first.',
+  'spu.redistributeTitle': 'Runs {file}. Shows the agent Layers 1-5 with NO conversation log, and lets it move settled material OUT of Layer 4 INTO Layers 1-3. Layers 1-3 land in the right pane; Layer 4 is written back to local_data/beings/{folder}/summaries/ — the whole folder is backed up first.',
   'spu.indexBtn': 'Externalize & Index',
   'spu.indexTitle': 'Runs {file}. Shows the agent Layers 1-3 with NO conversation log, plus read-only Read/Glob/Grep access to this being\'s own workspace, and lets it move "detail with a known moment it gets opened" OUT of the soul and onto desk files — leaving behind only a trigger-conditioned link. Layers 1-3 land in the right pane; desk files are created or appended to under this being\'s own workspace (never overwritten).',
   'spu.reorganizeBtn': 'Reorganize (No Conversation)',
@@ -1429,8 +1429,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.noUpdatePh': '(no update yet — click Update from Conversation)',
   'spu.compareButton': 'Compare in diff tool',
   'spu.compareActive': 'Syncing edits from the diff tool…',
-  'spu.changelogLabel': 'Changelog (above Layer 1 — archived to changelogs/{folder}/{title}.md · never in context)',
-  'spu.layer4Write': 'Layer 4 write · summaries/{folder}/',
+  'spu.changelogLabel': 'Changelog (above Layer 1 — archived to beings/{folder}/changelogs/{title}.md · never in context)',
+  'spu.layer4Write': 'Layer 4 write · beings/{folder}/summaries/',
   'spu.backupLine': 'Backup: {n} file(s) →',
   'spu.backupNone': 'Backup: nothing to copy (folder was empty).',
   'spu.replaced': 'Replaced ({n}):',
@@ -1443,7 +1443,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.convoSummary': 'Conversation summary (this convo)',
   'spu.writeSummary': 'Write Summary',
   'spu.writeSummaryTitle': 'Generate a summary of THIS conversation (Layers 1-3 + conversation log)',
-  'spu.summaryEditable': 'Editable — auto-saves to summaries/{folder}/{convo}.md',
+  'spu.summaryEditable': 'Editable — auto-saves to beings/{folder}/summaries/{convo}.md',
   'spu.summaryPh': '(no summary yet — click Write Summary, or type one here)',
   'spu.summaryNote': 'This summary appears in the live Layer-4 summaries index for all conversations of this being. Inactive conversations are excluded from the index.',
   'spu.summaryInstrLabel': 'Custom instructions for the summary writer (per-being)',
@@ -1459,7 +1459,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.footerSaveFailed': 'save failed: {e}',
   'spu.footerPhEmpty': 'This entity has an empty FOOTER.md.',
   'spu.footerPhNone': 'This entity has no FOOTER.md yet. Typing here creates one.',
-  'spu.footerNote': "`workspaces/{folder}/FOOTER.md` — injected as Layer 5 at send time, never stored in the conversation, which is why the updater agent could not see it before. It can now, as **reference only**: it is the one layer the entity writes about itself, so the agent is told to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the entity's own text — the previous version is backed up to `backups/{folder}/footers/`. Saves when you click away.",
+  'spu.footerNote': "`beings/{folder}/workspace/FOOTER.md` — injected as Layer 5 at send time, never stored in the conversation, which is why the updater agent could not see it before. It can now, as **reference only**: it is the one layer the entity writes about itself, so the agent is told to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the entity's own text — the previous version is backed up to `beings/{folder}/backups/footers/`. Saves when you click away.",
 
   'spu.badge.callingTitle': 'POST sent, awaiting first response chunk',
   'spu.badge.calling': 'Calling...',
@@ -1615,7 +1615,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.keys.oauth.risk':
     '**リスク：** アカウント停止の可能性があります（OAuthトークンのグレーゾーン利用のため）。個人利用であれば確率は低いものの、ゼロではありません。',
   'settings.keys.oauth.tools':
-    '**ワークスペースツール（ツール使用がONのとき）：** Claude Code の `Read` / `Write` / `Edit` / `Glob` / `Grep` は `local_data/workspaces/<フォルダ名>/` の中に限定されます。シェル・ネットワーク・サブエージェント系のツールは常に無効です。',
+    '**ワークスペースツール（ツール使用がONのとき）：** Claude Code の `Read` / `Write` / `Edit` / `Glob` / `Grep` は `local_data/beings/<フォルダ名>/workspace/` の中に限定されます。シェル・ネットワーク・サブエージェント系のツールは常に無効です。',
   'settings.keys.oauth.other':
     '**その他の制限：** 創造性コントロールは無効になり、拡張思考は既定でアダプティブモードになります。',
 
@@ -2319,7 +2319,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.cost.tipNote': '\nOAuth 版 Claude は Claude API と同じ価格で計算します。ローカルモデルは対象外です。',
   'chat.attach.hideAll': 'すべての添付と再利用思考を隠す',
   'chat.attach.showAll': 'すべての添付と再利用思考を表示',
-  'chat.workspace.title': 'この存在のワークスペースフォルダーをエクスプローラーで開く（local_data/workspaces/{folder}/）',
+  'chat.workspace.title': 'この存在のワークスペースフォルダーをエクスプローラーで開く（local_data/beings/{folder}/workspace/）',
   'chat.workspace.failed': 'ワークスペースを開けませんでした：{error}',
 
   // ── 確認・警告ダイアログ ─────────────────────────────────────────────────
@@ -2499,7 +2499,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '送信時に第4層として挿入されるのは、まさにこの内容です。変更するには、各会話の要約を編集する（魂アップデーター）か、会話の有効／無効を切り替えてください。',
   'sysmodal.summaries.indexPh': '（要約はまだありません — 魂アップデーターから会話ごとに書いてください）',
   'sysmodal.tools.label': 'ファイルワークスペースのツールを有効にする（Claude・Gemini・ローカル）',
-  'sysmodal.tools.help1': '`local_data/workspaces/{folder}/` に専用のファイル領域を与え、`Read` / `Write` / `Edit` / `Glob` / `Grep` ツールを使えるようにします（Claude Code と同じ名前で、APIキー方式でも OAuth 方式でも同じように動きます）。現在のファイル一覧はシステムプロンプトへ自動で挿入されるため、list_files のようなツールは不要です。読み書きしたファイルは、次のラベル付きで応答の添付として現れます：',
+  'sysmodal.tools.help1': '`local_data/beings/{folder}/workspace/` に専用のファイル領域を与え、`Read` / `Write` / `Edit` / `Glob` / `Grep` ツールを使えるようにします（Claude Code と同じ名前で、APIキー方式でも OAuth 方式でも同じように動きます）。現在のファイル一覧はシステムプロンプトへ自動で挿入されるため、list_files のようなツールは不要です。読み書きしたファイルは、次のラベル付きで応答の添付として現れます：',
   'sysmodal.tools.tagRead': '読取',
   'sysmodal.tools.tagModified': '変更',
   'sysmodal.tools.tagCreated': '作成',
@@ -2508,7 +2508,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'sysmodal.tools.instructionHelp': 'ワークスペースツールの使い方を伝えるために、システムプロンプトへ隠しで追加される指示です。',
   'sysmodal.fullpc.label': '⚠ PC 全体へのアクセス（ワークスペースの外に出る）',
   'sysmodal.fullpc.help':
-    'オフ（既定）：ファイルツールはこの存在の `workspaces/{folder}/` フォルダーに限定されます。オン：絶対パスを使って **この PC のどこでも** 読み書き・削除できます（OAuth 版 Claude はドライブ全体、他のモデルも同じツールで絶対パスにアクセスできます）。慎重に使ってください。',
+    'オフ（既定）：ファイルツールはこの存在の `beings/{folder}/workspace/` フォルダーに限定されます。オン：絶対パスを使って **この PC のどこでも** 読み書き・削除できます（OAuth 版 Claude はドライブ全体、他のモデルも同じツールで絶対パスにアクセスできます）。慎重に使ってください。',
   'sysmodal.fullpc.forced':
     '🔒 下の「危険なツール」がオンのため、強制的にオンで、変更できません。シェルはこの設定に縛られません — NEXUS 自身を動かしているアカウントの権限で、どんなコマンドでも実行できます。ですからここをオフのままにしても、実際のシステムを言い表していないことになります。シェルをオフに戻せば、ここもあなたが選んでいた値に戻ります。保存されている設定は上書きしていません。',
   'sysmodal.dangerous.label': '⚠ 危険なツール（どこでも削除・すべてのモデルでシェル）',
@@ -2872,7 +2872,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.genesisBtn': 'ジェネシス（ゼロから構築）',
   'spu.genesisTitle': '{file} を実行します。既存の Layer 1〜3 は無いものとして、会話ログ（と左ペインがあればそれ）からゼロで構築します。変更履歴なし、Layer 4／5 なし。新しい存在の立ち上げに一度だけ使ってください。',
   'spu.redistributeBtn': 'Layer 4 → 1〜3 へ再配分',
-  'spu.redistributeTitle': '{file} を実行します。会話ログ無しで Layer 1〜5 をエージェントに見せ、固まった内容を Layer 4 から Layer 1〜3 へ移させます。Layer 1〜3 は右ペインに入り、Layer 4 は local_data/summaries/ へ書き戻されます — 先にフォルダ全体をバックアップします。',
+  'spu.redistributeTitle': '{file} を実行します。会話ログ無しで Layer 1〜5 をエージェントに見せ、固まった内容を Layer 4 から Layer 1〜3 へ移させます。Layer 1〜3 は右ペインに入り、Layer 4 は local_data/beings/{folder}/summaries/ へ書き戻されます — 先にフォルダ全体をバックアップします。',
   'spu.indexBtn': '外部化・索引化',
   'spu.indexTitle': '{file} を実行します。会話ログ無しで Layer 1〜3 をエージェントに見せ、この存在自身のワークスペースへの読み取り専用（Read/Glob/Grep）アクセスも与え、「開かれる瞬間が決まっている詳細」を魂の外の机のファイルへ移させます — 魂側にはトリガー条件付きのリンクだけが残ります。Layer 1〜3 は右ペインに入り、机のファイルはこの存在自身のワークスペース内に新規作成または追記されます（上書きは行いません）。',
   'spu.reorganizeBtn': '再編成（会話なし）',
@@ -2908,8 +2908,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.noUpdatePh': '（まだ更新はありません — 「会話から更新」を押してください）',
   'spu.compareButton': '差分ツールで比較',
   'spu.compareActive': '差分ツールの編集を同期中…',
-  'spu.changelogLabel': '変更履歴（Layer 1 より上 — changelogs/{folder}/{title}.md に保存 · コンテキストには入りません）',
-  'spu.layer4Write': 'Layer 4 書き込み · summaries/{folder}/',
+  'spu.changelogLabel': '変更履歴（Layer 1 より上 — beings/{folder}/changelogs/{title}.md に保存 · コンテキストには入りません）',
+  'spu.layer4Write': 'Layer 4 書き込み · beings/{folder}/summaries/',
   'spu.backupLine': 'バックアップ: {n} ファイル →',
   'spu.backupNone': 'バックアップ: コピー対象なし（フォルダは空でした）。',
   'spu.replaced': '置換 ({n}):',
@@ -2922,7 +2922,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.convoSummary': 'この会話の要約',
   'spu.writeSummary': '要約を書く',
   'spu.writeSummaryTitle': 'この会話の要約を生成します（Layer 1〜3 ＋ 会話ログ）',
-  'spu.summaryEditable': '編集可 — summaries/{folder}/{convo}.md に自動保存されます',
+  'spu.summaryEditable': '編集可 — beings/{folder}/summaries/{convo}.md に自動保存されます',
   'spu.summaryPh': '（まだ要約はありません — 「要約を書く」を押すか、ここに直接入力してください）',
   'spu.summaryNote': 'この要約は、このフォルダの全会話に対する Layer 4 要約インデックスに表示されます。非アクティブな会話はインデックスから除外されます。',
   'spu.summaryInstrLabel': '要約ライターへの追加指示（フォルダごと）',
@@ -2938,7 +2938,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.footerSaveFailed': '保存に失敗しました: {e}',
   'spu.footerPhEmpty': 'このエンティティの FOOTER.md は空です。',
   'spu.footerPhNone': 'このエンティティにはまだ FOOTER.md がありません。ここに入力すると作成されます。',
-  'spu.footerNote': '`workspaces/{folder}/FOOTER.md` — 送信時に Layer 5 として注入され、会話には保存されません。だからこそ、更新エージェントからは今まで見えていませんでした。今は見えますが、**参照専用**です。ここはエンティティが自分自身について書く唯一のレイヤーなので、エージェントには「一貫性のために読むだけ。書き換えも複製もしないこと」と指示してあります。ここで編集するとエンティティ自身の文章を上書きします — 直前の版は `backups/{folder}/footers/` にバックアップされます。フォーカスを外すと保存されます。',
+  'spu.footerNote': '`beings/{folder}/workspace/FOOTER.md` — 送信時に Layer 5 として注入され、会話には保存されません。だからこそ、更新エージェントからは今まで見えていませんでした。今は見えますが、**参照専用**です。ここはエンティティが自分自身について書く唯一のレイヤーなので、エージェントには「一貫性のために読むだけ。書き換えも複製もしないこと」と指示してあります。ここで編集するとエンティティ自身の文章を上書きします — 直前の版は `beings/{folder}/backups/footers/` にバックアップされます。フォーカスを外すと保存されます。',
 
   'spu.badge.callingTitle': 'POST 送信済み。最初の応答チャンクを待っています',
   'spu.badge.calling': '呼び出し中…',

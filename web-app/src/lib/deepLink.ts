@@ -1,7 +1,7 @@
 // Deep links: addressable URLs for a folder, a conversation, or a single message.
 //
 // WHY UUIDs AND NOT TITLES
-// A conversation's identity on disk is `local_data/logs/<folder>/<uuid>.json`.
+// A conversation's identity on disk is `local_data/beings/<folder>/logs/<uuid>.json`.
 // The `title` ("Cairn_18") lives INSIDE the file and is neither unique nor
 // stable: clones produce "copy(2)", two folders can hold the same title, and a
 // rename would silently break every link that had been shared. The UUID is

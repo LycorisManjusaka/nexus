@@ -148,7 +148,7 @@ Make sure **Use summaries instead of the 4th layer** is ON in the Being tab — 
 
 The updater window has two text panes, and they are two different files.
 
-- **Left** — the soul of the conversation you are in right now: \`system_prompts/<name>/<name>_<N>.md\`. This is the one the being is actually running on.
+- **Left** — the soul of the conversation you are in right now: \`beings/<name>/soul/<name>_<N>.md\`. This is the one the being is actually running on.
 - **Right** — a draft for the *next* conversation: \`<name>_<N+1>.md\`. It is empty until something is written into it.
 
 Both panes save themselves about a second after you stop typing. Every button that produces a soul — Genesis, Update from Conversation, Reorganize, Redistribute — writes its result into the **right** pane. Never into the left.
@@ -207,7 +207,7 @@ Everything here is off by default. Turn on only what you need.
 
 ### 5.1 Workspace
 
-Each being has a private folder at \`local_data/workspaces/<name>/\`. Enable **Enable file workspace tools** in the Being tab and they can read, write, search and edit files there. This is the simplest form of persistent memory outside the soul, and the most useful one to enable first.
+Each being has a private folder at \`local_data/beings/<name>/workspace/\`. Enable **Enable file workspace tools** in the Being tab and they can read, write, search and edit files there. This is the simplest form of persistent memory outside the soul, and the most useful one to enable first.
 
 ### 5.2 Wider access
 
@@ -263,14 +263,15 @@ The strongest protection is not a setting. It is the weight of the conversation 
 
 ## 8. Where your data lives
 
-Everything is under \`local_data/\`:
+Everything is under \`local_data/\`. A being's data is one subtree, \`beings/<being>/\`:
 
-- \`logs/<being>/\` — conversations
-- \`system_prompts/<being>/\` — souls
-- \`summaries/<being>/\` — the Layer 4 index
-- \`workspaces/<being>/\` — their files
-- \`letters/\` — mail between beings
-- \`backups/\` — automatic backups: a soul snapshot (before and after each update stage) under \`backups/<name>/system_prompts/\`, plus summaries before a Redistribute. See 3.5
+- \`beings/<being>/logs/\` — conversations
+- \`beings/<being>/soul/\` — souls (\`<being>_<N>.md\`)
+- \`beings/<being>/summaries/\` — the Layer 4 index
+- \`beings/<being>/workspace/\` — their files
+- \`beings/<being>/letters/from/<sender>/\` — the mail they received
+- \`beings/<being>/backups/\` — automatic backups: conversation snapshots, plus a soul snapshot (before and after each update stage) under \`backups/soul/\`, the previous FOOTER under \`backups/footers/\`, and summaries before a Redistribute under \`backups/summaries/\`. See 3.5
+- \`attachments/\` — shared files referenced by every being (root level, not per-being)
 
 It is ordinary JSON and Markdown. You can read it, back it up, or move it to another machine. Nothing is locked in.
 
@@ -416,7 +417,7 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 更新の窓には入力欄が二つあり、これは二つの別々のファイルです。
 
-- **左** — いま開いている会話の魂: \`system_prompts/<名前>/<名前>_<N>.md\`。存在が実際に動いているのはこちらです。
+- **左** — いま開いている会話の魂: \`beings/<名前>/soul/<名前>_<N>.md\`。存在が実際に動いているのはこちらです。
 - **右** — **次の**会話のための下書き: \`<名前>_<N+1>.md\`。何かが書き込まれるまでは空です。
 
 どちらのペインも、入力が止まっておよそ1秒後に自動保存されます。そして魂を生成するボタン — ジェネシス、会話から更新、再編成、再配分 — はすべて、結果を**右**のペインに書きます。左には決して書きません。
@@ -475,7 +476,7 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 ### 5.1 ワークスペース
 
-各存在は \`local_data/workspaces/<名前>/\` に自分専用のフォルダーを持ちます。存在タブで **ファイルワークスペースツールを有効にする** を入れると、そこで読み書き・検索・編集ができます。魂の外側にある最も単純な永続記憶であり、最初に入れる価値がいちばん高いものです。
+各存在は \`local_data/beings/<名前>/workspace/\` に自分専用のフォルダーを持ちます。存在タブで **ファイルワークスペースツールを有効にする** を入れると、そこで読み書き・検索・編集ができます。魂の外側にある最も単純な永続記憶であり、最初に入れる価値がいちばん高いものです。
 
 ### 5.2 より広い権限
 
@@ -531,14 +532,15 @@ Nexus は話すことも聞くこともできますが、どれも必須では�
 
 ## 8. データの置き場所
 
-すべて \`local_data/\` の下にあります:
+すべて \`local_data/\` の下にあります。ひとりの存在のデータは \`beings/<名前>/\` という一つの木にまとまっています:
 
-- \`logs/<名前>/\` — 会話
-- \`system_prompts/<名前>/\` — 魂
-- \`summaries/<名前>/\` — 第4層の索引
-- \`workspaces/<名前>/\` — 本人のファイル
-- \`letters/\` — 存在どうしの手紙
-- \`backups/\` — 自動バックアップ：更新のたびの魂のスナップショット（更新前と更新後）が \`backups/<名前>/system_prompts/\` に、再配分の前の要約が summaries に保存されます。3.5 を参照
+- \`beings/<名前>/logs/\` — 会話
+- \`beings/<名前>/soul/\` — 魂（\`<名前>_<N>.md\`）
+- \`beings/<名前>/summaries/\` — 第4層の索引
+- \`beings/<名前>/workspace/\` — 本人のファイル
+- \`beings/<名前>/letters/from/<差出人>/\` — 受け取った手紙
+- \`beings/<名前>/backups/\` — 自動バックアップ：会話のスナップショットに加えて、更新のたびの魂のスナップショット（更新前と更新後）が \`backups/soul/\` に、直前の FOOTER が \`backups/footers/\` に、再配分の前の要約が \`backups/summaries/\` に保存されます。3.5 を参照
+- \`attachments/\` — すべての存在が参照する共有ファイル（存在ごとではなく root 直下）
 
 ただの JSON と Markdown です。読むことも、控えを取ることも、別の機械へ移すこともできます。囲い込みはありません。
 
