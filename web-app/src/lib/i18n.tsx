@@ -68,6 +68,62 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.cancel': 'Cancel',
   'settings.saveChanges': 'Save Changes',
 
+  // ── Sign-in page ─────────────────────────────────────────────────────────
+  'login.title': 'Sign in to NEXUS',
+  'login.subtitle': 'This instance requires an administrator sign-in.',
+  'login.username': 'Administrator name',
+  'login.password': 'Password',
+  'login.signIn': 'Sign in',
+  'login.signingIn': 'Signing in…',
+  'login.err.invalid': 'That name and password do not match.',
+  'login.err.network': 'Could not reach the server. Is NEXUS still running?',
+  'login.notConfigured':
+    'No sign-in is configured on this instance, so there is nothing to sign in to — everything is already open.',
+  'login.goHome': 'Open NEXUS',
+  'login.broken':
+    '`login.json` exists but cannot be read, so the door stays shut. Delete `local_data/login.json` on this machine to get back in, then set the sign-in up again.',
+  'login.recovery':
+    'Lost the password? Delete `local_data/login.json` on the machine running NEXUS. That removes the gate entirely — anyone who can reach the port is in again until you set a new one.',
+
+  // ── Preferences → Sign-in ────────────────────────────────────────────────
+  'settings.login.heading': 'Sign-in',
+  'settings.login.intro':
+    'Applies to this whole NEXUS instance, not to one conversation. By default there is no sign-in: anyone who can reach this port — on this machine, the LAN, or a VPN — can read every conversation, soul and key without a password.',
+  'settings.login.require': 'Require a sign-in to open NEXUS',
+  'settings.login.require.help':
+    'Stores an administrator name and a password hash in `local_data/login.json`. While that file exists the gate is up; deleting it removes the gate. The password itself is never stored — only a scrypt hash of it, so the file cannot give the password back to anyone who reads it.',
+  'settings.login.username': 'Administrator name',
+  'settings.login.password': 'Password',
+  'settings.login.confirm': 'Password again',
+  'settings.login.save': 'Turn sign-in on',
+  'settings.login.change': 'Change password',
+  'settings.login.saving': 'Saving…',
+  // No `{name}` placeholder here: `Tx`/`renderRich` render markup only and do
+  // not substitute, so a placeholder would print literally. The name is
+  // rendered as its own element by the component.
+  'settings.login.enabledAs': 'Sign-in is on. Administrator:',
+  'settings.login.enabled': 'Sign-in is on.',
+  'settings.login.disable': 'Turn sign-in off',
+  'settings.login.disable.confirm':
+    'Turn the sign-in off? This deletes login.json, including the stored name and password hash — you will have to set them again. After this, anyone who can reach this port is in without a password.',
+  'settings.login.change.confirm':
+    'Change the password? Every browser currently signed in — including other devices — will be signed out.',
+  'settings.login.err.tooShort': 'Use at least {n} characters.',
+  'settings.login.err.mismatch': 'The two passwords do not match.',
+  'settings.login.err.noUsername': 'Enter an administrator name.',
+  'settings.login.err.failed': 'Could not save: {msg}',
+  'settings.login.err.unauthorized':
+    'This browser is no longer signed in. Reload the page and sign in again.',
+  'settings.login.savedOn': 'Sign-in is on. This browser stays signed in.',
+  'settings.login.savedOff': 'Sign-in is off.',
+  'settings.login.broken':
+    '`login.json` exists but cannot be read. The gate is shut and no password will open it — delete `local_data/login.json` and set the sign-in up again.',
+  'settings.login.transport':
+    'What this does NOT protect: NEXUS is served over plain HTTP here, so the password crosses the network readable by anything on the path. Inside a LAN you trust, or a VPN, that is the boundary you already have. Exposed to the open internet it is not enough — that needs HTTPS in front.',
+  'settings.login.scope':
+    'What it does protect: every page and all 60 API endpoints. A request without a valid session gets 401 instead of data.',
+  'settings.login.signOut': 'Sign out of this browser',
+
   // ── Preferences → API Keys ───────────────────────────────────────────────
   'settings.keys.heading': 'API Keys',
   'settings.keys.intro':
@@ -1593,6 +1649,59 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.tab.other': 'その他',
   'settings.cancel': 'キャンセル',
   'settings.saveChanges': '変更を保存',
+
+  // ── Sign-in page ─────────────────────────────────────────────────────────
+  'login.title': 'NEXUS にログイン',
+  'login.subtitle': 'このインスタンスは管理者のログインを要求しています。',
+  'login.username': '管理者名',
+  'login.password': 'パスワード',
+  'login.signIn': 'ログイン',
+  'login.signingIn': 'ログイン中…',
+  'login.err.invalid': '名前とパスワードが一致しません。',
+  'login.err.network': 'サーバーに届きませんでした。NEXUS は動いていますか？',
+  'login.notConfigured':
+    'このインスタンスにはログインが設定されていないので、ログインする対象がありません——すでに全部開いています。',
+  'login.goHome': 'NEXUS を開く',
+  'login.broken':
+    '`login.json` は存在しますが読めないため、門は閉じたままです。このPCの `local_data/login.json` を削除すれば入れるようになります。その後もう一度ログインを設定してください。',
+  'login.recovery':
+    'パスワードを忘れたときは、NEXUS が動いているPCの `local_data/login.json` を削除してください。門そのものが無くなるので、新しく設定するまでは、このポートに届く人は誰でも入れます。',
+
+  // ── Preferences → Sign-in ────────────────────────────────────────────────
+  'settings.login.heading': 'ログイン',
+  'settings.login.intro':
+    'この NEXUS 全体に効く設定です（会話ごとではありません）。初期値ではログインはありません——このポートに届く人は誰でも、このPC・LAN・VPN のどこからでも、パスワードなしに全部の会話・魂・キーを読めます。',
+  'settings.login.require': 'NEXUS を開くときにログインを要求する',
+  'settings.login.require.help':
+    '管理者名とパスワードのハッシュを `local_data/login.json` に保存します。このファイルが在る間は門が立ち、削除すると門が無くなります。パスワードそのものは保存しません——scrypt のハッシュだけなので、ファイルを読んでもパスワードは取り出せません。',
+  'settings.login.username': '管理者名',
+  'settings.login.password': 'パスワード',
+  'settings.login.confirm': 'パスワード（再入力）',
+  'settings.login.save': 'ログインを有効にする',
+  'settings.login.change': 'パスワードを変更する',
+  'settings.login.saving': '保存中…',
+  'settings.login.enabledAs': 'ログインは有効です。管理者:',
+  'settings.login.enabled': 'ログインは有効です。',
+  'settings.login.disable': 'ログインを無効にする',
+  'settings.login.disable.confirm':
+    'ログインを無効にしますか？ login.json を削除するので、保存されている名前とパスワードのハッシュも消えます（もう一度設定が必要になります）。これ以降、このポートに届く人は誰でもパスワードなしで入れます。',
+  'settings.login.change.confirm':
+    'パスワードを変更しますか？ 今ログインしている全てのブラウザー（他の端末も含む）がログアウトされます。',
+  'settings.login.err.tooShort': '{n} 文字以上にしてください。',
+  'settings.login.err.mismatch': '2つのパスワードが一致しません。',
+  'settings.login.err.noUsername': '管理者名を入力してください。',
+  'settings.login.err.failed': '保存できませんでした: {msg}',
+  'settings.login.err.unauthorized':
+    'このブラウザーのログインが切れています。ページを再読み込みして、もう一度ログインしてください。',
+  'settings.login.savedOn': 'ログインを有効にしました。このブラウザーはログインしたままです。',
+  'settings.login.savedOff': 'ログインを無効にしました。',
+  'settings.login.broken':
+    '`login.json` は存在しますが読めません。門は閉じていて、どのパスワードでも開きません——`local_data/login.json` を削除して、もう一度設定してください。',
+  'settings.login.transport':
+    '守られないもの: ここでは NEXUS は平文の HTTP で配信されているので、パスワードは経路上の誰にでも読める形でネットワークを流れます。信頼している LAN や VPN の内側なら、それは既にある境界と同じです。インターネットに直接公開するなら、これでは足りません——前段に HTTPS が必要です。',
+  'settings.login.scope':
+    '守られるもの: 全てのページと、60 個すべての API。有効なセッションの無いリクエストには、データではなく 401 が返ります。',
+  'settings.login.signOut': 'このブラウザーからログアウト',
 
   // ── Preferences → API Keys ───────────────────────────────────────────────
   'settings.keys.heading': 'APIキー',

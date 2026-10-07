@@ -50,7 +50,13 @@ export default async function RootLayout({
     <html
       lang="en"
       data-device={device.kind}
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      // `dark` here, on the server, not only in NexusApp: the dark base is not
+      // a preference, it is the theme ("The dark base is always applied" —
+      // NexusApp), and pages outside NexusApp — /login — never run that effect,
+      // so they rendered in the browser's default light palette and looked like
+      // a different application. Setting it in the markup also means no
+      // light-then-dark flash on first paint.
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <DeviceProvider initialKind={device.kind}>{children}</DeviceProvider>

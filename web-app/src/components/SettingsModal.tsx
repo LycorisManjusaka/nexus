@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
 import UserIdentityEditor from './UserIdentityEditor';
+import AdminLoginEditor from './AdminLoginEditor';
 import { useT, Tx } from '@/lib/i18n';
 import { ensureAudioPermission, supportsSinkId, invalidateDeviceCache } from '@/lib/audioSink';
 import { buildTag, loadBuildTag } from '@/lib/buildVersion';
@@ -722,6 +723,12 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             <h3 className="text-sm font-semibold flex items-center gap-2 text-indigo-500">
               <SlidersHorizontal size={16} /> {t('settings.other.heading')}
             </h3>
+
+            {/* First in this tab, not buried under the toggles: every other
+                switch here changes how NEXUS behaves, this one decides who can
+                reach it at all. */}
+            <AdminLoginEditor />
+
             <div>
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
