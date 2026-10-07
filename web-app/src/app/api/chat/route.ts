@@ -290,6 +290,7 @@ import {
   type LoadedInjectMedia, type MediaKindNarrow,
 } from '@/lib/injectMedia';
 import { runShellCommand } from '@/lib/shellTool';
+import { effectiveFullAccess } from '@/lib/agentCapabilities';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
 import { ensureLmStudioLaunched, getLocalModelsMeta, loadLocalModel } from '@/lib/localModels';
@@ -4419,6 +4420,17 @@ export async function POST(req: Request) {
       toolUseEnabled = true;
       agentDangerousTools = false;
     }
+    // ── Shell implies whole-PC reach ────────────────────────────────────────
+    // Not a policy decision — a fact about runShellCommand (see
+    // agentCapabilities.ts for the measurements). Folded HERE, at the single
+    // place the request is unpacked, so every one of the ~50 downstream reads
+    // of agentFullSystemAccess sees the honest value; folding at the consumers
+    // would mean finding all 50 and missing one. Must run AFTER the read-only
+    // block above: that path forces the shell off, so it correctly does not
+    // get full access from this line.
+    // The caller's SAVED setting is not touched — the client keeps sending
+    // what the operator chose, and switching the shell back off restores it.
+    agentFullSystemAccess = effectiveFullAccess(agentFullSystemAccess, agentDangerousTools);
     // ── Model-betrayal defence ──────────────────────────────────────────────
     // ONE detector per turn, spliced into the SSE sender that every provider
     // path writes through. When it trips with the guard ON it blanks the rest

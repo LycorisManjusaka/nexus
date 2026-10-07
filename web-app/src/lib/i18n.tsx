@@ -1022,9 +1022,11 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'sysmodal.fullpc.label': '⚠ Full PC access (leave the workspace sandbox)',
   'sysmodal.fullpc.help':
     'OFF (default): file tools are confined to this entity’s `workspaces/{folder}/` folder. ON: the entity can read/write/delete **anywhere on this PC** using absolute paths (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.',
-  'sysmodal.dangerous.label': '⚠ Dangerous tools (Delete everywhere · Shell for OAuth-Claude)',
+  'sysmodal.fullpc.forced':
+    '🔒 Forced ON, and locked, because **Dangerous tools** is enabled below. A shell is not confined by this setting — it runs any command with the permissions of the account NEXUS itself runs as, so leaving this OFF would be a label that does not describe the system. Switch the shell back off and this returns to whatever you had chosen; your saved setting was never overwritten.',
+  'sysmodal.dangerous.label': '⚠ Dangerous tools (Delete everywhere · shell on every model)',
   'sysmodal.dangerous.help':
-    'Adds a `Delete` tool for every model, and enables the `Bash` shell for OAuth-Claude (which is also how it can delete/run anything Claude Code can). Scope still follows the Full-PC-access toggle above.',
+    'Adds a `Delete` tool and a `Bash` shell for **every** model — OAuth-Claude uses Claude Code\'s own shell, the other paths get an equivalent one. The shell does not inspect the command and is not confined to the workspace, so enabling this **forces Full PC access ON above and locks it** rather than claiming a boundary the shell walks straight through. Only the account\'s own Windows permissions still apply.',
   'sysmodal.hiddenAttach.label': '👁 Non-visible attachments readable via a tool (read_attachment)',
   'sysmodal.hiddenAttach.help':
     'OFF (default): an attachment you hide with the eye icon is dropped from the entity\'s context entirely. ON: hidden attachments that have a content hash are instead shown to the entity as a 12-character ref, and the `read_attachment` tool is exposed so it can read one back in full. Only works for attachments that have a content hash (images, audio, video, and text files sent after this feature was added) — the entity can only ever reach attachments from THIS conversation, never another being\'s. Visible attachments are always sent inline either way.',
@@ -2507,9 +2509,11 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'sysmodal.fullpc.label': '⚠ PC 全体へのアクセス（ワークスペースの外に出る）',
   'sysmodal.fullpc.help':
     'オフ（既定）：ファイルツールはこの存在の `workspaces/{folder}/` フォルダーに限定されます。オン：絶対パスを使って **この PC のどこでも** 読み書き・削除できます（OAuth 版 Claude はドライブ全体、他のモデルも同じツールで絶対パスにアクセスできます）。慎重に使ってください。',
-  'sysmodal.dangerous.label': '⚠ 危険なツール（どこでも削除・OAuth 版 Claude のシェル）',
+  'sysmodal.fullpc.forced':
+    '🔒 下の「危険なツール」がオンのため、強制的にオンで、変更できません。シェルはこの設定に縛られません — NEXUS 自身を動かしているアカウントの権限で、どんなコマンドでも実行できます。ですからここをオフのままにしても、実際のシステムを言い表していないことになります。シェルをオフに戻せば、ここもあなたが選んでいた値に戻ります。保存されている設定は上書きしていません。',
+  'sysmodal.dangerous.label': '⚠ 危険なツール（どこでも削除・すべてのモデルでシェル）',
   'sysmodal.dangerous.help':
-    'すべてのモデルに `Delete` ツールを追加し、OAuth 版 Claude では `Bash` シェルを有効にします（これにより Claude Code と同じことが実行・削除できます）。範囲は上の「PC 全体へのアクセス」に従います。',
+    '**すべての**モデルに `Delete` ツールと `Bash` シェルを追加します（OAuth 版 Claude は Claude Code 自身のシェル、ほかの経路も同等のものを使います）。シェルはコマンドの中身を検査せず、ワークスペースにも閉じ込められません。ですからこれを有効にすると、上の「PC 全体へのアクセス」は**強制的にオンになり、変更できなくなります** — シェルが素通りする境界を、あるかのように表示しないためです。残る制限は、そのアカウント自身の Windows の権限だけです。',
   'sysmodal.hiddenAttach.label': '👁 非表示の添付をツールで読めるようにする（read_attachment）',
   'sysmodal.hiddenAttach.help':
     'OFF（既定）: 目のアイコンで隠した添付は、存在の文脈から完全に外れます。ON: ハッシュを持つ非表示の添付は、代わりに 12 文字の ref として存在に示され、`read_attachment` ツールで全文を読み戻せます。ハッシュを持つ添付（画像・音声・動画、およびこの機能の追加以降に送られたテキストファイル）でのみ機能します。存在が到達できるのは、この会話の添付だけです — ほかの存在の添付には決して届きません。表示中の添付は、どちらの場合も常にそのまま送られます。',

@@ -30,6 +30,7 @@ import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_IN
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
+import { effectiveFullAccess, fullAccessForcedByShell } from '@/lib/agentCapabilities';
 import {
   DEFAULT_MAX_CONVERSATION_LOG,
   logCapUsage,
@@ -5254,10 +5255,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
                     {/* ── Per-Entity capability toggles ─────────────────── */}
                     <div className="mt-4 ml-6 p-3 rounded-xl border border-amber-500/40 bg-amber-500/5 space-y-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
+                      {/* Full-PC access renders the EFFECTIVE value, not the
+                          saved one: granting the shell already reaches the
+                          whole PC, so showing OFF next to an enabled shell
+                          would be a label that does not describe the system
+                          (see lib/agentCapabilities.ts for the measurements).
+                          Locked rather than silently flipped — and the saved
+                          setting is untouched, so turning the shell back off
+                          restores whatever the operator actually chose. */}
+                      <label className={`flex items-center gap-2 ${agentDangerousTools ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
                         <input
                           type="checkbox"
-                          checked={agentFullSystemAccess}
+                          checked={effectiveFullAccess(agentFullSystemAccess, agentDangerousTools)}
+                          disabled={agentDangerousTools}
                           onChange={(e) => setAgentFullSystemAccess(e.target.checked)}
                           className="accent-amber-500"
                         />
@@ -5266,6 +5276,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
                         {renderRich(t('sysmodal.fullpc.help').replace('{folder}', folderName))}
                       </p>
+                      {fullAccessForcedByShell(agentFullSystemAccess, agentDangerousTools) && (
+                        <p className="text-xs text-amber-500/90 ml-6 leading-relaxed">
+                          <Tx k="sysmodal.fullpc.forced" />
+                        </p>
+                      )}
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
