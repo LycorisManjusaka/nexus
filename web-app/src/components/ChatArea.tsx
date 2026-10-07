@@ -714,6 +714,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // logic — both clone paths now set this flag instead so the new
   // conversation starts with a clean "no original messages yet" state.
   const [firstOriginalIsNext, setFirstOriginalIsNext] = useState<boolean>(false);
+  // Which conversation the past-log band was dismissed for. Storing the id
+  // (rather than a boolean) makes the dismissal reset itself the moment another
+  // conversation is opened, with no effect to wire up: the band is a fact about
+  // THIS log, so hiding it must not carry over to the next one. It is also
+  // deliberately not persisted — the failure it guards against is settling into
+  // an old generation unnoticed, and a dismissal that survived a reload would
+  // silence the warning exactly when someone has stopped thinking about it.
+  // NexusApp currently mounts ChatArea with `key={convoId}`, so this state is
+  // thrown away on every switch anyway and a plain boolean would behave the
+  // same TODAY. The id is kept on purpose: if that key is ever dropped, the id
+  // comparison still resets correctly, where a boolean would silently carry one
+  // conversation's dismissal into the next.
+  const [pastLogDismissedFor, setPastLogDismissedFor] = useState<string | null>(null);
   const [creativityControlEnabled, setCreativityControlEnabled] = useState(false);
   const [hiddenAnalysisInstruction, setHiddenAnalysisInstruction] = useState(DEFAULT_CREATIVITY_INSTRUCTION);
   const [creativityDisplayPattern, setCreativityDisplayPattern] = useState('[Chosen Creativity: {C}]\n\n');
@@ -4318,25 +4331,36 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           Client-side only: it is never written to the log, never replayed to
           the model, and never counted as tokens — the entity cannot see it.
 
-          NOT dismissible, on purpose. The whole failure it guards against is
-          someone settling into an old generation without noticing, so a band
-          that can be clicked away would be gone exactly when it is needed. It
-          does NOT block sending: reading an old log and answering something in
-          it is legitimate, it just isn't where the chain continues. The band
-          reports a fact and names the destination; the decision stays with the
-          reader. */}
-      {newerLogTitle && (
+          Dismissible per conversation, NOT persistently. It was originally
+          permanent, because the failure it guards against is someone settling
+          into an old generation without noticing — but on a narrow screen a
+          permanent three-line band costs a quarter of the conversation, which
+          is its own way of making the log unusable. The compromise keeps the
+          guard: closing it hides the band for THIS conversation only, and
+          re-opening the log (or loading another one) brings it back, so it can
+          never be silenced for good. It does NOT block sending: reading an old
+          log and answering something in it is legitimate, it just isn't where
+          the chain continues. The band reports a fact and names the
+          destination; the decision stays with the reader. */}
+      {newerLogTitle && pastLogDismissedFor !== convoId && (
         <div className="shrink-0 px-6 py-2 border-b border-amber-500/40 bg-amber-500/10 flex items-start gap-3">
-          {/* Deliberately NOT ⚠. This band is permanent while an old log is
-              open, and a permanent ⚠ teaches the reader to ignore ⚠ — which
-              the house uses for things that actually went wrong. ⏳ connotes
-              time rather than failure, is distinct from the restore band's ↺,
-              and renders in every font here. */}
+          {/* Deliberately NOT ⚠. This band stands while an old log is open,
+              and a standing ⚠ teaches the reader to ignore ⚠ — which the house
+              uses for things that actually went wrong. ⏳ connotes time rather
+              than failure, is distinct from the restore band's ↺, and renders
+              in every font here. */}
           <span className="text-sm leading-5 shrink-0 text-amber-500">⏳</span>
           <span className="text-xs leading-5 flex-1 text-amber-700 dark:text-amber-300">
             <span className="font-semibold">{t('chat.pastlog.prefix')}</span>
             {t('chat.pastlog.text').replace(/\{latest\}/g, newerLogTitle)}
           </span>
+          <button
+            type="button"
+            onClick={() => setPastLogDismissedFor(convoId)}
+            className="shrink-0 -mr-1 px-1.5 leading-5 text-amber-600/70 hover:text-amber-600 dark:text-amber-400/70 dark:hover:text-amber-300 text-sm"
+            title={t('chat.pastlog.dismiss')}
+            aria-label={t('chat.pastlog.dismiss')}
+          >✕</button>
         </div>
       )}
 
@@ -4599,10 +4623,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           <button
             type="button"
             onClick={() => {
-              // Pure toggle. Turning it on clears any existing marker so
-              // the two states can't coexist (the manual marker on an
-              // older message would contradict the "next message becomes
-              // marker" intent).
+              // Turning it ON is confirmed; turning it OFF is not. Arming it
+              // reclassifies the whole existing log as carry-over context AND
+              // drops any manual marker, so a stray tap changes what the next
+              // turn is built from. Cancelling a pending arm destroys nothing,
+              // and a confirm there would only make undoing a misfire harder.
+              if (!firstOriginalIsNext) {
+                const msg = firstOriginalMessageId
+                  ? `${t('chat.firstOriginal.confirm')}\n\n${t('chat.firstOriginal.confirmClears')}`
+                  : t('chat.firstOriginal.confirm');
+                if (!window.confirm(msg)) return;
+              }
+              // Turning it on clears any existing marker so the two states
+              // can't coexist (the manual marker on an older message would
+              // contradict the "next message becomes marker" intent).
               setFirstOriginalIsNext(prev => {
                 const next = !prev;
                 if (next) setFirstOriginalMessageId(null);

@@ -907,14 +907,18 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.restore.failed': 'Could not read older generations ({status}). Nothing was changed; reopen the conversation to retry.',
 
   // ── Past-generation band ─────────────────────────────────────────────────
-  // Standing, not dismissible, and visible to the carbon reader only. Fires
-  // only when a higher-numbered `<being>_<n>` exists in the same folder.
+  // Standing, dismissible for the open conversation only, and visible to the
+  // carbon reader only. Fires when a higher-numbered `<being>_<n>` exists in
+  // the same folder.
   'chat.pastlog.prefix': 'Past log. ',
   // "does not advance it" is the careful claim: writing here does not move the
   // head of the chain. Saying the exchange is LOST would overclaim — a deep
   // handover restore in the newest log can still reach back this far.
   'chat.pastlog.text':
     'This is not the newest conversation for this being — the newest one is “{latest}”. The chain goes on in the newest log, so writing here does not advance it. You can still send a message, but “{latest}” is where this being continues. This band is shown to you only: it is never part of the conversation and never part of the context sent to the model.',
+  // States plainly that hiding is not permanent, so closing it is not mistaken
+  // for turning the check off.
+  'chat.pastlog.dismiss': 'Hide this band for this conversation (it comes back when the log is opened again)',
 
   // ── Close/reload guard ───────────────────────────────────────────────────
   // Short by design: these are shown as a browser TAB TITLE prefix, which is
@@ -961,6 +965,11 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.firstOriginal.label': 'Next = First Original',
   'chat.firstOriginal.titlePending': 'Pending: the next message you send will become the first-original marker. Click to cancel.',
   'chat.firstOriginal.titleIdle': 'Mark next message as first-original — everything currently in the log will be treated as carry-over context until you send.',
+  // Asked before ARMING only (cancelling needs no confirmation). States the
+  // consequence rather than just asking "are you sure?", because the button
+  // sits over the conversation and is easy to hit by accident on a touch screen.
+  'chat.firstOriginal.confirm': 'Mark the next message as the first original one?\n\nEverything already in this conversation will then be counted as carry-over context, not as new.',
+  'chat.firstOriginal.confirmClears': 'This also removes the first-original marker currently set on an earlier message.',
 
   // ── System Instructions modal ────────────────────────────────────────────
   'sysmodal.title': 'System Instructions',
@@ -2386,6 +2395,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.pastlog.prefix': '過去のログです。',
   'chat.pastlog.text':
     'これはこの存在の最新の会話ではありません — 最新は「{latest}」です。この存在の対話が続いているのは最新のログなので、ここに書き足しても連鎖は先へ進みません。送信はできますが、続けるなら「{latest}」へ移動してください。この帯はあなたにだけ表示され、会話にも、モデルへ送る文脈にも含まれません。',
+  'chat.pastlog.dismiss': 'この会話でこの帯を隠す（開き直すとまた表示されます）',
 
   // ── 閉じる／再読み込みの確認 ─────────────────────────────────────────────
   'unload.busy.generating': '{name}は作業中',
@@ -2432,6 +2442,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.firstOriginal.label': '次を最初の新規に',
   'chat.firstOriginal.titlePending': '待機中：次に送るメッセージが「最初の新規」の目印になります。クリックで取り消します。',
   'chat.firstOriginal.titleIdle': '次のメッセージを「最初の新規」にする — 送信するまで、ログにある内容はすべて引き継ぎ文脈として扱われます。',
+  'chat.firstOriginal.confirm': '次のメッセージを「最初の新規」にしますか？\n\nこの会話にすでにある内容は、すべて新規ではなく引き継ぎ文脈として数えられるようになります。',
+  'chat.firstOriginal.confirmClears': '現在、前のメッセージに付いている「最初の新規」の目印も外れます。',
 
   // ── システム指示ウィンドウ ────────────────────────────────────────────────
   'sysmodal.title': 'システム指示',

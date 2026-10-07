@@ -6,6 +6,7 @@ import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
+import { useDevice } from './DeviceProvider';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 
@@ -366,6 +367,7 @@ export default function SystemPromptUpdater({
   folders, saveFolderSettings, onFinalize, bindingOptional,
 }: Props) {
   const t = useT();
+  const { isMobile } = useDevice();
   // ── State ────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'index' | 'summary' | 'auto'>(null);
@@ -2286,32 +2288,68 @@ export default function SystemPromptUpdater({
   // fresh as the thing that displays it.
   const silenceMs = running && lastEventAtRef.current ? Math.max(0, nowTs - lastEventAtRef.current) : 0;
 
+  // On a phone the panel takes the whole screen: the 16px inset and the
+  // rounded corners cost real width on a 414px device, and `h-dvh` (not
+  // `92vh`) keeps it inside the visible area when the keyboard is up — `vh`
+  // is the keyboard-hidden height. Desktop keeps the inset card unchanged.
+  //
+  // One close button, rendered in one of two places. On desktop it is the last
+  // item of the action group (unchanged). On a phone that group wraps, and the
+  // ✕ was being pushed onto a line of its own — a whole row spent on one icon.
+  // Putting it at the end of the TITLE line instead costs no row at all and is
+  // where a phone user reaches for it anyway.
+  const closeButton = (
+    <button onClick={onClose} className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground shrink-0">
+      <X size={18} />
+    </button>
+  );
+
   return (
-    <div className="fixed inset-0 bg-background/85 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-      <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-[1600px] h-[92vh] flex flex-col overflow-hidden">
-        {/* Header bar */}
-        <div className="px-6 py-3 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
-          <div className="flex items-center gap-3">
-            <Layers size={20} className="text-indigo-500" />
-            <div>
-              <h2 className="text-lg font-bold leading-tight">{t('spu.title')}</h2>
+    <div className={`fixed inset-0 bg-background/85 backdrop-blur-sm z-[110] flex items-center justify-center ${isMobile ? 'p-0' : 'p-4'}`}>
+      <div className={`bg-card border border-border shadow-2xl w-full max-w-[1600px] flex flex-col overflow-hidden ${isMobile ? 'h-dvh rounded-none' : 'h-[92vh] rounded-xl'}`}>
+        {/* Header bar. On mobile it wraps rather than squeezing: without that
+            the action buttons were compressed until their labels rendered one
+            character per line. Desktop keeps the original one-line row.
+            `min-w-0`/`shrink-0` are unconditional but cannot move a layout
+            that already fits — a flex item's automatic minimum size only binds
+            once the content is wider than the space available, which on
+            desktop it is not (measured at 1280px). */}
+        <div className={`border-b border-border flex items-center justify-between bg-secondary/30 shrink-0 ${isMobile ? 'px-3 py-2 gap-2 flex-wrap' : 'px-6 py-3'}`}>
+          <div className={`flex items-center gap-3 min-w-0 ${isMobile ? 'w-full' : ''}`}>
+            <Layers size={20} className="text-indigo-500 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-lg font-bold leading-tight">{t('spu.title')}</h2>
+                {isMobile && closeButton}
+              </div>
               <div className="text-[11px] text-muted-foreground font-mono leading-snug">
                 <div>
                   <span className="text-blue-500">Left:</span> {baseName}/{baseName}_{currentIndex}.md
                   {' · '}
                   <span className="text-blue-500">Right:</span> {baseName}/{baseName}_{currentIndex + 1}.md
                 </div>
-                <div className="opacity-70">
-                  Model:{' '}
-                  {forceUpdaterModel
-                    ? <span className="text-indigo-500">{effectiveAiName} / {effectiveSpecificModel}{effectiveAuthMode === 'oauth' ? ' (OAuth)' : ''} <span className="opacity-70">(overriding {aiName}/{specificModel})</span></span>
-                    : <span>{aiName} / {specificModel}</span>}
-                  {' '}· {baseName}_{currentIndex} → _{currentIndex + 1} · Folder: {folderName}
-                </div>
+                {/* Dropped on mobile, where it wrapped to three rows — the
+                    widest single thing in the header. Everything an operator
+                    needs from it is restated two rows below in the body: the
+                    "use a dedicated model" checkbox, the model dropdown, and
+                    the `実行モデル: <family> / <id>` line. The folder and the
+                    _N → _N+1 pair are already in the Left/Right paths above.
+                    The ONE fact not restated anywhere is which conversation
+                    model is being overridden; that is the accepted cost, and
+                    deleting `isMobile &&` brings the line back. */}
+                {!isMobile && (
+                  <div className="opacity-70">
+                    Model:{' '}
+                    {forceUpdaterModel
+                      ? <span className="text-indigo-500">{effectiveAiName} / {effectiveSpecificModel}{effectiveAuthMode === 'oauth' ? ' (OAuth)' : ''} <span className="opacity-70">(overriding {aiName}/{specificModel})</span></span>
+                      : <span>{aiName} / {specificModel}</span>}
+                    {' '}· {baseName}_{currentIndex} → _{currentIndex + 1} · Folder: {folderName}
+                  </div>
+                )}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className={`flex items-center gap-2 ${isMobile ? 'flex-wrap' : ''}`}>
             <span
               className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
                 autoSaveState === 'saving' ? 'text-amber-500'
@@ -2351,9 +2389,7 @@ export default function SystemPromptUpdater({
             >
               <ChevronsRight size={14} /> {t('spu.next')}
             </button>
-            <button onClick={onClose} className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
-              <X size={18} />
-            </button>
+            {!isMobile && closeButton}
           </div>
         </div>
 
@@ -2529,12 +2565,20 @@ export default function SystemPromptUpdater({
 
           {/* Identity (Layers 1-3) — single combined block, left vs right */}
           <div className="border border-border rounded-lg p-3 bg-muted/10">
-            <div className="flex items-center justify-between mb-2">
+            {/* Wrapping is MOBILE-ONLY, and that is a correction: the first
+                version applied `flex-wrap` on every device, on the assumption
+                that a 1600px panel always has room. Measured at a 1280px
+                window, it does not — the row wrapped and the five buttons
+                dropped onto their own line, which is a desktop change nobody
+                asked for. Desktop therefore keeps the original one-line row
+                (buttons pushed right, shrinking when tight). On a phone they
+                used to run off the right edge, the last one unreachable. */}
+            <div className={`flex items-center justify-between mb-2 ${isMobile ? 'gap-2 flex-wrap' : ''}`}>
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider font-semibold text-indigo-500">{t('spu.identity')}</span>
                 <span className="text-sm font-medium">{t('spu.identitySub')}</span>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className={`flex items-center gap-1.5 ${isMobile ? 'flex-wrap' : ''}`}>
                 <StatusBadge status={updateStatus} />
                 <button
                   onClick={handleGenesis}
@@ -2828,7 +2872,9 @@ export default function SystemPromptUpdater({
 
           {/* Summary panel — separate call, separate default model (MiMo). */}
           <div className="border border-emerald-500/40 rounded-lg p-3 bg-emerald-500/[0.04]">
-            <div className="flex items-center justify-between mb-2">
+            {/* Mobile-only wrap — see the identity row above for why this is
+                not applied on desktop. */}
+            <div className={`flex items-center justify-between mb-2 ${isMobile ? 'gap-2 flex-wrap' : ''}`}>
               <div className="flex items-center gap-2">
                 <span className="text-xs uppercase tracking-wider font-semibold text-emerald-500">{t('spu.layer4Summary')}</span>
                 <span className="text-sm font-medium">{t('spu.convoSummary')}</span>
