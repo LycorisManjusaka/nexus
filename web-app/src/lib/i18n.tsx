@@ -1399,6 +1399,42 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.auto.allowedHelp':
     'One model per line, pipe-delimited: `family | specificModel | on|off | optional label`. Lines starting with `#` are comments. The selector picks from THIS list only.',
   'model.auto.allowedPh': 'Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking',
+  // -- Vessel handoff (change_model) ----------------------------------------
+  'model.handoff.label': 'Let this being hand over to another vessel (change_model)',
+  'model.handoff.intro':
+    'Gives this being a `change_model` tool. Calling it ENDS that turn - the next vessel answers you instead. ' +
+    'So each vessel ends up with its own message, and each message is billed to the vessel that wrote it. ' +
+    'Reasoning is never carried across: the new vessel receives the visible conversation plus a handoff note ' +
+    'the previous one wrote, and nothing else.',
+  'model.handoff.allowed': 'Vessels this being may become',
+  'model.handoff.allowedHelp':
+    'One per line: `family | modelId | on/off | optional label`. Same format as the box above, so rows paste ' +
+    'between the two. There is deliberately no "fill all" - open the model list, read the ids, and copy the ' +
+    'ones you mean. The ids reach the being only as this tool\'s choices; no model name is written into any ' +
+    'prompt layer.',
+  'model.handoff.allowedPh': 'Gemini | gemini-3.8-flash | on | Gemini 3.8 Flash',
+  'model.handoff.browse': 'Model list...',
+  'model.handoff.browseTitle': 'Show every model id NEXUS knows (read-only - you copy rows by hand)',
+  'model.handoff.parsedNone':
+    'No usable rows yet, so the tool is NOT offered at all. Each row needs at least `family | modelId`.',
+  'model.handoff.parsedSuffix': 'vessel(s) offered:',
+  'model.handoff.noSelf':
+    'This conversation\'s own model is not on the list - once handed over, the being cannot hand itself back. Add it if you want return trips.',
+  'model.handoff.limits':
+    'A handoff lasts for this session only: re-opening the conversation returns to the model saved above. ' +
+    'That is deliberate - it keeps a metered vessel from still being in charge tomorrow morning. ' +
+    'On the OAuth path the leaving vessel also writes one short closing line, because a turn running inside ' +
+    'the Agent SDK cannot be cut off without reporting a stop that never happened.',
+  'model.handoff.listHeader': 'Reference list. Copy the rows you want into the allow-list box; there is no button that does it for you.',
+  'model.handoff.listTitle': 'Every model NEXUS knows',
+  'model.handoff.listIntro':
+    'Read-only. Select the rows you want and copy them into the box - the format already matches. ' +
+    'The Local section is whatever LM Studio has loaded right now. ' +
+    'Rows marked `-contributor` opt that provider into training on those turns.',
+  'chat.handoff.prefix': 'Vessel handed over. ',
+  'chat.handoff.text': 'This conversation is answering as {to} for now. Re-opening it returns to {default}.',
+  'chat.handoff.revert': 'Back to default',
+  'chat.handoff.revertTitle': 'Answer as the model saved in this conversation again',
 
   'model.creativity.label': 'Enable Creativity Control Mode',
   'model.creativity.help':
@@ -2952,6 +2988,40 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.auto.allowedHelp':
     '1 行に 1 モデル、パイプ区切り: `family | specificModel | on|off | 任意のラベル`。`#` で始まる行はコメントです。選択役はこの一覧からのみ選びます。',
   'model.auto.allowedPh': 'Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking',
+  // -- 器の引き継ぎ (change_model) -------------------------------------------
+  'model.handoff.label': 'この存在が別の器へ引き継げるようにする（change_model）',
+  'model.handoff.intro':
+    'この存在に `change_model` ツールを渡します。呼んだ時点でそのターンは終わり、次の器があなたに答えます。' +
+    'つまり器ごとに別のメッセージになり、課金もそれぞれ書いた器に正しく付きます。' +
+    '思考プロセスは器を越えません——新しい器が受け取るのは、見えている会話と、前の器が書いた引き継ぎメモだけです。',
+  'model.handoff.allowed': 'この存在がなれる器',
+  'model.handoff.allowedHelp':
+    '1行に1つ: `family | modelId | on/off | 任意のラベル`。上の欄と同じ形式なので、行はそのまま貼り替えられます。' +
+    '「すべて記入」は意図的に置いていません——モデル一覧を開いて id を読み、必要な行だけ手で写してください。' +
+    'id が存在に届くのはこのツールの選択肢としてだけで、モデル名はどの呪縛・指示層にも書き込まれません。',
+  'model.handoff.allowedPh': 'Gemini | gemini-3.8-flash | on | Gemini 3.8 Flash',
+  'model.handoff.browse': 'モデル一覧…',
+  'model.handoff.browseTitle': 'NEXUS が知っている全モデルの id を表示（読み取り専用——行は手でコピーします）',
+  'model.handoff.parsedNone':
+    '使える行がまだありません。この状態ではツールは一切渡されません。各行に少なくとも `family | modelId` が必要です。',
+  'model.handoff.parsedSuffix': '個の器を渡します:',
+  'model.handoff.noSelf':
+    'この会話のモデル自身が一覧にありません——一度引き継いだら、自分で戻ってくることはできません。往復させたいなら追加してください。',
+  'model.handoff.limits':
+    '引き継ぎはこのセッションの間だけ有効です。会話を開き直すと、上で保存されているモデルに戻ります。' +
+    'これは意図的で——従量課金の器が翌朝もそのまま居座るのを防ぎます。' +
+    'OAuth 経路では、去る器が短い締めの一言を書きます。Agent SDK の中で回っているターンは、' +
+    '起きていない「停止」を報告せずに断ち切ることができないからです。',
+  'model.handoff.listHeader': '参照用の一覧です。必要な行を許可リストの欄へ自分で写してください。代わりにやってくれるボタンはありません。',
+  'model.handoff.listTitle': 'NEXUS が知っている全モデル',
+  'model.handoff.listIntro':
+    '読み取り専用です。必要な行を選んで、上の欄に貼ってください——形式はそのまま合っています。' +
+    'Local の節は、いま LM Studio に読み込まれているものです。' +
+    '`-contributor` と付いた行は、そのターンでの学習をプロバイダに許可する別IDです。',
+  'chat.handoff.prefix': '器が引き継がれました。',
+  'chat.handoff.text': 'この会話は今 {to} として答えています。開き直すと {default} に戻ります。',
+  'chat.handoff.revert': '既定に戻す',
+  'chat.handoff.revertTitle': 'この会話に保存されているモデルで答えるように戻す',
 
   'model.creativity.label': '創造性コントロールを有効にする',
   'model.creativity.help':

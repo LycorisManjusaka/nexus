@@ -44,6 +44,7 @@ import { describeProviderError } from '@/lib/providerErrors';
 import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireCarriesMedia, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
+import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
@@ -782,6 +783,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     "GLM    | glm-5.2          | on | GLM-5.2 Thinking\n" +
     "GLM    | glm-4.6v-flash   | off | GLM-4.6V Flash"
   );
+  // ── Vessel handoff (change_model) — per-being ─────────────────────────────
+  const [modelHandoffEnabled, setModelHandoffEnabled] = useState(false);
+  // Same line format as the auto-select box above, so a row copied out of the
+  // model-list window pastes into either one. EMPTY by default and never
+  // auto-filled: this list is the set of vessels this being is permitted to
+  // BECOME, and filling it wholesale would hand over every vessel NEXUS knows
+  // — including metered ones and the Meta "-contributor" ids that opt into
+  // training. Curation stays a decision, not a click.
+  const [modelHandoffAllowedModels, setModelHandoffAllowedModels] = useState('');
+  // Live vessel after a handoff. Deliberately NOT written into
+  // localAiName / specificModel: those are the values that get SAVED, and a
+  // metered vessel persisted into the conversation would still be there
+  // tomorrow morning when a heavy build runs (望月希子's safety-valve point).
+  // Re-opening the conversation returns to the being's own default — which is
+  // structural, not a reset routine someone has to remember to run.
+  const [handoffOverride, setHandoffOverride] = useState<null | {
+    family: string; specificModel: string; thinking: boolean; label: string; fromLabel: string;
+  }>(null);
+  // Read-only reference window listing every model id NEXUS knows. This is
+  // what replaces auto-select's "Fill all" for handoff: you read the ids and
+  // copy the rows you actually want.
+  const [modelListOpen, setModelListOpen] = useState(false);
+  const [modelListText, setModelListText] = useState('');
+  // The vessel that is ACTUALLY answering right now. Everything that describes
+  // the live request (the wire body, the delivery badge, the thinking filter)
+  // must read these, not localAiName/specificModel, or the UI starts narrating
+  // a vessel that isn't the one running.
+  const effAiName = handoffOverride?.family || localAiName;
+  const effSpecificModel = handoffOverride?.specificModel || specificModel;
   // ── Claude OAuth session ID (per-conversation) ────────────────────────────
   // The backend's Agent SDK path resumes the Anthropic-side session by ID so
   // role semantics (user vs assistant turns) are preserved without flattening
@@ -1433,6 +1463,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAutoModelSelectEnabled(data.autoModelSelectEnabled === true);
         if (typeof data.autoModelSelectCriteria === 'string') setAutoModelSelectCriteria(data.autoModelSelectCriteria);
         if (typeof data.autoModelSelectAllowedModels === 'string') setAutoModelSelectAllowedModels(data.autoModelSelectAllowedModels);
+        setModelHandoffEnabled(!!data.modelHandoffEnabled);
+        if (typeof data.modelHandoffAllowedModels === 'string') setModelHandoffAllowedModels(data.modelHandoffAllowedModels);
+        // Safety valve: a handoff never survives re-opening a conversation.
+        // Loading IS the "new session" 望月希子 asked to reset at.
+        setHandoffOverride(null);
         setAgentSession(typeof data.claudeAgentSessionId === 'string' ? data.claudeAgentSessionId : null);
         if (data.claudeAuthMode === 'oauth') {
           setClaudeAuthMode('oauth');
@@ -1511,6 +1546,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof folderSettings.autoModelSelectAllowedModels === 'string') {
           setAutoModelSelectAllowedModels(folderSettings.autoModelSelectAllowedModels);
         }
+        setModelHandoffEnabled(!!folderSettings.modelHandoffEnabled);
+        if (typeof folderSettings.modelHandoffAllowedModels === 'string') {
+          setModelHandoffAllowedModels(folderSettings.modelHandoffAllowedModels);
+        }
+        setHandoffOverride(null);
         setAgentSession(null);
         // Folder settings still win outright; the fallback is the machine-aware
         // default described where claudeAuthMode is declared.
@@ -1613,7 +1653,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1723,7 +1763,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1761,18 +1801,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // helper model picks the family per request, so no static marker could be
   // honest. There the display is left alone.
   const deliveryCtx = useMemo(() => ({
-    specificModel,
+    // EFFECTIVE model, not the saved default: after a change_model handoff the
+    // badge has to describe the vessel that will actually receive the bytes.
+    specificModel: effSpecificModel,
     // Blank under automatic model selection: the family is chosen per request,
     // so no static answer about the wire format would be honest.
-    aiName: autoModelSelectEnabled ? '' : String(localAiName || ''),
+    aiName: autoModelSelectEnabled ? '' : String(effAiName || ''),
     // Same family test the server applies to `aiName` (substring, not equality).
-    isOAuthClaude: String(localAiName || '').toLowerCase().includes('claude')
+    // A handoff to a non-Claude vessel makes this false even while the saved
+    // default is OAuth Claude — which is the truth about this request.
+    isOAuthClaude: String(effAiName || '').toLowerCase().includes('claude')
       && claudeAuthMode === 'oauth'
       && !autoModelSelectEnabled,
     eyesEnabled,
     earsEnabled,
     watcherEnabled,
-  }), [specificModel, localAiName, claudeAuthMode, autoModelSelectEnabled, eyesEnabled, earsEnabled, watcherEnabled]);
+  }), [effSpecificModel, effAiName, claudeAuthMode, autoModelSelectEnabled, eyesEnabled, earsEnabled, watcherEnabled]);
 
   // Index of the last USER message. On the OAuth path only this message's
   // images become native image blocks; every earlier image is dropped, because
@@ -2719,8 +2763,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // the "carry on from where you stopped" user turn itself, because for Claude
   // an assistant message in last position is a prefill, which Anthropic rejects
   // while extended thinking is enabled.
-  const generateAiResponse = async (history: any[], opts?: { continueMsgId?: string }) => {
+  const generateAiResponse = async (history: any[], opts?: {
+    continueMsgId?: string;
+    // Set only by the vessel-handoff re-POST: who handed over, and the note
+    // they wrote. A handoff is a NEW assistant message (not a continuation) —
+    // which is also what makes per-message billing come out right, since cost
+    // is computed per message from its own modelSpecific.
+    handoffFrom?: { family: string; specificModel: string; label: string; note: string };
+    // The vessel THIS request must run on. Passed explicitly rather than read
+    // from handoffOverride because the re-POST happens in the same tick as the
+    // setState that records the switch — a closure would still see the old
+    // vessel and the handoff would silently run on the vessel it just left.
+    vesselOverride?: { family: string; specificModel: string; thinking: boolean; label: string };
+    // How many handoffs produced this request. Capped so two vessels that each
+    // prefer the other cannot ping-pong forever at real cost per hop.
+    handoffDepth?: number;
+  }) => {
     const continueMsgId = opts?.continueMsgId;
+    // Vessel for THIS request. opts wins over state for the reason above.
+    const turnVessel = opts?.vesselOverride ?? handoffOverride;
+    const turnAiName = turnVessel?.family || localAiName;
+    const turnSpecificModel = turnVessel?.specificModel || specificModel;
     setLoading(true);
     clearLiveTool();
     setStreamPhase(null);
@@ -2836,6 +2899,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // the catch below can invoke it on AbortError and still persist billing
     // (cacheUsage) and the 🔧 tool report (toolCalls) instead of dropping them.
     let finalizeMessage: (() => void) | null = null;
+    // Vessel handoff, carried OUT of the try block: the accumulated text lives
+    // inside it, but the re-POST has to happen after the whole teardown below.
+    let handoffPlan: null | {
+      vessel: { family: string; specificModel: string; thinking: boolean; label: string };
+      from: { family: string; specificModel: string; label: string; note: string };
+      assistant: any;
+    } = null;
 
     try {
       // Slim the wire payload aggressively. The backend only reads role / content /
@@ -2889,7 +2959,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         //      which is empty). We forward it as a signature-less block: the OAuth
         //      transcript builder folds `tb.thinking` regardless of signature, and
         //      the API-key native-replay path safely skips signature-less blocks.
-        if (saveThinkingToLog && !m.thinkingExcluded) {
+        //
+        // THIRD gate, added with vessel handoff: only replay reasoning the
+        // CURRENT vessel produced. Feeding one provider's raw chain-of-thought
+        // to another is exactly what distillation guards look for
+        // (Anthropic's `reasoning_extraction`, measured as deterministic in
+        // conversation size) — so without this, the first handoff would
+        // manufacture a refusal out of nothing. Messages with no recorded
+        // family pass through: every conversation written before handoff
+        // existed is single-vessel, and withholding their thinking would be a
+        // silent regression there. Answers 望月希子's point 2 and Lizard-kun's
+        // question about returning to a previous vessel: coming back, your own
+        // thinking comes back with you; it never travels to someone else.
+        if (saveThinkingToLog && !m.thinkingExcluded && thinkingBelongsToVessel(m.modelFamily, turnAiName)) {
           if (m.claudeThinkingBlocks?.length) {
             slim.claudeThinkingBlocks = m.claudeThinkingBlocks;
           } else if (m.thoughtProcess) {
@@ -2906,7 +2988,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // claudeAgentSessionId is only consumed by the Claude OAuth path. When
       // null, backend starts a fresh Anthropic-side session. When set, backend
       // resumes that session (so role semantics are preserved without flatten).
-      const bodyObj = { messages: slimHistory, aiName: localAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
+      // aiName/specificModel are the EFFECTIVE pair: after a change_model
+      // handoff the override decides who answers, while localAiName /
+      // specificModel stay the being's saved default (see handoffOverride).
+      const bodyObj = { messages: slimHistory, aiName: turnAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
         browserEnabled,
         // Text in the UI, array on the wire. Split on newlines and commas so the
         // box accepts whichever way the host list was typed.
@@ -2914,7 +2999,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         browserAllowAnyHost, browserCompact,
         computerControlEnabled,
         appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking }, specificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId, clientId: TAB_CLIENT_ID,
+        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking: turnVessel ? turnVessel.thinking : claudeThinking }, specificModel: turnSpecificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels,
+        modelHandoffEnabled, modelHandoffAllowedModels,
+        // Only set on the FIRST request after a switch: the note the previous
+        // vessel wrote. The server injects it as a user turn (it is not the
+        // partner's voice, and it says so).
+        ...(opts?.handoffFrom ? { handoffFrom: opts.handoffFrom } : {}),
+        convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId, clientId: TAB_CLIENT_ID,
         // Absolute Base Binding — HINTS, not controls. The route injects the
         // Binding whatever these say (lib/baseBinding.ts); `baseBindingMode` is
         // honoured only when the server process carries the developer
@@ -2960,6 +3051,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // family/specific/thinking/label tag for the meta bar. These fields are
       // display-only metadata — slimHistory above explicitly omits them so
       // they never leak back into the AI context window.
+      // Set when the vessel calls change_model and the switch is accepted.
+      // Acted on AFTER the stream closes and this message is finalized, so the
+      // text this vessel produced is committed and billed to IT before the
+      // next vessel starts a new message.
+      let pendingHandoff: null | {
+        family: string; specificModel: string; label: string; thinking: boolean; note: string;
+        fromFamily: string; fromSpecificModel: string; fromLabel: string;
+      } = null;
       let chosenModelFamily = '';
       let chosenModelSpecific = '';
       let chosenModelThinking = false;
@@ -3006,7 +3105,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // prompt-cache usage, and the tool calls that drive the 🔧 report.
       // Defined here — before the read loop — so the catch below can invoke it
       // when the partner stops the turn mid-stream.
-      finalizeMessage = () => {
+      // The finalized shape, built in ONE place and used by two callers: the
+      // setState below that commits it to the visible list, and the
+      // vessel-handoff re-POST that has to send this same message as history.
+      //
+      // The handoff used to hand-build its own copy of this object, and that
+      // copy silently dropped cacheUsage, generationMs, textTokens,
+      // thinkingTokens, toolCalls and notices — i.e. the entire billing record
+      // of the vessel that had just handed over. MEASURED on a real handoff:
+      // the handing-over message landed on disk with tokens=0 and no
+      // cacheUsage, while the receiving one was complete. Per-message billing
+      // only works if every message is finalized the same way.
+      const buildFinalizedMessage = (base: any) => {
         const finalText = currentText;
         // Both were `length / 4` (0.377x measured on this house's text). This
         // is the stored per-message count for a turn whose usage never
@@ -3014,10 +3124,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // written to disk and then summed forever by the conversation-log cap.
         const fallbackTokens = estimateTokensForModel(finalText || '', localAiName);
         const thinkingTokens = currentThought ? estimateTokensForModel(currentThought, localAiName) : 0;
-        setMessages(prev => prev.map(m =>
-          m.id === msgId
-            ? {
-                ...m,
+        return {
+                ...base,
                 content: finalText,
                 tokens: fallbackTokens,
                 textTokens: fallbackTokens,
@@ -3045,9 +3153,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 ...(toolCalls.length > 0 ? { toolCalls } : {}),
                 ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
                 ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
-              }
-            : m
-        ));
+        };
+      };
+      finalizeMessage = () => {
+        setMessages(prev => prev.map(m => (m.id === msgId ? buildFinalizedMessage(m) : m)));
       };
 
       // Throttle the streaming UI update to ONE render per animation frame.
@@ -3127,6 +3236,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 if (typeof data.autoSelectNotice === 'string' && data.autoSelectNotice.trim()) {
                   notices.push(data.autoSelectNotice.trim());
                 }
+              } else if (data.type === 'model_handoff') {
+                // The vessel handed this conversation to another one. The
+                // switch is already committed server-side (that turn ended);
+                // all that is left is to finish this message and send a new
+                // request as the new vessel.
+                pendingHandoff = {
+                  family: String(data.family || ''),
+                  specificModel: String(data.specificModel || ''),
+                  label: String(data.label || ''),
+                  thinking: !!data.thinking,
+                  note: String(data.note || ''),
+                  fromFamily: String(data.fromFamily || ''),
+                  fromSpecificModel: String(data.fromSpecificModel || ''),
+                  fromLabel: String(data.fromLabel || ''),
+                };
               } else if (data.type === 'cache_usage') {
                 cacheUsage = {
                   cachedInputTokens: Number(data.cachedInputTokens || 0),
@@ -3426,6 +3550,41 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const finalText = currentText;
       finalizeMessage();
 
+      // Vessel handoff: build the plan while the accumulated values are still
+      // in scope. The assistant message is reconstructed by hand rather than
+      // read back from `messages`, because finalizeMessage() went through
+      // setState and that state is not visible yet in this tick.
+      if (pendingHandoff) {
+        handoffPlan = {
+          vessel: {
+            family: pendingHandoff.family,
+            specificModel: pendingHandoff.specificModel,
+            thinking: pendingHandoff.thinking,
+            label: pendingHandoff.label,
+          },
+          from: {
+            family: pendingHandoff.fromFamily,
+            specificModel: pendingHandoff.fromSpecificModel,
+            label: pendingHandoff.fromLabel,
+            note: pendingHandoff.note,
+          },
+          // Built by the SAME function that commits the visible message, so
+          // the handing-over message carries its complete record (cacheUsage,
+          // generationMs, token counts, tool calls) into the next request
+          // instead of a thinner hand-made copy.
+          assistant: buildFinalizedMessage({
+            id: msgId,
+            role: 'assistant',
+            timestamp: Date.now(),
+            attachments: [],
+            // Carried so the NEXT request can tell whose reasoning this was —
+            // the thinking filter drops it for the new vessel and restores it
+            // if the conversation ever comes back to this one.
+            ...(currentThought ? { thoughtProcess: currentThought } : {}),
+          }),
+        };
+      }
+
       // Refine tokens in the background — message bubble and TTS are already
       // unblocked at this point; the token counter just updates a moment later.
       fetchTokensForText(finalText, localAiName).then(aiTokens => {
@@ -3474,6 +3633,34 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Stop beating and retire this conversation's registry entry — otherwise
     // other tabs keep being told a turn is running for up to the TTL.
     retireTurnRegistration();
+
+    // ── Vessel handoff: begin the next turn as the new vessel ───────────────
+    // Deliberately AFTER the full teardown above (loading flag, turn registry,
+    // live-tool state): this is a SECOND turn, not a continuation of the first,
+    // and it has to start from a clean slate. That separation is also what
+    // makes billing correct without touching the billing code — each vessel
+    // ends up with its own assistant message, and cost is computed per message
+    // from that message's own modelSpecific (Lizard-kun's proposal).
+    if (handoffPlan) {
+      setHandoffOverride({ ...handoffPlan.vessel, fromLabel: handoffPlan.from.label });
+      // The Anthropic OAuth session described the PREVIOUS vessel's view of
+      // this timeline — drop it, same as rerun and continue do.
+      setAgentSession(null);
+      // Chain guard: a fresh vessel can call change_model on its very first
+      // turn, and two vessels that each prefer the other would ping-pong
+      // forever, spending real money per hop. After the cap the switch still
+      // takes effect (the override is set above) — we just stop auto-sending,
+      // so the next thing the new vessel answers is the partner, not itself.
+      const MAX_HANDOFF_CHAIN = 3;
+      const depth = (opts?.handoffDepth ?? 0) + 1;
+      if (depth <= MAX_HANDOFF_CHAIN) {
+        await generateAiResponse([...history, handoffPlan.assistant], {
+          vesselOverride: handoffPlan.vessel,
+          handoffFrom: handoffPlan.from,
+          handoffDepth: depth,
+        });
+      }
+    }
   };
 
   const handleRerun = async (msgId: string) => {
@@ -4605,6 +4792,62 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             title={t('chat.pastlog.dismiss')}
             aria-label={t('chat.pastlog.dismiss')}
           >✕</button>
+        </div>
+      )}
+
+      {/* A vessel handoff is in effect. Loud on purpose: a metered vessel costs
+          real money per turn, and the only thing worse than switching is not
+          noticing that you did. The band names the saved default too, so "what
+          happens when I reload this" is answerable without opening settings —
+          and ⇄ rather than ⚠ because nothing went wrong. */}
+      {handoffOverride && (
+        <div className="shrink-0 px-6 py-2 border-b border-sky-500/40 bg-sky-500/10 flex items-start gap-3">
+          <span className="text-sm leading-5 shrink-0 text-sky-500">⇄</span>
+          <span className="text-xs leading-5 flex-1 text-sky-700 dark:text-sky-300">
+            <span className="font-semibold">{t('chat.handoff.prefix')}</span>
+            {t('chat.handoff.text')
+              .replace(/\{to\}/g, handoffOverride.label || handoffOverride.specificModel)
+              .replace(/\{default\}/g, specificModel || '—')}
+          </span>
+          <button
+            type="button"
+            onClick={() => setHandoffOverride(null)}
+            className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium bg-sky-500/15 text-sky-700 dark:text-sky-300 hover:bg-sky-500/25 transition-colors"
+            title={t('chat.handoff.revertTitle')}
+          >{t('chat.handoff.revert')}</button>
+        </div>
+      )}
+
+      {/* Model-list reference window. Read-only by design: this is what
+          replaces auto-select's "Fill all" for handoff — a list you copy FROM
+          by hand (Lizard-kun's design), so no single click can grant every
+          vessel NEXUS knows, metered and training-opt-in ones included. */}
+      {modelListOpen && (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+          onClick={() => setModelListOpen(false)}
+        >
+          <div
+            className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-foreground">{t('model.handoff.listTitle')}</h3>
+              <button
+                type="button"
+                onClick={() => setModelListOpen(false)}
+                className="px-1.5 text-muted-foreground hover:text-foreground text-sm"
+                title={t('common.close')}
+                aria-label={t('common.close')}
+              >✕</button>
+            </div>
+            <p className="px-4 pt-3 text-xs text-muted-foreground">{renderRich(t('model.handoff.listIntro'))}</p>
+            <textarea
+              readOnly
+              value={modelListText}
+              className="m-4 flex-1 min-h-[280px] p-3 bg-background border border-border rounded-xl text-xs font-mono resize-none focus:ring-2 focus:ring-indigo-500/50 outline-none"
+            />
+          </div>
         </div>
       )}
 
@@ -6641,6 +6884,125 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 )}
               </div>
 
+              {/* ── Vessel handoff (change_model) ────────────────────────────
+                  Placed AFTER auto-select deliberately: the two read the same
+                  line format, but this one must survive auto-select being
+                  removed. There is no "Fill all" here on purpose — see the
+                  model-list window button, which SHOWS the ids instead of
+                  pasting them, so curating the list stays a decision. */}
+              <div className="border-t border-border pt-6 mt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="checkbox"
+                    id="modelHandoff"
+                    checked={modelHandoffEnabled}
+                    onChange={(e) => setModelHandoffEnabled(e.target.checked)}
+                    className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                  />
+                  <label htmlFor="modelHandoff" className="text-sm font-semibold text-foreground cursor-pointer">
+                    {t('model.handoff.label')}
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground mb-4">{renderRich(t('model.handoff.intro'))}</p>
+                {modelHandoffEnabled && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-foreground">{t('model.handoff.allowed')}</label>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            // Same live LM Studio fetch the auto-select "Fill
+                            // all" button does — but the result is DISPLAYED,
+                            // never written into the box.
+                            let liveLocal: string[] = localModels;
+                            let liveErr: string | null = localModelsError;
+                            try {
+                              const r = await fetch('/api/local/models');
+                              const d = await r.json();
+                              if (Array.isArray(d?.models)) {
+                                liveLocal = d.models;
+                                setLocalModels(d.models);
+                              }
+                              liveErr = d?.error || null;
+                              setLocalModelsError(liveErr);
+                            } catch (e: any) {
+                              liveErr = e?.message || 'Failed to reach LM Studio';
+                              setLocalModelsError(liveErr);
+                            }
+                            // The shared table's first line explains itself as
+                            // auto-filled by the "Fill all" button — true in
+                            // the auto-select box above, FALSE here, where that
+                            // button deliberately does not exist. MEASURED on
+                            // the real window: it told the reader to look for a
+                            // control that is not there. Swap the header for
+                            // one that describes this window instead.
+                            setModelListText(
+                              buildAllModelsFill(liveLocal, liveErr)
+                                .replace(/^#[^\n]*\n/, `# ${t('model.handoff.listHeader')}\n`),
+                            );
+                            setModelListOpen(true);
+                          }}
+                          className="px-2 py-1 text-[11px] font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded transition-colors"
+                          title={t('model.handoff.browseTitle')}
+                        >
+                          {t('model.handoff.browse')}
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-2">{renderRich(t('model.handoff.allowedHelp'))}</p>
+                      <textarea
+                        value={modelHandoffAllowedModels}
+                        onChange={(e) => setModelHandoffAllowedModels(e.target.value)}
+                        className="w-full min-h-[140px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                        placeholder={t('model.handoff.allowedPh')}
+                      />
+                    </div>
+                    {/* What the list ACTUALLY parses to. Without this, a box
+                        full of comments or mistyped rows reads as "configured"
+                        while the tool is silently not offered at all. */}
+                    {(() => {
+                      const parsed = parseHandoffModels(modelHandoffAllowedModels);
+                      if (parsed.length === 0) {
+                        return (
+                          <p className="text-xs text-amber-600 dark:text-amber-400">
+                            {t('model.handoff.parsedNone')}
+                          </p>
+                        );
+                      }
+                      const hasSelf = parsed.some(
+                        (m) => m.specificModel.toLowerCase() === String(specificModel || '').toLowerCase(),
+                      );
+                      return (
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <p>
+                            <span className="text-foreground font-semibold">{parsed.length}</span>{' '}
+                            {t('model.handoff.parsedSuffix')}
+                          </p>
+                          <ul className="font-mono space-y-0.5">
+                            {parsed.map((m) => (
+                              <li key={m.specificModel}>
+                                {m.specificModel}
+                                <span className="text-muted-foreground/70">
+                                  {' '}— {m.family} · {m.thinking ? 'thinking on' : 'thinking off'}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          {!hasSelf && (
+                            <p className="text-amber-600 dark:text-amber-400">
+                              {t('model.handoff.noSelf')}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      {renderRich(t('model.handoff.limits'))}
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="border-t border-border pt-6 mt-6">
                 <div className="flex items-center gap-2 mb-4">
                   <input
@@ -6743,6 +7105,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       fatigueInstruction,
                       baseBindingMode,
                       autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels,
+                      modelHandoffEnabled, modelHandoffAllowedModels,
                     };
                     const res = await fetch('/api/folders', {
                       method: 'POST',

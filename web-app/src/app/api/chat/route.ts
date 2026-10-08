@@ -19,6 +19,7 @@ import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
+import { resolveHandoff, describeAllowed, buildHandoffInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -985,6 +986,7 @@ async function streamClaudeViaAgentSDK(args: {
   language?: string;               // 'en' | 'ja' — base dict for the instructions above
   askUserEnabled: boolean;         // per-Entity: expose the AskQuestion MCP tool
   askUserTimeoutMs: number;        // wait time for an answer (0 = indefinite)
+  handoff: HandoffBundle;          // per-Entity: expose the change_model MCP tool
   subagentEnabled: boolean;        // per-Entity: expose the spawn_subagent MCP tool
   subagentModel: string;           // model the child runs on ('' = cheap default)
   subagentFamily: string;          // provider family of the child model ('' = Claude)
@@ -1003,7 +1005,7 @@ async function streamClaudeViaAgentSDK(args: {
   turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
   betrayalSend: GuardedSender;     // guarded SSE writer — see lib/betrayalGuard.ts
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Refusal-retry CONFIGURATION, resolved ONCE here so the parent query() and
@@ -1553,6 +1555,49 @@ async function streamClaudeViaAgentSDK(args: {
                   const finalAnswers = timedOut ? recommendedDefaults(questions) : answered;
                   enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                   return { content: [{ type: 'text' as const, text: formatAnswerForModel(finalAnswers, timedOut) }] };
+                },
+              ),
+            );
+          }
+          if (handoff.enabled) {
+            // Vessel handoff on the OAuth path.
+            //
+            // ONE honest difference from the other four dialects: those run
+            // their own tool loop, so an accepted switch `break`s and the turn
+            // ends immediately. Here the loop lives inside the Agent SDK and
+            // the only ways out are abort (which surfaces as "turn stopped" —
+            // a false label, nothing was stopped) or letting the vessel close
+            // its own turn. So the tool result ASKS for one short closing line.
+            // Cost: one extra short completion. The switch itself is already
+            // committed — the client has the `model_handoff` event by then and
+            // re-POSTs regardless of what this vessel says next.
+            const handoffTargetSchema = handoff.targetIds.length > 0
+              ? z.enum(handoff.targetIds as [string, ...string[]])
+              : z.string();
+            nexusTools.push(
+              sdk.tool(
+                'change_model',
+                I.changeModelDesc,
+                {
+                  target: handoffTargetSchema.describe(
+                    `${I.changeModelTargetParam} Available: ${handoff.targetHelp}`,
+                  ),
+                  handoff: z.string().describe(I.changeModelHandoffParam),
+                },
+                async (a: { target: string; handoff: string }) => {
+                  const o = runChangeModel(a, handoff.ctx);
+                  if (o.switched) {
+                    enqueue(handoff.payload({ model: o.model, note: o.note }));
+                    return {
+                      content: [{
+                        type: 'text' as const,
+                        text: o.resultText
+                          + ' Close out now with AT MOST one short sentence and call no further tools'
+                          + ' — the next vessel takes it from here.',
+                      }],
+                    };
+                  }
+                  return { content: [{ type: 'text' as const, text: o.resultText }] };
                 },
               ),
             );
@@ -3043,6 +3088,86 @@ function parseAllowedModels(raw: string): AllowedModel[] {
   return out;
 }
 
+// ── change_model (vessel handoff) — ONE decision for all five dialects ──────
+// The tool exists in five provider dialects; this is the single place that
+// decides what a call MEANS, so none of them can answer "allowed" more easily
+// than the others. Result text is model-facing and deliberately English-only:
+// it is read by whichever vessel is running, not by the partner.
+//
+// Only `switched: true` ends the turn. An unknown target or a target that is
+// already the current vessel is REPORTED and the turn continues — a refusal
+// that also killed the turn would turn a typo into a lost answer.
+type ChangeModelOutcome =
+  | { switched: false; resultText: string }
+  | { switched: true; resultText: string; model: HandoffModel; note: string };
+
+// Everything the two out-of-POST stream functions (OAuth / Anthropic-compat)
+// need to offer and run the tool, bundled into ONE argument. Five separate
+// parameters threaded through two signatures and two call sites is five chances
+// to forget one — and the one you forget is the one that reads as "handoff
+// isn't offered on that provider" without anything looking broken.
+type HandoffBundle = {
+  enabled: boolean;
+  targetIds: string[];
+  targetHelp: string;
+  ctx: { allowedRaw: string; curFamily: string; curSpecific: string };
+  payload: (o: { model: HandoffModel; note: string }) => any;
+};
+
+function runChangeModel(
+  input: any,
+  ctx: { allowedRaw: string; curFamily: string; curSpecific: string },
+): ChangeModelOutcome {
+  const target = String(input?.target ?? '').trim();
+  const note = String(input?.handoff ?? '').trim();
+  const r = resolveHandoff(ctx.allowedRaw, target, {
+    family: ctx.curFamily,
+    specificModel: ctx.curSpecific,
+  });
+  if (r.kind === 'empty') {
+    return {
+      switched: false,
+      resultText:
+        'change_model is unavailable: no vessels are on this being\'s curated list. ' +
+        'Nothing was changed. Tell your partner if you need the list filled in.',
+    };
+  }
+  if (r.kind === 'unknown') {
+    return {
+      switched: false,
+      resultText:
+        `"${target || '(empty)'}" is not an allowed target, so NOTHING was changed and you are ` +
+        `still running as ${ctx.curSpecific}. Match one id exactly from this list:\n` +
+        describeAllowed(r.allowed),
+    };
+  }
+  if (r.kind === 'already') {
+    return {
+      switched: false,
+      resultText:
+        `You are ALREADY running as ${r.model.specificModel} (${r.model.label}). ` +
+        'No switch was performed and the turn was not interrupted — just carry on with the work.',
+    };
+  }
+  if (!note) {
+    return {
+      switched: false,
+      resultText:
+        `No switch performed: \`handoff\` was empty. The next vessel receives NO reasoning from ` +
+        `you — the note is the only thing it gets beyond the visible conversation. Call ` +
+        `change_model again with a handoff that says what is done and what remains.`,
+    };
+  }
+  return {
+    switched: true,
+    model: r.model,
+    note,
+    resultText:
+      `Handoff accepted: ${ctx.curSpecific} → ${r.model.specificModel} (${r.model.label}). ` +
+      'This turn ends here; the next vessel answers your partner using your handoff note.',
+  };
+}
+
 // Build the common selector prompt + enum ids shared by every provider branch.
 function buildSelectorPrompt(criteria: string, allowed: AllowedModel[], messages: any[]) {
   const enumIds = allowed.map((_, i) => String(i));
@@ -3484,6 +3609,7 @@ async function streamViaAnthropicCompat(args: {
   language?: string;
   askUserEnabled: boolean;
   askUserTimeoutMs: number;
+  handoff: HandoffBundle;
   subagentEnabled: boolean;
   subagentModel: string;
   subagentFamily: string;
@@ -3507,7 +3633,7 @@ async function streamViaAnthropicCompat(args: {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
     modelSelectedPayload, modelParams, folderName, senseEvents, toolUseEnabled,
     enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools,
-    instructionOverrides, language, askUserEnabled, askUserTimeoutMs,
+    instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff,
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
     computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
@@ -3666,11 +3792,32 @@ async function streamViaAnthropicCompat(args: {
       },
     });
   }
+  // Optional vessel handoff (Kimi / MiMo speak the Anthropic dialect).
+  if (handoff.enabled) {
+    tools.push({
+      name: 'change_model', description: I.changeModelDesc,
+      input_schema: {
+        type: 'object',
+        properties: {
+          target: {
+            type: 'string',
+            enum: handoff.targetIds,
+            description: `${I.changeModelTargetParam} Available: ${handoff.targetHelp}`,
+          },
+          handoff: { type: 'string', description: I.changeModelHandoffParam },
+        },
+        required: ['target', 'handoff'],
+      },
+    });
+  }
+  // Set by the change_model handler below; read right after the tool loop to
+  // end the turn (the client re-POSTs as the new vessel).
+  let handoffAccepted: { model: HandoffModel; note: string } | null = null;
 
   const LOCAL_TOOL_NAMES_SET = new Set([
     'Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash',
     'web_search', 'web_fetch', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments',
-    'AskQuestion', 'spawn_subagent',
+    'AskQuestion', 'spawn_subagent', 'change_model',
     ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES, ...APP_TOOL_NAMES,
   ]);
 
@@ -4060,6 +4207,15 @@ async function streamViaAnthropicCompat(args: {
                   enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                   resultContent = formatAnswerForModel(finalAnswers, timedOut);
                 }
+              } else if (tu.name === 'change_model') {
+                // Vessel handoff. Only an ACCEPTED switch ends the turn.
+                const o = runChangeModel(tu.input, handoff.ctx);
+                resultContent = o.resultText;
+                if (o.switched) {
+                  const acc = { model: o.model, note: o.note };
+                  handoffAccepted = acc;
+                  enqueue(handoff.payload(acc));
+                }
               } else if (tu.name === 'spawn_subagent') {
                 const task = String((tu.input as any)?.task || '');
                 if (!task.trim()) {
@@ -4119,6 +4275,9 @@ async function streamViaAnthropicCompat(args: {
             try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injected.texts, files: prep.logNames } } }); } catch {}
           }
           currentMessages.push({ role: 'user', content: toolResultBlocks });
+          // Vessel handoff: the turn is over — the client re-POSTs as the new
+          // vessel instead of asking this one to continue.
+          if (handoffAccepted) break;
         }
 
         if (toolStopNotice) {
@@ -4275,6 +4434,18 @@ export async function POST(req: Request) {
       autoModelSelectEnabled = false,
       autoModelSelectCriteria = '',
       autoModelSelectAllowedModels = '',
+      // ── Vessel handoff (change_model) — per-being ─────────────────────────
+      // Exposes the `change_model` tool so the being can hand the conversation
+      // to another vessel at a TURN BOUNDARY (this turn ends, the client
+      // re-POSTs as the new vessel). The allow-list is hand-curated: same line
+      // format as the auto-select box, no "fill all".
+      modelHandoffEnabled = false,
+      modelHandoffAllowedModels = '',
+      // Set by the client on the FIRST request after a switch: the note the
+      // previous vessel wrote, plus who it was. Injected as a user turn below
+      // (see "Vessel handoff" near the manual-continuation injection) because
+      // the new vessel receives no reasoning from its predecessor.
+      handoffFrom = null as null | { family?: string; specificModel?: string; label?: string; note?: string },
       // Conversation UUID. Used as the `x-grok-conv-id` header on xAI Grok
       // requests — xAI explicitly recommends it to maximize prompt-cache hit
       // rates by hinting that consecutive calls belong to the same session.
@@ -4801,6 +4972,56 @@ export async function POST(req: Request) {
                           : /reasoning/i.test(specificModel || '') && !/non-?reasoning/i.test(specificModel || '')) :
                        false;
     const modelLabelForSSE = buildModelLabel(aiName, specificModel, modelThinkingFlag, modelParams);
+
+    // ── change_model availability, computed ONCE for all five dialects ───────
+    // Gated on a non-empty curated list, not just the toggle: an enum with zero
+    // members is an invalid schema, and a tool that can only fail is worse than
+    // no tool. Computed here because it needs the FINAL aiName/specificModel
+    // (auto-selection may have overridden them above), so "already on that
+    // vessel" compares against the vessel that is actually answering.
+    const handoffTargets: HandoffModel[] = modelHandoffEnabled
+      ? parseHandoffModels(modelHandoffAllowedModels)
+      : [];
+    const handoffToolEnabled = handoffTargets.length > 0;
+    // The enum is the ONLY place model names are offered to the being
+    // (望月希子's design note): choices here, never in a standing prompt layer.
+    const handoffTargetIds = handoffTargets.map((m) => m.specificModel);
+    const handoffTargetHelp = handoffTargets
+      .map((m) => `${m.specificModel} = ${m.label}`)
+      .join('; ');
+    // Gated on handoffToolEnabled, NOT on the raw list: with the toggle off a
+    // leftover list must not make a switch succeed. A model that calls the tool
+    // anyway (it isn't offered, but models do invent names) gets the "no vessels
+    // configured" refusal instead of a silent switch nobody authorised.
+    const handoffCtx = {
+      allowedRaw: handoffToolEnabled ? String(modelHandoffAllowedModels || '') : '',
+      curFamily: String(aiName || ''),
+      curSpecific: String(specificModel || ''),
+    };
+    // Set by a tool handler when a switch is accepted. Each provider loop reads
+    // it right after running the tool and stops iterating: the turn is over, and
+    // the client re-POSTs as the new vessel (see 'model_handoff' SSE below).
+    let handoffAccepted: { model: HandoffModel; note: string } | null = null;
+    const handoffPayload = (o: { model: HandoffModel; note: string }) => ({
+      type: 'model_handoff',
+      family: o.model.family,
+      specificModel: o.model.specificModel,
+      label: o.model.label,
+      thinking: o.model.thinking,
+      note: o.note,
+      fromFamily: aiName,
+      fromSpecificModel: specificModel,
+      fromLabel: modelLabelForSSE,
+    });
+    // Single argument for the two stream functions that live outside POST.
+    const handoffBundle: HandoffBundle = {
+      enabled: handoffToolEnabled,
+      targetIds: handoffTargetIds,
+      targetHelp: handoffTargetHelp,
+      ctx: handoffCtx,
+      payload: handoffPayload,
+    };
+
     const modelSelectedPayload = {
       type: 'model_selected',
       family: aiName,
@@ -5141,6 +5362,34 @@ export async function POST(req: Request) {
       }
     }
 
+    // ── Vessel handoff: the note the previous vessel wrote ───────────────────
+    // Appended as a user turn for the same reason the continuation instruction
+    // is: an assistant message in last position is a prefill, which Anthropic
+    // rejects under extended thinking and Gemini 3.6+ rejects outright.
+    //
+    // The text names itself as a NEXUS notice (lib/modelHandoff.ts) instead of
+    // speaking in the partner's voice — the note was written by the previous
+    // vessel, and a `user` turn claiming otherwise would be a false label.
+    // Placed after the continuation injection so the two never fight over the
+    // tail, and after aiName/specificModel are final so "to" names the vessel
+    // that is actually about to answer.
+    if (handoffFrom && typeof handoffFrom === 'object' && processedMessages.length > 0) {
+      processedMessages.push({
+        role: 'user',
+        content: buildHandoffInjection(
+          {
+            family: String(handoffFrom.family || ''),
+            specificModel: String(handoffFrom.specificModel || ''),
+            label: handoffFrom.label ? String(handoffFrom.label) : undefined,
+          },
+          { family: aiName, specificModel, label: modelLabelForSSE },
+          String(handoffFrom.note || ''),
+          language,
+        ),
+        mediaFiles: [],
+      });
+    }
+
     // Helper: each provider branch calls this at the start of its stream so
     // the frontend can update message attachments with their new descriptions
     // before the AI text begins flowing.
@@ -5189,6 +5438,7 @@ export async function POST(req: Request) {
           processedMessages,
           resumeSessionId: claudeAgentSessionId,
           modelSelectedPayload,
+          handoff: handoffBundle,
           modelParams,
           folderName,
           senseEvents,
@@ -5710,6 +5960,26 @@ export async function POST(req: Request) {
           },
         });
       }
+      // Optional vessel handoff. The allowed ids ride in the enum, never in a
+      // standing prompt layer.
+      if (handoffToolEnabled) {
+        claudeTools.push({
+          name: 'change_model',
+          description: I.changeModelDesc,
+          input_schema: {
+            type: 'object',
+            properties: {
+              target: {
+                type: 'string',
+                enum: handoffTargetIds,
+                description: `${I.changeModelTargetParam} Available: ${handoffTargetHelp}`,
+              },
+              handoff: { type: 'string', description: I.changeModelHandoffParam },
+            },
+            required: ['target', 'handoff'],
+          },
+        });
+      }
       if (claudeTools.length) claudeParams.tools = claudeTools;
 
       // ── Layer 1: Creativity analysis ────────────────────────────────────────
@@ -6068,7 +6338,7 @@ export async function POST(req: Request) {
               // turn dead-ends mid-tool-call (Claude waits forever for a result
               // that never comes). Web search/fetch are Anthropic server-side
               // tools (no client round-trip) so they're intentionally excluded.
-              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments', 'AskQuestion', 'spawn_subagent', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES, ...APP_TOOL_NAMES]);
+              const LOCAL_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Delete', 'Bash', 'read_conversation', 'search_conversations', 'read_attachment', 'search_attachments', 'AskQuestion', 'spawn_subagent', 'change_model', ...LETTER_TOOL_NAMES, ...BROWSER_TOOL_NAMES, ...COMPUTER_TOOL_NAMES, ...APP_TOOL_NAMES]);
               const toolUses = assistantBlocks.filter(b => b.type === 'tool_use' && LOCAL_TOOLS.has(b.name));
               if (toolUses.length === 0) {
                 // ── Truncated at the token cap → continue automatically ──────
@@ -6452,6 +6722,16 @@ export async function POST(req: Request) {
                       enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                       resultContent = formatAnswerForModel(finalAnswers, timedOut);
                     }
+                  } else if (tu.name === 'change_model') {
+                    // Vessel handoff. Only an ACCEPTED switch ends the turn —
+                    // see the `handoffAccepted` break after this tool loop.
+                    const o = runChangeModel(tu.input, handoffCtx);
+                    resultContent = o.resultText;
+                    if (o.switched) {
+                      const acc = { model: o.model, note: o.note };
+                      handoffAccepted = acc;
+                      enqueue(handoffPayload(acc));
+                    }
                   } else if (tu.name === 'spawn_subagent') {
                     // Context firewall: a fresh read-only child investigates and
                     // returns only its distilled result. Child model defaults to
@@ -6520,6 +6800,10 @@ export async function POST(req: Request) {
                 try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedClaude.texts, files: prepClaude.logNames } } }); } catch {}
               }
               currentMessages.push({ role: 'user', content: toolResultBlocks });
+              // Vessel handoff: the turn is over. Stop BEFORE asking this
+              // vessel to continue — the next vessel answers, in a fresh
+              // request the client sends after it sees `model_handoff`.
+              if (handoffAccepted) break;
               // …and around the loop again. Next iteration the model sees the
               // tool_result blocks and continues its reply.
             }
@@ -6891,6 +7175,30 @@ export async function POST(req: Request) {
                   return_contract: { type: 'STRING', description: 'Optional: how the distilled result should be shaped/formatted.' },
                 },
                 required: ['task'],
+              },
+            },
+          ],
+        });
+      }
+      // Optional vessel handoff. UPPERCASE types, same as every other Gemini
+      // declaration here; `enum` is accepted on a STRING property.
+      if (handoffToolEnabled) {
+        geminiTools.push({
+          functionDeclarations: [
+            {
+              name: 'change_model',
+              description: I.changeModelDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  target: {
+                    type: 'STRING',
+                    enum: handoffTargetIds,
+                    description: `${I.changeModelTargetParam} Available: ${handoffTargetHelp}`,
+                  },
+                  handoff: { type: 'STRING', description: I.changeModelHandoffParam },
+                },
+                required: ['target', 'handoff'],
               },
             },
           ],
@@ -7567,6 +7875,15 @@ export async function POST(req: Request) {
                         enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                         result = { answer: formatAnswerForModel(finalAnswers, timedOut) };
                       }
+                    } else if (fc.name === 'change_model') {
+                      // Vessel handoff. Only an ACCEPTED switch ends the turn.
+                      const o = runChangeModel(fc.args, handoffCtx);
+                      result = { result: o.resultText };
+                      if (o.switched) {
+                        const acc = { model: o.model, note: o.note };
+                        handoffAccepted = acc;
+                        enqueue(handoffPayload(acc));
+                      }
                     } else if (fc.name === 'spawn_subagent') {
                       // Context firewall: a fresh read-only child investigates
                       // and returns only its distilled result. Child model
@@ -7632,6 +7949,9 @@ export async function POST(req: Request) {
                   try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedGemini.texts, files: prepG.logNames } } }); } catch {}
                 }
                 contents = [...contents, { role: 'user', parts: [...fnRespParts, ...extraInlineParts, ...injectParts] }];
+                // Vessel handoff: the turn is over — don't ask this vessel to
+                // continue. The client re-POSTs as the new vessel.
+                if (handoffAccepted) break;
                 continue; // loop — model will continue with the function responses visible
               }
 
@@ -7821,6 +8141,7 @@ export async function POST(req: Request) {
         systemPrompt: enhancedSystemPrompt,
         processedMessages,
         modelSelectedPayload,
+        handoff: handoffBundle,
         modelParams,
         folderName,
         senseEvents,
@@ -8293,6 +8614,28 @@ export async function POST(req: Request) {
                 return_contract: { type: 'string', description: 'Optional: how the distilled result should be shaped/formatted.' },
               },
               required: ['task'],
+            },
+          },
+        });
+      }
+      // Optional vessel handoff.
+      if (handoffToolEnabled) {
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'change_model',
+            description: I.changeModelDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                target: {
+                  type: 'string',
+                  enum: handoffTargetIds,
+                  description: `${I.changeModelTargetParam} Available: ${handoffTargetHelp}`,
+                },
+                handoff: { type: 'string', description: I.changeModelHandoffParam },
+              },
+              required: ['target', 'handoff'],
             },
           },
         });
@@ -9792,6 +10135,15 @@ export async function POST(req: Request) {
                         enqueue({ type: 'ask_user_resolved', askId, answers: finalAnswers, timedOut });
                         resultText = formatAnswerForModel(finalAnswers, timedOut);
                       }
+                    } else if (tc.name === 'change_model') {
+                      // Vessel handoff. Only an ACCEPTED switch ends the turn.
+                      const o = runChangeModel(parsed, handoffCtx);
+                      resultText = o.resultText;
+                      if (o.switched) {
+                        const acc = { model: o.model, note: o.note };
+                        handoffAccepted = acc;
+                        enqueue(handoffPayload(acc));
+                      }
                     } else if (tc.name === 'spawn_subagent') {
                       // Context firewall: a fresh read-only child investigates
                       // and returns only its distilled result. Default child
@@ -9909,6 +10261,9 @@ export async function POST(req: Request) {
                   try { enqueue({ type: 'tool_call', call: { name: 'partner interjection', kind: 'event', at: Date.now(), input: { texts: injectedOai.texts, files: prepOai.logNames } } }); } catch {}
                 }
 
+                // Vessel handoff: the turn is over — don't ask this vessel to
+                // continue. The client re-POSTs as the new vessel.
+                if (handoffAccepted) break;
                 continue; // loop — next iteration sees tool results
               }
 

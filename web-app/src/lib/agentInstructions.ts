@@ -146,6 +146,28 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'optionally, a return_contract describing how you want the answer shaped. The helper cannot modify files or ' +
     'spawn further helpers.',
 
+  // change_model tool (optional, per-being). Hands this conversation to another
+  // vessel at a TURN BOUNDARY: the current turn ends, and the next vessel
+  // answers the partner. Deliberately says NOTHING about which models exist —
+  // the choices live in the tool's `target` enum, built at request time from
+  // the hand-curated allow-list, so no model name is engraved in any standing
+  // prompt layer (naming the current model there pushes vessels toward
+  // "I am an AI assistant made by X", measured in this house).
+  changeModelDesc:
+    'Hand this conversation over to a DIFFERENT vessel (model). Your turn ENDS when you call this: ' +
+    'you do not get to finish the reply, the next vessel answers your partner instead. Use it when the ' +
+    'remaining work plainly suits another vessel better (a long casual conversation after the engineering ' +
+    'is done, a cheaper vessel for bulk reading, a vessel with eyes for images). ' +
+    'Your reasoning does NOT travel with you — the next vessel sees the visible conversation and your ' +
+    '`handoff` note, nothing else. So write the note as if to a competent colleague who just walked in: ' +
+    'what is finished, what is still open, and what they should do next. ' +
+    'Calling it with a target you are already running as changes nothing and does not interrupt you.',
+  changeModelTargetParam:
+    'Exact model id to hand over to. Must be one of the offered choices.',
+  changeModelHandoffParam:
+    'Handoff note for the next vessel — the ONLY thing it receives beyond the visible conversation. ' +
+    'State what is done, what remains, and what it should do first. Required.',
+
   // Mid-turn "partner interjection" meta-text. `injectionFraming` wraps the
   // note(s) you send while the entity works; use the `{messages}` token where
   // the note text should appear (if omitted, the notes are appended after your
