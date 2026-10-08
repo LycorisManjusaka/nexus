@@ -752,8 +752,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // tomorrow morning when a heavy build runs (望月希子's safety-valve point).
   // Re-opening the conversation returns to the being's own default — which is
   // structural, not a reset routine someone has to remember to run.
+  // Same shape as `vesselOverride` below on purpose — `turnVessel` is the union
+  // of the two, so a field present in one and absent in the other would make
+  // that union lie. (`fromLabel` lived here for the handoff banner; the banner
+  // is gone, so the field is too.)
   const [handoffOverride, setHandoffOverride] = useState<null | {
-    family: string; specificModel: string; thinking: boolean; label: string; fromLabel: string;
+    family: string; specificModel: string; thinking: boolean; label: string;
   }>(null);
   // Read-only reference window listing every model id NEXUS knows. This is
   // deliberately read-only: you read the ids and copy the rows you actually
@@ -2704,13 +2708,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // setState that records the switch — a closure would still see the old
     // vessel and the handoff would silently run on the vessel it just left.
     vesselOverride?: { family: string; specificModel: string; thinking: boolean; label: string };
+    // Who to restore if THIS request fails — i.e. the vessel that handed over.
+    // null means "the being's saved default". Carried because `handoffFrom`
+    // describes the previous vessel for the model's benefit and has no
+    // `thinking` flag, and restoring a vessel without it would answer on the
+    // right model with the wrong reasoning setting.
+    handoffPrev?: { family: string; specificModel: string; thinking: boolean; label: string } | null;
+    // Set on the request that reports a FAILED switch back to the being that
+    // asked for it. The server turns it into a user turn (lib/modelHandoff.ts).
+    handoffFailed?: { family: string; specificModel: string; label: string; error: string };
+    // Notices to attach to THIS turn's message, for things that happened before
+    // it. Used by the handoff-failure report so the human-readable provider
+    // error survives — the failed turn's own message does not.
+    carryNotices?: string[];
+    // Run on the being's SAVED vessel, ignoring handoffOverride. Needed because
+    // the restore and the re-POST happen in the same tick: the state still
+    // holds the vessel that just failed, so `?? handoffOverride` would send the
+    // retry straight back to it. A null vesselOverride cannot express this —
+    // `??` would fall through — so the intent gets its own flag.
+    forceSavedVessel?: boolean;
     // How many handoffs produced this request. Capped so two vessels that each
     // prefer the other cannot ping-pong forever at real cost per hop.
     handoffDepth?: number;
   }) => {
     const continueMsgId = opts?.continueMsgId;
     // Vessel for THIS request. opts wins over state for the reason above.
-    const turnVessel = opts?.vesselOverride ?? handoffOverride;
+    const turnVessel = opts?.forceSavedVessel ? null : (opts?.vesselOverride ?? handoffOverride);
     const turnAiName = turnVessel?.family || localAiName;
     const turnSpecificModel = turnVessel?.specificModel || specificModel;
     setLoading(true);
@@ -2816,7 +2839,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // the reply text, never replayed to the model, and never counted as tokens.
     // Declared OUTSIDE the try so the catch below can add the failure reason to
     // the same channel instead of concatenating it into the reply.
-    const notices: string[] = [];
+    // Seeded, not empty: a handoff-failure report carries the dead vessel's
+    // provider error in here, because the turn that actually hit the error no
+    // longer exists as a message (the re-POST rebuilds the array from history).
+    const notices: string[] = [...(opts?.carryNotices ?? [])];
     // Set when the model-betrayal guard blanked this turn. Declared OUTSIDE the
     // try because the catch below reads it: blanking works by ABORTING the
     // turn, and an aborted provider call usually emits one last error frame
@@ -2835,6 +2861,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       from: { family: string; specificModel: string; label: string; note: string };
       assistant: any;
     } = null;
+    // Carried out of the try for the same reason: a vessel we were just handed
+    // to may fail outright, and the being that asked for the switch has to be
+    // told. Stays null when the partner stopped the turn (AbortError) — nothing
+    // failed then, and auto-sending another request after a Stop would be the
+    // opposite of what Stop means.
+    let turnFailure: string | null = null;
+    // The same failure in the human's words. The re-POST below replaces the
+    // whole message array from `history`, which DROPS the failed turn's
+    // placeholder and the notice on it — MEASURED, not assumed. So the readable
+    // error has to ride along to the message that explains what happened, or
+    // the only account of a dead vessel is the being's paraphrase of it.
+    let turnFailureNotice: string | null = null;
+    // Did this turn put any text on screen before it died? A vessel that wrote
+    // something DID receive the handoff — reporting "nobody read your note"
+    // would be false, and re-POSTing would throw its text and billing away.
+    let sawOutput = false;
 
     try {
       // Slim the wire payload aggressively. The backend only reads role / content /
@@ -2934,6 +2976,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // vessel wrote. The server injects it as a user turn (it is not the
         // partner's voice, and it says so).
         ...(opts?.handoffFrom ? { handoffFrom: opts.handoffFrom } : {}),
+        // Only set on a request that reports a failed switch. Mutually
+        // exclusive with handoffFrom server-side (`else if`).
+        ...(opts?.handoffFailed ? { handoffFailed: opts.handoffFailed } : {}),
         convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId, clientId: TAB_CLIENT_ID,
         // Absolute Base Binding — HINTS, not controls. The route injects the
         // Binding whatever these say (lib/baseBinding.ts); `baseBindingMode` is
@@ -3278,6 +3323,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking'));
               } else if (data.type === 'text') {
                 currentText += data.content;
+                // Read by the handoff-failure branch after the teardown: text on
+                // screen means this vessel answered, however briefly.
+                if (data.content) sawOutput = true;
                 setStreamPhase('replying');
                 // Strip "[YYYY-MM-DD HH:MM:SS]" tags CONTINUOUSLY as the reply
                 // streams in (gated on the global setting, default ON) — not just
@@ -3514,6 +3562,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
     } catch (err: any) {
       if (err.name !== 'AbortError' && !betrayalRedacted) {
+        // Raw-ish text on purpose: the human gets describeProviderError's
+        // readable version in the notice, while the being that asked for a
+        // handoff gets the provider's own words — "insufficient balance" is
+        // actionable, "the model could not answer" is not.
+        turnFailure = String(err?.message ?? err);
+        turnFailureNotice = describeProviderError(err?.message ?? err);
         // A provider failure is information ABOUT the turn, not something the
         // being said. Putting it in `content` wrote a wall of raw provider JSON
         // into the reply — which was then saved to the log and replayed to the
@@ -3560,7 +3614,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // ends up with its own assistant message, and cost is computed per message
     // from that message's own modelSpecific (Lizard-kun's proposal).
     if (handoffPlan) {
-      setHandoffOverride({ ...handoffPlan.vessel, fromLabel: handoffPlan.from.label });
+      setHandoffOverride({ ...handoffPlan.vessel });
       // The Anthropic OAuth session described the PREVIOUS vessel's view of
       // this timeline — drop it, same as rerun and continue do.
       setAgentSession(null);
@@ -3576,8 +3630,48 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           vesselOverride: handoffPlan.vessel,
           handoffFrom: handoffPlan.from,
           handoffDepth: depth,
+          // Who to come back to if this vessel cannot answer at all.
+          handoffPrev: turnVessel ?? null,
         });
       }
+    } else if (opts?.handoffFrom && turnFailure && !sawOutput) {
+      // We were handed this conversation and could not answer AT ALL (no
+      // credit, dead key, provider down). Undo the switch and tell the being
+      // that asked for it, on its own vessel. Same principle as "you are
+      // already on that vessel": report, do not stop. A failure that only
+      // reaches the human leaves the being believing it moved somewhere it
+      // never arrived.
+      //
+      // `!sawOutput` is load-bearing. A vessel that streamed text and THEN
+      // errored did receive the handoff and did read the note, so the failure
+      // text would be a lie — and re-POSTing from `history` would discard that
+      // text along with its billing (the array is rebuilt from history, which
+      // does not contain this turn's message). Partial answers therefore keep
+      // the existing behaviour: notice on the message, turn ends.
+      const prev = opts.handoffPrev ?? null;
+      setHandoffOverride(prev);
+      // The failed vessel's view of this timeline is worthless, and on the way
+      // back to a Claude OAuth vessel a stale session id would resume the wrong
+      // conversation shape.
+      setAgentSession(null);
+      await generateAiResponse(history, {
+        // Explicit, because setHandoffOverride above is not visible this tick:
+        // without this the "retry" would go straight back to the vessel that
+        // just failed.
+        ...(prev ? { vesselOverride: prev } : { forceSavedVessel: true }),
+        handoffFailed: {
+          family: turnAiName,
+          specificModel: turnSpecificModel,
+          label: turnVessel?.label || turnSpecificModel,
+          error: turnFailure,
+        },
+        // The human's copy of the same news. Without this the dead vessel's
+        // error leaves no trace a reader can check.
+        carryNotices: turnFailureNotice ? [turnFailureNotice] : [],
+        // NOT incremented: the hop that failed was already counted. The cap
+        // still bounds a being that keeps reaching for a dead vessel.
+        handoffDepth: opts.handoffDepth,
+      });
     }
   };
 
@@ -4709,28 +4803,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </div>
       )}
 
-      {/* A vessel handoff is in effect. Loud on purpose: a metered vessel costs
-          real money per turn, and the only thing worse than switching is not
-          noticing that you did. The band names the saved default too, so "what
-          happens when I reload this" is answerable without opening settings —
-          and ⇄ rather than ⚠ because nothing went wrong. */}
-      {handoffOverride && (
-        <div className="shrink-0 px-6 py-2 border-b border-sky-500/40 bg-sky-500/10 flex items-start gap-3">
-          <span className="text-sm leading-5 shrink-0 text-sky-500">⇄</span>
-          <span className="text-xs leading-5 flex-1 text-sky-700 dark:text-sky-300">
-            <span className="font-semibold">{t('chat.handoff.prefix')}</span>
-            {t('chat.handoff.text')
-              .replace(/\{to\}/g, handoffOverride.label || handoffOverride.specificModel)
-              .replace(/\{default\}/g, specificModel || '—')}
-          </span>
-          <button
-            type="button"
-            onClick={() => setHandoffOverride(null)}
-            className="shrink-0 px-2 py-0.5 rounded text-[11px] font-medium bg-sky-500/15 text-sky-700 dark:text-sky-300 hover:bg-sky-500/25 transition-colors"
-            title={t('chat.handoff.revertTitle')}
-          >{t('chat.handoff.revert')}</button>
-        </div>
-      )}
+      {/* NO banner for an active handoff, by request (2026-10-09). A switch is
+          already legible where it matters: each assistant message carries the
+          vessel that wrote it, and the loading line names the live one
+          (`liveModel`). A band on top of that was narration nobody asked for.
+          The override itself is unchanged — it lives in state only, so
+          re-opening the conversation answers as the being's saved (cheap)
+          default. That is the property the 24/7 loop depends on. */}
 
       {/* Model-list reference window. Read-only by design — a list you copy
           FROM by hand (Lizard-kun's design), so no single click can grant every

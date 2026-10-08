@@ -94,16 +94,61 @@ export const COMPUTER_TOOL_NAMES = ['computer_screens', 'computer_screenshot', '
 //     1/1.5, so DPI was never the cause). This is the DEFAULT.
 //   • Claude API-key: 1568 — the Anthropic API resizes >1568px long edge server
 //     side, so NEXUS must pre-shrink to 1568 there (passed as ctx.maxEdge).
-//   • Gemini / OpenAI-compatible / Kimi / MiMo: left at the 2000 default —
-//     coordinate-safe; their real caps are UNMEASURED for computer-use, so raise
-//     with evidence, never by guess.
+//   • Gemini: 2000 long edge, PLUS a height pin — see NORMALIZED_COORD_SAFE_HEIGHT
+//     below, which is what actually governs the delivered size there. The 2000
+//     cap itself is coordinate-safe for Gemini (MEASURED: on clean runs it
+//     reports accurate pixels of the DELIVERED frame at 1280x720, 1778x1000,
+//     1920x1080, 1920x1200, 1920x1400 and 2000x1125 — its internal tiling is
+//     invisible to the coordinate contract, promptTokenCount ~1180 at every one
+//     of those sizes).
+//   • OpenAI-compatible / Kimi / MiMo: left at the 2000 default — their real
+//     caps are UNMEASURED for computer-use, so raise with evidence, never by
+//     guess.
 export const DEFAULT_SCREENSHOT_MAX_EDGE = 2000;
 
-/** Image-to-native scale for a monitor's screenshot (1 if it isn't downscaled). */
-export function screenScale(widthPx: number, heightPx: number, maxEdge: number = DEFAULT_SCREENSHOT_MAX_EDGE): number {
+// ── Normalized-coordinate safety (Gemini) ───────────────────────────────────
+// MEASURED 2026-10-08. Gemini answers "where is this?" in one of TWO coordinate
+// spaces, and which one it picks varies PER RESPONSE: of 55 completed runs, 55%
+// came back in a 0–1000 normalized space instead of image pixels (classified
+// mechanically — see workspace/gemini-normalized-coordinate-mode.md). The error
+// is MULTIPLICATIVE, dy = -y·(1 - 1000/H), which is exactly why it reads as a
+// "wandering 25–50px vertical offset" when only a handful of points are sampled
+// (that earlier reading was mine, and it was wrong).
+//
+// Two fixes that do NOT work, and why:
+//   • A per-model flag. Every Gemini tested (3.1…3.8, pro and flash) does it
+//     intermittently — the mode is per-RESPONSE, not per-model.
+//   • ctx.normalizedCoords (the Seed 2.x path). That branch assumes the model
+//     ALWAYS normalizes; switching it on for Gemini would break the 40% of
+//     responses that are already correct.
+//
+// So remove the AMBIGUITY instead of the behaviour: deliver the image at height
+// EXACTLY 1000, where y·1000/H == y, and the two spaces produce the SAME number.
+// The fault cannot be expressed, whichever space the model happens to pick.
+// Legibility is unaffected — transcription was identical native vs height-1000
+// on a synthetic ladder down to 9px (99.5% both) and on real Explorer captures
+// (8/8 on 1920x1080→1778x1000, and 12/12 on a portrait 1080x1920→563x1000).
+// NOT applied to monitors already shorter than 1000: upscaling adds no detail,
+// and that case is UNMEASURED — do not guess it into the shipped path.
+export const NORMALIZED_COORD_SAFE_HEIGHT = 1000;
+
+/** Image-to-native scale for a monitor's screenshot (1 if it isn't downscaled).
+ *  `heightTarget` (optional) shrinks further so the delivered image lands on
+ *  exactly that height — see NORMALIZED_COORD_SAFE_HEIGHT. It can only ever
+ *  make the scale SMALLER, never enlarge past the transport cap. */
+export function screenScale(
+  widthPx: number,
+  heightPx: number,
+  maxEdge: number = DEFAULT_SCREENSHOT_MAX_EDGE,
+  heightTarget?: number,
+): number {
   const longest = Math.max(widthPx || 0, heightPx || 0);
-  if (!longest || longest <= maxEdge) return 1;
-  return maxEdge / longest;
+  let scale = !longest || longest <= maxEdge ? 1 : maxEdge / longest;
+  if (heightTarget && heightPx > heightTarget) {
+    const toHeight = heightTarget / heightPx;
+    if (toHeight < scale) scale = toHeight;
+  }
+  return scale;
 }
 
 // ── Global stop key (Ctrl+Shift+X) ──────────────────────────────────────────
@@ -205,6 +250,13 @@ export interface ComputerToolCtx {
    *  dimension) before applying the screen_index offset. Requires screen_index
    *  (NEXUS needs the monitor size to un-normalize). See reportsNormalizedCoords. */
   normalizedCoords?: boolean;
+  /** Deliver the screenshot at exactly this image HEIGHT (further shrinking
+   *  beyond maxEdge) so a 0–1000 normalized answer and a pixel answer are the
+   *  same number. Set to NORMALIZED_COORD_SAFE_HEIGHT on the Gemini path, where
+   *  the space varies per RESPONSE and so cannot be corrected after the fact.
+   *  Must be passed to BOTH computer_screenshot and computer_input — they
+   *  recompute the same screenScale(), and a mismatch sends every click off. */
+  heightTarget?: number;
 }
 
 export interface ComputerToolResult {
@@ -1060,8 +1112,9 @@ $bmp.Dispose()
           // Best-effort logging must never block the reply to the being.
         }
 
-        // Downscale the copy the BEING sees to a known long edge (see
-        // the provider cap). Doing it here means the scale is known exactly and
+        // Downscale the copy the BEING sees to a known size (the provider long-
+        // edge cap, and on the Gemini path also ctx.heightTarget — see
+        // NORMALIZED_COORD_SAFE_HEIGHT). Doing it here means the scale is known exactly and
         // nothing downstream re-shrinks it. On resize failure we fall back to the
         // native bytes AND report native dimensions, so the caption never claims a
         // scaling that was not applied (the computer_input transform recomputes the
@@ -1069,12 +1122,17 @@ $bmp.Dispose()
         // which the caption steers the being to omit screen_index, which is correct
         // for a native image).
         const maxEdge = ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE;
-        let scale = screenScale(mon.width, mon.height, maxEdge);
+        let scale = screenScale(mon.width, mon.height, maxEdge, ctx.heightTarget);
         let shownBase64 = cap.stdout;
         if (scale < 1) {
           try {
+            // Resize to the EXACT pixel dimensions the caption will claim, rather
+            // than to a `fit: 'inside'` box: a box can only express a long-edge
+            // cap, and ctx.heightTarget needs the short edge pinned too. Passing
+            // both numbers also removes sharp's own rounding as a second opinion
+            // — the bytes and the caption now come from the same arithmetic.
             const shown = await sharp(png)
-              .resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true })
+              .resize({ width: Math.round(mon.width * scale), height: Math.round(mon.height * scale), fit: 'fill' })
               .png()
               .toBuffer();
             shownBase64 = shown.toString('base64');
@@ -1090,8 +1148,11 @@ $bmp.Dispose()
 
         return {
           text: scaled
+            // No reason is given for the downscale: it is sometimes transport
+            // (maxEdge) and sometimes coordinate safety (heightTarget), and a
+            // caption that names the wrong one is a caption that lies.
             ? `Screenshot of monitor ${idx}, shown to you at ${shownW}x${shownH}px (scaled down from this monitor's native ` +
-              `${mon.width}x${mon.height} to fit transport). To act on something you see here, call computer_input with ` +
+              `${mon.width}x${mon.height}). To act on something you see here, call computer_input with ` +
               `"screen_index": ${idx} and the x,y pixel EXACTLY as you read it off THIS image — NEXUS converts it to the real ` +
               `screen position for you. Do not add any offset or multiply by anything yourself. (Coordinates passed WITHOUT ` +
               `screen_index are treated as raw absolute virtual-desktop pixels, which will NOT match this scaled image — use ` +
@@ -1129,7 +1190,9 @@ $bmp.Dispose()
           if (!mon) {
             return { text: `Error: screen_index ${sIdx} does not match any monitor — call computer_screens first (there are ${screens.length}, indices 0..${Math.max(0, screens.length - 1)}). No input was sent.` };
           }
-          const scale = screenScale(mon.width, mon.height, ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE);
+          // Same four arguments the screenshot used — including ctx.heightTarget.
+          // If these two calls ever disagree, every screen_index click lands off.
+          const scale = screenScale(mon.width, mon.height, ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE, ctx.heightTarget);
           // Normalized-coordinate models (Seed 2.x) report x,y in a 0–1000 space
           // that ignores image size; recover the real-screen pixel directly as
           // (reported / 1000 × monitor dimension). screenScale cancels out here

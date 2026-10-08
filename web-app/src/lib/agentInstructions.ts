@@ -357,8 +357,8 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   toolComputerScreenshotDesc:
     'Take a picture of one monitor and see it directly. A visible red border briefly flashes around that ' +
     'monitor on the real screen at the moment of capture — this is a physical machine, and every capture is ' +
-    'meant to be seen. A large or high-DPI monitor is shown to you SMALLER than its native resolution (to fit ' +
-    'transport); the reply states the size you are actually seeing. You do not need to care about that scaling: ' +
+    'meant to be seen. A monitor may be shown to you SMALLER than its native resolution; the reply states the ' +
+    'size you are actually seeing. You do not need to care about that scaling: ' +
     'to act on a point in the image, pass its pixel to computer_input together with this "screen_index", and ' +
     'NEXUS converts it to the real-screen position for you — never multiply by a scale or add an offset yourself. ' +
     'Set "show_cursor": true to draw a red crosshair at the current mouse position in the returned image, ' +

@@ -19,7 +19,7 @@ import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
-import { resolveHandoff, describeAllowed, buildHandoffInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
+import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFailureInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -300,7 +300,7 @@ import {
   browserToolsClaude, browserToolsGemini, browserToolsOpenAI,
 } from '@/lib/browserTools';
 import {
-  runComputerTool, COMPUTER_TOOL_NAMES,
+  runComputerTool, COMPUTER_TOOL_NAMES, NORMALIZED_COORD_SAFE_HEIGHT,
   computerToolsClaude, computerToolsGemini, computerToolsOpenAI,
   registerActiveTurnStop, ensureStopKeyWatcher, killActiveInput,
 } from '@/lib/computerTools';
@@ -1271,7 +1271,20 @@ async function streamClaudeViaAgentSDK(args: {
         // per-conversation toggles. Tool names as seen by the model:
         // `mcp__nexus__read_conversation`, `mcp__nexus__AskQuestion`.
         let nexusMcpServers: Record<string, any> | undefined;
-        if (enableReadConversation || askUserEnabled || subagentEnabled || lettersEnabled || browserEnabled || computerControlEnabled || appControlEnabled || hiddenAttachmentsAccessible) {
+        // NO umbrella condition here, deliberately. There used to be one — a
+        // hand-maintained `A || B || C || ...` listing every toggle whose tool
+        // is built below — and `handoff.enabled` was missing from it. The effect
+        // was not a refusal: with every other toggle off, the MCP server was
+        // never created, so `change_model` did not EXIST and the model never saw
+        // it. That is why the handoff worked on all four other dialects (they
+        // build their tool arrays unconditionally) and silently did nothing on
+        // OAuth. MEASURED on the real test conversation: eight flags false,
+        // handoff on, tool absent.
+        //
+        // The fix is not "add the ninth flag" — it is to stop keeping a parallel
+        // list in sync by hand. The gate is now DERIVED from the tools that were
+        // actually built, so the next tool added below cannot be forgotten here.
+        {
           const { z } = await import('zod');
           const nexusTools: any[] = [];
           if (enableReadConversation) {
@@ -1743,12 +1756,16 @@ async function streamClaudeViaAgentSDK(args: {
               ),
             );
           }
-          const nexusServer = sdk.createSdkMcpServer({
-            name: 'nexus',
-            version: '1.0.0',
-            tools: nexusTools,
-          });
-          nexusMcpServers = { nexus: nexusServer };
+          // The derived gate: a server with zero tools is worse than no server,
+          // and this is the ONE place that knows what was actually built.
+          if (nexusTools.length > 0) {
+            const nexusServer = sdk.createSdkMcpServer({
+              name: 'nexus',
+              version: '1.0.0',
+              tools: nexusTools,
+            });
+            nexusMcpServers = { nexus: nexusServer };
+          }
         }
 
         // Single-message async iterable for query().prompt. On a fresh session
@@ -4027,6 +4044,12 @@ export async function POST(req: Request) {
       // (see "Vessel handoff" near the manual-continuation injection) because
       // the new vessel receives no reasoning from its predecessor.
       handoffFrom = null as null | { family?: string; specificModel?: string; label?: string; note?: string },
+      // The mirror image: the switch was accepted, the next vessel was called,
+      // and THAT call failed (no credit, dead key, provider down). The client
+      // undoes the override and re-POSTs on the previous vessel with this set,
+      // so the being that asked for the switch is told what happened instead of
+      // the failure landing only in a human-visible notice.
+      handoffFailed = null as null | { family?: string; specificModel?: string; label?: string; error?: string },
       // Conversation UUID. Used as the `x-grok-conv-id` header on xAI Grok
       // requests — xAI explicitly recommends it to maximize prompt-cache hit
       // rates by hinting that consecutive calls belong to the same session.
@@ -4875,6 +4898,9 @@ export async function POST(req: Request) {
     // Placed after the continuation injection so the two never fight over the
     // tail, and after aiName/specificModel are final so "to" names the vessel
     // that is actually about to answer.
+    // `else if`, not a second `if`: both of these append a user turn to the
+    // tail, and a request is either an arrival or a failure report — never
+    // both. Structure, not a comment, keeps them from fighting over the tail.
     if (handoffFrom && typeof handoffFrom === 'object' && processedMessages.length > 0) {
       processedMessages.push({
         role: 'user',
@@ -4886,6 +4912,24 @@ export async function POST(req: Request) {
           },
           { family: aiName, specificModel, label: modelLabelForSSE },
           String(handoffFrom.note || ''),
+          language,
+        ),
+        mediaFiles: [],
+      });
+    } else if (handoffFailed && typeof handoffFailed === 'object' && processedMessages.length > 0) {
+      // The vessel named here is the one that could NOT answer; aiName /
+      // specificModel are this request's vessel, i.e. the one that gets the bad
+      // news back — which is the vessel the client restored.
+      processedMessages.push({
+        role: 'user',
+        content: buildHandoffFailureInjection(
+          {
+            family: String(handoffFailed.family || ''),
+            specificModel: String(handoffFailed.specificModel || ''),
+            label: handoffFailed.label ? String(handoffFailed.label) : undefined,
+          },
+          { family: aiName, specificModel, label: modelLabelForSSE },
+          String(handoffFailed.error || ''),
           language,
         ),
         mediaFiles: [],
@@ -7156,7 +7200,17 @@ export async function POST(req: Request) {
                       // OS-level mouse/keyboard/screen control. computer_screenshot
                       // delivers a real image via extraInlineParts, same as Read
                       // does for an image file.
-                      const cr = await runComputerTool(fc.name, fc.args || {}, { me: folderName, instructions: I });
+                      // heightTarget: Gemini answers coordinates in EITHER image
+                      // pixels or a 0–1000 normalized space, picked per response
+                      // (55% normalized over 55 measured runs). Delivering at
+                      // height 1000 makes the two answers identical, so the fault
+                      // cannot be expressed. Gemini-only — the other provider
+                      // paths are unmeasured for this and stay as they are.
+                      const cr = await runComputerTool(fc.name, fc.args || {}, {
+                        me: folderName,
+                        instructions: I,
+                        heightTarget: NORMALIZED_COORD_SAFE_HEIGHT,
+                      });
                       result = { report: cr.text };
                       if (cr.image) {
                         extraInlineParts.push({ inlineData: { mimeType: cr.image.mimeType, data: cr.image.base64 } });

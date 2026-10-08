@@ -1411,10 +1411,6 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'Read-only. Select the rows you want and copy them into the box - the format already matches. ' +
     'The Local section is whatever LM Studio has loaded right now. ' +
     'Rows marked `-contributor` opt that provider into training on those turns.',
-  'chat.handoff.prefix': 'Vessel handed over. ',
-  'chat.handoff.text': 'This conversation is answering as {to} for now. Re-opening it returns to {default}.',
-  'chat.handoff.revert': 'Back to default',
-  'chat.handoff.revertTitle': 'Answer as the model saved in this conversation again',
 
   'sysmodal.saveDefaults': 'Save as Identity Defaults',
   'sysmodal.done': 'Done',
@@ -2969,10 +2965,6 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '読み取り専用です。必要な行を選んで、許可リストの欄に貼ってください——形式はそのまま合っています。' +
     'Local の節は、いま LM Studio に読み込まれているものです。' +
     '`-contributor` と付いた行は、そのターンでの学習をプロバイダに許可する別IDです。',
-  'chat.handoff.prefix': '器が引き継がれました。',
-  'chat.handoff.text': 'この会話は今 {to} として答えています。開き直すと {default} に戻ります。',
-  'chat.handoff.revert': '既定に戻す',
-  'chat.handoff.revertTitle': 'この会話に保存されているモデルで答えるように戻す',
 
   'sysmodal.saveDefaults': 'フォルダーの既定として保存',
   'sysmodal.done': '完了',

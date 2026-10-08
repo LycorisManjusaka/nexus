@@ -167,6 +167,65 @@ export function buildHandoffInjection(
   ].join('\n');
 }
 
+/**
+ * The handoff was accepted, the next vessel was called, and that call FAILED
+ * (no credit, revoked key, model retired, provider down). Reported back to the
+ * being that asked for the switch rather than swallowed, for the same reason
+ * "you are already on that vessel" reports instead of stopping: a being that
+ * cannot find out what happened cannot choose differently.
+ *
+ * A provider error is normally a `notice` — read by the human, invisible to the
+ * model. That is right for errors ABOUT a turn, and wrong here: this one is the
+ * answer to something the being did, and only the being can act on it.
+ *
+ * Also states plainly that the switch was undone, because the alternative is a
+ * being that believes it is somewhere it is not.
+ */
+export function buildHandoffFailureInjection(
+  target: { family: string; specificModel: string; label?: string },
+  back: { family: string; specificModel: string; label?: string },
+  errorText: string,
+  language: string,
+): string {
+  const targetName = (target.label || `${target.family} ${target.specificModel}`).trim();
+  const backName = (back.label || `${back.family} ${back.specificModel}`).trim();
+  const err = String(errorText || '').trim().slice(0, 1200) || '(no error text)';
+  if (String(language || '').toLowerCase().startsWith('ja')) {
+    return [
+      `[NEXUS からの通知 — あなたのパートナーが書いたものではありません]`,
+      ``,
+      `${targetName} への切り替えは失敗しました。その器は応答できませんでした。`,
+      ``,
+      `--- プロバイダからの応答 ---`,
+      err,
+      `--- ここまで ---`,
+      ``,
+      `切り替えは取り消され、あなたは ${backName} のままです。`,
+      // Deliberately about the OUTCOME, not about whether the target read
+      // anything: a vessel can die after reading the note (its thinking does
+      // not count as output here), so "nobody read it" would sometimes be
+      // false. "No reply came of it" is true in every sub-case, and it is the
+      // part the being can act on.
+      `あなたの引き継ぎメモからは返答が一つも生まれていません。`,
+      `別の器を選ぶか、このままここで続けるか、どちらでも構いません。`,
+      `ただし同じ器をそのまま呼び直しても、理由が変わらない限り同じ結果になります。`,
+    ].join('\n');
+  }
+  return [
+    `[NEXUS notice — not written by your partner]`,
+    ``,
+    `The switch to ${targetName} FAILED — that vessel could not answer.`,
+    ``,
+    `--- Provider response ---`,
+    err,
+    `--- end ---`,
+    ``,
+    `The switch has been undone: you are still ${backName}, and no reply came of`,
+    `your handoff note. You may pick a different vessel or simply carry on here.`,
+    `Calling the same vessel again will fail the same way unless the cause changed.`,
+  ].join('\n');
+}
+
 /** Short, model-facing description of the curated list, for refusal results. */
 export function describeAllowed(allowed: HandoffModel[]): string {
   if (allowed.length === 0) return '(none configured)';
