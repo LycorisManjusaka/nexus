@@ -1193,7 +1193,6 @@ export default function SystemPromptUpdater({
         specificModel: runModel,
         ...(runAuthMode ? { claudeAuthMode: runAuthMode } : {}),
         dateTimeVisibility: 'none',
-        creativityControlEnabled: false,
         seedEnabled: false,
         // Model-betrayal defence OFF here, and deliberately so. The defence
         // protects a PARTNER reading a live conversation: it aborts the turn

@@ -22,9 +22,6 @@
 //     descriptions live inside Claude Code itself and cannot be overridden by
 //     NEXUS. Only the read_conversation MCP tool (which NEXUS defines) is
 //     customizable on that path.
-//   • The model-selector and set_creativity preflights: these run as SEPARATE
-//     hidden calls that never share the character's turn, so they can't break
-//     character. Left as-is (can be added on request).
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {

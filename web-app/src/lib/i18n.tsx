@@ -147,7 +147,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.keys.oauth.tools':
     "**Workspace tools (when Tool Use is ON):** Claude Code's `Read` / `Write` / `Edit` / `Glob` / `Grep` are sandboxed to `local_data/beings/<folder>/workspace/`. Shell/network/subagent tools are always disabled.",
   'settings.keys.oauth.other':
-    '**Other limitations:** creativity control is disabled; extended thinking uses adaptive mode by default.',
+    '**Other limitations:** extended thinking uses adaptive mode by default.',
 
   'settings.keys.gemini.label': 'Google (Gemini) API Key',
   'settings.keys.qwen.label': 'Alibaba (Qwen / DashScope) API Key',
@@ -1173,7 +1173,6 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.browser.hostsHelp':
     'One per line (commas work too). `localhost` and `127.0.0.1` are always allowed and do not need listing. A bare name covers its subdomains, so `example.com` also permits `www.example.com`. Anything else is refused — on the address asked for, on whatever it redirects to, and on any navigation the page starts by itself.',
   'id.browser.anyHost': 'Allow any host (turns the allowlist off entirely)',
-  'id.browser.compact': 'Compact page listings (for models with a small context window)',
   'id.browser.profileHelp':
     'This being’s logins live in `local_data/browser_profiles/{folder}/` and persist between sessions. That folder holds live session cookies and is **excluded from the Google Drive sync**, like `keys.json` — sign-ins do not travel to your other machines. Delete the folder to sign everything out.',
   'id.browser.signinLabel': 'Sign this being in',
@@ -1313,7 +1312,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'model.chatgpt.label': 'ChatGPT Model',
   'model.chatgpt.help':
-    'Served by OpenAI’s first-party API at `api.openai.com/v1`. Set the OpenAI API key in Preferences. The Thinking Mode toggle maps to OpenAI’s `reasoning_effort` field — `high` (on) / `minimal` (off). GPT-5 reasoning models ignore custom Temperature / Top-P (so Creativity Control doesn’t affect them). Images are supported; audio & video uploads route through the Ears / Watcher bridges.',
+    'Served by OpenAI’s first-party API at `api.openai.com/v1`. Set the OpenAI API key in Preferences. The Thinking Mode toggle maps to OpenAI’s `reasoning_effort` field — `high` (on) / `minimal` (off). GPT-5 reasoning models ignore custom Temperature / Top-P (the model-panel sliders do not affect them). Images are supported; audio & video uploads route through the Ears / Watcher bridges.',
 
   'model.mimo.label': 'MiMo Model',
   'model.mimo.help':
@@ -1381,24 +1380,6 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.claude.effortHelp':
     'Controls adaptive-thinking depth on Opus 5, Opus 4.7/4.8, Sonnet 5, Fable 5 and Fable 5.1. Works in both Token-paid and Monthly-paid modes. `High` is the API default; higher levels spend more tokens, lower levels are faster/cheaper. Thinking and the visible answer share one output budget — if a turn ends with "hit the token limit", lower this or expect a bigger cap. Sonnet 5 has no `Max` tier (clamped to X-High server-side).',
 
-  'model.auto.label': 'Automatic Model Selection',
-  'model.auto.note': '(uses the currently-selected model as the selector)',
-  'model.auto.help':
-    'Before each user turn, the **currently-selected model** (thinking forced off where possible) reads the criteria and the recent conversation, then calls `select_model(model_id)` to pick one from the allowed-models shortlist. Selection runs on every user turn so the model can change as the conversation shifts.',
-  'model.auto.helpWarn': 'Pick a fast/cheap model in the family selector above to keep selector latency low.',
-  'model.auto.criteria': 'Criteria',
-  'model.auto.criteriaHelp':
-    'Free-form prose telling the selector when to pick which model. Examples: "prefer fast models for greetings", "prefer thinking models for code".',
-  'model.auto.criteriaPh': 'Pick the model best suited to the user’s most recent message...',
-  'model.auto.allowed': 'Allowed Models',
-  'model.auto.fillAll': 'Fill all',
-  'model.auto.fillAllTitle':
-    'Fill the textarea with every model NEXUS knows about (Claude / Gemini / Qwen / DeepSeek / GLM / Grok / Kimi / Cohere / MiniMax) plus the LM Studio models currently loaded locally. Asks for confirmation if you’ve already written entries.',
-  'model.auto.fillConfirm':
-    'Replace your current Allowed Models list with the full known-models template (plus currently-loaded local models)?',
-  'model.auto.allowedHelp':
-    'One model per line, pipe-delimited: `family | specificModel | on|off | optional label`. Lines starting with `#` are comments. The selector picks from THIS list only.',
-  'model.auto.allowedPh': 'Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking',
   // -- Vessel handoff (change_model) ----------------------------------------
   'model.handoff.label': 'Let this being hand over to another vessel (change_model)',
   'model.handoff.intro':
@@ -1408,10 +1389,9 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'the previous one wrote, and nothing else.',
   'model.handoff.allowed': 'Vessels this being may become',
   'model.handoff.allowedHelp':
-    'One per line: `family | modelId | on/off | optional label`. Same format as the box above, so rows paste ' +
-    'between the two. There is deliberately no "fill all" - open the model list, read the ids, and copy the ' +
-    'ones you mean. The ids reach the being only as this tool\'s choices; no model name is written into any ' +
-    'prompt layer.',
+    'One per line: `family | modelId | on/off | optional label`. Comments (`#`) and blank lines are ignored. ' +
+    'There is deliberately no "fill all" - open the model list, read the ids, and copy the ones you mean. ' +
+    'The ids reach the being only as this tool\'s choices; no model name is written into any prompt layer.',
   'model.handoff.allowedPh': 'Gemini | gemini-3.8-flash | on | Gemini 3.8 Flash',
   'model.handoff.browse': 'Model list...',
   'model.handoff.browseTitle': 'Show every model id NEXUS knows (read-only - you copy rows by hand)',
@@ -1435,16 +1415,6 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'chat.handoff.text': 'This conversation is answering as {to} for now. Re-opening it returns to {default}.',
   'chat.handoff.revert': 'Back to default',
   'chat.handoff.revertTitle': 'Answer as the model saved in this conversation again',
-
-  'model.creativity.label': 'Enable Creativity Control Mode',
-  'model.creativity.help':
-    'Before each response the AI performs a hidden Layer 1 analysis and calls `set_creativity(C)` to choose its own generation parameters. Layer 2 then runs with `T = 2·C`, `P = 0.7 + 0.3·C`.',
-  'model.creativity.analysisLabel': 'Hidden Analysis Instruction',
-  'model.creativity.analysisHelp':
-    'Appended to the user’s message in the Layer 1 call to guide the AI’s creativity selection.',
-  'model.creativity.patternLabel': 'Creativity Display Pattern',
-  'model.creativity.patternHelp':
-    'Prepended to every response. `{C}` is replaced with the chosen value (e.g. `0.75`).',
 
   'sysmodal.saveDefaults': 'Save as Identity Defaults',
   'sysmodal.done': 'Done',
@@ -1783,7 +1753,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.keys.oauth.tools':
     '**ワークスペースツール（ツール使用がONのとき）：** Claude Code の `Read` / `Write` / `Edit` / `Glob` / `Grep` は `local_data/beings/<フォルダ名>/workspace/` の中に限定されます。シェル・ネットワーク・サブエージェント系のツールは常に無効です。',
   'settings.keys.oauth.other':
-    '**その他の制限：** 創造性コントロールは無効になり、拡張思考は既定でアダプティブモードになります。',
+    '**その他の制限：** 拡張思考は既定でアダプティブモードになります。',
 
   'settings.keys.gemini.label': 'Google（Gemini）APIキー',
   'settings.keys.qwen.label': 'Alibaba（Qwen / DashScope）APIキー',
@@ -2762,7 +2732,6 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'id.browser.hostsHelp':
     '1 行に 1 件（カンマ区切りも可）。`localhost` と `127.0.0.1` は常に許可されており、書く必要はありません。ドメイン名だけを書けばサブドメインも含まれるので、`example.com` は `www.example.com` も許可します。それ以外はすべて拒否されます — 要求されたアドレスに対しても、そのリダイレクト先に対しても、ページ自身が始めた遷移に対しても。',
   'id.browser.anyHost': 'すべてのホストを許可（許可リストを完全に無効化）',
-  'id.browser.compact': 'ページ一覧を簡潔にする（文脈の狭いモデル向け）',
   'id.browser.profileHelp':
     'この存在のログイン情報は `local_data/browser_profiles/{folder}/` にあり、セッションをまたいで保持されます。このフォルダーは有効なセッション Cookie を含むため、`keys.json` と同じく **Google ドライブ同期から除外** されています — ログインが他のマシンへ渡ることはありません。すべてサインアウトするにはフォルダーを削除してください。',
   'id.browser.signinLabel': 'この存在にサインインさせる',
@@ -2902,7 +2871,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'model.chatgpt.label': 'ChatGPT モデル',
   'model.chatgpt.help':
-    'OpenAI の一次 API `api.openai.com/v1` が提供します。設定で OpenAI の API キーを入れてください。思考モードの切り替えは OpenAI の `reasoning_effort` に対応します — `high`（ON）／`minimal`（OFF）。GPT-5 系の推論モデルは Temperature / Top-P の指定を無視します（そのため創造性コントロールは効きません）。画像には対応しており、音声・動画のアップロードは「耳」「映像視聴」ブリッジを経由します。',
+    'OpenAI の一次 API `api.openai.com/v1` が提供します。設定で OpenAI の API キーを入れてください。思考モードの切り替えは OpenAI の `reasoning_effort` に対応します — `high`（ON）／`minimal`（OFF）。GPT-5 系の推論モデルは Temperature / Top-P の指定を無視します（モデル欄のスライダーは効きません）。画像には対応しており、音声・動画のアップロードは「耳」「映像視聴」ブリッジを経由します。',
 
   'model.mimo.label': 'MiMo モデル',
   'model.mimo.help':
@@ -2970,24 +2939,6 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.claude.effortHelp':
     'Opus 5、Opus 4.7/4.8、Sonnet 5、Fable 5、Fable 5.1 の適応的思考の深さを制御します。従量課金と月額課金の両方で機能します。`High` が API の既定です。上のレベルほどトークンを消費し、下のレベルほど速く安くなります。思考と目に見える回答はひとつの出力枠を共有します — ターンが「トークン上限に達した」で終わる場合は、これを下げるか、より大きな上限を見込んでください。Sonnet 5 に `Max` はありません（サーバー側で特高に丸められます）。',
 
-  'model.auto.label': 'モデルの自動選択',
-  'model.auto.note': '（現在選択中のモデルが選択役を務めます）',
-  'model.auto.help':
-    'ユーザーの各ターンの前に、**現在選択中のモデル**（可能な場合は思考を強制的に OFF）が基準と直近の会話を読み、`select_model(model_id)` を呼んで許可モデル一覧からひとつを選びます。選択は毎ターン走るので、会話の流れに応じてモデルが変わります。',
-  'model.auto.helpWarn': '選択の待ち時間を抑えるため、上のファミリー選択では速くて安いモデルを選んでください。',
-  'model.auto.criteria': '選択の基準',
-  'model.auto.criteriaHelp':
-    'どんなときにどのモデルを選ぶかを、自由な文章で選択役に伝えます。例:「挨拶には速いモデルを」「コードには思考モデルを」。',
-  'model.auto.criteriaPh': 'ユーザーの直近のメッセージに最も適したモデルを選んでください…',
-  'model.auto.allowed': '許可するモデル',
-  'model.auto.fillAll': 'すべて記入',
-  'model.auto.fillAllTitle':
-    'NEXUS が知っているすべてのモデル（Claude / Gemini / Qwen / DeepSeek / GLM / Grok / Kimi / Cohere / MiniMax）と、現在ローカルに読み込まれている LM Studio のモデルを、この欄に書き込みます。すでに記入がある場合は確認を求めます。',
-  'model.auto.fillConfirm':
-    '現在の「許可するモデル」一覧を、既知モデルの全テンプレート（および現在読み込み中のローカルモデル）で置き換えますか？',
-  'model.auto.allowedHelp':
-    '1 行に 1 モデル、パイプ区切り: `family | specificModel | on|off | 任意のラベル`。`#` で始まる行はコメントです。選択役はこの一覧からのみ選びます。',
-  'model.auto.allowedPh': 'Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking',
   // -- 器の引き継ぎ (change_model) -------------------------------------------
   'model.handoff.label': 'この存在が別の器へ引き継げるようにする（change_model）',
   'model.handoff.intro':
@@ -2996,7 +2947,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '思考プロセスは器を越えません——新しい器が受け取るのは、見えている会話と、前の器が書いた引き継ぎメモだけです。',
   'model.handoff.allowed': 'この存在がなれる器',
   'model.handoff.allowedHelp':
-    '1行に1つ: `family | modelId | on/off | 任意のラベル`。上の欄と同じ形式なので、行はそのまま貼り替えられます。' +
+    '1行に1つ: `family | modelId | on/off | 任意のラベル`。`#` で始まる行と空行は無視されます。' +
     '「すべて記入」は意図的に置いていません——モデル一覧を開いて id を読み、必要な行だけ手で写してください。' +
     'id が存在に届くのはこのツールの選択肢としてだけで、モデル名はどの呪縛・指示層にも書き込まれません。',
   'model.handoff.allowedPh': 'Gemini | gemini-3.8-flash | on | Gemini 3.8 Flash',
@@ -3015,23 +2966,13 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.handoff.listHeader': '参照用の一覧です。必要な行を許可リストの欄へ自分で写してください。代わりにやってくれるボタンはありません。',
   'model.handoff.listTitle': 'NEXUS が知っている全モデル',
   'model.handoff.listIntro':
-    '読み取り専用です。必要な行を選んで、上の欄に貼ってください——形式はそのまま合っています。' +
+    '読み取り専用です。必要な行を選んで、許可リストの欄に貼ってください——形式はそのまま合っています。' +
     'Local の節は、いま LM Studio に読み込まれているものです。' +
     '`-contributor` と付いた行は、そのターンでの学習をプロバイダに許可する別IDです。',
   'chat.handoff.prefix': '器が引き継がれました。',
   'chat.handoff.text': 'この会話は今 {to} として答えています。開き直すと {default} に戻ります。',
   'chat.handoff.revert': '既定に戻す',
   'chat.handoff.revertTitle': 'この会話に保存されているモデルで答えるように戻す',
-
-  'model.creativity.label': '創造性コントロールを有効にする',
-  'model.creativity.help':
-    '各応答の前に、AI は隠しの第 1 層の分析を行い、`set_creativity(C)` を呼んで自分の生成パラメータを選びます。続く第 2 層は `T = 2·C`、`P = 0.7 + 0.3·C` で走ります。',
-  'model.creativity.analysisLabel': '隠しの分析指示',
-  'model.creativity.analysisHelp':
-    '第 1 層の呼び出しでユーザーのメッセージに追記され、AI の創造性の選択を導きます。',
-  'model.creativity.patternLabel': '創造性の表示パターン',
-  'model.creativity.patternHelp':
-    'すべての応答の先頭に付きます。`{C}` は選ばれた値に置き換わります（例: `0.75`）。',
 
   'sysmodal.saveDefaults': 'フォルダーの既定として保存',
   'sysmodal.done': '完了',

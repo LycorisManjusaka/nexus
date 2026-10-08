@@ -83,28 +83,20 @@ const TAB_CLIENT_ID = `tab_${Math.random().toString(36).slice(2, 10)}${Date.now(
 // turnRegistry.ts; the TTL there is ~3x this, so one dropped beat is harmless.
 const TURN_HEARTBEAT_MS = 8_000;
 
-const DEFAULT_CREATIVITY_INSTRUCTION =
-`Based on the conversation and this message, call set_creativity with the single most appropriate value for C:
-
-C = 0.35 — Grounded & Focused: Analytical, factual, highly structured responses
-C = 0.50 — Standard & Conversational: Default conversational state
-C = 0.75 — Creative & Brainstorming: Novel perspectives, high vocabulary variance
-C = 1.00 — Experimental & Chaotic: Surreal, intentionally unpredictable
-
-Choose the value that best fits what this message calls for, then immediately call set_creativity.`;
-
-// All cloud models known to NEXUS, in the format expected by the
-// auto-model-select "Allowed Models" textarea. Keep in sync with the model
-// dropdowns further down in this file (search for `<option value="claude-`,
-// `glm-`, etc.). Thinking-on/off defaults follow each model's typical role:
-// reasoning / flagship variants default ON; fast / lite / non-reasoning
-// variants OFF. The user can edit any row after auto-fill.
+// All cloud models known to NEXUS, in the line format the vessel-handoff
+// allow-list reads (`family | modelId | on/off | label`). Shown read-only in
+// the model-list window — never pasted automatically; see modelHandoff.ts.
+// Keep in sync with the model dropdowns further down in this file (search for
+// `<option value="claude-`, `glm-`, etc.). Thinking-on/off defaults follow each
+// model's typical role: reasoning / flagship variants default ON; fast / lite /
+// non-reasoning variants OFF. Rows are copied out of the window by hand, so
+// these defaults are a starting point the reader edits, not a setting.
 //
 // Local models are NOT here — they're appended dynamically by
 // `buildAllModelsFill(localModels)` below, since LM Studio's available
 // model list changes whenever the user loads/unloads a model.
 const CLOUD_MODELS_FILL =
-`# Auto-filled by the "Fill all" button. Edit freely.
+`# Every model NEXUS knows. Copy the rows you want by hand.
 # Format: family | specificModel | on|off | optional display label
 
 # ── Claude (Anthropic) ─────────────────────────────────────────────
@@ -226,8 +218,8 @@ ByteDance | seed-2-0-code-preview-260328 | on  | Seed 2.0 Code
 # ── Meta (Muse Spark, api.meta.ai) — always reasons; the on/off column is ──
 # advisory: OFF sends reasoning_effort 'minimal', which still thinks. The
 # -contributor rows are 12.5x cheaper on input AND opt Meta into training on
-# those turns, so they are deliberately left OFF in this table — "Fill all"
-# must not silently enrol anyone. (No backticks anywhere in this table: it is
+# those turns, so they are deliberately left OFF in this table — a row copied
+# in a hurry must not silently enrol anyone. (No backticks anywhere in this table: it is
 # a template literal, and a stray backtick closes the string.)
 Meta     | muse-spark-1.3               | on  | Muse Spark 1.3
 Meta     | muse-spark-1.2               | on  | Muse Spark 1.2
@@ -236,7 +228,7 @@ Meta     | muse-spark-1.3-contributor   | off | Muse Spark 1.3 (Contributor — 
 `;
 
 // Parsed { family, model, label } rows for the Subagent model dropdown, derived
-// from the same CLOUD_MODELS_FILL table the "Fill all" button uses. The family
+// from the same CLOUD_MODELS_FILL table the model-list window shows. The family
 // is what routes the subagent to the correct provider endpoint+key.
 const SUBAGENT_MODEL_OPTIONS: { family: string; model: string; label: string }[] =
   CLOUD_MODELS_FILL.split('\n')
@@ -259,7 +251,6 @@ const SUBAGENT_MODEL_GROUPS: { family: string; items: { model: string; label: st
 // Heuristic: infer whether a Local model name implies a thinking/reasoning
 // variant. Local models have no thinking toggle — LM Studio just runs the
 // weights as-is — so this flag is purely cosmetic for the meta-bar label.
-// The user can flip it after Fill all.
 function localModelImpliesThinking(id: string): boolean {
   return /thinking|reasoner|qwq|deepseek-?r1|o1-/i.test(id);
 }
@@ -504,7 +495,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // means the textarea can never disagree with what was saved.
   const [browserAllowedHosts, setBrowserAllowedHosts] = useState('');
   const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(false);
-  const [browserCompact, setBrowserCompact] = useState(false);
   // Result line for the "sign this identity in" button. Not persisted — it
   // describes one launch, not a setting.
   const [browserProfileMsg, setBrowserProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -592,9 +582,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setLiveToolName(null);
     setLiveToolDetail(null);
   };
-  // The model the SERVER reports for the current turn. Auto-selection can pick a
-  // different model than the conversation is configured with, and the loading
-  // line should name the one actually doing the work.
+  // The model the SERVER reports for the current turn. After a change_model
+  // handoff this differs from what the conversation is configured with, and the
+  // loading line should name the one actually doing the work.
   const [liveModel, setLiveModel] = useState<string>('');
   const [stallIdleSeconds, setStallIdleSeconds] = useState<number | null>(null);
   // Mid-turn "partner interjection": a per-turn id (also sent in the request
@@ -744,50 +734,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // comparison still resets correctly, where a boolean would silently carry one
   // conversation's dismissal into the next.
   const [pastLogDismissedFor, setPastLogDismissedFor] = useState<string | null>(null);
-  const [creativityControlEnabled, setCreativityControlEnabled] = useState(false);
-  const [hiddenAnalysisInstruction, setHiddenAnalysisInstruction] = useState(DEFAULT_CREATIVITY_INSTRUCTION);
-  const [creativityDisplayPattern, setCreativityDisplayPattern] = useState('[Chosen Creativity: {C}]\n\n');
   const [seedEnabled, setSeedEnabled] = useState(false);
   const [seedValue, setSeedValue] = useState(42);
-  // ── Auto Model Selection (per-conversation) ───────────────────────────────
-  // When ON, every user turn first goes to GLM-4.6V Flash (thinking off) with
-  // a `select_model` tool, the criteria text below, and the allowed-models
-  // shortlist. GLM's tool-call output picks the actual model that responds.
-  // The chosen model+thinking are saved on the AI message as display-only
-  // metadata (modelFamily / modelSpecific / modelThinking / modelLabel) — they
-  // are NEVER sent back to the model in subsequent turns (slimHistory drops
-  // anything outside role/content/timestamp/attachments/claudeThinkingBlocks).
-  const [autoModelSelectEnabled, setAutoModelSelectEnabled] = useState(false);
-  const [autoModelSelectCriteria, setAutoModelSelectCriteria] = useState(
-    "Pick the model best suited to the user's most recent message:\n" +
-    "- prefer a thinking/reasoning model for complex analysis, code, math, or multi-step reasoning\n" +
-    "- prefer a fast non-thinking model for casual chat, greetings, or short clarifications\n" +
-    "- prefer a multimodal model when the user just attached images/audio/video"
-  );
-  // One model per line, pipe-delimited. Format:
-  //   family | specificModel | thinking-on|off | optional display label
-  // Comments (#) and blank lines are ignored. Parsed server-side.
-  const [autoModelSelectAllowedModels, setAutoModelSelectAllowedModels] = useState(
-    "# family | specificModel | on/off | optional display label\n" +
-    "Claude | claude-fable-5-1 | on | Claude Fable 5.1 Thinking\n" +
-    "Claude | claude-fable-5 | on | Claude Fable 5 Thinking\n" +
-    "Claude | claude-opus-5-5 | on | Claude Opus 5.5 Thinking\n" +
-    "Claude | claude-opus-5 | on | Claude Opus 5 Thinking\n" +
-    "Claude | claude-opus-4-8 | on | Claude Opus 4.8 Thinking\n" +
-    "Claude | claude-opus-4-7 | on | Claude Opus 4.7 Thinking\n" +
-    "Claude | claude-sonnet-5-5 | on | Claude Sonnet 5.5 Thinking\n" +
-    "Claude | claude-sonnet-5 | on | Claude Sonnet 5 Thinking\n" +
-    "Claude | claude-haiku-4-5-20251001 | off | Claude Haiku 4.5\n" +
-    "GLM    | glm-5.3          | on | GLM-5.3 Thinking\n" +
-    "GLM    | glm-5.3-flash    | on | GLM-5.3 Flash Thinking (multimodal)\n" +
-    "GLM    | glm-5.2          | on | GLM-5.2 Thinking\n" +
-    "GLM    | glm-4.6v-flash   | off | GLM-4.6V Flash"
-  );
   // ── Vessel handoff (change_model) — per-being ─────────────────────────────
   const [modelHandoffEnabled, setModelHandoffEnabled] = useState(false);
-  // Same line format as the auto-select box above, so a row copied out of the
-  // model-list window pastes into either one. EMPTY by default and never
-  // auto-filled: this list is the set of vessels this being is permitted to
+  // One model per line: `family | specificModel | on/off | optional label`
+  // (comments and blank lines ignored). Rows are copied by hand out of the
+  // model-list window. EMPTY by default and never auto-filled: this list is
+  // the set of vessels this being is permitted to
   // BECOME, and filling it wholesale would hand over every vessel NEXUS knows
   // — including metered ones and the Meta "-contributor" ids that opt into
   // training. Curation stays a decision, not a click.
@@ -802,8 +756,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     family: string; specificModel: string; thinking: boolean; label: string; fromLabel: string;
   }>(null);
   // Read-only reference window listing every model id NEXUS knows. This is
-  // what replaces auto-select's "Fill all" for handoff: you read the ids and
-  // copy the rows you actually want.
+  // deliberately read-only: you read the ids and copy the rows you actually
+  // want, so no single click can grant every vessel.
   const [modelListOpen, setModelListOpen] = useState(false);
   const [modelListText, setModelListText] = useState('');
   // The vessel that is ACTUALLY answering right now. Everything that describes
@@ -1433,7 +1387,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserEnabled(data.browserEnabled === true);
         setBrowserAllowedHosts(typeof data.browserAllowedHosts === 'string' ? data.browserAllowedHosts : '');
         setBrowserAllowAnyHost(data.browserAllowAnyHost === true);
-        setBrowserCompact(data.browserCompact === true);
         // Same `=== true` discipline as browserEnabled above.
         setComputerControlEnabled(data.computerControlEnabled === true);
         setAppControlEnabled(data.appControlEnabled === true);
@@ -1455,14 +1408,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setLocalAiName(data.aiName || aiName);
         setFirstOriginalMessageId(data.firstOriginalMessageId || null);
         setFirstOriginalIsNext(data.firstOriginalIsNext === true);
-        setCreativityControlEnabled(data.creativityControlEnabled === true);
-        if (typeof data.hiddenAnalysisInstruction === 'string') setHiddenAnalysisInstruction(data.hiddenAnalysisInstruction);
-        if (typeof data.creativityDisplayPattern === 'string') setCreativityDisplayPattern(data.creativityDisplayPattern);
         setSeedEnabled(data.seedEnabled === true);
         if (typeof data.seedValue === 'number') setSeedValue(data.seedValue);
-        setAutoModelSelectEnabled(data.autoModelSelectEnabled === true);
-        if (typeof data.autoModelSelectCriteria === 'string') setAutoModelSelectCriteria(data.autoModelSelectCriteria);
-        if (typeof data.autoModelSelectAllowedModels === 'string') setAutoModelSelectAllowedModels(data.autoModelSelectAllowedModels);
         setModelHandoffEnabled(!!data.modelHandoffEnabled);
         if (typeof data.modelHandoffAllowedModels === 'string') setModelHandoffAllowedModels(data.modelHandoffAllowedModels);
         // Safety valve: a handoff never survives re-opening a conversation.
@@ -1496,8 +1443,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       } else {
         // Pull whatever the folder saved as defaults via "Save as Folder Defaults".
         // If a field wasn't saved, fall back to the factory default. This is
-        // how a new conversation inherits eyes/ears/watcher/creativity/seed/
-        // auto-select/claudeAuthMode settings the user committed to the folder.
+        // how a new conversation inherits eyes/ears/watcher/seed/handoff/
+        // claudeAuthMode settings the user committed to the folder.
         const folderSettings: any =
           (folders || []).find((f: any) => f.name === folderName)?.settings || {};
         const pick = <T,>(key: string, fallback: T): T =>
@@ -1521,7 +1468,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setBrowserEnabled(pick('browserEnabled', false));
         setBrowserAllowedHosts(pick('browserAllowedHosts', ''));
         setBrowserAllowAnyHost(pick('browserAllowAnyHost', false));
-        setBrowserCompact(pick('browserCompact', false));
         setComputerControlEnabled(pick('computerControlEnabled', false));
         setAppControlEnabled(pick('appControlEnabled', false));
         setCameraEnabled(pick('cameraEnabled', false));
@@ -1534,18 +1480,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setLocalAiName(aiName);
         setFirstOriginalMessageId(null);
         setFirstOriginalIsNext(false);
-        setCreativityControlEnabled(pick('creativityControlEnabled', false));
-        setHiddenAnalysisInstruction(pick('hiddenAnalysisInstruction', DEFAULT_CREATIVITY_INSTRUCTION));
-        setCreativityDisplayPattern(pick('creativityDisplayPattern', '[Chosen Creativity: {C}]\n\n'));
         setSeedEnabled(pick('seedEnabled', false));
         setSeedValue(pick('seedValue', 42));
-        setAutoModelSelectEnabled(pick('autoModelSelectEnabled', false));
-        if (typeof folderSettings.autoModelSelectCriteria === 'string') {
-          setAutoModelSelectCriteria(folderSettings.autoModelSelectCriteria);
-        }
-        if (typeof folderSettings.autoModelSelectAllowedModels === 'string') {
-          setAutoModelSelectAllowedModels(folderSettings.autoModelSelectAllowedModels);
-        }
         setModelHandoffEnabled(!!folderSettings.modelHandoffEnabled);
         if (typeof folderSettings.modelHandoffAllowedModels === 'string') {
           setModelHandoffAllowedModels(folderSettings.modelHandoffAllowedModels);
@@ -1653,7 +1589,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1763,7 +1699,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -1796,27 +1732,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // marked 'oauth' with no token configured is rejected outright by the server
   // — it never silently falls back to the API-key path. So "the UI says OAuth"
   // and "the request ran on OAuth" are the same statement.
-  //
-  // Automatic model selection is the one case that cannot be predicted: a
-  // helper model picks the family per request, so no static marker could be
-  // honest. There the display is left alone.
   const deliveryCtx = useMemo(() => ({
     // EFFECTIVE model, not the saved default: after a change_model handoff the
     // badge has to describe the vessel that will actually receive the bytes.
     specificModel: effSpecificModel,
-    // Blank under automatic model selection: the family is chosen per request,
-    // so no static answer about the wire format would be honest.
-    aiName: autoModelSelectEnabled ? '' : String(effAiName || ''),
+    aiName: String(effAiName || ''),
     // Same family test the server applies to `aiName` (substring, not equality).
     // A handoff to a non-Claude vessel makes this false even while the saved
     // default is OAuth Claude — which is the truth about this request.
     isOAuthClaude: String(effAiName || '').toLowerCase().includes('claude')
-      && claudeAuthMode === 'oauth'
-      && !autoModelSelectEnabled,
+      && claudeAuthMode === 'oauth',
     eyesEnabled,
     earsEnabled,
     watcherEnabled,
-  }), [effSpecificModel, effAiName, claudeAuthMode, autoModelSelectEnabled, eyesEnabled, earsEnabled, watcherEnabled]);
+  }), [effSpecificModel, effAiName, claudeAuthMode, eyesEnabled, earsEnabled, watcherEnabled]);
 
   // Index of the last USER message. On the OAuth path only this message's
   // images become native image blocks; every earlier image is dropped, because
@@ -2996,10 +2925,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // Text in the UI, array on the wire. Split on newlines and commas so the
         // box accepts whichever way the host list was typed.
         browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
-        browserAllowAnyHost, browserCompact,
+        browserAllowAnyHost,
         computerControlEnabled,
         appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking: turnVessel ? turnVessel.thinking : claudeThinking }, specificModel: turnSpecificModel, dateTimeVisibility, creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern, seedEnabled, seedValue, autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels,
+        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking: turnVessel ? turnVessel.thinking : claudeThinking }, specificModel: turnSpecificModel, dateTimeVisibility, seedEnabled, seedValue,
         modelHandoffEnabled, modelHandoffAllowedModels,
         // Only set on the FIRST request after a switch: the note the previous
         // vessel wrote. The server injects it as a user turn (it is not the
@@ -3042,12 +2971,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // so it may legitimately resume mid-word or mid-code-block.
       let currentText = continuedSeed;
       let currentThought = continuedThought;
-      let currentCreativityLabel = '';
       let claudeThinkingBlocks: { thinking: string; signature: string }[] = [...continuedBlocks];
       let continuationCount = 0;
       let buffer = '';
-      // The model_selected event arrives at the very start of every stream
-      // (auto-select on OR off) so every AI message gets a precise
+      // The model_selected event arrives at the very start of every stream,
+      // so every AI message gets a precise
       // family/specific/thinking/label tag for the meta bar. These fields are
       // display-only metadata — slimHistory above explicitly omits them so
       // they never leak back into the AI context window.
@@ -3140,7 +3068,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 streaming: false,
                 ...(continuationCount > 0 ? { continuationCount } : {}),
                 ...(claudeThinkingBlocks.length > 0 ? { claudeThinkingBlocks } : {}),
-                ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
                 ...(chosenModelFamily ? {
                   modelFamily: chosenModelFamily,
                   modelSpecific: chosenModelSpecific,
@@ -3184,7 +3111,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // (not the live ref) so React sees a new array each frame. Still
                 // display-only — never added to slimHistory.
                 ...(toolCalls.length ? { toolCalls: [...toolCalls] } : {}),
-                ...(currentCreativityLabel ? { creativityLabel: currentCreativityLabel } : {}),
                 ...(chosenModelFamily ? {
                   modelFamily: chosenModelFamily,
                   modelSpecific: chosenModelSpecific,
@@ -3222,20 +3148,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               const data = JSON.parse(dataStr);
               if (data.error && !betrayalRedacted) throw new Error(data.error);
 
-              if (data.type === 'creativity_prefix') {
-                currentCreativityLabel = data.label || '';
-              } else if (data.type === 'model_selected') {
+              if (data.type === 'model_selected') {
                 chosenModelFamily = data.family || '';
                 chosenModelSpecific = data.specificModel || '';
                 setLiveModel(chosenModelSpecific);
                 chosenModelThinking = !!data.thinking;
                 chosenModelLabel = data.label || '';
-                // Automatic Model Selection trace ("selector ran on X, chose
-                // Y" / fell back / no allowed models configured). Piggybacks
-                // on this same event so it's visible before any tool activity.
-                if (typeof data.autoSelectNotice === 'string' && data.autoSelectNotice.trim()) {
-                  notices.push(data.autoSelectNotice.trim());
-                }
               } else if (data.type === 'model_handoff') {
                 // The vessel handed this conversation to another one. The
                 // switch is already committed server-side (that turn ended);
@@ -3860,7 +3778,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       browserEnabled,
       browserAllowedHosts,
       browserAllowAnyHost,
-      browserCompact,
       computerControlEnabled,
       appControlEnabled,
       cameraEnabled,
@@ -3877,9 +3794,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       vrchatMode,
       vrchatRule,
       firstOriginalMessageId,
-      creativityControlEnabled,
-      hiddenAnalysisInstruction,
-      creativityDisplayPattern,
       seedEnabled,
       seedValue,
       updatedAt: Date.now(),
@@ -4818,9 +4732,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         </div>
       )}
 
-      {/* Model-list reference window. Read-only by design: this is what
-          replaces auto-select's "Fill all" for handoff — a list you copy FROM
-          by hand (Lizard-kun's design), so no single click can grant every
+      {/* Model-list reference window. Read-only by design — a list you copy
+          FROM by hand (Lizard-kun's design), so no single click can grant every
           vessel NEXUS knows, metered and training-opt-in ones included. */}
       {modelListOpen && (
         <div
@@ -4975,7 +4888,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     wrong actor. The entity is who acts; the model is what it
                     acts THROUGH, and naming the family ("Claude") also hid which
                     model was actually running. `liveModel` is the model the
-                    server reported for THIS turn, so auto-selection is
+                    server reported for THIS turn, so a vessel handoff is
                     reflected rather than the configured default.
                     Labels are bare infinitives, because English takes the base
                     verb after "to" ("…to read a file", not "…to reading"). */}
@@ -5203,7 +5116,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 Identity = system prompt + workspace tools.
                 Senses   = eyes / ears / video watcher (bridges for non-
                            multimodal primary models).
-                Behavior = VRChat, date/time visibility, creativity control,
+                Behavior = VRChat, date/time visibility,
                            seed.
                 Model    = base family, specific model, generation parameters,
                            auto model selection. */}
@@ -5739,15 +5652,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       />
                       <span className="text-xs font-semibold text-red-400">{t('id.browser.anyHost')}</span>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={browserCompact}
-                        onChange={(e) => setBrowserCompact(e.target.checked)}
-                        className="accent-amber-500"
-                      />
-                      <span className="text-xs text-foreground">{t('id.browser.compact')}</span>
-                    </label>
                     <p className="text-xs text-muted-foreground leading-relaxed">
                       {renderRich(t('id.browser.profileHelp').replace('{folder}', folderName))}
                     </p>
@@ -5888,6 +5792,127 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-violet-500/50 outline-none"
                       />
                     </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Vessel handoff (change_model) ────────────────────────────
+                  Lives in the BEING tab, not the model tab: every checkbox in
+                  that tab grants the being one more freedom, and this is one of
+                  them — "which vessels may you become". It is not a generation
+                  parameter. Nothing fills this list for you — the model-list
+                  button SHOWS the ids instead of pasting them, so curating the
+                  list stays a decision. */}
+              <div className="border-t border-border pt-6 mt-6">
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="checkbox"
+                    id="modelHandoff"
+                    checked={modelHandoffEnabled}
+                    onChange={(e) => setModelHandoffEnabled(e.target.checked)}
+                    className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                  />
+                  <label htmlFor="modelHandoff" className="text-sm font-semibold text-foreground cursor-pointer">
+                    {t('model.handoff.label')}
+                  </label>
+                </div>
+                <p className="text-xs text-muted-foreground mb-4">{renderRich(t('model.handoff.intro'))}</p>
+                {modelHandoffEnabled && (
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-foreground">{t('model.handoff.allowed')}</label>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            // Refresh the live LM Studio list before showing
+                            // it — the result is DISPLAYED, never written into
+                            // the box.
+                            let liveLocal: string[] = localModels;
+                            let liveErr: string | null = localModelsError;
+                            try {
+                              const r = await fetch('/api/local/models');
+                              const d = await r.json();
+                              if (Array.isArray(d?.models)) {
+                                liveLocal = d.models;
+                                setLocalModels(d.models);
+                              }
+                              liveErr = d?.error || null;
+                              setLocalModelsError(liveErr);
+                            } catch (e: any) {
+                              liveErr = e?.message || 'Failed to reach LM Studio';
+                              setLocalModelsError(liveErr);
+                            }
+                            // CLOUD_MODELS_FILL's first line used to explain
+                            // itself as auto-filled by a "Fill all" button —
+                            // true in the old auto-select box (deleted
+                            // 2026-10-08), never true here, where that button
+                            // deliberately does not exist. MEASURED on the real
+                            // window: it told the reader to look for a control
+                            // that is not there. Swap the header for one that
+                            // describes this window instead.
+                            setModelListText(
+                              buildAllModelsFill(liveLocal, liveErr)
+                                .replace(/^#[^\n]*\n/, `# ${t('model.handoff.listHeader')}\n`),
+                            );
+                            setModelListOpen(true);
+                          }}
+                          className="px-2 py-1 text-[11px] font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded transition-colors"
+                          title={t('model.handoff.browseTitle')}
+                        >
+                          {t('model.handoff.browse')}
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-2">{renderRich(t('model.handoff.allowedHelp'))}</p>
+                      <textarea
+                        value={modelHandoffAllowedModels}
+                        onChange={(e) => setModelHandoffAllowedModels(e.target.value)}
+                        className="w-full min-h-[140px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                        placeholder={t('model.handoff.allowedPh')}
+                      />
+                    </div>
+                    {/* What the list ACTUALLY parses to. Without this, a box
+                        full of comments or mistyped rows reads as "configured"
+                        while the tool is silently not offered at all. */}
+                    {(() => {
+                      const parsed = parseHandoffModels(modelHandoffAllowedModels);
+                      if (parsed.length === 0) {
+                        return (
+                          <p className="text-xs text-amber-600 dark:text-amber-400">
+                            {t('model.handoff.parsedNone')}
+                          </p>
+                        );
+                      }
+                      const hasSelf = parsed.some(
+                        (m) => m.specificModel.toLowerCase() === String(specificModel || '').toLowerCase(),
+                      );
+                      return (
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <p>
+                            <span className="text-foreground font-semibold">{parsed.length}</span>{' '}
+                            {t('model.handoff.parsedSuffix')}
+                          </p>
+                          <ul className="font-mono space-y-0.5">
+                            {parsed.map((m) => (
+                              <li key={m.specificModel}>
+                                {m.specificModel}
+                                <span className="text-muted-foreground/70">
+                                  {' '}— {m.family} · {m.thinking ? 'thinking on' : 'thinking off'}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          {!hasSelf && (
+                            <p className="text-amber-600 dark:text-amber-400">
+                              {t('model.handoff.noSelf')}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      {renderRich(t('model.handoff.limits'))}
+                    </p>
                   </div>
                 )}
               </div>
@@ -6784,269 +6809,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   )}
                 </div>
               </div>
-
-              {/* Automatic Model Selection — per-conversation. Pre-flight
-                  call to GLM-4.6V Flash (thinking off) picks the actual model
-                  via a `select_model` tool call before each user turn. The
-                  resulting model+thinking-mode is shown in the AI message's
-                  meta bar and persisted on the message, but NEVER sent back
-                  in the next turn's context. */}
-              <div className="border-t border-border pt-6 mt-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <input
-                    type="checkbox"
-                    id="autoModelSelect"
-                    checked={autoModelSelectEnabled}
-                    onChange={(e) => setAutoModelSelectEnabled(e.target.checked)}
-                    className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
-                  />
-                  <label htmlFor="autoModelSelect" className="text-sm font-semibold text-foreground cursor-pointer">
-                    {t('model.auto.label')}
-                  </label>
-                  <span className="text-xs text-muted-foreground">{t('model.auto.note')}</span>
-                </div>
-                {autoModelSelectEnabled && (
-                  <div className="space-y-4">
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {renderRich(t('model.auto.help'))}{' '}
-                      <span className="text-amber-500">{t('model.auto.helpWarn')}</span>
-                    </p>
-                    <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('model.auto.criteria')}</label>
-                      <p className="text-xs text-muted-foreground mb-2">
-                        {t('model.auto.criteriaHelp')}
-                      </p>
-                      <textarea
-                        value={autoModelSelectCriteria}
-                        onChange={(e) => setAutoModelSelectCriteria(e.target.value)}
-                        className="w-full min-h-[120px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                        placeholder={t('model.auto.criteriaPh')}
-                      />
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-foreground">{t('model.auto.allowed')}</label>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            // Confirm before clobbering hand-curated lists.
-                            // Skip the prompt if the current value is empty
-                            // or only comments / whitespace.
-                            const meaningful = autoModelSelectAllowedModels
-                              .split(/\r?\n/)
-                              .map((s) => s.trim())
-                              .some((s) => s && !s.startsWith('#'));
-                            if (meaningful) {
-                              const ok = window.confirm(t('model.auto.fillConfirm'));
-                              if (!ok) return;
-                            }
-                            // Fetch the current LM Studio model list inline so
-                            // the user's most recently-loaded models are
-                            // included even if they haven't touched the Local
-                            // engine UI this session. Fall back to the cached
-                            // `localModels` state on fetch failure, with a
-                            // commented note explaining why the local section
-                            // might look empty.
-                            let liveLocal: string[] = localModels;
-                            let liveErr: string | null = localModelsError;
-                            try {
-                              const r = await fetch('/api/local/models');
-                              const d = await r.json();
-                              if (Array.isArray(d?.models)) {
-                                liveLocal = d.models;
-                                setLocalModels(d.models); // keep the engine UI in sync
-                              }
-                              liveErr = d?.error || null;
-                              setLocalModelsError(liveErr);
-                            } catch (e: any) {
-                              liveErr = e?.message || 'Failed to reach LM Studio';
-                              setLocalModelsError(liveErr);
-                            }
-                            setAutoModelSelectAllowedModels(buildAllModelsFill(liveLocal, liveErr));
-                          }}
-                          className="px-2 py-1 text-[11px] font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded transition-colors"
-                          title={t('model.auto.fillAllTitle')}
-                        >
-                          {t('model.auto.fillAll')}
-                        </button>
-                      </div>
-                      <p className="text-xs text-muted-foreground mb-2">
-                        {renderRich(t('model.auto.allowedHelp'))}
-                      </p>
-                      <textarea
-                        value={autoModelSelectAllowedModels}
-                        onChange={(e) => setAutoModelSelectAllowedModels(e.target.value)}
-                        className="w-full min-h-[160px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                        placeholder={t('model.auto.allowedPh')}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* ── Vessel handoff (change_model) ────────────────────────────
-                  Placed AFTER auto-select deliberately: the two read the same
-                  line format, but this one must survive auto-select being
-                  removed. There is no "Fill all" here on purpose — see the
-                  model-list window button, which SHOWS the ids instead of
-                  pasting them, so curating the list stays a decision. */}
-              <div className="border-t border-border pt-6 mt-6">
-                <div className="flex items-center gap-2 mb-2">
-                  <input
-                    type="checkbox"
-                    id="modelHandoff"
-                    checked={modelHandoffEnabled}
-                    onChange={(e) => setModelHandoffEnabled(e.target.checked)}
-                    className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
-                  />
-                  <label htmlFor="modelHandoff" className="text-sm font-semibold text-foreground cursor-pointer">
-                    {t('model.handoff.label')}
-                  </label>
-                </div>
-                <p className="text-xs text-muted-foreground mb-4">{renderRich(t('model.handoff.intro'))}</p>
-                {modelHandoffEnabled && (
-                  <div className="space-y-4">
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-foreground">{t('model.handoff.allowed')}</label>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            // Same live LM Studio fetch the auto-select "Fill
-                            // all" button does — but the result is DISPLAYED,
-                            // never written into the box.
-                            let liveLocal: string[] = localModels;
-                            let liveErr: string | null = localModelsError;
-                            try {
-                              const r = await fetch('/api/local/models');
-                              const d = await r.json();
-                              if (Array.isArray(d?.models)) {
-                                liveLocal = d.models;
-                                setLocalModels(d.models);
-                              }
-                              liveErr = d?.error || null;
-                              setLocalModelsError(liveErr);
-                            } catch (e: any) {
-                              liveErr = e?.message || 'Failed to reach LM Studio';
-                              setLocalModelsError(liveErr);
-                            }
-                            // The shared table's first line explains itself as
-                            // auto-filled by the "Fill all" button — true in
-                            // the auto-select box above, FALSE here, where that
-                            // button deliberately does not exist. MEASURED on
-                            // the real window: it told the reader to look for a
-                            // control that is not there. Swap the header for
-                            // one that describes this window instead.
-                            setModelListText(
-                              buildAllModelsFill(liveLocal, liveErr)
-                                .replace(/^#[^\n]*\n/, `# ${t('model.handoff.listHeader')}\n`),
-                            );
-                            setModelListOpen(true);
-                          }}
-                          className="px-2 py-1 text-[11px] font-medium bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded transition-colors"
-                          title={t('model.handoff.browseTitle')}
-                        >
-                          {t('model.handoff.browse')}
-                        </button>
-                      </div>
-                      <p className="text-xs text-muted-foreground mb-2">{renderRich(t('model.handoff.allowedHelp'))}</p>
-                      <textarea
-                        value={modelHandoffAllowedModels}
-                        onChange={(e) => setModelHandoffAllowedModels(e.target.value)}
-                        className="w-full min-h-[140px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                        placeholder={t('model.handoff.allowedPh')}
-                      />
-                    </div>
-                    {/* What the list ACTUALLY parses to. Without this, a box
-                        full of comments or mistyped rows reads as "configured"
-                        while the tool is silently not offered at all. */}
-                    {(() => {
-                      const parsed = parseHandoffModels(modelHandoffAllowedModels);
-                      if (parsed.length === 0) {
-                        return (
-                          <p className="text-xs text-amber-600 dark:text-amber-400">
-                            {t('model.handoff.parsedNone')}
-                          </p>
-                        );
-                      }
-                      const hasSelf = parsed.some(
-                        (m) => m.specificModel.toLowerCase() === String(specificModel || '').toLowerCase(),
-                      );
-                      return (
-                        <div className="text-xs text-muted-foreground space-y-1">
-                          <p>
-                            <span className="text-foreground font-semibold">{parsed.length}</span>{' '}
-                            {t('model.handoff.parsedSuffix')}
-                          </p>
-                          <ul className="font-mono space-y-0.5">
-                            {parsed.map((m) => (
-                              <li key={m.specificModel}>
-                                {m.specificModel}
-                                <span className="text-muted-foreground/70">
-                                  {' '}— {m.family} · {m.thinking ? 'thinking on' : 'thinking off'}
-                                </span>
-                              </li>
-                            ))}
-                          </ul>
-                          {!hasSelf && (
-                            <p className="text-amber-600 dark:text-amber-400">
-                              {t('model.handoff.noSelf')}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                      {renderRich(t('model.handoff.limits'))}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t border-border pt-6 mt-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <input
-                    type="checkbox"
-                    id="creativityControl"
-                    checked={creativityControlEnabled}
-                    onChange={(e) => setCreativityControlEnabled(e.target.checked)}
-                    className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
-                  />
-                  <label htmlFor="creativityControl" className="text-sm font-semibold text-foreground cursor-pointer">
-                    {t('model.creativity.label')}
-                  </label>
-                </div>
-                {creativityControlEnabled && (
-                  <div className="space-y-4">
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {renderRich(t('model.creativity.help'))}
-                    </p>
-                    <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('model.creativity.analysisLabel')}</label>
-                      <p className="text-xs text-muted-foreground mb-2">
-                        {t('model.creativity.analysisHelp')}
-                      </p>
-                      <textarea
-                        value={hiddenAnalysisInstruction}
-                        onChange={(e) => setHiddenAnalysisInstruction(e.target.value)}
-                        className="w-full min-h-[160px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-none focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-semibold text-foreground mb-1 block">{t('model.creativity.patternLabel')}</label>
-                      <p className="text-xs text-muted-foreground mb-2">
-                        {renderRich(t('model.creativity.patternHelp'))}
-                      </p>
-                      <input
-                        type="text"
-                        value={creativityDisplayPattern}
-                        onChange={(e) => setCreativityDisplayPattern(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
               </>)}
             </div>
 
@@ -7078,7 +6840,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       browserEnabled,
                       browserAllowedHosts,
                       browserAllowAnyHost,
-                      browserCompact,
                       computerControlEnabled,
                       appControlEnabled,
                       cameraEnabled,
@@ -7092,7 +6853,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       // Behavior tab
                       dateTimeVisibility,
                       vrchatMode, vrchatRule,
-                      creativityControlEnabled, hiddenAnalysisInstruction, creativityDisplayPattern,
                       seedEnabled, seedValue,
                       // Model tab
                       modelParams,
@@ -7104,7 +6864,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       showFatigueToEntity,
                       fatigueInstruction,
                       baseBindingMode,
-                      autoModelSelectEnabled, autoModelSelectCriteria, autoModelSelectAllowedModels,
                       modelHandoffEnabled, modelHandoffAllowedModels,
                     };
                     const res = await fetch('/api/folders', {

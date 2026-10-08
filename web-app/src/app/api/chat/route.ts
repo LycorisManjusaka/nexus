@@ -812,16 +812,6 @@ function resolveKimiModel(model: string | undefined | null): string {
   return model.replace(/^moonshotai\//i, '').toLowerCase();
 }
 
-const DEFAULT_ANALYSIS_INSTRUCTION =
-`Based on the conversation and this message, call set_creativity with the single most appropriate value for C:
-
-C = 0.35 — Grounded & Focused: Analytical, factual, highly structured responses
-C = 0.50 — Standard & Conversational: Default conversational state
-C = 0.75 — Creative & Brainstorming: Novel perspectives, high vocabulary variance
-C = 1.00 — Experimental & Chaotic: Surreal, intentionally unpredictable
-
-Choose the value that best fits what this message calls for, then immediately call set_creativity.`;
-
 // ── Prompt-cache usage normalizer ────────────────────────────────────────────
 // Each provider reports cache hits in a slightly different shape. This helper
 // folds them into a uniform { cachedInputTokens, uncachedInputTokens,
@@ -964,7 +954,6 @@ function normalizeCacheUsage(usage: any, providerHint: string): any | null {
 //
 // Limitations of this path (vs the API-key branch):
 //   • Workspace tools (Read/Write/Edit/Glob/Grep) bridged via SDK's built-ins
-//   • Creativity Control not bridged
 //   • Extended thinking may behave differently (driven by SDK defaults)
 //   • Auto-continuation prefill not used (SDK handles its own loop)
 async function streamClaudeViaAgentSDK(args: {
@@ -994,7 +983,6 @@ async function streamClaudeViaAgentSDK(args: {
   browserEnabled: boolean;         // per-Entity: expose the browser MCP tools
   browserAllowedHosts: string[];   // per-Entity: hosts beyond localhost
   browserAllowAnyHost: boolean;    // per-Entity: drop the allowlist entirely
-  browserCompact: boolean;         // per-Entity: trim snapshots for small contexts
   computerControlEnabled: boolean; // per-Entity: expose the OS-level mouse/keyboard/screen tools
   appControlEnabled: boolean;      // per-Entity: expose the UI-Automation app tools (separate toggle on purpose)
   convoId: string;                 // conversation id — scopes letter announcements
@@ -1005,7 +993,7 @@ async function streamClaudeViaAgentSDK(args: {
   turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
   betrayalSend: GuardedSender;     // guarded SSE writer — see lib/betrayalGuard.ts
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Refusal-retry CONFIGURATION, resolved ONCE here so the parent query() and
@@ -1420,7 +1408,6 @@ async function streamClaudeViaAgentSDK(args: {
               me: folderName,
               allowedHosts: browserAllowedHosts,
               allowAnyHost: browserAllowAnyHost,
-              compact: browserCompact,
               instructions: I,
             };
             const bt = (n: string) => async (a: any) => ({
@@ -3168,401 +3155,6 @@ function runChangeModel(
   };
 }
 
-// Build the common selector prompt + enum ids shared by every provider branch.
-function buildSelectorPrompt(criteria: string, allowed: AllowedModel[], messages: any[]) {
-  const enumIds = allowed.map((_, i) => String(i));
-  // Compressed conversation excerpt: last N messages, content trimmed to keep
-  // the preflight payload small. Selector only needs to grasp recent intent.
-  const RECENT = 6;
-  const recent = messages.slice(-RECENT).map((m: any) => {
-    const text = (m.content || '').slice(0, 600);
-    return `[${m.role}] ${text}`;
-  }).join('\n\n');
-  const optionsText = allowed.map((m, i) =>
-    `${i}. ${m.label}  (family=${m.family}, model=${m.specificModel}, thinking=${m.thinking ? 'on' : 'off'})`
-  ).join('\n');
-  const systemPrompt =
-    'You are a model selector. Read the user-supplied criteria and the recent ' +
-    'conversation, then call the `select_model` tool with the index of the most ' +
-    'appropriate option. Do not respond with text — only the tool call.';
-  const userMsg =
-    `=== Criteria ===\n${criteria || '(no criteria provided)'}\n\n` +
-    `=== Allowed models ===\n${optionsText}\n\n` +
-    `=== Recent conversation (newest last) ===\n${recent || '(empty)'}\n\n` +
-    `Now call select_model with the integer index (as a string) of your choice.`;
-  return { systemPrompt, userMsg, enumIds };
-}
-
-// Validate the model_id the selector returned (string or number) and look up
-// the matching AllowedModel entry. Returns null on out-of-range / NaN.
-function resolveSelectorAnswer(rawId: any, allowed: AllowedModel[]): AllowedModel | null {
-  const id = String(rawId ?? '');
-  const idx = parseInt(id, 10);
-  if (isNaN(idx) || idx < 0 || idx >= allowed.length) return null;
-  return allowed[idx];
-}
-
-// Run the model-selector preflight using the user's CURRENTLY-SELECTED model
-// (not a hardcoded one). Dispatches by family:
-//   • Claude     → Anthropic SDK with input_schema + tool_choice.type='tool'
-//   • Gemini     → @google/genai SDK with functionDeclarations + ANY mode
-//   • all others → OpenAI-compatible /chat/completions with tool_choice
-//                  routed to the right URL/key (DeepSeek-direct, DashScope,
-//                  Z.AI, xAI, Moonshot, Cohere, MiniMax, LM Studio).
-// Thinking is forced OFF where the provider supports it — the selector task
-// doesn't need reasoning and we don't want to inflate per-turn latency.
-// Returns null on any failure (the caller falls back to the user's original
-// selection, so a flaky selector never blocks chat).
-async function runModelSelectorPreflight(args: {
-  aiName: string;
-  specificModel: string;
-  modelParams: any;
-  keys: any;
-  criteria: string;
-  allowed: AllowedModel[];
-  messages: any[];
-}): Promise<AllowedModel | null> {
-  const { aiName, specificModel, modelParams, keys, criteria, allowed, messages } = args;
-  if (allowed.length === 0) return null;
-  const { systemPrompt, userMsg, enumIds } = buildSelectorPrompt(criteria, allowed, messages);
-
-  const fam = (aiName || '').toLowerCase();
-
-  // ── Claude branch ──────────────────────────────────────────────────────
-  if (fam.includes('claude')) {
-    if (!keys.claude) return null;
-    const anthropic = new Anthropic({ apiKey: keys.claude });
-    const claudeModel = specificModel?.includes('claude') ? specificModel : 'claude-haiku-4-5-20251001';
-    // Skip `thinking` entirely — Claude defaults to no extended thinking when
-    // the field is omitted. tool_choice forces the tool to fire.
-    const resp = await anthropic.messages.create({
-      model: claudeModel,
-      system: systemPrompt,
-      max_tokens: 512,
-      messages: [{ role: 'user', content: userMsg }],
-      tools: [{
-        name: 'select_model',
-        description: 'Pick the index of the most appropriate model for the user\'s most recent message.',
-        input_schema: {
-          type: 'object',
-          properties: {
-            model_id: { type: 'string', enum: enumIds, description: 'Integer index (as string) of chosen model.' },
-          },
-          required: ['model_id'],
-        },
-      }],
-      tool_choice: { type: 'tool', name: 'select_model' },
-    } as any);
-    for (const block of (resp as any).content || []) {
-      if (block.type === 'tool_use' && block.name === 'select_model') {
-        return resolveSelectorAnswer((block as any).input?.model_id, allowed);
-      }
-    }
-    return null;
-  }
-
-  // ── Gemini branch ──────────────────────────────────────────────────────
-  if (fam.includes('gemini')) {
-    if (!keys.google) return null;
-    const isLive = (specificModel || '').includes('live');
-    const ai = new GoogleGenAI({ apiKey: keys.google, ...(isLive ? { apiVersion: 'v1alpha' } : {}) });
-    const geminiModel = specificModel || 'gemini-3.5-flash';
-    const resp = await ai.models.generateContent({
-      model: geminiModel,
-      contents: [{ role: 'user', parts: [{ text: userMsg }] }],
-      config: {
-        systemInstruction: systemPrompt,
-        // Gemini 3.x can't fully disable thinking — 'minimal' is the cheapest.
-        thinkingConfig: { thinkingLevel: 'minimal', includeThoughts: false } as any,
-        tools: [{ functionDeclarations: [{
-          name: 'select_model',
-          description: 'Pick the index of the most appropriate model for the user\'s most recent message.',
-          parameters: {
-            type: 'OBJECT',
-            properties: {
-              model_id: { type: 'STRING', enum: enumIds, description: 'Integer index (as string) of chosen model.' },
-            },
-            required: ['model_id'],
-          },
-        }] }],
-        toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['select_model'] } },
-      } as any,
-    });
-    for (const cand of (resp as any).candidates || []) {
-      for (const part of cand.content?.parts || []) {
-        if (part.functionCall?.name === 'select_model') {
-          return resolveSelectorAnswer(part.functionCall.args?.model_id, allowed);
-        }
-      }
-    }
-    return null;
-  }
-
-  // ── Local (LM Studio) branch — TEXT-BASED selection ──────────────────────
-  // LM Studio models are unreliable at forced `tool_choice`/function calling
-  // (same reason Layer-1 uses a text approach): many reject the forced tool
-  // with an HTTP 400, which would make the shared OpenAI-compatible branch
-  // below throw and silently fall back to the original model — so auto-select
-  // never actually worked on a local selector. Instead we ask for a bare
-  // integer index and parse it. No auth, no tools, no tool_choice.
-  if (fam.includes('local')) {
-    const localUrl = `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`;
-    const localSystem =
-      'You are a model selector. Read the criteria and the recent conversation, ' +
-      'then reply with ONLY the integer index of the single most appropriate ' +
-      'option. No words, no punctuation, no explanation — just the number.';
-    const localBody: any = {
-      model: specificModel || 'local-model',
-      messages: [
-        { role: 'system', content: localSystem },
-        { role: 'user', content: `${userMsg}\n\nReply with ONLY the number.` },
-      ],
-      temperature: 0,
-      // Bounded cap: enough headroom for a reasoning model to think then answer,
-      // but never -1 (which would let runaway thinking fill the whole context).
-      max_tokens: 4096,
-      stream: false,
-    };
-    const res = await fetch(localUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(localBody),
-    });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(`Selector Local HTTP ${res.status}: ${errText.slice(0, 300)}`);
-    }
-    const data = await res.json();
-    let text: string = data?.choices?.[0]?.message?.content || '';
-    // Strip <think>…</think> so digits inside the model's reasoning aren't
-    // mistaken for the final answer.
-    text = text.replace(/<think>[\s\S]*?<\/think>/gi, ' ');
-    // Take the LAST in-range integer — the final answer, not a number the model
-    // may have mentioned mid-reasoning.
-    const nums = [...text.matchAll(/\b(\d{1,2})\b/g)].map((m) => m[1]);
-    for (let i = nums.length - 1; i >= 0; i--) {
-      const ans = resolveSelectorAnswer(nums[i], allowed);
-      if (ans) return ans;
-    }
-    return null;
-  }
-
-  // ── OpenAI-compatible branch (Qwen / DeepSeek / GLM / Grok /
-  //                              Kimi / Cohere / MiniMax / OpenAI / MiMo) ──
-  const isLocal     = fam.includes('local');
-  const isQwen      = fam.includes('qwen');
-  const isDeepSeek  = fam.includes('deepseek');
-  const isGLM       = fam.includes('glm');
-  const isGrok      = fam.includes('grok');
-  const isKimi      = fam.includes('kimi');
-  const isCohere    = fam.includes('cohere') || fam.includes('command');
-  const isMinimax   = fam.includes('minimax');
-  const isOpenAI    = fam.includes('openai') || fam.includes('chatgpt');
-  const isMimo      = fam.includes('mimo');
-  const isBytedance = fam.includes('bytedance');
-  const isMeta      = fam.includes('meta');
-  const isDashScope = isQwen || isDeepSeek;
-  // DeepSeek direct vs via DashScope (only deepseek-v3.2 lives on DashScope).
-  const useDeepSeekDirect = isDeepSeek && !!specificModel && specificModel !== 'deepseek-v3.2';
-  // DigitalOcean Inference serves GLM open weights on US infrastructure;
-  // selected via a `digitalocean/` prefix on the model id (see main branch).
-  const useDigitalOcean = isGLM && (specificModel || '').startsWith('digitalocean/');
-
-  const url = useDeepSeekDirect
-    ? 'https://api.deepseek.com/v1/chat/completions'
-    : isDashScope ? 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
-    : isGLM       ? (useDigitalOcean
-        ? 'https://inference.do-ai.run/v1/chat/completions'
-        : 'https://api.z.ai/api/paas/v4/chat/completions')
-    : isGrok      ? 'https://api.x.ai/v1/chat/completions'
-    : isKimi      ? 'https://api.moonshot.ai/v1/chat/completions'
-    : isCohere    ? 'https://api.cohere.ai/compatibility/v1/chat/completions'
-    : isMinimax   ? 'https://api.minimax.io/v1/chat/completions'
-    : isOpenAI    ? 'https://api.openai.com/v1/chat/completions'
-    : isMimo      ? 'https://api.xiaomimimo.com/v1/chat/completions'
-    : isBytedance ? 'https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions'
-    : isMeta      ? 'https://api.meta.ai/v1/chat/completions'
-    : isLocal     ? `${process.env.LOCAL_LLM_BASE || 'http://localhost:1234'}/v1/chat/completions`
-    : null;
-  if (!url) return null;
-
-  const apiKey = useDeepSeekDirect ? keys.deepseek
-    : isDashScope ? keys.qwen
-    : isGLM       ? (useDigitalOcean ? keys.digitalocean : keys.glm)
-    : isGrok      ? keys.grok
-    : isKimi      ? keys.kimi
-    : isCohere    ? keys.cohere
-    : isMinimax   ? keys.minimax
-    : isOpenAI    ? keys.openai
-    : isMimo      ? keys.mimo
-    : isBytedance ? keys.bytedance
-    : isMeta      ? keys.meta
-    : null; // Local has no auth
-  if (!isLocal && !apiKey) return null;
-
-  // Provider-specific thinking-disable. Selection is a trivial task — we
-  // don't want extended reasoning eating latency or output tokens.
-  // Qwen Omni models (qwen3.5-omni-flash / -plus) reject `enable_thinking`
-  // — DashScope validates a derived `thinking_budget` and refuses the disable
-  // path with a contradictory "must be positive integer and not greater than 0"
-  // error. Skip the toggle for Omni; reasoning is built into those models.
-  const isOmni = (specificModel || '').toLowerCase().includes('omni');
-  const extra: any = {};
-  // Kimi K3 does NOT use the K2.x `thinking` param — reasoning is always on and
-  // configured via the top-level `reasoning_effort` field (only 'max' today). It
-  // also fixes temperature/top_p server-side, so those are omitted below.
-  const selKimiK3 = isKimi && /k3/i.test(resolveKimiModel(specificModel));
-  // The kimi-k2.7-code line is thinking-ONLY. Measured 2026-09-19 against
-  // api.moonshot.ai: `thinking: { type: 'disabled' }` returns 400 "only
-  // type=enabled is allowed for this model" on both kimi-k2.7-code and
-  // kimi-k2.7-code-highspeed, while kimi-k2.6 and kimi-k3 accept the disable.
-  // So this row is the K2.x analogue of the glm-5.3 exception: reasoning can
-  // only be sent as enabled. `reasoning_effort` was probed here and the result
-  // was NOT conclusive (low/high/max/none gave non-monotone thinking-token
-  // counts, n=1 per cell), so it is deliberately not sent.
-  const selKimiCode = isKimi && /k2\.7-code/i.test(resolveKimiModel(specificModel));
-  // `enable_thinking` is a DashScope extension (Qwen, and DeepSeek V3.2 which
-  // is ALSO served via DashScope). DeepSeek's own direct API (api.deepseek.com)
-  // does not recognize this field at all — it silently ignores it and stays
-  // in its default 'thinking: enabled' state. Sending it here is a no-op that
-  // masked a real 400: this selector always forces tool_choice, and DeepSeek's
-  // direct endpoint rejects a forced tool_choice while thinking is enabled
-  // ("Thinking mode does not support this tool_choice"). Direct DeepSeek must
-  // use the same object shape as GLM/Kimi below instead.
-  if ((isQwen || (isDeepSeek && !useDeepSeekDirect)) && !isOmni) extra.enable_thinking = false;
-  // glm-5.3 is the GLM-side K3: Z.AI rejects `thinking: { type: 'disabled' }`
-  // for it outright ("always operates with reasoning enabled"). Depth is set
-  // with `reasoning_effort` instead — 'low' here, since picking an index is a
-  // trivial task and we don't want reasoning eating latency.
-  const selGLM53 = isGLM && !useDigitalOcean && /glm-5\.3/i.test(String(specificModel || ''));
-  if (useDigitalOcean) extra.reasoning_effort = 'none';
-  else if (selGLM53) { extra.thinking = { type: 'enabled' }; extra.reasoning_effort = 'low'; }
-  else if (selKimiCode) extra.thinking = { type: 'enabled' };
-  else if (isGLM || (isKimi && !selKimiK3) || useDeepSeekDirect) extra.thinking = { type: 'disabled' };
-  if (selKimiK3) extra.reasoning_effort = 'max';
-  if (isCohere) extra.reasoning_effort = 'none';
-  // Meta (Muse Spark) MUST get an explicit 'minimal' here, and this is not a
-  // latency preference — without it the selector returns nothing at all.
-  // Measured 2026-10-05 against api.meta.ai: reasoning cannot be switched off
-  // (`reasoning_effort: 'none'` 400s with "Supported values: [minimal, low,
-  // medium, high, xhigh, max]", and the Anthropic-surface equivalent
-  // `thinking: {type:'disabled'}` 400s through the same code path), so the model
-  // always spends output tokens thinking BEFORE it emits anything. This selector
-  // caps max_tokens at 512; at effort 'low' a trivial prompt burned all 64 of a
-  // 64-token budget on reasoning and came back `content: null,
-  // finish_reason: 'length'`. At 'minimal' the same prompt spent 23 reasoning
-  // tokens and answered. Same exception family as glm-5.3 and kimi-k3 above:
-  // the toggle maps onto depth, never onto silence.
-  if (isMeta) extra.reasoning_effort = 'minimal';
-  // OpenAI GPT-5 family: DO NOT set `reasoning_effort` here. This selector always
-  // sends a forced `select_model` function tool, and gpt-5.x on
-  // /v1/chat/completions 400s when `reasoning_effort` is combined with function
-  // tools ("Please use /v1/responses instead"). GPT-5 still reasons at its
-  // default effort, which is plenty for a one-shot index pick.
-  // Grok / MiniMax / Local: no toggle exists. Grok's reasoning is set by
-  // model-suffix; MiniMax always reasons; LM Studio runs the loaded weights.
-
-  let selectorModel = isKimi ? resolveKimiModel(specificModel)
-    // DigitalOcean wants the bare model id; the prefix is NEXUS routing only.
-    : useDigitalOcean ? (specificModel || '').slice('digitalocean/'.length)
-    : (specificModel || (
-    isGLM      ? 'glm-4.7' :
-    isGrok     ? 'grok-4.7' :
-    isCohere   ? 'command-a-plus-05-2026' :
-    isMinimax  ? 'MiniMax-M3' :
-    isDeepSeek ? DEEPSEEK_FLASH :
-    isQwen     ? 'qwen3.6-plus' :
-    isOpenAI   ? 'gpt-5.6-terra' :
-    // V2.6 replaced the V2.5 series; v2.5-pro/v2.5 are deprecated 2026-10-21.
-    isMimo     ? 'mimo-v2.6-pro' :
-    isBytedance ? 'seed-2-0-pro-260328' :
-    isMeta     ? 'muse-spark-1.3' :
-                 'local-model'
-  ));
-  // api.deepseek.com serves a tiny, frequently-renamed catalog; retired Flash
-  // ids (deepseek-v4-flash-0731 and friends) now hard-400. Normalise via the
-  // single table in lib/deepseekModels.ts — same mapping as the main
-  // request-building path below. Without it, THIS preflight call 400s, gets
-  // caught, and silently falls back to the user's un-mapped current model,
-  // which is exactly the "picked model isn't even in the allowed list" bug.
-  if (useDeepSeekDirect) selectorModel = deepseekWireModel(selectorModel);
-
-  const body: any = {
-    model: selectorModel,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userMsg },
-    ],
-    // GPT-5 reasoning models reject a non-default temperature and use
-    // `max_completion_tokens` instead of `max_tokens`. Every other
-    // OpenAI-compatible provider accepts the classic pair.
-    ...(isOpenAI
-      ? { max_completion_tokens: 512 }
-      : useDigitalOcean
-        ? { max_completion_tokens: 512, temperature: 0.0 }   // DO: max_tokens deprecated
-      : selKimiK3
-        ? { max_tokens: 512 }                       // K3 fixes temp/top_p — omit them
-        : { temperature: 0.0, max_tokens: 512 }),
-    ...extra,
-    tools: [{
-      type: 'function',
-      function: {
-        name: 'select_model',
-        description: 'Pick the index of the most appropriate model for the user\'s most recent message.',
-        parameters: {
-          type: 'object',
-          properties: {
-            model_id: { type: 'string', enum: enumIds, description: 'Integer index (as string) of chosen model.' },
-          },
-          required: ['model_id'],
-        },
-      },
-    }],
-    // Meta is the one provider here that cannot be forced. api.meta.ai accepts
-    // ONLY `tool_choice: "auto"` and 400s on everything else — measured
-    // 2026-10-05, all three other forms rejected with the same message
-    // ("only \"auto\" is supported for tool_choice. \"none\", \"required\", and
-    // named function choices are not currently supported"). Forcing it here is
-    // what every other family needs, so the field is dropped for Meta only
-    // rather than dropped for everyone.
-    //
-    // Omitting it is safe for this model rather than merely tolerable: with the
-    // field absent and the same enum tool attached, it called select_model 6/6
-    // with a valid index, where the forced form was 0/2 (both HTTP 400 — i.e.
-    // auto-select would have been dead on arrival for this family). The text
-    // fallback above (pull the last integer out of the reply) still backs it up
-    // if a future version answers in prose instead.
-    ...(isMeta ? {} : { tool_choice: { type: 'function', function: { name: 'select_model' } } }),
-    stream: false,
-  };
-  // LM Studio's max_tokens uses -1 to mean "unlimited" — but we explicitly
-  // want a tight cap on the selector, so leave the 512 cap above.
-
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`Selector ${aiName} HTTP ${res.status}: ${errText.slice(0, 300)}`);
-  }
-  const data = await res.json();
-  const toolCall = data?.choices?.[0]?.message?.tool_calls?.[0];
-  const argStr = toolCall?.function?.arguments;
-  if (argStr) {
-    let parsed: any;
-    try { parsed = JSON.parse(argStr); } catch { return null; }
-    return resolveSelectorAnswer(parsed?.model_id, allowed);
-  }
-  // Fallback for Local / loosely-tool-trained models: try to find a bare
-  // integer in the visible content (e.g. "I pick option 2"). The selector
-  // system prompt asks for the tool, but model adherence varies.
-  const text: string = data?.choices?.[0]?.message?.content || '';
-  const m = text.match(/\b(\d{1,2})\b/);
-  if (m) return resolveSelectorAnswer(m[1], allowed);
-  return null;
-}
-
 // ── Anthropic-format adapter (Kimi + MiMo) ─────────────────────────────────
 // Kimi (Moonshot) and MiMo (Xiaomi) both ship a native Anthropic Messages API
 // endpoint that speaks the dialect these models were actually trained for —
@@ -3617,7 +3209,6 @@ async function streamViaAnthropicCompat(args: {
   browserEnabled: boolean;
   browserAllowedHosts: string[];
   browserAllowAnyHost: boolean;
-  browserCompact: boolean;
   computerControlEnabled: boolean;
   appControlEnabled: boolean;
   convoId: string;
@@ -3635,7 +3226,7 @@ async function streamViaAnthropicCompat(args: {
     enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools,
     instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff,
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
-    browserEnabled, browserAllowedHosts, browserAllowAnyHost, browserCompact,
+    browserEnabled, browserAllowedHosts, browserAllowAnyHost,
     computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
     hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend,
   } = args;
@@ -4155,7 +3746,7 @@ async function streamViaAnthropicCompat(args: {
               } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                 resultContent = await runBrowserTool(tu.name, tu.input || {}, {
                   me: folderName, allowedHosts: browserAllowedHosts,
-                  allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                  allowAnyHost: browserAllowAnyHost, instructions: I,
                 });
               } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                 const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
@@ -4422,23 +4013,13 @@ export async function POST(req: Request) {
       modelParams = { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium' },
       specificModel = 'gemini-3.5-flash',
       dateTimeVisibility = 'all',
-      creativityControlEnabled = false,
-      hiddenAnalysisInstruction = DEFAULT_ANALYSIS_INSTRUCTION,
-      creativityDisplayPattern = '[Chosen Creativity: {C}]\n\n',
       seedEnabled = false,
       seedValue = 42,
-      // ── Auto Model Selection (per-conversation) ───────────────────────────
-      // When enabled, run a GLM-4.6V-Flash preflight that picks a model from
-      // the user-curated allowedModels list (one per line, pipe-delimited).
-      // The chosen model overrides aiName/specificModel/modelParams below.
-      autoModelSelectEnabled = false,
-      autoModelSelectCriteria = '',
-      autoModelSelectAllowedModels = '',
       // ── Vessel handoff (change_model) — per-being ─────────────────────────
       // Exposes the `change_model` tool so the being can hand the conversation
       // to another vessel at a TURN BOUNDARY (this turn ends, the client
-      // re-POSTs as the new vessel). The allow-list is hand-curated: same line
-      // format as the auto-select box, no "fill all".
+      // re-POSTs as the new vessel). The allow-list is hand-curated — one model
+      // per line, no "fill all" button anywhere.
       modelHandoffEnabled = false,
       modelHandoffAllowedModels = '',
       // Set by the client on the FIRST request after a switch: the note the
@@ -4532,7 +4113,6 @@ export async function POST(req: Request) {
       browserEnabled = false,
       browserAllowedHosts = [],
       browserAllowAnyHost = false,
-      browserCompact = false,
       // OS-level mouse/keyboard/screen control (Windows only). Off by default —
       // same boundary discipline as browserEnabled: an unset field must never
       // silently grant physical control of the machine.
@@ -4781,78 +4361,6 @@ export async function POST(req: Request) {
     const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
     const pathRule = agentFullSystemAccess ? I.pathRuleFull : I.pathRuleSandbox;
 
-    // ── Auto-Model-Select preflight ─────────────────────────────────────────
-    // Runs BEFORE the provider flags are computed so the resolved model drives
-    // every downstream branch. The preflight uses whatever model the
-    // conversation is CURRENTLY set to — no more hardcoded GLM-4.6V-Flash,
-    // which used to 429 on the free tier and block every turn. Failure modes
-    // (no API key, parse error, empty list, network error, no tool call in
-    // response) all fall through to the user's originally-selected model —
-    // a flaky selector never blocks normal chat.
-    //
-    // `autoSelectedThinking` captures the chosen entry's thinking flag so the
-    // model_selected SSE label is accurate even for families (Local, Grok,
-    // MiniMax) where modelParams has no per-provider thinking field to read.
-    let autoSelectedThinking: boolean | null = null;
-    // Human-readable trace of what Automatic Model Selection actually did this
-    // turn, surfaced to the user via the `notices` channel (never sent to the
-    // model). Every branch below — success, empty list, and failure/fallback —
-    // sets this, so "the model I got isn't what I configured" is always
-    // explainable from the UI instead of requiring a server-log dig.
-    let autoSelectNotice: string | null = null;
-    if (autoModelSelectEnabled) {
-      const preAutoLabel = buildModelLabel(aiName, specificModel, false, modelParams);
-      const allowed = parseAllowedModels(autoModelSelectAllowedModels);
-      if (allowed.length === 0) {
-        autoSelectNotice = `Automatic Model Selection is ON but no allowed models are configured — running on ${preAutoLabel} unchanged.`;
-      } else {
-        try {
-          const chosen = await runModelSelectorPreflight({
-            aiName,
-            specificModel,
-            modelParams,
-            keys,
-            criteria: autoModelSelectCriteria,
-            allowed,
-            messages,
-          });
-          if (chosen) {
-            aiName = chosen.family;
-            specificModel = chosen.specificModel;
-            autoSelectedThinking = chosen.thinking;
-            // Map the thinking flag to the provider-specific parameter shape.
-            // We re-derive the family from the chosen entry (NOT from the
-            // post-override aiName lowercase, which would also work but is
-            // less explicit here).
-            const fam = chosen.family.toLowerCase();
-            const t = !!chosen.thinking;
-            const patch: any = {};
-            if (fam.includes('claude')) patch.claudeThinking = t;
-            // Qwen / DeepSeek / GLM / Kimi / Cohere all read the same flag.
-            if (fam.includes('qwen') || fam.includes('deepseek') || fam.includes('glm') ||
-                fam.includes('kimi') || fam.includes('cohere') || fam.includes('command')) {
-              patch.qwenEnableThinking = t;
-            }
-            // Gemini 3.x can't fully disable — map "off" to the lowest level
-            // this specific chosen model actually accepts (some, like Pro
-            // variants and Gemini 3.7 Flash, reject 'minimal' outright).
-            if (fam.includes('gemini')) patch.thinkingLevel = t ? 'medium' : resolveGeminiMinThinkingLevel(chosen.specificModel);
-            modelParams = { ...modelParams, ...patch };
-            autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} → chose ${chosen.label}.`;
-          } else {
-            autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} but returned no valid pick — falling back to ${preAutoLabel} unchanged.`;
-          }
-        } catch (e) {
-          // Don't block the turn on a preflight error — fall back silently to
-          // chat, but still tell the user it happened (that's the whole point
-          // of this notice: a swallowed exception used to be indistinguishable
-          // from a real pick).
-          console.warn('[auto-model-select] preflight failed:', e);
-          const errMsg = e instanceof Error ? e.message : String(e);
-          autoSelectNotice = `Automatic Model Selection: selector ran on ${preAutoLabel} but failed (${errMsg.slice(0, 200)}) — falling back to ${preAutoLabel} unchanged.`;
-        }
-      }
-    }
 
     const isClaude    = aiName.toLowerCase().includes('claude');
     const isGemini    = aiName.toLowerCase().includes('gemini');
@@ -4930,17 +4438,12 @@ export async function POST(req: Request) {
     const isDashScope = isQwen || isDeepSeek;
 
     // ── Compute the model-selected SSE payload ──────────────────────────────
-    // Emitted at the very start of every stream (auto-select on OR off) so
-    // every AI message gets a precise family/specific/thinking/label tag in
+    // Emitted at the very start of every stream, so every AI message gets a
+    // precise family/specific/thinking/label tag in
     // the meta bar. Display-only — the frontend stores it on the message
     // metadata but slimHistory drops it on subsequent turns, so this never
     // leaks back into the AI context window.
-    // When auto-select picked a model, its declared thinking flag is the
-    // source of truth — Local and other parameter-less families can't be
-    // inferred from modelParams alone. Falls back to provider-specific
-    // detection when the user is running on a manually-picked model.
     const modelThinkingFlag: boolean =
-      autoSelectedThinking !== null ? autoSelectedThinking :
       // Fable/Mythos 5 and Opus 5.5 always think — `disabled` 400s, so the
       // toggle set to OFF runs adaptive at the shallowest effort. Report that
       // as thinking ON: shallow reasoning is not silence. (Same rule the Grok
@@ -4976,9 +4479,9 @@ export async function POST(req: Request) {
     // ── change_model availability, computed ONCE for all five dialects ───────
     // Gated on a non-empty curated list, not just the toggle: an enum with zero
     // members is an invalid schema, and a tool that can only fail is worse than
-    // no tool. Computed here because it needs the FINAL aiName/specificModel
-    // (auto-selection may have overridden them above), so "already on that
-    // vessel" compares against the vessel that is actually answering.
+    // no tool. Computed from the FINAL aiName/specificModel — after a handoff
+    // the client re-POSTs as the new vessel, so "already on that vessel"
+    // compares against the vessel that is actually answering this request.
     const handoffTargets: HandoffModel[] = modelHandoffEnabled
       ? parseHandoffModels(modelHandoffAllowedModels)
       : [];
@@ -5028,7 +4531,6 @@ export async function POST(req: Request) {
       specificModel,
       thinking: modelThinkingFlag,
       label: modelLabelForSSE,
-      ...(autoSelectNotice ? { autoSelectNotice } : {}),
     };
 
     const formatDate = (ts: number) => {
@@ -5458,7 +4960,6 @@ export async function POST(req: Request) {
           browserEnabled,
           browserAllowedHosts,
           browserAllowAnyHost,
-          browserCompact,
           computerControlEnabled,
           appControlEnabled,
           convoId,
@@ -5982,105 +5483,6 @@ export async function POST(req: Request) {
       }
       if (claudeTools.length) claudeParams.tools = claudeTools;
 
-      // ── Layer 1: Creativity analysis ────────────────────────────────────────
-      let layer1C: number | null = null;
-      let layer1ThinkingBlocks: any[] = [];
-
-      if (creativityControlEnabled) {
-        const creativityToolDef = {
-          name: 'set_creativity',
-          description: 'Analyze the context and call this tool with the optimal creativity value C for generating the response.',
-          input_schema: {
-            type: 'object' as const,
-            properties: {
-              creativity: { type: 'number', description: 'Creativity level 0.0 (analytical/structured) to 1.0 (experimental/chaotic)' },
-            },
-            required: ['creativity'],
-          },
-        };
-
-        // Append analysis instruction to the last user message
-        const layer1Msgs = anthropicMessages.map((m: any, i: number) => {
-          if (i === anthropicMessages.length - 1 && m.role === 'user') {
-            const content = m.content.map((b: any) => ({ ...b }));
-            const lastTextIdx = content.reduce((found: number, b: any, idx: number) => b.type === 'text' ? idx : found, -1);
-            if (lastTextIdx >= 0) {
-              content[lastTextIdx] = { ...content[lastTextIdx], text: content[lastTextIdx].text + '\n\n' + hiddenAnalysisInstruction };
-            } else {
-              content.push({ type: 'text', text: hiddenAnalysisInstruction });
-            }
-            return { role: m.role, content };
-          }
-          return m;
-        });
-
-        const layer1Params: any = {
-          model: claudeModel,
-          system: enhancedSystemPrompt,
-          messages: layer1Msgs,
-          // Shares the thinking+output budget like the main call below. 4000 was
-          // too tight once adaptive thinking was enabled — thinking could consume
-          // it before the forced set_creativity tool call was emitted, silently
-          // losing the creativity value. Unused ceiling is never billed.
-          max_tokens: 16000,
-          tools: [creativityToolDef],
-          tool_choice: { type: 'tool', name: 'set_creativity' },
-        };
-        if (claudeThinkingOn) {
-          if (isAdaptiveThinking) {
-            // Opus 4.7/4.8 and Fable/Mythos 5 reject the classic enabled shape; use adaptive.
-            layer1Params.thinking = { type: 'adaptive', display: 'summarized' };
-            layer1Params.output_config = { effort: claudeEffort };
-          } else {
-            layer1Params.thinking = { type: 'enabled', budget_tokens: 2000 };
-          }
-        } else if (!isAdaptiveThinking) {
-          layer1Params.temperature = modelParams.temperature;
-        }
-
-        try {
-          const layer1Resp = await anthropic.messages.create(layer1Params, { signal: turnAbort.signal });
-          for (const block of layer1Resp.content) {
-            if (block.type === 'tool_use' && block.name === 'set_creativity') {
-              const val = Number((block as any).input?.creativity);
-              if (!isNaN(val)) layer1C = Math.max(0, Math.min(1, val));
-            } else if (block.type === 'thinking') {
-              layer1ThinkingBlocks.push({ type: 'thinking', thinking: (block as any).thinking || '', signature: (block as any).signature || '' });
-            } else if (block.type === 'redacted_thinking') {
-              layer1ThinkingBlocks.push({ type: 'redacted_thinking', data: (block as any).data || '' });
-            }
-          }
-          console.log(`[creativity] Claude Layer 1: C=${layer1C}, thinking=${layer1ThinkingBlocks.length} blocks`);
-        } catch (e: any) {
-          console.warn('[creativity] Claude Layer 1 failed, using default params:', e.message);
-        }
-
-        if (layer1C !== null) {
-          // Adaptive-thinking models (incl. Fable/Mythos 5, which always think)
-          // reject a custom temperature — only nudge top_p in that case.
-          if (!claudeThinkingOn) claudeParams.temperature = 2.0 * layer1C;
-          claudeParams.top_p = 0.7 + 0.3 * layer1C;
-        }
-
-        // Inject Layer 1 thinking into history so Claude continues the thought in Layer 2
-        if (layer1ThinkingBlocks.length > 0 && claudeThinkingOn && layer1C !== null) {
-          const lastMsg = anthropicMessages[anthropicMessages.length - 1];
-          const l1Content = lastMsg.content.map((b: any) => ({ ...b }));
-          const l1TextIdx = l1Content.reduce((found: number, b: any, idx: number) => b.type === 'text' ? idx : found, -1);
-          if (l1TextIdx >= 0) {
-            l1Content[l1TextIdx] = { ...l1Content[l1TextIdx], text: l1Content[l1TextIdx].text + '\n\n' + hiddenAnalysisInstruction };
-          } else {
-            l1Content.push({ type: 'text', text: hiddenAnalysisInstruction });
-          }
-          anthropicMessages.splice(
-            anthropicMessages.length - 1, 1,
-            { role: 'user', content: l1Content },
-            { role: 'assistant', content: [...layer1ThinkingBlocks, { type: 'text', text: '…' }] },
-            lastMsg,
-          );
-        }
-      }
-      // ── End Layer 1 ─────────────────────────────────────────────────────────
 
       const readableStream = new ReadableStream({
         async start(controller) {
@@ -6088,16 +5490,11 @@ export async function POST(req: Request) {
           registerActiveTurnStop(() => { try { controller.close(); } catch {} try { turnAbort.abort(); } catch {} });
 
           // Identify the model+thinking-mode that's about to respond. Always
-          // emitted, regardless of auto-select. The frontend stashes this on
+          // emitted. The frontend stashes this on
           // the AI message for display only — it does NOT travel back in
           // subsequent turns (slimHistory drops it).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);
-
-          // Emit creativity display prefix before the first token (visual-only — not saved to log)
-          if (layer1C !== null) {
-            enqueue({ type: 'creativity_prefix', label: creativityDisplayPattern.replace('{C}', layer1C.toFixed(2)) });
-          }
 
           // Tool loop. Each iteration runs one stream call. If the model emits
           // tool_use blocks, we execute them, append the assistant turn and a
@@ -6647,7 +6044,7 @@ export async function POST(req: Request) {
                     // route filter — never here, so no call site can forget it.
                     resultContent = await runBrowserTool(tu.name, tu.input || {}, {
                       me: folderName, allowedHosts: browserAllowedHosts,
-                      allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                      allowAnyHost: browserAllowAnyHost, instructions: I,
                     });
                   } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                     // OS-level mouse/keyboard/screen control. computer_screenshot
@@ -7278,64 +6675,6 @@ export async function POST(req: Request) {
       ]);
       const geminiModelId = specificModel?.includes('gemini') ? specificModel : 'gemini-3.5-flash';
 
-      // ── Layer 1: Creativity analysis ────────────────────────────────────────
-      // Must be after fullContents and geminiModelId are defined.
-      let layer1C: number | null = null;
-
-      if (creativityControlEnabled) {
-        const creativityFnDecl = {
-          name: 'set_creativity',
-          description: 'Analyze the context and call this with the optimal creativity value C for generating the response.',
-          parameters: {
-            type: 'OBJECT',
-            properties: { creativity: { type: 'NUMBER', description: 'Creativity level 0.0 to 1.0' } },
-            required: ['creativity'],
-          },
-        };
-
-        const layer1Contents = fullContents.map((c: any, i: number) => {
-          if (i === fullContents.length - 1 && c.role === 'user') {
-            const parts = [...c.parts];
-            const lastTextIdx = parts.reduce((found: number, p: any, idx: number) => (p.text !== undefined ? idx : found), -1);
-            if (lastTextIdx >= 0) {
-              parts[lastTextIdx] = { ...parts[lastTextIdx], text: parts[lastTextIdx].text + '\n\n' + hiddenAnalysisInstruction };
-            } else {
-              parts.push({ text: hiddenAnalysisInstruction });
-            }
-            return { role: c.role, parts };
-          }
-          return c;
-        });
-
-        try {
-          const layer1Resp = await ai.models.generateContent({
-            model: geminiModelId,
-            contents: layer1Contents,
-            config: {
-              systemInstruction: enhancedSystemPrompt,
-              tools: [{ functionDeclarations: [creativityFnDecl] }],
-              toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['set_creativity'] } },
-            },
-          });
-          for (const cand of (layer1Resp as any).candidates || []) {
-            for (const part of cand.content?.parts || []) {
-              if (part.functionCall?.name === 'set_creativity') {
-                const val = Number(part.functionCall.args?.creativity);
-                if (!isNaN(val)) layer1C = Math.max(0, Math.min(1, val));
-              }
-            }
-          }
-          console.log(`[creativity] Gemini Layer 1: C=${layer1C}`);
-        } catch (e: any) {
-          console.warn('[creativity] Gemini Layer 1 failed:', e.message);
-        }
-
-        if (layer1C !== null) {
-          geminiConfig.temperature = 2.0 * layer1C;
-          geminiConfig.topP = 0.7 + 0.3 * layer1C;
-        }
-      }
-      // ── End Layer 1 ─────────────────────────────────────────────────────────
 
       // One attempt at one Gemini call. `emitFlag` flips the moment anything has
       // been written to the client for THIS attempt — the retry wrapper below
@@ -7498,9 +6837,6 @@ export async function POST(req: Request) {
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);
-          if (layer1C !== null) {
-            enqueue({ type: 'creativity_prefix', label: creativityDisplayPattern.replace('{C}', layer1C.toFixed(2)) });
-          }
           const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
           const repeatGuard = makeRepeatGuard();
           let toolStopNotice = '';
@@ -7814,7 +7150,7 @@ export async function POST(req: Request) {
                       // executor, not here — see the Claude API site.
                       result = { report: await runBrowserTool(fc.name, fc.args || {}, {
                         me: folderName, allowedHosts: browserAllowedHosts,
-                        allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                        allowAnyHost: browserAllowAnyHost, instructions: I,
                       }) };
                     } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
                       // OS-level mouse/keyboard/screen control. computer_screenshot
@@ -8161,7 +7497,6 @@ export async function POST(req: Request) {
         browserEnabled,
         browserAllowedHosts,
         browserAllowAnyHost,
-        browserCompact,
         computerControlEnabled,
         appControlEnabled,
         convoId,
@@ -8942,85 +8277,9 @@ export async function POST(req: Request) {
       // Thinking on local models is therefore left to the model/template itself
       // (choose a non-thinking model/quant to avoid it).
 
-      // ── Layer 1: Creativity analysis (text-based — works with any local model) ─
-      let layer1C: number | null = null;
-      console.log(`[creativity] Local: enabled=${creativityControlEnabled}, model=${localModel}`);
 
-      if (creativityControlEnabled) {
-        // Build a dedicated Layer 1 conversation with its own system message.
-        // The system message tells the model its ONLY job is to output a number.
-        // We keep the conversation history so it understands context, but strip
-        // the original system prompt and replace it with the analysis one.
-        const analysisHeuristic =
-          'C = 0.35: Grounded & Focused — analytical, factual, highly structured\n' +
-          'C = 0.50: Standard & Conversational — default\n' +
-          'C = 0.75: Creative & Brainstorming — novel perspectives, high variance\n' +
-          'C = 1.00: Experimental & Chaotic — surreal, intentionally unpredictable\n\n' +
-          'Choose the value that best fits the conversation above.';
-
-        const layer1Msgs: any[] = [
-          { role: 'system', content: 'Output ONLY a single decimal number from 0.0 to 1.0. No explanation, no other text.' },
-        ];
-        // Append conversation history (skip original system message)
-        for (const m of baseOaiMessages) {
-          if (m.role === 'system') continue;
-          layer1Msgs.push({ ...m });
-        }
-        // Append heuristic guide to the last user message so the model knows the scale
-        const lastIdx = layer1Msgs.length - 1;
-        if (lastIdx >= 1 && layer1Msgs[lastIdx].role === 'user') {
-          const last = layer1Msgs[lastIdx];
-          layer1Msgs[lastIdx] = {
-            ...last,
-            content: typeof last.content === 'string'
-              ? last.content + '\n\n' + analysisHeuristic
-              : [...(Array.isArray(last.content) ? last.content : [{ type: 'text', text: String(last.content) }]),
-                 { type: 'text', text: analysisHeuristic }],
-          };
-        } else {
-          layer1Msgs.push({ role: 'user', content: analysisHeuristic });
-        }
-
-        try {
-          console.log(`[creativity] Local Layer 1 — sending ${layer1Msgs.length} msgs to ${localModel}`);
-          const layer1Res = await fetch(chatCompletionsUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders },
-            body: JSON.stringify({
-              model: localModel,
-              messages: layer1Msgs,
-              stream: false,
-              temperature: 0.1,
-              top_p: 0.9,
-            }),
-            signal: turnAbort.signal,
-          });
-          if (layer1Res.ok) {
-            const layer1Data = await layer1Res.json();
-            const msg = layer1Data.choices?.[0]?.message || {};
-            // Thinking models (Gemma 4, QwQ, etc.) often return empty `content`
-            // and put their output in `reasoning_content`. Check both.
-            const raw = (msg.content || msg.reasoning_content || '').trim();
-            console.log(`[creativity] Local Layer 1 raw: "${raw.slice(0, 120)}"`);
-            // Find any float 0.0–1.0 anywhere in the text
-            const match = raw.match(/\b(1(?:\.0+)?|0(?:\.\d+)?|\.\d+)\b/);
-            if (match) {
-              const val = parseFloat(match[1]);
-              if (!isNaN(val)) layer1C = Math.max(0, Math.min(1, val));
-            }
-          } else {
-            const errText = await layer1Res.text().catch(() => '');
-            console.warn(`[creativity] Local Layer 1 HTTP ${layer1Res.status}: ${errText.slice(0, 300)}`);
-          }
-          console.log(`[creativity] Local Layer 1 result: C=${layer1C}`);
-        } catch (e: any) {
-          console.warn('[creativity] Local Layer 1 exception:', e.message);
-        }
-      }
-
-      const effectiveLocalTemp = layer1C !== null ? 2.0 * layer1C : (modelParams.temperature ?? 0.7);
-      const effectiveLocalTopP = layer1C !== null ? 0.7 + 0.3 * layer1C : (modelParams.topP ?? 0.95);
-      // ── End Layer 1 ─────────────────────────────────────────────────────────
+      const effectiveLocalTemp = modelParams.temperature ?? 0.7;
+      const effectiveLocalTopP = modelParams.topP ?? 0.95;
 
       // One streaming call. Returns visibleText (only the text portion, not thoughts)
       // and finishReason from the provider. Tokens are emitted to controller as they arrive.
@@ -9055,8 +8314,8 @@ export async function POST(req: Request) {
         // fail for anyone who has Top-K set in the model panel, so the field is
         // simply never put on Meta's wire. (temperature, top_p, seed,
         // presence_penalty, frequency_penalty and stream_options.include_usage
-        // were all measured accepted, including temperature at the Creativity
-        // Control maximum of 2.0, so nothing else needs stripping here.)
+        // were all measured accepted, including temperature at the UI slider's
+        // maximum of 2.0, so nothing else needs stripping here.)
         //   Cohere's OpenAI-compatibility endpoint rejects the same field with a
         // different status. Measured 2026-10-06 against
         // api.cohere.ai/compatibility/v1: `top_k: 40` returns 422
@@ -9072,8 +8331,8 @@ export async function POST(req: Request) {
         if (typeof modelParams.topK === 'number' && !isMeta && !isCohere) requestBody.top_k = modelParams.topK;
         // OpenAI GPT-5 reasoning models reject any non-default `temperature` /
         // `top_p` / `top_k` (only the model default is allowed) and 400 if they
-        // are present. Strip the sampling knobs entirely — Creativity Control's
-        // T/P override therefore doesn't apply to ChatGPT (documented).
+        // are present. Strip the sampling knobs entirely — the model-panel
+        // temperature / top-p therefore do not apply to ChatGPT (documented).
         if (isOpenAI) {
           delete requestBody.temperature;
           delete requestBody.top_p;
@@ -9240,15 +8499,13 @@ export async function POST(req: Request) {
         //   • Thinking ON  → temperature must be 1   (also Moonshot's
         //                     recommended value for chain-of-thought quality)
         //   • Thinking OFF → temperature must be 0.6
-        // Override both the user's temperature and any Creativity-Control value
-        // (2·C), which would otherwise trip the 400.
+        // Override the user's temperature, which would otherwise trip the 400.
         if (isKimi && !isKimiK3) {
           requestBody.temperature = modelParams.qwenEnableThinking !== false ? 1 : 0.6;
         }
         // MiMo (Xiaomi) only accepts temperature within [0, 1.5] and 400s
-        // otherwise ("temperature must be within [0, 1.5]"). The UI / Creativity
-        // Control can produce up to 2.0 (T = 2·C), so clamp into range rather
-        // than fail. top_p stays untouched (MiMo accepts the standard 0–1).
+        // otherwise ("temperature must be within [0, 1.5]"). The model panel's
+        // slider goes to 2.0, so clamp into range rather than fail. top_p stays untouched (MiMo accepts the standard 0–1).
         if (isMimo && typeof requestBody.temperature === 'number') {
           requestBody.temperature = Math.min(1.5, Math.max(0, requestBody.temperature));
         }
@@ -9581,9 +8838,6 @@ export async function POST(req: Request) {
           // Identify the model+thinking-mode about to respond (see Claude branch above).
           enqueue(modelSelectedPayload);
           emitSenseEvents(controller);
-          if (layer1C !== null) {
-            enqueue({ type: 'creativity_prefix', label: creativityDisplayPattern.replace('{C}', layer1C.toFixed(2)) });
-          }
 
           // ── Grok native web + X search fork ─────────────────────────────────
           // Opt-in, Model tab only (`enableGrokNativeSearch`, default off). Runs
@@ -10025,7 +9279,7 @@ export async function POST(req: Request) {
                       // executor, not here — see the Claude API site.
                       resultText = await runBrowserTool(tc.name, parsed || {}, {
                         me: folderName, allowedHosts: browserAllowedHosts,
-                        allowAnyHost: browserAllowAnyHost, compact: browserCompact, instructions: I,
+                        allowAnyHost: browserAllowAnyHost, instructions: I,
                       });
                     } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
                       // OS-level mouse/keyboard/screen control. computer_screenshot

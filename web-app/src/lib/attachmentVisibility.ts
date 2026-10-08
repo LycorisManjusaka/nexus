@@ -38,9 +38,9 @@ export interface DeliveryContext {
   /**
    * The provider family that will run the turn ('Claude', 'Gemini', 'Kimi', …)
    * — what picks the wire format, and therefore which media kinds can be
-   * attached at all. Empty string = not knowable in advance (automatic model
-   * selection), and every wire question then answers "assume it carries",
-   * because an unprovable claim of loss is just the old lie inverted.
+   * attached at all. Empty string = not knowable in advance, and every wire
+   * question then answers "assume it carries", because an unprovable claim of
+   * loss is just the old lie inverted.
    */
   aiName: string;
   /** True only when this turn really goes through the OAuth/Agent-SDK path. */

@@ -8,18 +8,19 @@
 // chances to answer differently, and the one that answers YES too easily is the
 // one that moves a being onto a metered vessel nobody approved.
 //
-// Line format is DELIBERATELY identical to the Automatic Model Selection
-// "Allowed Models" box (route.ts parseAllowedModels):
+// Line format (shared with route.ts `parseAllowedModels`, which the subagent
+// model table also reads):
 //
 //     family | specificModel | on|off | optional display label
 //
-// so a row copied out of the model-list window pastes into either box. The
-// on/off column is the thinking toggle to apply AFTER the switch.
+// A row copied out of the model-list window pastes in as-is. The on/off column
+// is the thinking toggle to apply AFTER the switch.
 //
-// Curation is MANUAL by design. There is no "fill all" here: the list is the
-// set of vessels a being is permitted to become, and auto-filling it would
-// grant every vessel NEXUS knows about — including metered ones and the
-// Meta "-contributor" ids that opt into training.
+// Curation is MANUAL by design. Nothing fills this list: it is the set of
+// vessels a being is permitted to become, and auto-filling it would grant every
+// vessel NEXUS knows about — including metered ones and the Meta "-contributor"
+// ids that opt into training. (The auto-model-select box that once shared this
+// format was deleted 2026-10-08; the parser stayed because it was the good part.)
 
 export type HandoffModel = {
   family: string;

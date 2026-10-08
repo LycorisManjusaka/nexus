@@ -60,8 +60,6 @@ export interface BrowserToolCtx {
   allowedHosts?: string[];
   /** Per-Entity opt-in to the open internet. Overrides the allowlist entirely. */
   allowAnyHost?: boolean;
-  /** Trim snapshots hard — for models with a small context window. */
-  compact?: boolean;
   /** Resolved (per-Entity overridable) instruction strings. */
   instructions?: Record<string, string>;
 }
@@ -550,7 +548,7 @@ export async function openProfileBrowser(
 // every action returns a fresh snapshot, so the entity is never working from a
 // stale list for more than the action it just took.
 
-const SNAPSHOT_JS = `(opts) => {
+const SNAPSHOT_JS = `() => {
   const SEL = [
     'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
     '[role=button]', '[role=link]', '[role=textbox]', '[role=searchbox]',
@@ -559,8 +557,8 @@ const SNAPSHOT_JS = `(opts) => {
     '[onclick]', '[contenteditable=""]', '[contenteditable="true"]'
   ].join(',');
 
-  const MAXN = opts.compact ? 60 : 250;
-  const MAXLEN = opts.compact ? 40 : 120;
+  const MAXN = 250;
+  const MAXLEN = 120;
 
   const clean = (s) => String(s == null ? '' : s).replace(/\\s+/g, ' ').trim();
   const clip = (s) => (s.length > MAXLEN ? s.slice(0, MAXLEN - 1) + '…' : s);
@@ -665,12 +663,11 @@ const SNAPSHOT_JS = `(opts) => {
 async function snapshot(page: Page, ctx: BrowserToolCtx): Promise<string> {
   let snap: any;
   try {
-    // Playwright evaluates a STRING as an expression, not as a callable: it
-    // will not apply the second argument to it. Passing SNAPSHOT_JS plus an
-    // options object therefore evaluated to a bare function object, which is
-    // not serializable, and came back as undefined. Self-invoke instead and
-    // bake the options in — the same shape browser_read already uses.
-    const expr = `(${SNAPSHOT_JS})(${JSON.stringify({ compact: !!ctx.compact })})`;
+    // Playwright evaluates a STRING as an expression, not as a callable, so
+    // SNAPSHOT_JS on its own evaluated to a bare function object — not
+    // serializable, and it came back as undefined. Self-invoke instead, the
+    // same shape browser_read already uses.
+    const expr = `(${SNAPSHOT_JS})()`;
     snap = await page.evaluate(expr as any);
   } catch (e: any) {
     return `Page: ${page.url()}\n(could not read the page: ${e?.message || e})`;
@@ -848,7 +845,7 @@ export async function runBrowserTool(name: string, args: any, ctx: BrowserToolCt
 
       // ── read ──────────────────────────────────────────────────────────────
       case 'browser_read': {
-        const max = ctx.compact ? 6000 : 20000;
+        const max = 20000;
         let body: string;
         try {
           // innerText already reflects rendered text only, so script/style

@@ -1453,6 +1453,11 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
           </div>
         ) : (
           <div className="flex flex-col gap-2">
+            {/* Creativity Control itself was deleted (2026-10-08) — nothing
+                writes this field any more. The RENDER stays because 21 saved
+                log files already carry `creativityLabel` on real messages;
+                dropping the render would make history that exists stop being
+                visible. Delete this only after those values are gone. */}
             {msg.creativityLabel && !isUser && (
               <div className="text-[10px] font-mono text-indigo-400/70 select-none px-1">
                 {msg.creativityLabel.trim()}
