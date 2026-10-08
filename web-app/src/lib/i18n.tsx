@@ -465,6 +465,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'bubble.tts.stop': 'Stop TTS',
   'bubble.copyMd': 'Copy as Markdown',
   'bubble.edit': 'Edit this message',
+  'bubble.more': 'More actions',
   'bubble.rerun': 'Rerun from here',
   'bubble.continue':
     'Continue this reply — the model carries on from where it stopped and the new text is appended to this same message',
@@ -1462,8 +1463,9 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.resumeComplete': 'Right side looks complete — leave this off for a normal re-run.',
   'spu.shiftConfirm':
     'The right pane already holds a finished draft.\n\n' +
-    'Continuing will back up {name}’s current left-side soul, move this draft into the left side, ' +
+    'Continuing will back up what the left pane holds now, move this draft into the left pane, ' +
     'and clear the right side so this run can write into it fresh.\n\n' +
+    'The left pane is a working copy — {name}’s finished soul file for this conversation is NOT touched.\n\n' +
     'Continue?',
   'spu.backupsLabel': 'Soul backups',
   'spu.beforeBackup': 'Before update',
@@ -1471,12 +1473,31 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.pickBackup': 'Pick a snapshot…',
   'spu.noBackups': 'None',
   'spu.restore': 'Restore',
-  'spu.restoreBeforeTitle': 'Load this snapshot into the left pane (current soul)',
+  'spu.restoreBeforeTitle': 'Load this snapshot into the left pane (working copy)',
   'spu.restoreAfterTitle': 'Load this snapshot into the right pane (next draft)',
-  'spu.backupRestoredBefore': 'Restored a "before update" snapshot into the left pane (current soul).',
+  'spu.backupRestoredBefore': 'Restored a "before update" snapshot into the left pane (working copy).',
   'spu.backupRestoredAfter': 'Restored an "after update" snapshot into the right pane (next draft).',
   'spu.backupRestoreFailed': 'Restore failed.',
-  'spu.currentLabel': 'Current (all layers — edit freely; remove Layer 4 here once)',
+  'spu.currentLabel': 'Working copy of the current soul (all layers — edit freely; remove Layer 4 here once)',
+  'spu.work.badge': 'Differs from {file}',
+  'spu.work.noFile': 'No {file} on disk — this pane is the only copy',
+  'spu.work.reload': 'Reload from the soul file',
+  'spu.work.reloadTitle': 'Discard this working copy and load {file} as it is on disk',
+  'spu.work.write': 'Write into the soul file',
+  'spu.work.writeTitle': 'Overwrite {file} with this working copy (snapshots the current file first)',
+  'spu.work.writeConfirm':
+    'Overwrite {file} with the left pane?\n\n' +
+    '{file} is the finished soul of THIS conversation — the record of what this ' +
+    'generation actually ran with. Normally nothing needs to write it: the next ' +
+    'generation is saved from the RIGHT pane by "Go to Next Conversation".\n\n' +
+    'Do this when you are hand-writing a soul that has no file yet, or ' +
+    'deliberately correcting the record. A dated snapshot of the current file is ' +
+    'taken first (Soul backups → "Before update").\n\n' +
+    'Overwrite?',
+  'spu.work.written': 'Wrote the working copy into {file} (a snapshot of the previous contents was taken first).',
+  'spu.work.writeFailed': 'Could not write the soul file: {e}',
+  'spu.work.reloaded': 'Reloaded the left pane from the soul file on disk.',
+  'spu.work.reloadFailed': 'Could not read the soul file: {e}',
   'spu.tokens': 'tokens',
   'spu.chars': 'chars',
   'spu.updatedLabel': 'Updated',
@@ -2033,6 +2054,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'bubble.tts.stop': '読み上げを止める',
   'bubble.copyMd': 'Markdown としてコピー',
   'bubble.edit': 'このメッセージを編集',
+  'bubble.more': 'その他の操作',
   'bubble.rerun': 'ここからやり直す',
   'bubble.continue':
     'この返答を続ける — モデルが止まったところから続きを書き、同じメッセージに追記されます',
@@ -2994,8 +3016,9 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.resumeComplete': '右側は完成しているようです。通常の再実行ならオフのままにしてください。',
   'spu.shiftConfirm':
     '右側にはすでに完成した草稿があります。\n\n' +
-    'このまま続けると、{name}の現在の左側の魂をバックアップしたうえで、この草稿を左側に移し、' +
+    'このまま続けると、いま左側にある内容をバックアップしたうえで、この草稿を左側に移し、' +
     '右側を空にしてこの実行が新しく書き込めるようにします。\n\n' +
+    '左側は作業コピーです。{name}のこの会話の完成した魂ファイルには触れません。\n\n' +
     '続けますか？',
   'spu.backupsLabel': '魂のバックアップ',
   'spu.beforeBackup': '更新前',
@@ -3003,12 +3026,29 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.pickBackup': 'スナップショットを選択…',
   'spu.noBackups': 'なし',
   'spu.restore': '復元',
-  'spu.restoreBeforeTitle': 'このスナップショットを左ペイン（現在の魂）へ読み込む',
+  'spu.restoreBeforeTitle': 'このスナップショットを左ペイン（作業コピー）へ読み込む',
   'spu.restoreAfterTitle': 'このスナップショットを右ペイン（次の下書き）へ読み込む',
-  'spu.backupRestoredBefore': '「更新前」のスナップショットを左ペイン（現在の魂）へ復元しました。',
+  'spu.backupRestoredBefore': '「更新前」のスナップショットを左ペイン（作業コピー）へ復元しました。',
   'spu.backupRestoredAfter': '「更新後」のスナップショットを右ペイン（次の下書き）へ復元しました。',
   'spu.backupRestoreFailed': '復元に失敗しました。',
-  'spu.currentLabel': '現在（全レイヤー — 自由に編集できます。Layer 4 はここで一度だけ削除してください）',
+  'spu.currentLabel': '現在の魂の作業コピー（全レイヤー — 自由に編集できます。Layer 4 はここで一度だけ削除してください）',
+  'spu.work.badge': '{file} とは内容が違います',
+  'spu.work.noFile': '{file} はディスクに存在しません — このペインが唯一の写しです',
+  'spu.work.reload': '魂ファイルから読み直す',
+  'spu.work.reloadTitle': 'この作業コピーを捨てて、ディスク上の {file} をそのまま読み込む',
+  'spu.work.write': '魂ファイルに書き込む',
+  'spu.work.writeTitle': '{file} をこの作業コピーで上書きする（上書き前のファイルは控えを取ります）',
+  'spu.work.writeConfirm':
+    '{file} を左ペインの内容で上書きしますか？\n\n' +
+    '{file} は「この会話」の完成した魂 — この世代が実際に何で動いていたかの記録です。' +
+    '通常はここに書き込む必要はありません。次の世代は「次の会話へ」が右ペインから保存します。\n\n' +
+    '使うのは、まだファイルが無い魂を手で書いているとき、または記録を意図して訂正するときです。' +
+    '上書き前に現在のファイルの控え（魂のバックアップ →「更新前」）を日付つきで取ります。\n\n' +
+    '上書きしますか？',
+  'spu.work.written': '作業コピーを {file} に書き込みました（上書き前の内容は控えを取ってあります）。',
+  'spu.work.writeFailed': '魂ファイルに書き込めませんでした：{e}',
+  'spu.work.reloaded': 'ディスク上の魂ファイルから左ペインを読み直しました。',
+  'spu.work.reloadFailed': '魂ファイルを読めませんでした：{e}',
   'spu.tokens': 'トークン',
   'spu.chars': '文字',
   'spu.updatedLabel': '更新後',

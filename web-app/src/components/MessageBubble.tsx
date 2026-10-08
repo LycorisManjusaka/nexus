@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1597,65 +1597,103 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             `no-hover:` on the bar is not decoration — see globals.css. In a
             remote session the browser reports no hover-capable pointer, and a
             hover-revealed bar is then unreachable at all. */}
-        {/* Vertical on mobile. This bar sits OUTSIDE the bubble
-            (`left-full` / `right-full`), and on a phone the bubble takes
-            almost the whole width — a horizontal row of six buttons simply
-            runs off the screen. Stacked, the bar is one button wide and fits
-            in the margin that is actually there. */}
-        {!isEditing && (
-          <div className={`absolute bottom-2 transition-opacity flex gap-1 ${isMobile ? 'flex-col' : ''} ${
+        {/* On mobile: horizontal, BELOW the bubble, tail actions behind a "…".
+            Three measured facts forced this shape, in order.
+            (1) The bar is positioned against the bubble wrapper, which is
+                `max-w-[85%]`. For a LONG message that leaves ~15% of the
+                screen outside it — about 62px on a 414px phone, not enough for
+                a horizontal row. That is why it was stacked vertically.
+            (2) Stacking moved the problem instead of fixing it. The bar was
+                anchored `bottom-2` and grows UPWARD, so on a SHORT message a
+                7-8 button column overhangs and covers the message above.
+                Reported from a phone: "it overlaps the message above".
+            (3) Below the bubble the whole row width is available, so neither
+                failure applies. 22px of buttons (`p-1` + a 14px icon) sit
+                inside the 24px gutter ChatArea already leaves between messages
+                (`space-y-6`). That coupling is real: shrink that spacing and
+                this bar starts poking into the next message.
+            Anchored to the bubble's own outer edge — user right, assistant
+            left — so it grows toward the middle of the screen: into the empty
+            space for a short bubble, under the bubble for a long one. Neither
+            can run off the edge.
+            Trimming to three primary actions is Lizard-kun's call, not a
+            layout requirement (all eight fit on a 414px row). It also keeps
+            Delete off the first tap, which on a touch screen earns its place.
+            DESKTOP IS UNCHANGED: same order, same classes, same position. */}
+        {!isEditing && (() => {
+          // `p-1.5` on desktop is the original padding, unchanged. `transition-colors`
+          // is added per-button below exactly where it already was, so the
+          // desktop class sets stay byte-for-byte what they were.
+          const btnBase = `${isMobile ? 'p-1' : 'p-1.5'} bg-background border border-border rounded-lg shadow-sm`;
+          // The tail actions as DATA, not JSX: they render in two places
+          // (inline on desktop, inside the menu on mobile) and the menu has to
+          // close itself after acting — a menu still open after you pick from
+          // it reads as "nothing happened". Order matches the old bar.
+          const tail: Array<{ key: string; run: () => void; label: string; icon: React.ReactNode; tone: string }> = [];
+          if (!isUser && onRerun) tail.push({ key: 'rerun', run: onRerun, label: t('bubble.rerun'), icon: <RefreshCw size={14} />, tone: 'text-muted-foreground hover:text-indigo-500' });
+          if (!isUser && onContinue) tail.push({ key: 'continue', run: onContinue, label: t('bubble.continue'), icon: <CornerDownRight size={14} />, tone: 'text-muted-foreground hover:text-amber-500' });
+          if (onSetFirstOriginal) tail.push({ key: 'first', run: onSetFirstOriginal, label: isFirstOriginal ? t('bubble.firstOriginal.clear') : t('bubble.firstOriginal.set'), icon: <Bookmark size={14} fill={isFirstOriginal ? 'currentColor' : 'none'} />, tone: isFirstOriginal ? 'text-indigo-500 hover:text-muted-foreground' : 'text-muted-foreground hover:text-indigo-500' });
+          tail.push({ key: 'delete', run: onDelete, label: isOriginal ? t('bubble.delete.original') : t('bubble.delete.cloned'), icon: <Trash2 size={14} />, tone: 'text-red-400 hover:text-red-500' });
+          return (
+          <div className={`absolute transition-opacity flex gap-1 ${
             globalSettings?.alwaysShowHoverControls === true
               ? 'opacity-100'
               : 'opacity-0 group-hover/bubble:opacity-100 no-hover:opacity-100'
-          } ${isUser ? 'right-full mr-2' : 'left-full ml-2'}`}>
+          } ${isMobile
+              ? `top-full ${isUser ? 'right-0' : 'left-0'}`
+              : `bottom-2 ${isUser ? 'right-full mr-2' : 'left-full ml-2'}`}`}>
             {ttsState === 'idle' ? (
-              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-muted-foreground hover:text-green-500`} title={t('bubble.tts.read')}>
+              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`${btnBase} transition-colors text-muted-foreground hover:text-green-500`} title={t('bubble.tts.read')}>
                 <Volume2 size={14} />
               </button>
             ) : (
               <>
-                <button onClick={handlePauseResume} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-blue-500 hover:text-blue-600`} title={ttsState === 'playing' ? t('bubble.tts.pause') : t('bubble.tts.resume')}>
+                <button onClick={handlePauseResume} className={`${btnBase} transition-colors text-blue-500 hover:text-blue-600`} title={ttsState === 'playing' ? t('bubble.tts.pause') : t('bubble.tts.resume')}>
                   {ttsState === 'playing' ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
                 </button>
-                <button onClick={stopTTS} className={`p-1.5 bg-background border border-border rounded-lg shadow-sm transition-colors text-red-500 hover:text-red-600`} title={t('bubble.tts.stop')}>
+                <button onClick={stopTTS} className={`${btnBase} transition-colors text-red-500 hover:text-red-600`} title={t('bubble.tts.stop')}>
                   <Square size={14} fill="currentColor" />
                 </button>
               </>
             )}
-            <button onClick={handleCopyMarkdown} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-foreground shadow-sm" title={t('bubble.copyMd')}>
+            <button onClick={handleCopyMarkdown} className={`${btnBase} text-muted-foreground hover:text-foreground`} title={t('bubble.copyMd')}>
               <Copy size={14} />
             </button>
-            <button onClick={() => setIsEditing(true)} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-foreground shadow-sm" title={t('bubble.edit')}>
+            <button onClick={() => setIsEditing(true)} className={`${btnBase} text-muted-foreground hover:text-foreground`} title={t('bubble.edit')}>
               <Pencil size={14} />
             </button>
-            {!isUser && onRerun && (
-              <button onClick={onRerun} className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-indigo-500 shadow-sm" title={t('bubble.rerun')}>
-                <RefreshCw size={14} />
-              </button>
-            )}
-            {!isUser && onContinue && (
-              <button
-                onClick={onContinue}
-                className="p-1.5 bg-background border border-border rounded-lg text-muted-foreground hover:text-amber-500 shadow-sm"
-                title={t('bubble.continue')}
-              >
-                <CornerDownRight size={14} />
-              </button>
-            )}
-            {onSetFirstOriginal && (
-              <button
-                onClick={onSetFirstOriginal}
-                className={`p-1.5 bg-background border border-border rounded-lg shadow-sm ${isFirstOriginal ? 'text-indigo-500 hover:text-muted-foreground' : 'text-muted-foreground hover:text-indigo-500'}`}
-                title={isFirstOriginal ? t('bubble.firstOriginal.clear') : t('bubble.firstOriginal.set')}
-              >
-                <Bookmark size={14} fill={isFirstOriginal ? "currentColor" : "none"} />
-              </button>
-            )}
-            <button onClick={onDelete} className="p-1.5 bg-background border border-border rounded-lg text-red-400 hover:text-red-500 shadow-sm" title={isOriginal ? t('bubble.delete.original') : t('bubble.delete.cloned')}>
-              <Trash2 size={14} />
-            </button>
+            {isMobile
+              ? tail.length > 0 && (
+                  <ClickTip
+                    maxWidth={240}
+                    title={t('bubble.more')}
+                    className={`${btnBase} text-muted-foreground hover:text-foreground`}
+                    panel={(close) => (
+                      <div className="flex flex-col gap-0.5">
+                        {tail.map((a) => (
+                          <button
+                            key={a.key}
+                            onClick={() => { close(); a.run(); }}
+                            className={`flex items-center gap-2 px-2 py-2 rounded text-[12px] text-left hover:bg-muted ${a.tone}`}
+                          >
+                            {a.icon}
+                            <span className="truncate">{a.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  >
+                    <MoreHorizontal size={14} />
+                  </ClickTip>
+                )
+              : tail.map((a) => (
+                  <button key={a.key} onClick={a.run} className={`${btnBase} ${a.tone}`} title={a.label}>
+                    {a.icon}
+                  </button>
+                ))}
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
 

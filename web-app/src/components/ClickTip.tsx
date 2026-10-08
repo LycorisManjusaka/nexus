@@ -27,13 +27,30 @@ export default function ClickTip({
   className,
   title,
   children,
+  panel,
+  maxWidth,
 }: {
   /** The body of the panel. Rendered pre-wrapped — newlines are preserved. */
-  text: string;
+  text?: string;
   className?: string;
   /** Native hover tooltip. Defaults to `text`; pass '' to suppress it. */
   title?: string;
   children: React.ReactNode;
+  /**
+   * Interactive panel body, rendered INSTEAD of `text`. Receives `close` so a
+   * control inside can dismiss the panel after acting — a menu that stays open
+   * after you pick from it reads as "nothing happened".
+   *
+   * This exists so the mobile message-action overflow menu can reuse the
+   * positioning and dismissal logic above rather than grow a second copy of
+   * it. Both were measured the hard way: the portal is what keeps a panel from
+   * being clipped by the message scroll container, and "scroll repositions,
+   * only an outside press closes" is what keeps an opening panel from closing
+   * itself.
+   */
+  panel?: (close: () => void) => React.ReactNode;
+  /** Panel width cap. Defaults to 360 (right for prose, too wide for a menu). */
+  maxWidth?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -80,7 +97,7 @@ export default function ClickTip({
   let style: React.CSSProperties | null = null;
   if (open && rect && typeof window !== 'undefined') {
     const margin = 8;
-    const width = Math.min(360, window.innerWidth - margin * 2);
+    const width = Math.min(maxWidth ?? 360, window.innerWidth - margin * 2);
     const left = Math.min(Math.max(margin, rect.left), window.innerWidth - width - margin);
     const below = window.innerHeight - rect.bottom - margin;
     const above = rect.top - margin;
@@ -101,7 +118,7 @@ export default function ClickTip({
         ref={btnRef}
         type="button"
         className={className}
-        title={title === undefined ? text : (title || undefined)}
+        title={title === undefined ? (text || undefined) : (title || undefined)}
         onClick={(e) => {
           e.stopPropagation();
           if (open) { setOpen(false); return; }
@@ -115,9 +132,15 @@ export default function ClickTip({
         <div
           ref={panelRef}
           style={style}
-          className="overflow-auto rounded-lg border border-border bg-card text-card-foreground shadow-2xl px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-left font-normal normal-case tracking-normal"
+          className={
+            panel
+              // No `whitespace-pre-wrap` / `break-words` here: those are for
+              // prose, and they would fight a row of buttons.
+              ? 'overflow-auto rounded-lg border border-border bg-card text-card-foreground shadow-2xl p-1.5 text-left font-normal normal-case tracking-normal'
+              : 'overflow-auto rounded-lg border border-border bg-card text-card-foreground shadow-2xl px-3 py-2 text-[11px] leading-relaxed whitespace-pre-wrap break-words text-left font-normal normal-case tracking-normal'
+          }
         >
-          {text}
+          {panel ? panel(() => setOpen(false)) : text}
         </div>,
         document.body
       )}

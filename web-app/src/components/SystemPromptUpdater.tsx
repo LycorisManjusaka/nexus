@@ -392,6 +392,14 @@ export default function SystemPromptUpdater({
   // contents (all layers verbatim — no parsing/recognition).
   const [leftText, setLeftText] = useState('');
   const [rightText, setRightText] = useState('');
+  // The FINISHED soul of this conversation, `<baseName>_<currentIndex>.md`, as
+  // it is on disk. The left pane is a working copy of it (see writeSpuWorkFile
+  // in systemPromptStorage.ts), so this is kept separately for two jobs the
+  // pane itself can no longer do: say truthfully whether the pane has diverged
+  // from the record, and re-seed from the record on request. Refreshed only on
+  // open and after an explicit write — it is a snapshot of the file, not a
+  // live mirror, and nothing else in NEXUS writes that file.
+  const [realSoulText, setRealSoulText] = useState('');
   const [leftTokens, setLeftTokens] = useState(0);
   const [rightTokens, setRightTokens] = useState(0);
   // External diff-tool session (Preferences → Other → diff viewer path).
@@ -628,6 +636,27 @@ export default function SystemPromptUpdater({
   const titleParsed = useMemo(() => parseTitleIndex(title), [title]);
   const currentIndex = titleParsed?.index ?? 1;
   const baseName = titleParsed?.base ?? title;
+  // Who the agents are told they are working on — NOT `baseName`.
+  //
+  // `baseName` is the conversation TITLE with its trailing `_<n>` removed, and
+  // for every `<being>_<n>` conversation that equals the being's name, which is
+  // why it read correctly for years. It stops being a name the moment a title
+  // does not end in a number: `Genesis_01_Claude_Web` does not parse, so
+  // `baseName` becomes the whole title and the agents were told
+  // `Subject: Genesis_01_Claude_Web`. Genesis is exactly the mode you point at
+  // such a conversation, so that is where it bites.
+  //
+  // `folderName` IS the being — it is what the footer, summaries, changelogs
+  // and settings panes all key on. Same fallback shape the diff-viewer file
+  // naming already uses below (`parsed?.base ?? folderName`). In the normal
+  // case the two are identical, so this changes nothing; it only changes the
+  // case that was wrong.
+  //
+  // Deliberately NOT used for file paths: soul files stay keyed by `baseName`,
+  // because that is where the existing ones already live. (That the two keys
+  // can disagree at all is a real inconsistency, but renaming files is not a
+  // fix that belongs in a patch about subject lines.)
+  const subjectName = folderName.trim() || baseName;
   const summaryKey = title;
 
   const folder = useMemo(
@@ -643,17 +672,29 @@ export default function SystemPromptUpdater({
       setLoading(true);
       setStatusMessage(t('spu.st.loading'));
       try {
-        const [curRes, nextRes] = await Promise.all([
+        const [curRes, nextRes, workRes] = await Promise.all([
           fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`).then((r) => r.json()),
           fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex + 1}`).then((r) => r.json()),
+          fetch(`/api/system-prompts/work?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`).then((r) => r.json()),
         ]);
-        const leftRaw = (curRes?.contents || '').replace(/\s+$/, '');
+        const realRaw = (curRes?.contents || '').replace(/\s+$/, '');
         const nextRaw = (nextRes?.contents || '').replace(/\s+$/, '');
+        // `null` (no working copy for this index) seeds from the real soul;
+        // a string — INCLUDING '' — is an answer the operator produced and is
+        // kept verbatim. `typeof` rather than `||` for exactly that reason: an
+        // emptied pane must not silently refill on reopen.
+        const workRaw = typeof workRes?.contents === 'string'
+          ? workRes.contents.replace(/\s+$/, '')
+          : null;
+        const leftRaw = workRaw !== null ? workRaw : realRaw;
         if (cancelled) return;
+        setRealSoulText(realRaw);
 
-        // Initial state: copy the saved file verbatim into the LEFT side (all
-        // layers, no separation/recognition). The RIGHT side seeds ONLY from the
-        // next-conversation draft if one actually exists on disk; if there is no
+        // Initial state: the LEFT side shows its WORKING COPY for this index
+        // verbatim (all layers, no separation/recognition), seeded from the
+        // finished soul the first time this index is opened. The RIGHT side
+        // seeds ONLY from the next-conversation draft if one actually exists
+        // on disk; if there is no
         // next file, the right side stays EMPTY (we do NOT copy the left over —
         // that previously made it look like a draft already existed). Because
         // lastSavedRightRef matches the empty rightText, the right auto-save
@@ -785,8 +826,12 @@ export default function SystemPromptUpdater({
 
   // ── External diff tool session ────────────────────────────────────────────
   // Opens the configured viewer with temp copies of both panes. The temp files
-  // keep the real soul-file names (<name>_<N>.md / <name>_<N+1>.md) so the
-  // tool's tab titles are meaningful. See /api/diff-viewer for the spawn
+  // keep the on-disk names of what each pane actually holds — the LEFT working
+  // copy (<name>_<N>_left.md) and the real next-generation draft
+  // (<name>_<N+1>.md) — so the tool's tab titles are meaningful AND true. The
+  // left one used to be named `<name>_<N>.md`, which was right while the pane
+  // wrote that file and would now put a finished soul's name on a scratch copy
+  // of something else. See /api/diff-viewer for the spawn
   // contract (positional args, or {left}/{right} placeholders for tools that
   // need flags like `code --diff`).
   const openCompare = useCallback(async () => {
@@ -804,7 +849,7 @@ export default function SystemPromptUpdater({
           viewerPath,
           leftText,
           rightText,
-          leftName: `${base}_${n}.md`,
+          leftName: `${base}_${n}_left.md`,
           rightName: `${base}_${n + 1}.md`,
         }),
       });
@@ -1013,7 +1058,10 @@ export default function SystemPromptUpdater({
     return () => clearTimeout(h);
   }, [open, summaryKey, folderName, summaryText]);
 
-  // ── Auto-save LEFT → <baseName>_<currentIndex>.md ────────────────────────
+  // ── Auto-save LEFT → working copy for <currentIndex> ─────────────────────
+  // NOT `<baseName>_<currentIndex>.md`. That file is the finished soul of a
+  // closed generation; a debounced 800ms effect is the last thing that should
+  // be allowed to touch it.
   useEffect(() => {
     if (!open) return;
     if (lastSavedLeftRef.current === null) return;
@@ -1021,7 +1069,7 @@ export default function SystemPromptUpdater({
     const h = setTimeout(async () => {
       setAutoSaveState('saving');
       try {
-        const r = await fetch('/api/system-prompts', {
+        const r = await fetch('/api/system-prompts/work', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ folder: baseName, index: currentIndex, contents: leftText }),
@@ -1231,6 +1279,70 @@ export default function SystemPromptUpdater({
     return accum;
   }, [folderName, modelParams]);
 
+  // ── Working copy <-> real soul ───────────────────────────────────────────
+  // The left pane is a working copy, so its label would be a claim about a
+  // file it no longer tracks. Two things make that claim honest instead: a
+  // badge that says when the pane and the file differ, and these two explicit
+  // moves between them.
+  //
+  // Compared trimmed: the seed is already right-trimmed on load, and a lone
+  // trailing newline typed into a textarea is not a divergence worth warning
+  // about. The cost is that a whitespace-only difference reads as "same" —
+  // which is the direction this should fail in, since the badge exists to flag
+  // CONTENT that drifted.
+  const realSoulExists = realSoulText.trim().length > 0;
+  const leftDiverged = leftText.trim() !== realSoulText.trim();
+
+  const reloadLeftFromRealSoul = useCallback(async () => {
+    try {
+      const r = await fetch(
+        `/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`
+      );
+      const d = await r.json();
+      if (d?.error) throw new Error(d.error);
+      const real = (d?.contents || '').replace(/\s+$/, '');
+      setRealSoulText(real);
+      // Straight into the pane; the debounced auto-save then persists it as
+      // the working copy, so "reload" is itself an undoable edit rather than a
+      // separate kind of state.
+      setLeftText(real);
+      setStatusMessage(t('spu.work.reloaded'));
+    } catch (e: any) {
+      setStatusMessage(t('spu.work.reloadFailed').replace('{e}', e?.message || String(e)));
+    }
+  }, [baseName, currentIndex, t]);
+
+  // The ONLY path from the pane back onto `<baseName>_<currentIndex>.md`, and
+  // the reason it is safe is that it cannot happen by itself: a confirm the
+  // operator has to read, and a dated BEFORE snapshot of the file it is about
+  // to replace. Needed, not decorative — hand-writing Layers 1-3 for a brand
+  // new being is how a first-generation soul file comes into existence at all.
+  const writeLeftIntoRealSoul = useCallback(async () => {
+    const fileName = `${baseName}_${currentIndex}.md`;
+    // split/join, NOT `.replace('{file}', …)`: a string pattern substitutes the
+    // FIRST match only, and this text names the file twice — the second one
+    // would reach the operator as the literal characters `{file}`. Same shape
+    // as the two placeholder bugs caught yesterday; the lesson is to check
+    // every `{…}` the moment it is introduced, not to remember the rule.
+    const confirmed = window.confirm(t('spu.work.writeConfirm').split('{file}').join(fileName));
+    if (!confirmed) return;
+    try {
+      if (realSoulText.trim()) {
+        await writeSoulBackup('BEFORE', currentIndex, currentIndex + 1, realSoulText);
+      }
+      const r = await fetch('/api/system-prompts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: baseName, index: currentIndex, contents: leftText }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setRealSoulText(leftText);
+      setStatusMessage(t('spu.work.written').replace('{file}', fileName));
+    } catch (e: any) {
+      setStatusMessage(t('spu.work.writeFailed').replace('{e}', e?.message || String(e)));
+    }
+  }, [baseName, currentIndex, leftText, realSoulText, writeSoulBackup, t]);
+
   // ── Shift right pane -> left pane before a run starts ────────────────────
   // Matches how Lizard-kun already used the two panes by hand: when the right
   // side holds a finished draft, an update/reorganize/redistribute/genesis run
@@ -1315,7 +1427,7 @@ export default function SystemPromptUpdater({
     const resumeText = resumeFromRight ? rightText.trim() : '';
     const userMsg = buildUpdateUserMsg({
       lang: agentFolder,
-      baseName,
+      subjectName,
       withConversation,
       focus,
       header,
@@ -1490,7 +1602,7 @@ export default function SystemPromptUpdater({
     const resumeText = resumeFromRight ? rightText.trim() : '';
     const userMsg = buildRedistributeUserMsg({
       lang: agentFolder,
-      baseName,
+      subjectName,
       focus,
       header,
       leftText: effectiveLeftText,
@@ -1679,7 +1791,7 @@ export default function SystemPromptUpdater({
     const resumeText = resumeFromRight ? rightText.trim() : '';
     const userMsg = buildIndexUserMsg({
       lang: agentFolder,
-      baseName,
+      subjectName,
       focus,
       header,
       leftText: effectiveLeftText,
@@ -1858,7 +1970,7 @@ export default function SystemPromptUpdater({
     const resumeText = resumeFromRight ? rightText.trim() : '';
     const userMsg = buildGenesisUserMsg({
       lang: agentFolder,
-      baseName,
+      subjectName,
       focus,
       header,
       conversationLogText,
@@ -2044,7 +2156,7 @@ export default function SystemPromptUpdater({
     const customInstr = summaryInstructions.trim();
     const userMsg = buildSummaryUserMsg({
       lang: agentFolder,
-      baseName,
+      subjectName,
       customInstr,
       identityText,
       summaryIndexBody,
@@ -2107,7 +2219,11 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [agents, baseName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
+    // `subjectName` listed explicitly: the other four runners already depend on
+    // both `baseName` and `folderName` (which together determine it), this one
+    // depends on `baseName` alone and would hold a stale subject if the being
+    // were renamed mid-session.
+  }, [agents, baseName, subjectName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the
@@ -2239,14 +2355,16 @@ export default function SystemPromptUpdater({
         await writeSoulBackup('AFTER', currentIndex, nextIndex, rightText);
       }
 
-      // 1) Persist LEFT (current) to <baseName>_<currentIndex>.md.
-      await fetch('/api/system-prompts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: baseName, index: currentIndex, contents: leftText }),
-      });
+      // The LEFT pane is deliberately NOT persisted here. It used to be
+      // written to `<baseName>_<currentIndex>.md`, which meant committing a
+      // new generation also rewrote the previous one's finished soul with
+      // whatever the pane happened to hold. `<N>.md` is written exactly once —
+      // as the RIGHT pane of generation N-1, by the step below — and that is
+      // what makes the chain readable backwards. The working copy keeps the
+      // pane's edits (and the BEFORE snapshot above keeps a dated record of
+      // what this run was fed).
 
-      // 2) Persist RIGHT (updated) as the next conversation's file.
+      // Persist RIGHT (updated) as the next conversation's file.
       const saveRes = await fetch('/api/system-prompts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2324,7 +2442,13 @@ export default function SystemPromptUpdater({
               </div>
               <div className="text-[11px] text-muted-foreground font-mono leading-snug">
                 <div>
-                  <span className="text-blue-500">Left:</span> {baseName}/{baseName}_{currentIndex}.md
+                  {/* The LEFT path is the working copy, not `<base>_<N>.md`.
+                      This line used to name the finished soul file, which was
+                      true when the pane wrote it and became a lie the moment
+                      it stopped. A header that names a file the pane cannot
+                      write is the exact failure the working copy exists to
+                      prevent, one level up. */}
+                  <span className="text-blue-500">Left:</span> {baseName}/spu_work/{baseName}_{currentIndex}_left.md
                   {' · '}
                   <span className="text-blue-500">Right:</span> {baseName}/{baseName}_{currentIndex + 1}.md
                 </div>
@@ -2713,12 +2837,41 @@ export default function SystemPromptUpdater({
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              {/* Left = current */}
+              {/* Left = WORKING COPY of the current soul (never the file itself) */}
               <div className="flex flex-col">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">{t('spu.currentLabel')}</span>
                   <span className="text-[11px] font-mono text-foreground">{leftTokens.toLocaleString()} {t('spu.tokens')}</span>
                 </div>
+                {/* Rendered ONLY when the pane and the file actually differ, so
+                    the normal case costs no vertical space — which matters on a
+                    phone, where this modal is already full-screen. */}
+                {leftDiverged && (
+                  <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                      {(realSoulExists ? t('spu.work.badge') : t('spu.work.noFile'))
+                        .replace('{file}', `${baseName}_${currentIndex}.md`)}
+                    </span>
+                    {realSoulExists && (
+                      <button
+                        onClick={reloadLeftFromRealSoul}
+                        disabled={busy}
+                        title={t('spu.work.reloadTitle').replace('{file}', `${baseName}_${currentIndex}.md`)}
+                        className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {t('spu.work.reload')}
+                      </button>
+                    )}
+                    <button
+                      onClick={writeLeftIntoRealSoul}
+                      disabled={busy}
+                      title={t('spu.work.writeTitle').replace('{file}', `${baseName}_${currentIndex}.md`)}
+                      className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-700 dark:text-rose-400 hover:bg-rose-500/25 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {t('spu.work.write')}
+                    </button>
+                  </div>
+                )}
                 <textarea
                   value={leftText}
                   onChange={(e) => setLeftText(e.target.value)}

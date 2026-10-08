@@ -128,11 +128,71 @@ export async function writeSystemPromptFile(
   return p;
 }
 
+// ── SPU working copy of the LEFT pane ──────────────────────────────────────
+// `<name>_<N>.md` is the FINISHED soul of conversation N — the record of what
+// that generation actually ran with. The SPU's left pane used to be wired
+// straight to it, which made three separate paths (left auto-save, the
+// right→left shift, and the commit's "persist LEFT") write over a closed
+// generation. Lizard-kun hit the shift one: starting a run while the right
+// pane held a finished draft rewrote `Cairn_41.md` with the draft for 42.
+// Nothing was lost (the BEFORE/AFTER snapshots caught it) but the chain had to
+// be restored by hand, and a history you have to repair is not a history.
+//
+// So the left pane now edits a WORKING COPY, seeded from the real soul the
+// first time an index is opened. The real file is only ever written by (a) the
+// commit, which writes the RIGHT pane as `<N+1>.md`, and (b) one explicit,
+// confirmed "write the working copy into the real soul" action. Separate
+// functions rather than a `scope` argument on the existing pair: a mis-plumbed
+// parameter is exactly how the working text would land back on the real soul,
+// and this route cannot express that write at all.
+//
+// Keyed by the same `folderName`/index the real file uses, so a working copy
+// always sits beside the thing it is a copy of. Lives in a subdirectory, which
+// `retitleNumberedFiles` skips (it only touches `*.md` entries, not dirs) — so
+// renaming a being leaves working copies behind under the old stem, the lookup
+// misses, and the pane re-seeds from the real soul. That failure mode points at
+// the truth, which is the right direction for it to fail in.
+function spuWorkDir(folderName: string): string {
+  return path.join(entityDir(folderName), 'spu_work');
+}
+
+function spuWorkFilePath(folderName: string, index: number): string {
+  const safe = sanitizeFolderName(folderName);
+  return path.join(spuWorkDir(folderName), `${safe}_${index}_left.md`);
+}
+
+// `null` means "no working copy exists for this index" — the caller seeds from
+// the real soul. An EMPTY working copy is NOT null: emptying the left pane on
+// purpose has to survive a reopen, otherwise the pane would silently refill.
+export async function readSpuWorkFile(
+  folderName: string,
+  index: number
+): Promise<string | null> {
+  try {
+    return await fs.readFile(spuWorkFilePath(folderName, index), 'utf-8');
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return null;
+    throw e;
+  }
+}
+
+export async function writeSpuWorkFile(
+  folderName: string,
+  index: number,
+  contents: string
+): Promise<string> {
+  await fs.mkdir(spuWorkDir(folderName), { recursive: true });
+  const p = spuWorkFilePath(folderName, index);
+  await fs.writeFile(p, contents, 'utf-8');
+  return p;
+}
+
 // ── Shift right pane -> left pane (SPU "start of a new run" contract) ──────
 // Called right before any of the four update buttons begins writing into the
 // right pane, whenever the right pane already holds a finished draft. Backs
 // up the current left content (best-effort — a backup hiccup must not block
-// the shift), writes the old right content into the left (current) index,
+// the shift), writes the old right content into the left pane's WORKING COPY
+// for the current index (NOT `<name>_<N>.md` — see writeSpuWorkFile above),
 // and clears the right (next) index so the new run starts from a blank slate.
 function soulBackupStamp(d = new Date()): string {
   const pad = (n: number, w = 2) => String(n).padStart(w, '0');
@@ -269,7 +329,13 @@ export async function shiftRightToLeft(
     if (previousLeftContents.trim()) {
       await backupSoulSnapshot(folderName, currentIndex, currentIndex + 1, 'BEFORE', previousLeftContents);
     }
-    await writeSystemPromptFile(folderName, currentIndex, newLeftContents);
+    // The promoted draft becomes the left pane's WORKING COPY, not the finished
+    // soul of conversation N. This is the write that used to clobber a closed
+    // generation; the shift's intent was always "this draft is now the basis
+    // for the next pass", which is a working-copy operation by definition.
+    await writeSpuWorkFile(folderName, currentIndex, newLeftContents);
+    // The right pane IS the real `<N+1>.md` draft, so clearing it stays a real
+    // write — the new run starts from a blank next-generation file.
     await writeSystemPromptFile(folderName, currentIndex + 1, '');
     return { ok: true };
   } catch (e: any) {

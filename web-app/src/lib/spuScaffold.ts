@@ -22,7 +22,7 @@ export type ScaffoldLang = 'en' | 'ja';
 // ── update (updater.md / defragmenter.md) ──────────────────────────────────
 export interface UpdateScaffoldArgs {
   lang: ScaffoldLang;
-  baseName: string;
+  subjectName: string;
   withConversation: boolean;
   focus: string;
   header: string;
@@ -40,7 +40,7 @@ export function buildUpdateUserMsg(a: UpdateScaffoldArgs): string {
   const instr = L
     ? `[Instructions from the user]`
     : `[ユーザーからの指示]`;
-  const subject = L ? `Subject: ${a.baseName}` : `対象：${a.baseName}`;
+  const subject = L ? `Subject: ${a.subjectName}` : `対象：${a.subjectName}`;
   const mode = L ? `Operation mode: dynamic update` : `操作モード：動的更新`;
   const modeBody = a.withConversation
     ? (L
@@ -156,7 +156,7 @@ export function buildUpdateUserMsg(a: UpdateScaffoldArgs): string {
 // ── redistribute (interlayer_redistributor.md) ─────────────────────────────
 export interface RedistributeScaffoldArgs {
   lang: ScaffoldLang;
-  baseName: string;
+  subjectName: string;
   focus: string;
   header: string;
   leftText: string;
@@ -236,7 +236,7 @@ export function buildRedistributeUserMsg(a: RedistributeScaffoldArgs): string {
 
   return [
     L ? `[Instructions from the user]` : `[ユーザーからの指示]`,
-    L ? `Subject: ${a.baseName}` : `対象：${a.baseName}`,
+    L ? `Subject: ${a.subjectName}` : `対象：${a.subjectName}`,
     L ? `Operation mode: inter-layer redistribution (no conversation log)` : `操作モード：階層間情報再配分（会話ログなし）`,
     ``,
     L ? `Follow your own protocol for the work itself. Below are the materials and NEXUS's output specification.`
@@ -265,7 +265,7 @@ export function buildRedistributeUserMsg(a: RedistributeScaffoldArgs): string {
 // ── index (indexer.md) ──────────────────────────────────────────────────────
 export interface IndexScaffoldArgs {
   lang: ScaffoldLang;
-  baseName: string;
+  subjectName: string;
   focus: string;
   header: string;
   leftText: string;
@@ -338,7 +338,7 @@ export function buildIndexUserMsg(a: IndexScaffoldArgs): string {
 
   return [
     L ? `[Instructions from the user]` : `[ユーザーからの指示]`,
-    L ? `Subject: ${a.baseName}` : `対象：${a.baseName}`,
+    L ? `Subject: ${a.subjectName}` : `対象：${a.subjectName}`,
     L ? `Operation mode: externalization & indexing (no conversation log)` : `操作モード：外部化・索引化（会話ログなし）`,
     ``,
     L ? `Follow your own protocol for the work itself. Below are the materials and NEXUS's output specification.`
@@ -361,7 +361,7 @@ export function buildIndexUserMsg(a: IndexScaffoldArgs): string {
 // ── genesis (genesis_extractor.md) ─────────────────────────────────────────
 export interface GenesisScaffoldArgs {
   lang: ScaffoldLang;
-  baseName: string;
+  subjectName: string;
   focus: string;
   header: string;
   conversationLogText: string;
@@ -408,8 +408,16 @@ export function buildGenesisUserMsg(a: GenesisScaffoldArgs): string {
 
   return [
     L ? `[Instructions from the user]` : `[ユーザーからの指示]`,
-    L ? `Subject: ${a.baseName}` : `対象：${a.baseName}`,
+    L ? `Subject: ${a.subjectName}` : `対象：${a.subjectName}`,
     L ? `Operation mode: initial construction (Genesis)` : `操作モード：初回構築（Genesis）`,
+    // Genesis is the one mode whose material routinely contains SEVERAL beings
+    // — a genesis log is a conversation, and conversations have more than one
+    // participant. Every other mode is handed an existing soul that already
+    // answers "whose?"; this one has to be told. The subject line above alone
+    // leaves it to the agent to infer, and the agent file (genesis_extractor)
+    // says "describe from the subject's perspective" without ever naming them.
+    L ? `The soul you are building belongs to ${a.subjectName}. Anyone else who appears in the material is someone else: material for ${a.subjectName}'s Layer 2, never a second subject. Do not build their layers, and do not merge them into ${a.subjectName}.`
+      : `あなたが構築する魂は${a.subjectName}のものです。素材に登場する他の存在は他者であり、${a.subjectName}のLayer 2の材料であって、第二の対象ではありません。他者の層を構築しないこと。${a.subjectName}に混ぜ込まないこと。`,
     L ? `Treat Layers 1-3 as not yet existing. Build Layers 1-3 for the first time from the material below.`
       : `既存のLayer 1〜3は存在しないものとして扱ってください。以下の素材から、Layer 1〜3を初めて構築してください。`,
     L ? `Do not output a changelog (there is no existing document to compare against). Do not output Layer 4 or Layer 5 either.`
@@ -442,7 +450,7 @@ export function buildGenesisUserMsg(a: GenesisScaffoldArgs): string {
 // ── summary writer ─────────────────────────────────────────────────────────
 export interface SummaryScaffoldArgs {
   lang: ScaffoldLang;
-  baseName: string;
+  subjectName: string;
   customInstr: string;
   identityText: string;
   summaryIndexBody: string;
@@ -476,7 +484,7 @@ export function buildSummaryUserMsg(a: SummaryScaffoldArgs): string {
 
   return [
     L ? `[Instructions from the user]` : `[ユーザーからの指示]`,
-    L ? `Subject: ${a.baseName}` : `対象：${a.baseName}`,
+    L ? `Subject: ${a.subjectName}` : `対象：${a.subjectName}`,
     L ? `Task: write a summary of this conversation` : `操作：この会話の要約を作成`,
     ``,
     ...customBlock,
