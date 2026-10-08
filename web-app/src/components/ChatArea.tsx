@@ -2362,7 +2362,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     newMessage.tokens = newTokens;
     setMessages([...newMessages]); // update token count in state
 
-    await generateAiResponse(newMessages);
+    // A fresh user turn always starts on the being's SAVED default vessel, not
+    // on a change_model override left over from the previous turn's handoff
+    // chain (トカゲくん: as a 24/7 feature it is structurally right to always
+    // begin from the cheap default — the handoff vessel is transient to the
+    // chain the model itself drove, and reverts the moment the human speaks
+    // again). forceSavedVessel makes THIS request ignore the stale
+    // handoffOverride closure; setHandoffOverride(null) reverts the delivery
+    // badge on the next render. Reload is no longer needed to return to default.
+    setHandoffOverride(null);
+    await generateAiResponse(newMessages, { forceSavedVessel: true });
   };
 
   useEffect(() => {
@@ -2721,11 +2730,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // it. Used by the handoff-failure report so the human-readable provider
     // error survives — the failed turn's own message does not.
     carryNotices?: string[];
-    // Run on the being's SAVED vessel, ignoring handoffOverride. Needed because
-    // the restore and the re-POST happen in the same tick: the state still
-    // holds the vessel that just failed, so `?? handoffOverride` would send the
-    // retry straight back to it. A null vesselOverride cannot express this —
-    // `??` would fall through — so the intent gets its own flag.
+    // Run on the being's SAVED vessel, ignoring handoffOverride. Two callers:
+    // (1) the failure restore, where the restore and the re-POST happen in the
+    // same tick so the state still holds the vessel that just failed and
+    // `?? handoffOverride` would send the retry straight back to it; (2) a fresh
+    // user turn (handleSendMessage), which must start on the saved default even
+    // when a previous handoff chain left handoffOverride set — same stale-closure
+    // reason: the setHandoffOverride(null) there is not visible this tick. A null
+    // vesselOverride cannot express this — `??` would fall through — so the
+    // intent gets its own flag.
     forceSavedVessel?: boolean;
     // How many handoffs produced this request. Capped so two vessels that each
     // prefer the other cannot ping-pong forever at real cost per hop.
