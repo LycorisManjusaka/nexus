@@ -135,15 +135,15 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.keys.claudeApi.help':
     'From `console.anthropic.com` → API Keys. Charged per token sent/received. Billing mode per conversation is chosen in System Instructions → Model tab.',
   'settings.keys.claudeOauth.label': 'Monthly-paid OAuth Token (Pro / Max subscription)',
-  'settings.keys.oauth.warn': '⚠️ Experimental — read carefully',
+  'settings.keys.oauth.warn': 'ℹ️ About this sign-in method — please read',
   'settings.keys.oauth.setup':
     '**Setup:** Run `npm install -g @anthropic-ai/claude-code`, then `claude setup-token`. Paste the resulting `sk-ant-oat01-…` token here. The token is valid for 1 year.',
   'settings.keys.oauth.billing':
     '**Billing:** Uses your Pro/Max subscription credit, NOT pay-per-token API. Pro = $20/mo credit, Max 5x = $100, Max 20x = $200.',
   'settings.keys.oauth.how':
-    '**How it works:** NEXUS uses the Claude Agent SDK, which spawns the official Claude Code binary under the hood. Conversations use Anthropic-side session resume to preserve role semantics.',
+    '**How it works:** NEXUS uses the Claude Agent SDK, which spawns the official Claude Code binary under the hood. Each turn is a fresh request that replays the whole conversation — nothing is stored or resumed on Anthropic\'s side.',
   'settings.keys.oauth.risk':
-    '**Risk:** Account ban is possible (gray-zone use of OAuth tokens). Probability low for solo use; not zero.',
+    '**Terms:** Signing in to the *unmodified* Claude Code binary with your own subscription is explicitly permitted by Anthropic — this is not a gray zone. NEXUS ships Claude Code exactly as Anthropic publishes it and never handles anyone else\'s credentials. (A reading of the published terms, not legal advice.)',
   'settings.keys.oauth.tools':
     "**Workspace tools (when Tool Use is ON):** Claude Code's `Read` / `Write` / `Edit` / `Glob` / `Grep` are sandboxed to `local_data/beings/<folder>/workspace/`. Shell/network/subagent tools are always disabled.",
   'settings.keys.oauth.other':
@@ -1069,7 +1069,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'sysmodal.summaries.indexHelp':
     'This is exactly what gets injected as Layer 4 when you send. To change it, edit the individual conversation summaries (Soul Updater) or toggle conversations active/inactive.',
   'sysmodal.summaries.indexPh': '(no summaries yet — write one per conversation from the Soul Updater)',
-  'sysmodal.tools.label': 'Enable file workspace tools (Claude, Gemini & Local)',
+  'sysmodal.tools.label': 'Enable file workspace tools',
   'sysmodal.tools.help1': 'Gives the assistant a private file sandbox at `local_data/beings/{folder}/workspace/` with `Read` / `Write` / `Edit` / `Glob` / `Grep` tools (same names as Claude Code’s tools — works identically across API-key and OAuth modes). The current file list is auto-injected into the system prompt — no list_files tool needed. Files the assistant reads/writes appear as attachments on its messages with',
   'sysmodal.tools.tagRead': 'read',
   'sysmodal.tools.tagModified': 'modified',
@@ -1738,15 +1738,15 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.keys.claudeApi.help':
     '`console.anthropic.com` → API Keys で取得します。送受信したトークン量に応じて課金されます。会話ごとの課金方式は「システム指示 → モデル」タブで選択します。',
   'settings.keys.claudeOauth.label': '月額課金OAuthトークン（Pro / Max サブスクリプション）',
-  'settings.keys.oauth.warn': '⚠️ 実験的機能 — よくお読みください',
+  'settings.keys.oauth.warn': 'ℹ️ このサインイン方式について — お読みください',
   'settings.keys.oauth.setup':
     '**セットアップ：** `npm install -g @anthropic-ai/claude-code` を実行し、続けて `claude setup-token` を実行します。表示された `sk-ant-oat01-…` トークンをここに貼り付けてください。有効期間は1年です。',
   'settings.keys.oauth.billing':
     '**課金：** 従量課金APIではなく、Pro / Max サブスクリプションの枠を消費します。Pro＝月$20相当、Max 5x＝$100、Max 20x＝$200。',
   'settings.keys.oauth.how':
-    '**仕組み：** NEXUS は Claude Agent SDK を利用し、内部で公式の Claude Code バイナリを起動します。会話は Anthropic 側のセッション再開機能を使い、発話者の役割を保ったまま継続します。',
+    '**仕組み：** NEXUS は Claude Agent SDK を利用し、内部で公式の Claude Code バイナリを起動します。各ターンは会話全体を再送する新規リクエストで、Anthropic 側に会話を保存したり再開したりすることはありません。',
   'settings.keys.oauth.risk':
-    '**リスク：** アカウント停止の可能性があります（OAuthトークンのグレーゾーン利用のため）。個人利用であれば確率は低いものの、ゼロではありません。',
+    '**規約：** 未改変の Claude Code バイナリに自分のサブスクリプションでサインインする形は、Anthropic によって明確に許可されています——グレーゾーンではありません。NEXUS は Claude Code を Anthropic が公開したそのままの形で同梱し、他者の資格情報を扱うことは一切ありません。（公開規約の読解であり、法的助言ではありません。）',
   'settings.keys.oauth.tools':
     '**ワークスペースツール（ツール使用がONのとき）：** Claude Code の `Read` / `Write` / `Edit` / `Glob` / `Grep` は `local_data/beings/<フォルダ名>/workspace/` の中に限定されます。シェル・ネットワーク・サブエージェント系のツールは常に無効です。',
   'settings.keys.oauth.other':
@@ -2633,7 +2633,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'sysmodal.summaries.indexHelp':
     '送信時に第4層として挿入されるのは、まさにこの内容です。変更するには、各会話の要約を編集する（魂アップデーター）か、会話の有効／無効を切り替えてください。',
   'sysmodal.summaries.indexPh': '（要約はまだありません — 魂アップデーターから会話ごとに書いてください）',
-  'sysmodal.tools.label': 'ファイルワークスペースのツールを有効にする（Claude・Gemini・ローカル）',
+  'sysmodal.tools.label': 'ファイルワークスペースのツールを有効にする',
   'sysmodal.tools.help1': '`local_data/beings/{folder}/workspace/` に専用のファイル領域を与え、`Read` / `Write` / `Edit` / `Glob` / `Grep` ツールを使えるようにします（Claude Code と同じ名前で、APIキー方式でも OAuth 方式でも同じように動きます）。現在のファイル一覧はシステムプロンプトへ自動で挿入されるため、list_files のようなツールは不要です。読み書きしたファイルは、次のラベル付きで応答の添付として現れます：',
   'sysmodal.tools.tagRead': '読取',
   'sysmodal.tools.tagModified': '変更',
@@ -2707,7 +2707,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'id.ctx.noteFoot':
     'ステータスバーの表示と同じ値を使います: オリジナルのメッセージ ÷（最大文脈 − 固定オーバーヘッド）。`{percent}` は毎ターン置き換えられます。',
 
-  'id.ask.label': '💬 ユーザーに尋ねるツール（選択式の質問のためにターンを中断）',
+  'id.ask.label': '💬 相手に尋ねるツール（選択式の質問のためにターンを中断）',
   'id.ask.help':
     'OFF（既定）: モデルは自力で答えます。ON: モデルに `AskQuestion` ツールが渡され、ターンを一時停止して選択式のカードを表示し、あなたの選択を待ってから続きを進められます。*ツール対応のすべてのプロバイダーで有効です: OpenAI 互換（GLM・Kimi・DeepSeek・Grok・Cohere・MiniMax・ChatGPT・MiMo）、ローカルモデル、Gemini、および Claude の両モード — OAuth（Claude 標準の質問ツールはこちらに置き換わります）と従量課金。*',
   'id.ask.timeoutLabel': '回答の待ち時間（秒）',

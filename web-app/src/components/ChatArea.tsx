@@ -5621,18 +5621,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
                         <Tx k="sysmodal.dangerous.help" />
                       </p>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={hiddenAttachmentsAccessible}
-                          onChange={(e) => setHiddenAttachmentsAccessible(e.target.checked)}
-                          className="accent-amber-500"
-                        />
-                        <span className="text-sm font-semibold text-foreground">{t('sysmodal.hiddenAttach.label')}</span>
-                      </label>
-                      <p className="text-xs text-muted-foreground ml-6 leading-relaxed">
-                        <Tx k="sysmodal.hiddenAttach.help" />
-                      </p>
                     </div>
 
                     {/* ── Hidden instruction overrides (per-Entity) ─────── */}
@@ -5661,6 +5649,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     </details>
                   </>
                 )}
+              </div>
+
+              {/* ── Hidden-attachment access (read_attachment) — top-level ────
+                  Independent of the file-workspace tools above: reading hidden
+                  attachments is its own capability (and is sent regardless of
+                  Tool Use), so it sits at the same level as the ask-the-user
+                  and web-search toggles, not nested inside the file panel. */}
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={hiddenAttachmentsAccessible}
+                    onChange={(e) => setHiddenAttachmentsAccessible(e.target.checked)}
+                    className="accent-sky-500"
+                  />
+                  <span className="text-sm font-semibold text-foreground">{t('sysmodal.hiddenAttach.label')}</span>
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                  <Tx k="sysmodal.hiddenAttach.help" />
+                </p>
               </div>
 
               {/* ── Web Search & Access (universal DuckDuckGo tools) ──────────

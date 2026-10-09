@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { CHAR_MAP_PATH, DEFAULT_COMMENT, IdentityRule, CharacterMap, readCharacterMap } from '@/lib/characterMap';
+import { CHAR_MAP_PATH, DEFAULT_COMMENT, DEFAULT_OTHERS_LABEL, IdentityRule, CharacterMap, readCharacterMap } from '@/lib/characterMap';
 
 /**
  * The identity map editor's backing store (Preferences → User Identity).
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const rules: any[] = Array.isArray(body.rules) ? body.rules : [];
     const fallback: string = typeof body.fallback === 'string' ? body.fallback : 'Anonymous';
-    const humanLabel: string = typeof body.humanLabel === 'string' ? body.humanLabel : 'Human';
+    const humanLabel: string = typeof body.humanLabel === 'string' ? body.humanLabel : DEFAULT_OTHERS_LABEL;
 
     // ── Validation ──────────────────────────────────────────────────────────
     const names = rules.map(r => (r?.name || '').trim());
@@ -89,7 +89,7 @@ export async function POST(req: Request) {
       _comment: existing._comment || DEFAULT_COMMENT,
       rules: cleanRules,
       fallback,
-      humanLabel: humanLabel.trim() || 'Human',
+      humanLabel: humanLabel.trim() || DEFAULT_OTHERS_LABEL,
     };
 
     // Atomic write: temp file in the same directory, then rename. Config

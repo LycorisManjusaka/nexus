@@ -52,11 +52,18 @@ export const DEFAULT_COMMENT =
   'identity in, stored by name (never by slot index — engines renumber their speaker lists ' +
   'when voices are installed). Edit via Preferences → User Identity, or by hand.';
 
+/** Default tag for speech coming through the OTHER input channel (a second
+ *  mic / virtual audio cable carrying someone else's voice). Kept abstract on
+ *  purpose: this house has no "user", and the other speaker need not be human.
+ *  Single source so the empty map, the editor route, and userIdentity cannot
+ *  drift apart. */
+export const DEFAULT_OTHERS_LABEL = 'Guest';
+
 export const EMPTY_MAP: CharacterMap = {
   _comment: DEFAULT_COMMENT,
   rules: [{ name: 'Anonymous' }],
   fallback: 'Anonymous',
-  humanLabel: 'Human',
+  humanLabel: DEFAULT_OTHERS_LABEL,
 };
 
 /** Legacy numeric engine ids, as written by the pre-name schema. */
@@ -140,7 +147,7 @@ export function readCharacterMap(): CharacterMap {
     _comment: parsed._comment || DEFAULT_COMMENT,
     rules,
     fallback: parsed.fallback || 'Anonymous',
-    humanLabel: parsed.humanLabel || 'Human',
+    humanLabel: parsed.humanLabel || DEFAULT_OTHERS_LABEL,
   };
 }
 

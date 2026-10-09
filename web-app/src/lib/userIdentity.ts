@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { readCharacterMap, findIdentity, CharacterMap, IdentityRule } from './characterMap';
+import { readCharacterMap, findIdentity, CharacterMap, IdentityRule, DEFAULT_OTHERS_LABEL } from './characterMap';
 
 /**
  * local_data/user_identity.json — the single layer of truth for "who is
@@ -76,7 +76,7 @@ export interface ResolvedIdentity {
 
 /** Resolves the current selection against character_map.json. */
 export function resolveUserIdentity(map: CharacterMap = readCharacterMap()): ResolvedIdentity {
-  const humanLabel = map.humanLabel || 'Human';
+  const humanLabel = map.humanLabel || DEFAULT_OTHERS_LABEL;
   const fallback = map.fallback || 'Anonymous';
   const sel = readUserIdentitySelection();
 

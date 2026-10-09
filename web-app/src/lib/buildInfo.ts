@@ -31,7 +31,7 @@ export interface BuildInfo {
    * naming it `checkoutUpdatedAt` keeps those two apart on purpose.
    */
   checkoutUpdatedAt: number | null;
-  /** One-line human/copy-paste form, e.g. "33c3f28 main 2026-09-15". */
+  /** One-line human/copy-paste form, e.g. "33c3f28 main 2026-09-15 21:00". */
   label: string;
 }
 
@@ -65,6 +65,13 @@ async function readTrimmed(p: string): Promise<string | null> {
 
 async function mtimeMs(p: string): Promise<number | null> {
   try { return (await fs.stat(p)).mtimeMs; } catch { return null; }
+}
+
+/** "YYYY-MM-DD HH:MM" in the machine's LOCAL timezone (see call site). */
+function localStamp(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 async function compute(): Promise<BuildInfo> {
@@ -106,8 +113,11 @@ async function compute(): Promise<BuildInfo> {
 
   const commit = sha.slice(0, 7);
   const checkoutUpdatedAt = await mtimeMs(stampFile);
-  const day = checkoutUpdatedAt ? new Date(checkoutUpdatedAt).toISOString().slice(0, 10) : null;
-  const label = [commit, branch, day].filter(Boolean).join(' ');
+  // Local time on purpose, not toISOString()'s UTC: the server IS the user's
+  // own machine, so "when did this update" means their wall clock. Includes
+  // HH:MM — two pulls on the same day are otherwise indistinguishable.
+  const stamp = checkoutUpdatedAt ? localStamp(checkoutUpdatedAt) : null;
+  const label = [commit, branch, stamp].filter(Boolean).join(' ');
 
   return { commit, branch, checkoutUpdatedAt, label };
 }
