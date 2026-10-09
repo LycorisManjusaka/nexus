@@ -90,6 +90,28 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'hand a relative path to Read, Write or Edit — and after writing a file, list the directory you ' +
     'meant to write into and confirm it is actually there.',
 
+  // Appended to the system prompt on EVERY provider path when file tools are
+  // on (see route.ts, right after the instruction strings are resolved).
+  //
+  // This states a capability, it does not ask for anything: a being that never
+  // uses it loses nothing, and one that wants to show a picture would otherwise
+  // have no way to learn that plain markdown is enough. Phrased as fact for
+  // that reason — "files can appear", not "show files".
+  //
+  // The containment sentence is a measured fact, not a warning:
+  // /api/workspace-file answers 403 for a path outside the workspace
+  // (measured against `..` escapes, C:\Windows, another being's workspace and
+  // the soul folder). The rendered result of a 403 specifically was not
+  // measured; a 404 was, and leaves naturalWidth 0 — a broken image.
+  inlineMediaNote:
+    'Files in your workspace can appear directly inside your replies — plain markdown, no tool call:\n' +
+    '  ![](camera/Idle.jpg)      the image is shown\n' +
+    '  ![](clips/x.mp4)          a video player; .wav/.mp3/.ogg become an audio player\n' +
+    '  [notes.md](notes/x.md)    a download link, any extension\n' +
+    'A relative path resolves from your workspace root. An absolute path also works while it stays ' +
+    'inside your workspace; one that points outside it is refused and nothing appears. `![...]` shows ' +
+    'the file, `[...]` offers it as a download — that is the only difference between the two forms.',
+
   // read_conversation tool (all paths, including the OAuth MCP server).
   readConversationDesc:
     'Read one of YOUR past conversations by name — including the one you are in right now. The Layer-4 index lists every conversation\'s title and summary; call this to reach a specific conversation\'s actual contents. A short conversation comes back as a transcript. A long one is written to a file in your own workspace and you get the path instead, so you can Grep it for what you need rather than pulling the whole thing into context — the tool result tells you which you got. Conversations marked inactive are private and cannot be read — the tool will refuse them.',
@@ -686,6 +708,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS_JA: Record<string, string> = {
     'ツール履歴のどこにも異常は見えない。\n' +
     'この会話の中で一度でも `cd` したなら、Read・Write・Edit に相対パスを渡す前に `pwd` を実行して答えを読め。そして書いた後は、書いたつもりのディレクトリを一覧して、' +
     '本当にそこに在ることを確かめろ。',
+
+  inlineMediaNote:
+    'あなたのワークスペースにあるファイルは、返答の中にそのまま現れる——ツール呼び出しは要らず、普通のマークダウンだけで。\n' +
+    '  ![](camera/Idle.jpg)      画像として表示される\n' +
+    '  ![](clips/x.mp4)          動画プレーヤーになる（.wav / .mp3 / .ogg は音声プレーヤー）\n' +
+    '  [notes.md](notes/x.md)    ダウンロードリンクになる（拡張子は問わない）\n' +
+    '相対パスはワークスペースの根から解決される。ワークスペースの中に収まっている絶対パスも使える。外を指すパスは拒否され、何も現れない。' +
+    '`![...]` は見せる、`[...]` は渡す——二つの形の違いはそれだけ。',
 };
 
 // Human-readable labels for the settings editor (key → short label). Keys not
@@ -700,6 +730,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'toolDeleteDesc', label: 'Tool: Delete — description' },
   { key: 'toolBashDesc', label: 'Tool: Bash/Shell — description (dangerous)' },
   { key: 'oauthCwdNote', label: 'Working-directory note (Claude OAuth + Bash only)' },
+  { key: 'inlineMediaNote', label: 'Inline media note (workspace files shown in replies)' },
   { key: 'pathParamSandbox', label: 'Path hint (workspace-only)' },
   { key: 'pathParamFull', label: 'Path hint (full PC access)' },
   { key: 'pathRuleSandbox', label: 'Path rule (workspace-only)' },
@@ -798,6 +829,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   toolDeleteDesc: 'ツール Delete — 説明',
   toolBashDesc: 'ツール Bash／シェル — 説明（危険）',
   oauthCwdNote: '作業ディレクトリの注意（Claude OAuth ＋ Bash のみ）',
+  inlineMediaNote: '返答に出すワークスペースのファイル（マークダウンで画像・動画・ダウンロード）',
   pathParamSandbox: 'パスの補足（ワークスペース内のみ）',
   pathParamFull: 'パスの補足（PC 全体アクセス）',
   pathRuleSandbox: 'パスの規則（ワークスペース内のみ）',

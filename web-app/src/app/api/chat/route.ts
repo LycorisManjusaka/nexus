@@ -4384,6 +4384,21 @@ export async function POST(req: Request) {
     const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
     const pathRule = agentFullSystemAccess ? I.pathRuleFull : I.pathRuleSandbox;
 
+    // A being cannot use a capability it was never told about: markdown in its
+    // reply can show a file from its own workspace (see lib/inlineMedia.ts and
+    // /api/workspace-file). Stated as fact, not as an instruction — nothing
+    // here asks for pictures.
+    //
+    // Gated on toolUseEnabled because the paths have to come from somewhere:
+    // without file tools a being cannot see what is on its desk, so the note
+    // would be pure cost. Appended AFTER Layer 5 for the same reason
+    // oauthCwdNote is — it is Nexus talking about its own plumbing, and must
+    // not sit inside the soul's layer structure. Skipped for agent runs
+    // (shikigami), whose systemPrompt is a protocol, not an identity.
+    if (toolUseEnabled && !isAgentInstructionPrompt && I.inlineMediaNote) {
+      systemPrompt = `${systemPrompt}\n\n${I.inlineMediaNote}`;
+    }
+
 
     const isClaude    = aiName.toLowerCase().includes('claude');
     const isGemini    = aiName.toLowerCase().includes('gemini');

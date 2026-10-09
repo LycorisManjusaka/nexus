@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal, Download } from 'lucide-react';
 import { format } from 'date-fns';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { stripLeadingTimestamps, stripAllTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
@@ -17,6 +17,11 @@ import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 import { attachmentTokens, attachmentKind, undeliverableReason } from '@/lib/attachmentVisibility';
 import { copyText } from '@/lib/clipboard';
+import { isLocalFileRef, mediaKindOf, workspaceFileUrl, baseNameOf, makeMarkdownUrlTransform } from '@/lib/inlineMedia';
+
+// Module-level so the reference is stable across renders for free (see the
+// memoisation note on mdComponents — react-markdown re-parses every tick).
+const MD_URL_TRANSFORM = makeMarkdownUrlTransform(defaultUrlTransform);
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
@@ -60,6 +65,88 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
   const currentAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const currentAudioRef2 = React.useRef<HTMLAudioElement | null>(null);
+
+  // Markdown overrides that turn a local path in the message body into real
+  // media / a real download, so a being can show a picture by writing plain
+  // `![](camera/Idle.jpg)` with no tool call and no Nexus-specific syntax.
+  //
+  // Web URLs and in-app links are passed through untouched (isLocalFileRef
+  // decides, see lib/inlineMedia.ts) — measured: `/api/attachments/x.png`,
+  // `/c/Cairn/x`, `#frag` and `//cdn.example.com/a.png` all survive the url
+  // guard unchanged, so existing messages render exactly as before.
+  // NOT passed through: a `data:` URI, which react-markdown's default
+  // sanitiser blanks. That is unchanged from before this feature — body-text
+  // data: images never rendered — but it is a blank, not a pass-through, and
+  // the img branch below is what keeps it from becoming a broken image.
+  //
+  // MUST be memoised: react-markdown re-parses on every streaming tick, and a
+  // fresh components object each render makes React replace the rendered
+  // nodes — which would fight the TTS highlighter's direct DOM ranges (see
+  // the note above the content <div>).
+  const mdComponents = useMemo(() => {
+    // Without a folder we cannot build a workspace URL, so leave markdown
+    // completely alone rather than emitting ?folder=undefined and rendering a
+    // broken image where the plain text used to be.
+    if (!folderName) return undefined;
+    return {
+      img: (props: any) => {
+        // Already decoded by MD_URL_TRANSFORM — decoding again here would
+        // corrupt a filename containing a literal %20.
+        const src = String(props.src || '');
+        // The url sanitiser blanks what it refuses (data:, javascript:, ...).
+        // Rendering <img src=""> makes React warn and the browser re-request
+        // the page as an image; showing the alt text keeps the author's words
+        // instead of a broken-image icon. Pre-existing behaviour, surfaced by
+        // the console probe for this change.
+        if (!src) return <span className="italic opacity-60">{props.alt || ''}</span>;
+        if (!isLocalFileRef(src)) return <img {...props} />;
+        const kind = mediaKindOf(src);
+        const url = workspaceFileUrl(folderName, src);
+        if (kind === 'video') {
+          // preload="metadata" so a long clip doesn't pull megabytes over the
+          // LAN before anyone presses play.
+          return <video src={url} controls preload="metadata" className="max-w-full rounded-lg my-2" />;
+        }
+        if (kind === 'audio') {
+          return <audio src={url} controls preload="metadata" className="w-full my-2" />;
+        }
+        if (kind === 'image') {
+          return (
+            <img
+              src={url}
+              alt={props.alt || baseNameOf(src)}
+              className="max-w-full h-auto rounded-lg my-2 cursor-zoom-in"
+              onClick={() => setZoomImage(url)}
+            />
+          );
+        }
+        // Image syntax pointing at something that is not media (e.g. a .zip the
+        // model mislabelled). Offering the download beats a broken-image icon.
+        return (
+          <a href={workspaceFileUrl(folderName, src, true)} download={baseNameOf(src)}
+             className="inline-flex items-center gap-1.5 underline">
+            <Download size={14} /> {props.alt || baseNameOf(src)}
+          </a>
+        );
+      },
+      a: (props: any) => {
+        const href = String(props.href || '');   // decoded by MD_URL_TRANSFORM
+        if (!isLocalFileRef(href)) {
+          return <a {...props} target="_blank" rel="noopener noreferrer" />;
+        }
+        // A link (as opposed to ![]()) means "give me the file" for every
+        // extension — the route sets Content-Disposition: attachment, and the
+        // download attribute covers browsers that would otherwise navigate.
+        return (
+          <a href={workspaceFileUrl(folderName, href, true)} download={baseNameOf(href)}
+             className="inline-flex items-center gap-1.5 underline">
+            <Download size={14} />
+            {props.children}
+          </a>
+        );
+      },
+    };
+  }, [folderName]);
   const abortControllerRef = React.useRef<AbortController | null>(null);
   const hasAutoPlayed = React.useRef(false);
   // Always-current mirrors of msg.content / msg.streaming. The streaming-TTS
@@ -1597,13 +1684,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                   // pick up the bubble's foreground colour instead of the
                   // plugin's hard-coded greys/whites.
                   <div className={`prose prose-sm max-w-none prose-invert [&_*]:text-inherit`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={mdComponents} urlTransform={MD_URL_TRANSFORM}>
                       {msg.content}
                     </ReactMarkdown>
                   </div>
                 ) : (
                   <div className={`prose prose-sm max-w-none dark:prose-invert`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={mdComponents} urlTransform={MD_URL_TRANSFORM}>
                       {msg.content}
                     </ReactMarkdown>
                   </div>

@@ -208,7 +208,16 @@ function isWithinTrustedRoots(real: string, realRoot: string, trustedRoot: strin
 // (e.g. <workspace>/escape → C:\Windows) is caught: realpath surfaces the
 // true location and the prefix check fails. For files that don't exist yet
 // (Write operations), we realpath the deepest existing ancestor instead.
-async function resolveWorkspacePathSafe(folderName: string, relPath: string): Promise<string | null> {
+// Exported for /api/workspace-file, which serves these bytes over HTTP to the
+// browser. That route deliberately calls THIS and never resolvePathForAccess():
+// an entity's fullAccess toggle widens what the entity's own tools can reach
+// during its turn, but the HTTP endpoint is reachable by anything that can
+// talk to the port (Nexus binds 0.0.0.0 and admin login is optional), so
+// honouring fullAccess there would turn "this being may read the whole PC"
+// into "the whole PC is downloadable over the LAN". Keeping the widening
+// parameter out of reach is structural, not a policy flag someone can pass
+// the wrong value to.
+export async function resolveWorkspacePathSafe(folderName: string, relPath: string): Promise<string | null> {
   const target = resolveWorkspacePath(folderName, relPath);
   if (!target) return null;
   const root = path.resolve(beingWorkspaceDir(folderName));
