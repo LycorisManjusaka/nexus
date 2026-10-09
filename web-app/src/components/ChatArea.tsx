@@ -28,6 +28,7 @@ import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLaye
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
+import { copyText } from '@/lib/clipboard';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { effectiveFullAccess, fullAccessForcedByShell } from '@/lib/agentCapabilities';
@@ -4061,6 +4062,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // One conversation speaks at a time, so a single slot is enough — a newer play
   // simply replaces the old reading.
   const [ttsStatus, setTtsStatus] = useState<any>(null);
+  // Single source for "is the TTS bar on screen", read by the bar itself and
+  // by the two layout decisions below it. Two copies of this condition would
+  // drift into a row that exists with nothing in it, or a bar with no row.
+  const ttsBarVisible = !!(ttsStatus && (ttsStatus.active || ttsStatus.failed > 0));
+  // On a phone, stop floating and take a real row — but only while the bar is
+  // actually there (see the long note at the composer).
+  const ttsOwnRow = isMobile && ttsBarVisible;
   const handleTtsStatus = React.useCallback((_msgId: string, status: any) => {
     // Drop the trailing 'inactive, nothing wrong' report so a clean run leaves
     // no residue; a run that FAILED is kept on screen until dismissed.
@@ -4246,11 +4254,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           <button
             onClick={() => {
               const url = absoluteDeepLink(folderName, convoId);
-              navigator.clipboard?.writeText(url).then(
-                () => setCopiedLink('convo'),
-                () => window.prompt(t('chat.copyLink.prompt'), url),
-              );
-              setTimeout(() => setCopiedLink(null), 1600);
+              // copyText, not navigator.clipboard: on a phone (plain HTTP) the
+              // whole clipboard object is absent, so `clipboard?.writeText(x)`
+              // evaluates to undefined and `.then` on it THREW — the prompt
+              // fallback below was never reached either.
+              copyText(url).then((ok) => {
+                if (ok) {
+                  setCopiedLink('convo');
+                  setTimeout(() => setCopiedLink(null), 1600);
+                } else {
+                  window.prompt(t('chat.copyLink.prompt'), url);
+                }
+              });
             }}
             title={t('chat.copyLink.title')}
             className="text-muted-foreground opacity-70 hover:opacity-100 transition"
@@ -4934,11 +4949,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 linkCopied={copiedLink === msg.id}
                 onCopyLink={() => {
                   const url = absoluteDeepLink(folderName, convoId, msg.id);
-                  navigator.clipboard?.writeText(url).then(
-                    () => setCopiedLink(msg.id),
-                    () => window.prompt(t('chat.copyLink.prompt'), url),
-                  );
-                  setTimeout(() => setCopiedLink(null), 1600);
+                  copyText(url).then((ok) => {
+                    if (ok) {
+                      setCopiedLink(msg.id);
+                      setTimeout(() => setCopiedLink(null), 1600);
+                    } else {
+                      window.prompt(t('chat.copyLink.prompt'), url);
+                    }
+                  });
                 }}
               />
               {/* Persisted subagent runs (collapsed — task + distilled result). */}
@@ -5029,6 +5047,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           when the flag is active — minimizing visual noise without losing
           discoverability. */}
       <div className="shrink-0 relative">
+        {/* On a phone the two floating controls used to hang over the top edge
+            of the composer panel, and the TTS bar landed exactly on the attach
+            button — it was not merely ugly, the paperclip could not be tapped
+            at all while speech was playing. There is no hover on touch and no
+            horizontal room to dodge into, so on a phone they stop floating and
+            take a row of their own. That row only exists WHILE the TTS bar is
+            showing: the first-original toggle alone must not cost a permanent
+            row of conversation. When speech is silent the wrapper below has no
+            class and both children are absolute, so it is zero-height and the
+            rendered layout is unchanged — one extra DOM node, no pixels.
+            Desktop is untouched for the same reason: a static wrapper is not a
+            containing block, so the absolute children still resolve against
+            this `relative` parent. Measured 2026-10-09: with the bar showing,
+            the composer grows 34.5px on a phone and 0px on desktop. */}
+        <div className={ttsOwnRow ? 'flex items-end justify-between gap-2 px-3 pt-1 min-w-0' : ''}>
         {/* ── Live TTS indicator ──────────────────────────────────────────
             Mirrors the "Next = First Original" control on the opposite side.
             Everything shown here already existed inside the synthesis pipeline
@@ -5036,8 +5069,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             which is no use during a VRChat session. Hidden entirely until
             playback starts; kept visible after a failure so the reason does not
             vanish the moment the queue drains. */}
-        {ttsStatus && (ttsStatus.active || ttsStatus.failed > 0) && (
-          <div className="absolute left-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto max-w-[52%]">
+        {ttsBarVisible && (
+          <div className={ttsOwnRow
+            ? 'flex items-center gap-2 min-w-0 flex-1'
+            : 'absolute left-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto max-w-[52%]'}>
             <div
               className={`flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] backdrop-blur-sm ${
                 ttsStatus.failed > 0
@@ -5101,7 +5136,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         )}
 
         <div
-          className={`absolute right-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto transition-opacity ${
+          className={`${ttsOwnRow
+            ? 'flex items-center gap-2 shrink-0'
+            : 'absolute right-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto'} transition-opacity ${
             firstOriginalIsNext && !firstOriginalMessageId
               ? 'opacity-100'
               : 'opacity-40 hover:opacity-100'
@@ -5154,6 +5191,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               : <BookmarkPlus size={12} />}
             <span>{t('chat.firstOriginal.label')}</span>
           </button>
+        </div>
         </div>
         <div className="p-4 bg-gradient-to-t from-background via-background to-transparent">
           <div className="max-w-4xl mx-auto">

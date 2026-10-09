@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { compareConvoTitles } from '@/lib/convoSort';
 import { buildDeepLink, absoluteDeepLink } from '@/lib/deepLink';
 import { useT } from '@/lib/i18n';
+import { copyText } from '@/lib/clipboard';
 
 // Full-text search across all conversations of the current entity. Opens from
 // the 🔍 header button, matches message bodies via /api/search, groups hits by
@@ -92,7 +93,7 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
   // Clear stale results when the entity changes underneath us.
   useEffect(() => { setData(null); setError(null); }, [folderName]);
 
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<false | true | 'failed'>(false);
 
   const sortedResults = useMemo(() => {
     if (!data) return [];
@@ -163,21 +164,10 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
   async function copyResults() {
     const md = buildMarkdown();
     if (!md) return;
-    try {
-      await navigator.clipboard.writeText(md);
-    } catch {
-      // Clipboard API needs a secure context and permission. Fall back to the
-      // old selection trick rather than a prompt() box, which mangles and
-      // truncates a report this long.
-      const ta = document.createElement('textarea');
-      ta.value = md;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); } finally { document.body.removeChild(ta); }
-    }
-    setCopied(true);
+    // This used to carry its own copy of the selection trick AND claim
+    // "copied" unconditionally, including when execCommand had failed. Both
+    // now live in lib/clipboard.ts, which reports whether it actually landed.
+    setCopied((await copyText(md)) ? true : 'failed');
     setTimeout(() => setCopied(false), 1600);
   }
 
@@ -245,8 +235,8 @@ export default function SearchModal({ open, onClose, folderName }: { open: boole
               title={t('search.copyAll')}
               className="flex items-center gap-1 rounded px-2 py-1 text-xs opacity-70 hover:opacity-100 hover:bg-white/5 disabled:opacity-25 disabled:cursor-not-allowed"
             >
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? t('common.copied') : t('common.copy')}
+              {copied === true ? <Check size={14} /> : copied === 'failed' ? <X size={14} /> : <Copy size={14} />}
+              {copied === true ? t('common.copied') : copied === 'failed' ? t('common.copyFailed') : t('common.copy')}
             </button>
             <button onClick={onClose} className="p-1 opacity-70 hover:opacity-100"><X size={18} /></button>
           </div>

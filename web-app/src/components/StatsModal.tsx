@@ -5,6 +5,7 @@ import { X, BarChart3, RefreshCw, Copy, Check, Loader2 } from 'lucide-react';
 import { fmtUSD } from '@/lib/modelPricing';
 import { compareConvoTitles } from '@/lib/convoSort';
 import { useT, renderRich } from '@/lib/i18n';
+import { copyText } from '@/lib/clipboard';
 
 // Rich billing-statistics window. Pulls the full priced dataset from /api/stats
 // once, then aggregates it locally into six report layouts. Every table is
@@ -301,12 +302,11 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
   async function copy(kind: 'tsv' | 'md') {
     if (!result) return;
     const text = kind === 'tsv' ? gridToTSV(result.grid) : gridToMarkdown(result.grid);
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       setCopied(kind);
       setTimeout(() => setCopied(''), 1500);
-    } catch {
-      // Fallback: no clipboard permission — surface the text so it can be copied manually.
+    } else {
+      // Last resort — surface the text so it can be copied by hand.
       window.prompt(t('stats.copyPrompt'), text);
     }
   }

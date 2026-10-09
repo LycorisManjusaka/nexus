@@ -9,6 +9,7 @@ import { setUnloadGuard } from '@/lib/unloadGuard';
 import { useDevice } from './DeviceProvider';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
+import { copyText } from '@/lib/clipboard';
 
 // ── Title <-> index helpers (client-side mirror of the lib) ─────────────────
 const fwToHw = (s: string) =>
@@ -454,7 +455,7 @@ export default function SystemPromptUpdater({
   // in the same ordered list because the position is the information.
   const [runToolCalls, setRunToolCalls] = useState<{ name: string; input: any; at: number; kind?: string }[]>([]);
   const [toolLogOpen, setToolLogOpen] = useState(false);
-  const [toolLogCopyState, setToolLogCopyState] = useState<'idle' | 'copied'>('idle');
+  const [toolLogCopyState, setToolLogCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   // Refs, not state: these are written on every SSE frame. Keeping them out of
   // React's render path means the 1s ticker below is the ONLY thing that
   // re-renders the strip, however chatty the stream gets.
@@ -3189,16 +3190,14 @@ export default function SystemPromptUpdater({
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(JSON.stringify(runToolCalls, null, 2));
-                      setToolLogCopyState('copied');
-                      setTimeout(() => setToolLogCopyState('idle'), 1500);
-                    } catch {}
+                    const ok = await copyText(JSON.stringify(runToolCalls, null, 2));
+                    setToolLogCopyState(ok ? 'copied' : 'failed');
+                    setTimeout(() => setToolLogCopyState('idle'), 1500);
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
                   title={t('spu.tool.copyJson')}
                 >
-                  <Copy size={12} /> {toolLogCopyState === 'copied' ? t('common.copied') : t('common.copy')}
+                  <Copy size={12} /> {toolLogCopyState === 'copied' ? t('common.copied') : toolLogCopyState === 'failed' ? t('common.copyFailed') : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setToolLogOpen(false)}

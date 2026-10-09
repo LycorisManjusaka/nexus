@@ -393,6 +393,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'common.loading': 'Loading…',
   'common.copy': 'Copy',
   'common.copied': 'Copied!',
+  'common.copyFailed': 'Copy failed',
 
   // ── Message bubble ───────────────────────────────────────────────────────
   // Everything the user reads on a single message: the meta bar, attachment
@@ -1987,6 +1988,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'common.loading': '読み込み中…',
   'common.copy': 'コピー',
   'common.copied': 'コピーしました',
+  'common.copyFailed': 'コピーできませんでした',
 
   // ── Message bubble ───────────────────────────────────────────────────────
   'bubble.att.openModal': 'ファイル全体を別ウィンドウで開く',

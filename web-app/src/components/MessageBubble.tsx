@@ -16,6 +16,7 @@ import ClickTip from './ClickTip';
 import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 import { attachmentTokens, attachmentKind, undeliverableReason } from '@/lib/attachmentVisibility';
+import { copyText } from '@/lib/clipboard';
 
 export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
@@ -48,7 +49,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     fromCache?: boolean;
     error?: string;
   } | null>(null);
-  const [textCopyState, setTextCopyState] = useState<'idle' | 'copied'>('idle');
+  const [textCopyState, setTextCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  // Copy-the-message-body feedback. On a phone there is no other way to tell a
+  // copy apart from a mis-tap, and a copy that silently fails looks identical
+  // to one that worked — so this reports what actually happened, not that the
+  // button was pressed.
+  const [copiedBody, setCopiedBody] = useState<'idle' | 'ok' | 'fail'>('idle');
   // Tool report popup — the evidence panel for "did it really call the tool?".
   const [toolReportOpen, setToolReportOpen] = useState(false);
   const [zoomPos, setZoomPos] = useState({ x: 50, y: 50 });
@@ -643,8 +649,13 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     setIsEditing(false);
   };
 
-  const handleCopyMarkdown = () => {
-    navigator.clipboard.writeText(msg.content || '');
+  const handleCopyMarkdown = async () => {
+    // copyText, not navigator.clipboard: over plain HTTP (how a phone reaches
+    // this house) the clipboard object does not exist and the bare call throws
+    // before anything is copied. See lib/clipboard.ts.
+    const ok = await copyText(msg.content || '');
+    setCopiedBody(ok ? 'ok' : 'fail');
+    setTimeout(() => setCopiedBody('idle'), 1600);
   };
 
   const stopTTS = () => {
@@ -1661,8 +1672,18 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 </button>
               </>
             )}
-            <button onClick={handleCopyMarkdown} className={`${btnBase} text-muted-foreground hover:text-foreground`} title={t('bubble.copyMd')}>
-              <Copy size={14} />
+            <button
+              onClick={handleCopyMarkdown}
+              className={`${btnBase} ${
+                copiedBody === 'ok' ? 'text-emerald-500'
+                  : copiedBody === 'fail' ? 'text-red-500'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={copiedBody === 'fail' ? t('common.copyFailed') : t('bubble.copyMd')}
+            >
+              {copiedBody === 'ok' ? <Check size={14} />
+                : copiedBody === 'fail' ? <X size={14} />
+                : <Copy size={14} />}
             </button>
             <button onClick={() => setIsEditing(true)} className={`${btnBase} text-muted-foreground hover:text-foreground`} title={t('bubble.edit')}>
               <Pencil size={14} />
@@ -1738,16 +1759,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(JSON.stringify(msg.toolCalls || [], null, 2));
-                      setTextCopyState('copied');
-                      setTimeout(() => setTextCopyState('idle'), 1500);
-                    } catch {}
+                    const ok = await copyText(JSON.stringify(msg.toolCalls || [], null, 2));
+                    setTextCopyState(ok ? 'copied' : 'failed');
+                    setTimeout(() => setTextCopyState('idle'), 1500);
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
                   title={t('bubble.tool.copyJson')}
                 >
-                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied') : t('common.copy')}
+                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied')
+                    : textCopyState === 'failed' ? t('common.copyFailed')
+                    : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setToolReportOpen(false)}
@@ -1829,16 +1850,19 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(viewTextAttachment.textData);
-                      setTextCopyState('copied');
-                      setTimeout(() => setTextCopyState('idle'), 1500);
-                    } catch {}
+                    // The old `catch {}` here swallowed the TypeError a phone
+                    // throws (no navigator.clipboard off a secure context), so
+                    // the button did nothing at all and said nothing either.
+                    const ok = await copyText(viewTextAttachment.textData);
+                    setTextCopyState(ok ? 'copied' : 'failed');
+                    setTimeout(() => setTextCopyState('idle'), 1500);
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
                   title={t('bubble.copyFile')}
                 >
-                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied') : t('common.copy')}
+                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied')
+                    : textCopyState === 'failed' ? t('common.copyFailed')
+                    : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setViewTextAttachment(null)}
@@ -1893,16 +1917,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(viewDescription.description);
-                      setTextCopyState('copied');
-                      setTimeout(() => setTextCopyState('idle'), 1500);
-                    } catch {}
+                    const ok = await copyText(viewDescription.description);
+                    setTextCopyState(ok ? 'copied' : 'failed');
+                    setTimeout(() => setTextCopyState('idle'), 1500);
                   }}
                   className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
                   title={t('bubble.copyDesc')}
                 >
-                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied') : t('common.copy')}
+                  <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied')
+                    : textCopyState === 'failed' ? t('common.copyFailed')
+                    : t('common.copy')}
                 </button>
                 <button
                   onClick={() => setViewDescription(null)}
