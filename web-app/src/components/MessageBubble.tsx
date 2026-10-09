@@ -22,8 +22,46 @@ import { isLocalFileRef, mediaKindOf, workspaceFileUrl, baseNameOf, makeMarkdown
 // Module-level so the reference is stable across renders for free (see the
 // memoisation note on mdComponents — react-markdown re-parses every tick).
 const MD_URL_TRANSFORM = makeMarkdownUrlTransform(defaultUrlTransform);
+const MD_PLUGINS = [remarkGfm, remarkBreaks];
 
-export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
+// The rendered markdown body, as a memoised leaf.
+//
+// WHY THIS EXISTS (measured, 2026-10-09): MessageBubble is not memoised, so
+// EVERY ChatArea state change re-renders every bubble in the conversation —
+// and the TTS indicator alone pushes 5-7 status updates per spoken phrase.
+// With 400 messages one such state change cost ~700 ms of blocked main thread
+// on this desktop (21 bubbles: ~54 ms), because each bubble re-parsed its
+// markdown and React re-reconciled ~66 output nodes per bubble.
+//
+// react-markdown is a component: if it re-renders it re-parses. Wrapping it in
+// React.memo with only (content, components, isUser) — all stable while a
+// message is unchanged — lets React bail out of the whole subtree instead.
+// The plugin array must be module-level for the same reason.
+//
+// This also HELPS the TTS highlighter rather than fighting it: the highlight
+// holds a Range over real text nodes, and skipping the re-render means those
+// nodes are never replaced, so the range stays attached (see the note above
+// the content <div> and reapplyTtsHighlight).
+const MarkdownBody = React.memo(function MarkdownBody(
+  { content, components, isUser }: { content: string; components: any; isUser: boolean },
+) {
+  return (
+    <div className={isUser
+      // Inherit color from the bubble (text-primary-foreground) so a custom
+      // globals.css theme can recolor user messages. `prose-invert` sets
+      // dark-background prose defaults, then [&_*]:text-inherit forces every
+      // prose child to pick up the bubble's foreground colour instead of the
+      // plugin's hard-coded greys/whites.
+      ? 'prose prose-sm max-w-none prose-invert [&_*]:text-inherit'
+      : 'prose prose-sm max-w-none dark:prose-invert'}>
+      <ReactMarkdown remarkPlugins={MD_PLUGINS} components={components} urlTransform={MD_URL_TRANSFORM}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
+function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
   const t = useT();
   const { isMobile } = useDevice();
   const isUser = msg.role === 'user';
@@ -1676,25 +1714,9 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
                 : 'bg-card border border-border text-card-foreground rounded-tl-sm mr-auto'
             }`}>
               {msg.content ? (
-                isUser ? (
-                  // Inherit color from the bubble (text-primary-foreground) so
-                  // a custom globals.css theme can recolor user messages.
-                  // `prose-invert` sets dark-background prose defaults, then
-                  // [&_*]:text-inherit forces every prose child element to
-                  // pick up the bubble's foreground colour instead of the
-                  // plugin's hard-coded greys/whites.
-                  <div className={`prose prose-sm max-w-none prose-invert [&_*]:text-inherit`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={mdComponents} urlTransform={MD_URL_TRANSFORM}>
-                      {msg.content}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className={`prose prose-sm max-w-none dark:prose-invert`}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={mdComponents} urlTransform={MD_URL_TRANSFORM}>
-                      {msg.content}
-                    </ReactMarkdown>
-                  </div>
-                )
+                // Memoised leaf — see MarkdownBody. The user/assistant prose
+                // classes live inside it so both roles share one memo boundary.
+                <MarkdownBody content={msg.content} components={mdComponents} isUser={isUser} />
               ) : (
                 msg.attachments?.length > 0
                   ? <span className="italic opacity-50">{t('bubble.attachmentOnly')}</span>
@@ -2084,3 +2106,21 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
     </>
   );
 }
+
+// Memoised with the DEFAULT shallow comparison — no custom comparator.
+//
+// MEASURED 2026-10-09: unmemoised, one ChatArea state change re-rendered every
+// bubble in the conversation (696 ms of blocked main thread at 400 messages;
+// 70 ms after the MarkdownBody memo above). The streaming path flushes once per
+// animation frame, so that was the whole frame budget — which is why typing
+// felt sluggish while a reply was being written.
+//
+// A hand-written comparator is deliberately avoided: forgetting one prop there
+// freezes a bubble for the rest of the session, and nothing fails loudly. The
+// default compare is only useful because ChatArea feeds this component stable
+// props — the nine per-message callbacks come from its cached `bubbleCallbacks`
+// bundle, and `deliveryCtx` / `onTtsStatus` / `onAudioStateChange` /
+// `onSpeakingChange` are memoised there too. If a future prop is added as an
+// inline arrow at the call site, memoisation silently stops helping (it will
+// not break correctness) — add it to the bundle instead.
+export default React.memo(MessageBubble);

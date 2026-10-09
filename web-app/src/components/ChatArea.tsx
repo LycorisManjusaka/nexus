@@ -14,9 +14,7 @@ import SystemPromptUpdater from './SystemPromptUpdater';
 import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
 import MailModal from './MailModal';
-
-// Engine ids as used by the TTS pipeline and local_data/character_map.json.
-const TTS_ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
+import TtsStatusBar, { createTtsStatusStore } from './TtsStatusBar';
 import AudioSessionModal from './AudioSessionModal';
 import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
@@ -3155,6 +3153,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // flushStreamingMessage() reads the latest accumulated values (closure
       // over currentText/currentThought/toolAttachments/etc.).
       let rafId: number | null = null;
+      // WHICH kind of handle rafId holds. The two are not interchangeable:
+      // cancelAnimationFrame(timeoutId) silently does nothing, and the cancel
+      // below exists precisely to stop a late flush from reverting the
+      // authoritative finalize. Guessing by `typeof cancelAnimationFrame`
+      // would guess wrong for the timer path.
+      let rafIsTimer = false;
       const flushStreamingMessage = () => {
         rafId = null;
         setMessages(prev => prev.map(m =>
@@ -3182,9 +3186,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       };
       const scheduleStreamingFlush = () => {
         if (rafId !== null) return; // a frame is already queued — coalesce into it
+        // DO NOT replace rAF with a fixed-interval timer on long logs. I tried
+        // exactly that on the theory that rAF leaves the thread continuously
+        // busy, and MEASURED THE OPPOSITE (2026-10-09, 400-message log, 6x CPU
+        // throttle, same prompt, both arms streaming):
+        //
+        //   rAF (this code)        frame median  33 ms, keystroke median   94 ms
+        //   setTimeout(200 ms)     frame median 858 ms, keystroke median 2252 ms
+        //
+        // The premise was wrong. rAF is not a 60 Hz metronome — the browser
+        // only fires it after the previous frame finished, so when a render
+        // costs 400 ms the flush rate drops to ~2/s on its own. That is
+        // adaptive back-pressure for free. A 200 ms timer ignores how long the
+        // render actually took, so on a slow device it schedules MORE flushes
+        // than rAF would, and they land on top of paint work that has not
+        // finished. The remaining ceiling is the per-flush cost of the list
+        // itself (~70 ms at 400 messages, 1x CPU), not the scheduling.
         if (typeof requestAnimationFrame !== 'undefined') {
+          rafIsTimer = false;
           rafId = requestAnimationFrame(flushStreamingMessage);
         } else {
+          rafIsTimer = true;
           rafId = setTimeout(flushStreamingMessage, 16) as unknown as number;
         }
       };
@@ -3512,8 +3534,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // the authoritative finalize update below (which carries streaming:false
       // + token counts). A late flush would otherwise revert those.
       if (rafId !== null) {
-        if (typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId);
-        else clearTimeout(rafId as unknown as ReturnType<typeof setTimeout>);
+        if (rafIsTimer) clearTimeout(rafId as unknown as ReturnType<typeof setTimeout>);
+        else cancelAnimationFrame(rafId);
         rafId = null;
       }
 
@@ -3968,6 +3990,76 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     )));
   };
 
+  const handleCopyLink = (id: string) => {
+    const url = absoluteDeepLink(folderName, convoId, id);
+    copyText(url).then((ok) => {
+      if (ok) {
+        setCopiedLink(id);
+        setTimeout(() => setCopiedLink(null), 1600);
+      } else {
+        // No clipboard at all (plain-HTTP phone): hand the text over instead of
+        // silently doing nothing. See lib/clipboard.ts.
+        window.prompt(t('chat.copyLink.prompt'), url);
+      }
+    });
+  };
+
+  // ── Stable per-message callbacks (MessageBubble is React.memo'd) ───────────
+  //
+  // MEASURED 2026-10-09: with MessageBubble unmemoised, ONE ChatArea state
+  // change re-rendered every bubble — 696 ms of blocked main thread at 400
+  // messages. The markdown memo inside MessageBubble cut that to 70 ms; memo on
+  // the bubble itself removes the remaining 400 function bodies, which is what
+  // the streaming path needs (it flushes once per animation frame, so 70 ms per
+  // flush saturates the main thread and the keyboard goes sluggish while a
+  // reply is being written).
+  //
+  // React.memo only bails out when the props are identical, and every callback
+  // used to be a fresh arrow per render. These wrappers are cached per message
+  // so their identity holds, and they call through `liveHandlersRef` so they
+  // NEVER capture a stale closure: the handlers below read `messages` directly,
+  // and a stale one would write an OLD conversation back over the new one. The
+  // indirection is what makes memoisation safe here — not an optimisation of
+  // it.
+  const liveHandlersRef = React.useRef<any>({});
+  liveHandlersRef.current = {
+    handleEdit, handleDelete, handleRerun, handleContinue,
+    handleToggleAttachment, handleDeleteAttachment,
+    handleSetFirstOriginal, handleToggleThinking, handleCopyLink,
+  };
+  const bubbleCbCacheRef = React.useRef<Map<string, any>>(new Map());
+  // Drop the cache when the conversation changes so it cannot grow across a
+  // session (and so a recycled message id from another log can't hit a stale
+  // entry).
+  const cbCacheConvoRef = React.useRef<string | null>(null);
+  if (cbCacheConvoRef.current !== convoId) {
+    cbCacheConvoRef.current = convoId;
+    bubbleCbCacheRef.current = new Map();
+  }
+  // `canRerun` / `canContinue` are part of the key, not of the closure: their
+  // PRESENCE (undefined vs function) is what shows or hides the buttons, so a
+  // cached bundle must not outlive a change in either.
+  const bubbleCallbacks = (id: string, canRerun: boolean, canContinue: boolean) => {
+    const key = `${id}|${canRerun ? 1 : 0}${canContinue ? 1 : 0}`;
+    const cache = bubbleCbCacheRef.current;
+    let b = cache.get(key);
+    if (!b) {
+      b = {
+        onEdit: (content: string) => liveHandlersRef.current.handleEdit(id, content),
+        onDelete: () => liveHandlersRef.current.handleDelete(id),
+        onToggleAttachment: (attId: string) => liveHandlersRef.current.handleToggleAttachment(id, attId),
+        onDeleteAttachment: (attId: string) => liveHandlersRef.current.handleDeleteAttachment(id, attId),
+        onSetFirstOriginal: () => liveHandlersRef.current.handleSetFirstOriginal(id),
+        onToggleThinking: () => liveHandlersRef.current.handleToggleThinking(id),
+        onCopyLink: () => liveHandlersRef.current.handleCopyLink(id),
+        onRerun: canRerun ? () => liveHandlersRef.current.handleRerun(id) : undefined,
+        onContinue: canContinue ? () => liveHandlersRef.current.handleContinue(id) : undefined,
+      };
+      cache.set(key, b);
+    }
+    return b;
+  };
+
   // "Has reusable thinking" keys on `thoughtProcess` — the display text present
   // on BOTH the API-key path (which also stores signed claudeThinkingBlocks) and
   // the OAuth path (which emits thinking as text only, no signature blocks). The
@@ -4061,18 +4153,37 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Live TTS pipeline state, reported up by whichever MessageBubble is speaking.
   // One conversation speaks at a time, so a single slot is enough — a newer play
   // simply replaces the old reading.
-  const [ttsStatus, setTtsStatus] = useState<any>(null);
-  // Single source for "is the TTS bar on screen", read by the bar itself and
+  //
+  // DELIBERATELY NOT useState (measured, 2026-10-09): the pipeline pushes 5-7
+  // status updates per spoken phrase, and as ChatArea state each one re-rendered
+  // every message bubble — ~70 ms per push at 400 messages even after the
+  // markdown memo, which is the growing gap BETWEEN phrases that was reported.
+  // The detail now lives outside React's tree; only TtsStatusBar subscribes.
+  // One store per ChatArea instance so switching conversations cannot leak the
+  // previous reading. See TtsStatusBar.tsx.
+  const ttsStoreRef = React.useRef(createTtsStatusStore());
+  // Single source for "is the TTS bar on screen", read by the bar's own gate and
   // by the two layout decisions below it. Two copies of this condition would
   // drift into a row that exists with nothing in it, or a bar with no row.
-  const ttsBarVisible = !!(ttsStatus && (ttsStatus.active || ttsStatus.failed > 0));
+  // This is state (it moves layout) but it flips twice per playback, not per
+  // phrase — the whole point of splitting it from the detail above.
+  const [ttsBarVisible, setTtsBarVisible] = useState(false);
   // On a phone, stop floating and take a real row — but only while the bar is
   // actually there (see the long note at the composer).
   const ttsOwnRow = isMobile && ttsBarVisible;
   const handleTtsStatus = React.useCallback((_msgId: string, status: any) => {
     // Drop the trailing 'inactive, nothing wrong' report so a clean run leaves
     // no residue; a run that FAILED is kept on screen until dismissed.
-    setTtsStatus(status.active || status.failed > 0 ? status : null);
+    const live = status.active || status.failed > 0 ? status : null;
+    ttsStoreRef.current.publish(live);
+    // Only touch React state when the ANSWER changes. Calling setState with the
+    // same boolean on every push would re-render the whole list again and undo
+    // the split.
+    setTtsBarVisible(prev => (prev === !!live ? prev : !!live));
+  }, []);
+  const handleTtsDismiss = React.useCallback(() => {
+    ttsStoreRef.current.publish(null);
+    setTtsBarVisible(false);
   }, []);
   useEffect(() => {
     // One cheap read on mount so waiting mail is visible without opening the
@@ -4924,15 +5035,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <div className="flex-1 h-px bg-indigo-500/40" />
                 </div>
               )}
+              {/* The per-message callbacks are spread in from bubbleCallbacks:
+                  cached, identity-stable wrappers. MessageBubble is React.memo'd
+                  and a fresh arrow written here would defeat it silently. */}
               <MessageBubble
                 msg={msg}
-                onEdit={(content: string) => handleEdit(msg.id, content)}
-                onDelete={() => handleDelete(msg.id)}
+                {...bubbleCallbacks(
+                  msg.id,
+                  msgIdx === messages.length - 1,
+                  msgIdx === messages.length - 1 && msg.role !== 'user',
+                )}
                 onTtsStatus={handleTtsStatus}
-                onRerun={msgIdx === messages.length - 1 ? () => handleRerun(msg.id) : undefined}
-                onContinue={msgIdx === messages.length - 1 && msg.role !== 'user' ? () => handleContinue(msg.id) : undefined}
-                onToggleAttachment={(attId: string) => handleToggleAttachment(msg.id, attId)}
-                onDeleteAttachment={(attId: string) => handleDeleteAttachment(msg.id, attId)}
                 onAudioStateChange={handleAudioStateChange}
                 onSpeakingChange={handleSpeakingChange}
                 globalSettings={globalSettings}
@@ -4943,21 +5056,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 isPastMessage={msgIdx < lastUserMsgIndex}
                 isOriginal={isMessageOriginal(msg.id)}
                 isFirstOriginal={firstOriginalMessageId === msg.id}
-                onSetFirstOriginal={() => handleSetFirstOriginal(msg.id)}
                 reuseThinking={saveThinkingToLog}
-                onToggleThinking={() => handleToggleThinking(msg.id)}
                 linkCopied={copiedLink === msg.id}
-                onCopyLink={() => {
-                  const url = absoluteDeepLink(folderName, convoId, msg.id);
-                  copyText(url).then((ok) => {
-                    if (ok) {
-                      setCopiedLink(msg.id);
-                      setTimeout(() => setCopiedLink(null), 1600);
-                    } else {
-                      window.prompt(t('chat.copyLink.prompt'), url);
-                    }
-                  });
-                }}
               />
               {/* Persisted subagent runs (collapsed — task + distilled result). */}
               {Array.isArray(msg.subagentRuns) && msg.subagentRuns.map((sr: any, si: number) => (
@@ -5070,69 +5170,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             playback starts; kept visible after a failure so the reason does not
             vanish the moment the queue drains. */}
         {ttsBarVisible && (
-          <div className={ttsOwnRow
-            ? 'flex items-center gap-2 min-w-0 flex-1'
-            : 'absolute left-6 top-0 -translate-y-1/2 z-10 flex items-center gap-2 pointer-events-auto max-w-[52%]'}>
-            <div
-              className={`flex items-center gap-2 rounded-md border px-2 py-1 text-[11px] backdrop-blur-sm ${
-                ttsStatus.failed > 0
-                  ? 'border-red-500/50 bg-red-500/10 text-red-500'
-                  : ttsStatus.engineState === 'launched'
-                    ? 'border-amber-500/50 bg-amber-500/10 text-amber-500'
-                    : 'border-border/50 bg-background/60 text-muted-foreground'
-              }`}
-              title={ttsStatus.lastError
-                ? t('chat.tts.lastError').replace('{error}', ttsStatus.lastError)
-                : t('chat.tts.state')}
-            >
-              <span>{ttsStatus.active ? '🔊' : '⚠️'}</span>
-              <span className="font-semibold">{TTS_ENGINE_NAMES[ttsStatus.engine] || 'TTS'}</span>
-              <span className="opacity-70">
-                {ttsStatus.engineState === 'launched' ? t('chat.tts.starting')
-                  : ttsStatus.engineState === 'failed' ? t('chat.tts.notRunning')
-                  : ttsStatus.engineState === 'running' ? t('chat.tts.up')
-                  : '…'}
-              </span>
-              <span className="opacity-50">·</span>
-              <span>{ttsStatus.mode === 'context' ? t('chat.tts.modeContext') : t('chat.tts.modeSentence')}</span>
-              <span className="opacity-50">·</span>
-              {/* done / dispatched, so "3/7" reads as "3 of 7 chunks ready" */}
-              <span>{t('chat.tts.chunk')} {ttsStatus.done}/{ttsStatus.dispatched}</span>
-              {ttsStatus.playing !== null && ttsStatus.playing >= 0 && (
-                <><span className="opacity-50">·</span><span>▶ #{ttsStatus.playing}</span></>
-              )}
-              {ttsStatus.inFlight > 0 && (
-                <><span className="opacity-50">·</span><span className="animate-pulse">{t('chat.tts.synth')} {ttsStatus.inFlight}</span></>
-              )}
-              {ttsStatus.buffered > 0 && (
-                <><span className="opacity-50">·</span><span>{t('chat.tts.queued')} {ttsStatus.buffered}</span></>
-              )}
-              {ttsStatus.lastChars > 0 && (
-                <><span className="opacity-50">·</span><span>{ttsStatus.lastChars}ch</span></>
-              )}
-              {ttsStatus.lastMs > 0 && (
-                <><span className="opacity-50">·</span><span>{ttsStatus.lastMs}ms</span></>
-              )}
-              {ttsStatus.skipped > 0 && (
-                <><span className="opacity-50">·</span><span>{t('chat.tts.skipped')} {ttsStatus.skipped}</span></>
-              )}
-              {ttsStatus.failed > 0 && (
-                <><span className="opacity-50">·</span><span className="font-semibold">{t('chat.tts.failed')} {ttsStatus.failed}</span></>
-              )}
-              {!ttsStatus.active && ttsStatus.failed > 0 && (
-                <button
-                  onClick={() => setTtsStatus(null)}
-                  className="ml-1 opacity-60 hover:opacity-100"
-                  title={t('chat.tts.dismiss')}
-                >✕</button>
-              )}
-            </div>
-            {ttsStatus.lastError && (
-              <span className="truncate text-[10px] text-red-400/90" title={ttsStatus.lastError}>
-                {ttsStatus.lastError}
-              </span>
-            )}
-          </div>
+          <TtsStatusBar store={ttsStoreRef.current} ownRow={ttsOwnRow} onDismiss={handleTtsDismiss} />
         )}
 
         <div
