@@ -5193,7 +5193,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           </button>
         </div>
         </div>
-        <div className="p-4 bg-gradient-to-t from-background via-background to-transparent">
+        {/* Composer gutter. Desktop keeps p-4. Mobile trims the horizontal
+            padding to px-2 so the input box runs closer to the screen edges
+            (Gemini-like, less empty space beside it); the `max-w-4xl mx-auto`
+            only bites on desktop, so on a phone this is the only side margin. */}
+        <div className={`${isMobile ? 'px-2 pt-2 pb-3' : 'p-4'} bg-gradient-to-t from-background via-background to-transparent`}>
           <div className="max-w-4xl mx-auto">
             {activeSubagent && (
               <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-xl border border-violet-500/40 bg-violet-500/10 text-sm text-violet-700 dark:text-violet-300">

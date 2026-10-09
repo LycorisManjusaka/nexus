@@ -1443,8 +1443,16 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
         </div>
       )}
 
-      {/* Content Bubble */}
-      <div className={`relative group/bubble ${isEditing ? 'w-full max-w-full' : 'max-w-[85%]'}`}>
+      {/* Content Bubble.
+          Width, non-editing: desktop caps at 85% (leaves the margin the
+          hover action bar lives in — see the action-bar comment below).
+          Mobile uses `max-w-full`, so `w-fit` on the inner content div +
+          `items-end`/`items-start` on the outer column give the Gemini
+          shape: a SHORT message hugs its own side, a LONG one fills the
+          row. Mobile's action bar sits BELOW the bubble (`top-full`), so
+          removing the side margin costs it nothing; desktop's bar sits in
+          the margin, which is why desktop keeps the 85% cap. */}
+      <div className={`relative group/bubble ${isEditing ? 'w-full max-w-full' : (isMobile ? 'max-w-full' : 'max-w-[85%]')}`}>
         {isEditing ? (
           <div className="bg-card border border-border rounded-2xl p-4 shadow-lg w-full">
             <textarea
@@ -1615,10 +1623,12 @@ export default function MessageBubble({ msg, onEdit, onDelete, onToggleAttachmen
             hover-revealed bar is then unreachable at all. */}
         {/* On mobile: horizontal, BELOW the bubble, tail actions behind a "…".
             Three measured facts forced this shape, in order.
-            (1) The bar is positioned against the bubble wrapper, which is
-                `max-w-[85%]`. For a LONG message that leaves ~15% of the
-                screen outside it — about 62px on a 414px phone, not enough for
-                a horizontal row. That is why it was stacked vertically.
+            (1) An early version positioned the bar against the bubble wrapper.
+                On mobile the wrapper is now `max-w-full` (full-width when long,
+                matching Gemini), so a long bubble leaves NO horizontal margin
+                beside it at all — and even back when mobile capped at 85% the
+                ~15% leftover was only ~62px on a 414px phone, not enough for a
+                horizontal row. That is why it was stacked vertically.
             (2) Stacking moved the problem instead of fixing it. The bar was
                 anchored `bottom-2` and grows UPWARD, so on a SHORT message a
                 7-8 button column overhangs and covers the message above.
