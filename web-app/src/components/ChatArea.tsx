@@ -27,6 +27,7 @@ import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
+import { dedupeMessageIds } from '@/lib/messageIds';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { effectiveFullAccess, fullAccessForcedByShell } from '@/lib/agentCapabilities';
@@ -1373,7 +1374,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // carries it, so a save built on a snapshot another tab has already
         // superseded is refused instead of silently overwriting.
         baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
-        const loadedMessages = (data.messages || []).map((m: any) => ({ ...m, autoPlay: false }));
+        // Duplicate ids are repaired on the way in. A saved file can carry
+        // them (one does — see lib/messageIds.ts), and every by-id lookup in
+        // this component would otherwise act on the wrong copy. Nothing is
+        // written by this: the load deliberately skips the auto-save above,
+        // so the repair reaches disk only with the next real save.
+        const loadedMessages = dedupeMessageIds(
+          (data.messages || []).map((m: any) => ({ ...m, autoPlay: false })),
+        ).messages;
         setMessages(loadedMessages);
         setTitle(data.title || 'New Conversation');
         setSystemPrompt(data.systemPrompt !== undefined ? data.systemPrompt : defaultSystemPrompt);
@@ -3662,7 +3670,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const MAX_HANDOFF_CHAIN = 3;
       const depth = (opts?.handoffDepth ?? 0) + 1;
       if (depth <= MAX_HANDOFF_CHAIN) {
-        await generateAiResponse([...history, handoffPlan.assistant], {
+        // REPLACE when the id is already in `history`, append otherwise.
+        //
+        // A normal turn's `history` stops before this assistant message, so
+        // appending is right. A CONTINUE turn's does not: handleContinue
+        // passes `messages.slice(0, idx + 1)` — the target is in there — and
+        // `msgId` is that target's id, so a blind append puts the same id in
+        // the array twice. MEASURED in 先輩_64 (the 10-vessel race): two
+        // adjacent assistant messages both carrying 1791478736604, which is
+        // what React's "two children with the same key" is reporting. It is
+        // not cosmetic — edit/rerun/continue/delete and the handover-restore
+        // walk all look messages up BY ID and would act on the wrong one.
+        const handed = handoffPlan.assistant;
+        const nextHistory = history.some((m: any) => m.id === handed.id)
+          ? history.map((m: any) => (m.id === handed.id ? handed : m))
+          : [...history, handed];
+        await generateAiResponse(nextHistory, {
           vesselOverride: handoffPlan.vessel,
           handoffFrom: handoffPlan.from,
           handoffDepth: depth,

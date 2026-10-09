@@ -1151,7 +1151,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.ctx.noteFoot':
     'Uses the same value as the status-bar indicator: original messages ÷ (max context − fixed overhead). `{percent}` is replaced each turn.',
 
-  'id.ask.label': '💬 Ask-the-user tool (pause to ask a multiple-choice question)',
+  'id.ask.label': '💬 Ask-the-partner tool (pause to ask a multiple-choice question)',
   'id.ask.help':
     'OFF (default): the model answers on its own. ON: the model gets an `AskQuestion` tool to pause a turn, show you a multiple-choice card, and wait for your selection before continuing. *Active for all tool-capable providers: OpenAI-compatible (GLM, Kimi, DeepSeek, Grok, Cohere, MiniMax, ChatGPT, MiMo), local models, Gemini, and Claude in both modes — OAuth (its native question tool is replaced by this one) and token-paid.*',
   'id.ask.timeoutLabel': 'Answer wait timeout (seconds)',

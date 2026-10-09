@@ -24,11 +24,35 @@ import { isLocalFileRef, mediaKindOf, workspaceFileUrl, baseNameOf, makeMarkdown
 const MD_URL_TRANSFORM = makeMarkdownUrlTransform(defaultUrlTransform);
 const MD_PLUGINS = [remarkGfm, remarkBreaks];
 
+// Audio/TTS runtime conditions go to console.WARN, deliberately, and every
+// such site in this file goes through here so the reason lives in one place.
+//
+// Next's dev overlay patches console.error ONLY (read it:
+// next/dist/next-devtools/userspace/app/errors/intercept-console-error.js —
+// console.warn is untouched). So a console.error here raises the red "N
+// Issues" bubble in the bottom-left corner of a phone, over the composer,
+// for conditions that are ordinary rather than broken:
+//   • "Failed to fetch" — the tab was backgrounded, the phone changed network,
+//     or the dev server recompiled mid-request.
+//   • NotAllowedError  — the browser's autoplay policy, which this app is
+//     built to expect (it stops TTS and waits for a gesture).
+//   • play() rejections on resume, for the same family of reasons.
+// None of these are lost by warning instead: each one also lands in the TTS
+// diagnostics (pushTtsDiag → the status bar's lastError), which is the surface
+// actually built for them and the one a phone user can see.
+//
+// Do NOT promote these back to console.error to "make them visible". That
+// trades a readable indicator for a badge that covers the attach button.
+const ttsWarn = (...args: any[]) => console.warn(...args);
+
 // The rendered markdown body, as a memoised leaf.
 //
-// WHY THIS EXISTS (measured, 2026-10-09): MessageBubble is not memoised, so
-// EVERY ChatArea state change re-renders every bubble in the conversation —
-// and the TTS indicator alone pushes 5-7 status updates per spoken phrase.
+// WHY THIS EXISTS (measured, 2026-10-09): at the time, MessageBubble was not
+// memoised, so EVERY ChatArea state change re-rendered every bubble in the
+// conversation — and the TTS indicator alone pushes 5-7 status updates per
+// spoken phrase. (MessageBubble is memoised now, later the same day; this leaf
+// still earns its keep for the renders that DO get through — a streaming
+// message, an edit, a TTS state change on this bubble.)
 // With 400 messages one such state change cost ~700 ms of blocked main thread
 // on this desktop (21 bubbles: ~54 ms), because each bubble re-parsed its
 // markdown and React re-reconciled ~66 output nodes per bubble.
@@ -830,8 +854,8 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
       setIsSpeaking(false);
       setTtsState('paused');
     } else if (ttsStateRef.current === 'paused') {
-      if (currentAudioRef.current) currentAudioRef.current.play().catch(e => console.error("Resume error", e));
-      if (currentAudioRef2.current) currentAudioRef2.current.play().catch(e => console.error("Resume error 2", e));
+      if (currentAudioRef.current) currentAudioRef.current.play().catch(e => ttsWarn("TTS resume failed", e));
+      if (currentAudioRef2.current) currentAudioRef2.current.play().catch(e => ttsWarn("TTS resume failed (secondary device)", e));
       setIsSpeaking(true);
       setTtsState('playing');
     }
@@ -1059,7 +1083,7 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
           await p1;
           if (p2) await p2;
         } catch(e: any) {
-          console.error("Audio play error:", e);
+          ttsWarn("TTS playback failed:", e);
           if (e.name === 'NotAllowedError') {
             stopTTS();
             return;
@@ -1144,7 +1168,7 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
         }
       } catch(e: any) {
          if (e.name !== 'AbortError') {
-           console.error(e);
+           ttsWarn("TTS request failed", e);
            ttsDiagRef.current.failed++;
            pushTtsDiag({ lastError: e?.message || 'request failed' });
          }
