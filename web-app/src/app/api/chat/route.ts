@@ -1333,6 +1333,31 @@ async function streamClaudeViaAgentSDK(args: {
                 },
               ),
             );
+            // search_attachments — grep the CONTENT of every text attachment
+            // across this being's own conversations. Gated WITH the two
+            // conversation-reading tools, not with read_attachment, because
+            // that is the scope it actually has: a corpus-wide scan of the
+            // being's own past, returning which conversation each hit came
+            // from. read_attachment is the opposite — one attachment, this
+            // conversation, addressed by ref.
+            //   It used to ride read_attachment's gate. When whole-PC access
+            // began withdrawing that gate (attachmentPathsVisible, below in
+            // POST), this tool went with it and became unreachable: no
+            // checkbox could turn it back on. Whole-PC access does NOT make
+            // it redundant — the attachment store is a flat tree of hash
+            // names holding EVERY being's files, so Grep there cannot say
+            // which conversation a hit belongs to, and cannot stay inside
+            // this being's own.
+            nexusTools.push(
+              sdk.tool(
+                'search_attachments',
+                I.searchAttachmentsDesc,
+                { query: z.string().describe(I.searchAttachmentsQueryParam), regex: z.boolean().optional().describe(I.searchRegexParam) },
+                async (a: { query: string; regex?: boolean }) => ({
+                  content: [{ type: 'text' as const, text: await runSearchAttachments(folderName, a.query, !!a.regex, agentFullSystemAccess) }],
+                }),
+              ),
+            );
           }
           if (hiddenAttachmentsAccessible) {
             // Revive a hidden attachment by its ref prefix. Scoped to this
@@ -1351,17 +1376,6 @@ async function streamClaudeViaAgentSDK(args: {
                   if (r.media?.kind === 'image') content.push({ type: 'image' as const, data: r.media.base64, mimeType: r.media.mimeType });
                   return { content };
                 },
-              ),
-            );
-            // Grep across every text attachment of this being's own conversations.
-            nexusTools.push(
-              sdk.tool(
-                'search_attachments',
-                I.searchAttachmentsDesc,
-                { query: z.string().describe(I.searchAttachmentsQueryParam), regex: z.boolean().optional().describe(I.searchRegexParam) },
-                async (a: { query: string; regex?: boolean }) => ({
-                  content: [{ type: 'text' as const, text: await runSearchAttachments(folderName, a.query, !!a.regex, agentFullSystemAccess) }],
-                }),
               ),
             );
           }
@@ -3344,12 +3358,14 @@ async function streamViaAnthropicCompat(args: {
     tools.push(
       { name: 'read_conversation', description: I.readConversationDesc, input_schema: { type: 'object', properties: { name: { type: 'string', description: I.readConversationNameParam } }, required: ['name'] } },
       { name: 'search_conversations', description: I.searchConversationsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchConversationsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } }, required: ['query'] } },
+      // Same scope as the two above (this being's own past), so same gate —
+      // see the OAuth site's comment for why it is not read_attachment's.
+      { name: 'search_attachments', description: I.searchAttachmentsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchAttachmentsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } }, required: ['query'] } },
     );
   }
   if (hiddenAttachmentsAccessible) {
     tools.push(
       { name: 'read_attachment', description: I.readAttachmentDesc, input_schema: { type: 'object', properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam }, pattern: { type: 'string', description: I.readAttachmentPatternParam } }, required: ['ref'] } },
-      { name: 'search_attachments', description: I.searchAttachmentsDesc, input_schema: { type: 'object', properties: { query: { type: 'string', description: I.searchAttachmentsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } }, required: ['query'] } },
     );
   }
   if (lettersEnabled) {
@@ -4225,8 +4241,15 @@ export async function POST(req: Request) {
     //   full access  → the being can already open that file with Read (measured:
     //                  Read returns a real image block for an attachment path).
     //                  Hand it the path and read_attachment has nothing left to
-    //                  do — so the tool is withdrawn, which also drops its two
-    //                  schemas from every provider's tool list.
+    //                  do — so the tool is withdrawn, which drops its schema
+    //                  from every provider's tool list.
+    //                  ONLY read_attachment. search_attachments used to share
+    //                  this gate and went down with it — unreachable, since no
+    //                  checkbox could restore it. It now sits with the
+    //                  conversation-reading tools (enableReadConversation),
+    //                  which is the gate that matches its reach; whole-PC
+    //                  access does not make a corpus-wide, per-being,
+    //                  per-conversation scan redundant.
     //   no full access → the path is unreachable, so a path would be a lie.
     //                  Keep refs and keep read_attachment: unchanged behaviour.
     //
@@ -5350,6 +5373,17 @@ export async function POST(req: Request) {
             required: ['query'],
           },
         });
+        // Same scope as the two above (this being's own past), so same gate —
+        // see the OAuth site's comment for why it is not read_attachment's.
+        claudeTools.push({
+          name: 'search_attachments',
+          description: I.searchAttachmentsDesc,
+          input_schema: {
+            type: 'object',
+            properties: { query: { type: 'string', description: I.searchAttachmentsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } },
+            required: ['query'],
+          },
+        });
       }
       if (hiddenAttachmentsAccessible) {
         claudeTools.push({
@@ -5359,15 +5393,6 @@ export async function POST(req: Request) {
             type: 'object',
             properties: { ref: { type: 'string', description: I.readAttachmentPrefixParam }, pattern: { type: 'string', description: I.readAttachmentPatternParam } },
             required: ['ref'],
-          },
-        });
-        claudeTools.push({
-          name: 'search_attachments',
-          description: I.searchAttachmentsDesc,
-          input_schema: {
-            type: 'object',
-            properties: { query: { type: 'string', description: I.searchAttachmentsQueryParam }, regex: { type: 'boolean', description: I.searchRegexParam } },
-            required: ['query'],
           },
         });
       }
@@ -6529,6 +6554,21 @@ export async function POST(req: Request) {
                 required: ['query'],
               },
             },
+            // Same scope as the two above (this being's own past), so same
+            // gate — see the OAuth site's comment for why it is not
+            // read_attachment's.
+            {
+              name: 'search_attachments',
+              description: I.searchAttachmentsDesc,
+              parameters: {
+                type: 'OBJECT',
+                properties: {
+                  query: { type: 'STRING', description: I.searchAttachmentsQueryParam },
+                  regex: { type: 'BOOLEAN', description: I.searchRegexParam },
+                },
+                required: ['query'],
+              },
+            },
           ],
         });
       }
@@ -6545,18 +6585,6 @@ export async function POST(req: Request) {
                   pattern: { type: 'STRING', description: I.readAttachmentPatternParam },
                 },
                 required: ['ref'],
-              },
-            },
-            {
-              name: 'search_attachments',
-              description: I.searchAttachmentsDesc,
-              parameters: {
-                type: 'OBJECT',
-                properties: {
-                  query: { type: 'STRING', description: I.searchAttachmentsQueryParam },
-                  regex: { type: 'BOOLEAN', description: I.searchRegexParam },
-                },
-                required: ['query'],
               },
             },
           ],
@@ -8175,6 +8203,23 @@ export async function POST(req: Request) {
             },
           },
         });
+        // Same scope as the two above (this being's own past), so same gate —
+        // see the OAuth site's comment for why it is not read_attachment's.
+        localTools.push({
+          type: 'function',
+          function: {
+            name: 'search_attachments',
+            description: I.searchAttachmentsDesc,
+            parameters: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: I.searchAttachmentsQueryParam },
+                regex: { type: 'boolean', description: I.searchRegexParam },
+              },
+              required: ['query'],
+            },
+          },
+        });
       }
 
       if (hiddenAttachmentsAccessible) {
@@ -8190,21 +8235,6 @@ export async function POST(req: Request) {
                 pattern: { type: 'string', description: I.readAttachmentPatternParam },
               },
               required: ['ref'],
-            },
-          },
-        });
-        localTools.push({
-          type: 'function',
-          function: {
-            name: 'search_attachments',
-            description: I.searchAttachmentsDesc,
-            parameters: {
-              type: 'object',
-              properties: {
-                query: { type: 'string', description: I.searchAttachmentsQueryParam },
-                regex: { type: 'boolean', description: I.searchRegexParam },
-              },
-              required: ['query'],
             },
           },
         });

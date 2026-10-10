@@ -140,9 +140,15 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
 
   // search_attachments tool — grep across every TEXT attachment of this
   // being's own conversations (media attachments are skipped, their bytes
-  // aren't readable as text). Pairs with read_attachment for the full text.
+  // aren't readable as text).
+  //   How a hit is opened in full depends on the mode, which is why this text
+  // no longer names a tool: with whole-PC access each hit ends in an absolute
+  // path (Read it) and read_attachment does not exist; without it, each hit
+  // carries a 12-char ref (read_attachment it). The RESULT says which — see
+  // formatAttachmentSearchForTool's two closing lines in lib/attachmentIndex.ts,
+  // the single place that decides.
   searchAttachmentsDesc:
-    'Search the CONTENT of every text attachment across ALL of your conversations for a word or phrase (non-text attachments like images are skipped). Returns matching attachments with a few snippets each, their ref, name, size, and which conversation they came from. Use read_attachment with the ref to read a match in full.',
+    'Search the CONTENT of every text attachment across ALL of your conversations for a word or phrase (non-text attachments like images are skipped). Returns matching attachments with a few snippets each, their name, size, address, and which conversation they came from. The result itself tells you how to open a match in full from the address it gave you.',
   searchAttachmentsQueryParam:
     'The word or phrase to look for inside attachment content. Case-insensitive. Literal by default; set regex:true to use a regular expression instead.',
 

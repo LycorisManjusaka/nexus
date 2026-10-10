@@ -12,6 +12,12 @@
 //     search_attachments from a DIFFERENT past conversation of the same being)
 //   - search_attachments, whose whole job is a corpus-wide scan
 //
+// Those two tools are gated SEPARATELY (2026-10-10): search_attachments rides
+// the conversation-reading checkbox, read_attachment the hidden-attachment one,
+// because the scope described below is what each of them actually has. They
+// used to share one gate, and withdrawing read_attachment under whole-PC
+// access silently took search_attachments with it.
+//
 // Scope is always ONE being's own logs (`folderName`), never the shared
 // content-addressed store across beings — the isolation the original
 // read_attachment design existed to preserve is about beings, not about
