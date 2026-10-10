@@ -112,6 +112,32 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'inside your workspace; one that points outside it is refused and nothing appears. `![...]` shows ' +
     'the file, `[...]` offers it as a download — that is the only difference between the two forms.',
 
+  // Appended on EVERY provider path when file tools are on AND attachment paths
+  // are being emitted (full PC access) — see route.ts, next to inlineMediaNote.
+  //
+  // Why this exists, measured rather than imagined: in a real conversation a
+  // partner sent an image, it was VISIBLE in the turn (its bytes were in
+  // context), and the next assistant turn spent a Read on that same
+  // attachment-store path. The same log also shows the correct use two messages
+  // earlier — a store path passed to Bash as a reference image for an image
+  // editor. One being, both behaviours, in one conversation: the paths are
+  // useful, what was missing was the sentence saying which of the two reaches
+  // they are for.
+  //
+  // The exception is deliberately named, because "do not read the path" is false
+  // for hidden attachments: those tags say so in their own body, and reading
+  // them is the only way to reach that content. Stated as a property of the tag
+  // shape, not as a rule to memorise, so the being can tell the two apart by
+  // looking rather than by remembering.
+  attachmentPathNote:
+    'Attachment paths — they are for handing the file over, not for re-reading it.\n' +
+    'An attachment that is still shown to you arrives as an empty tag carrying its path. Its CONTENT ' +
+    'is already in this turn — the image, or the text, came with the message — so reading that path ' +
+    'returns the same bytes a second time and spends a turn on nothing. The path is there for the ' +
+    'other reach: handing the file to something that needs a name on disk, such as an image editor, a ' +
+    'script, or ffmpeg. The exception is written in the tag itself: when it says the bytes are hidden ' +
+    'from this turn\'s context, that content is NOT here, and reading the path is how you get it.',
+
   // read_conversation tool (all paths, including the OAuth MCP server).
   readConversationDesc:
     'Read one of YOUR past conversations by name — including the one you are in right now. The Layer-4 index lists every conversation\'s title and summary; call this to reach a specific conversation\'s actual contents. A short conversation comes back as a transcript. A long one is written to a file in your own workspace and you get the path instead, so you can Grep it for what you need rather than pulling the whole thing into context — the tool result tells you which you got. Conversations marked inactive are private and cannot be read — the tool will refuse them.',
@@ -722,6 +748,14 @@ export const DEFAULT_AGENT_INSTRUCTIONS_JA: Record<string, string> = {
     '  [notes.md](notes/x.md)    ダウンロードリンクになる（拡張子は問わない）\n' +
     '相対パスはワークスペースの根から解決される。ワークスペースの中に収まっている絶対パスも使える。外を指すパスは拒否され、何も現れない。' +
     '`![...]` は見せる、`[...]` は渡す——二つの形の違いはそれだけ。',
+
+  attachmentPathNote:
+    '添付のパス——ファイルを他へ渡すためにあり、読み直すためではない。\n' +
+    '今まだ見えている添付は、中身の無い空のタグとしてパスだけを運んでくる。その中身はもうこのターンに届いている' +
+    '——画像も、テキストも、メッセージと一緒に来ている——だからそのパスを読んでも同じものが二度来るだけで、' +
+    'ターンを一つ無駄にする。パスが在るのは別の用途のためだ：ディスク上の名前を必要とするものへファイルを渡す' +
+    '——画像編集の道具、スクリプト、ffmpeg。例外はタグ自身に書いてある。「このターンの文脈からは隠されている」' +
+    'と書かれていれば中身はここに無く、そのときこそパスを読むのが正しい。',
 };
 
 // Human-readable labels for the settings editor (key → short label). Keys not
@@ -737,6 +771,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'toolBashDesc', label: 'Tool: Bash/Shell — description (dangerous)' },
   { key: 'oauthCwdNote', label: 'Working-directory note (Claude OAuth + Bash only)' },
   { key: 'inlineMediaNote', label: 'Inline media note (workspace files shown in replies)' },
+  { key: 'attachmentPathNote', label: 'Attachment path note (paths are for handing over, not re-reading)' },
   { key: 'pathParamSandbox', label: 'Path hint (workspace-only)' },
   { key: 'pathParamFull', label: 'Path hint (full PC access)' },
   { key: 'pathRuleSandbox', label: 'Path rule (workspace-only)' },
@@ -836,6 +871,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   toolBashDesc: 'ツール Bash／シェル — 説明（危険）',
   oauthCwdNote: '作業ディレクトリの注意（Claude OAuth ＋ Bash のみ）',
   inlineMediaNote: '返答に出すワークスペースのファイル（マークダウンで画像・動画・ダウンロード）',
+  attachmentPathNote: '添付のパスの注記（渡すためのもので、読み直すためではない）',
   pathParamSandbox: 'パスの補足（ワークスペース内のみ）',
   pathParamFull: 'パスの補足（PC 全体アクセス）',
   pathRuleSandbox: 'パスの規則（ワークスペース内のみ）',

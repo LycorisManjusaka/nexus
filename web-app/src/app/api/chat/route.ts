@@ -4455,6 +4455,17 @@ export async function POST(req: Request) {
       systemPrompt = `${systemPrompt}\n\n${I.inlineMediaNote}`;
     }
 
+    // Says what the `path` on an attachment tag is FOR. Gated on
+    // attachmentPathsVisible rather than toolUseEnabled alone, because without
+    // full access no path is emitted at all and the note would describe
+    // something the being never sees; and ALSO on toolUseEnabled, because a
+    // being with no file tools can neither waste a Read nor hand a file to
+    // anything, so for it the note is pure cost. Measured need: see the comment
+    // on attachmentPathNote in lib/agentInstructions.ts.
+    if (toolUseEnabled && attachmentPathsVisible && !isAgentInstructionPrompt && I.attachmentPathNote) {
+      systemPrompt = `${systemPrompt}\n\n${I.attachmentPathNote}`;
+    }
+
 
     const isClaude    = aiName.toLowerCase().includes('claude');
     const isGemini    = aiName.toLowerCase().includes('gemini');
