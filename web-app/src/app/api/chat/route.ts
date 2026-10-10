@@ -12,7 +12,7 @@ import { extractVideoFrames } from '@/lib/videoFrames';
 import { webSearch, webFetch } from '@/lib/webTools';
 import { readConversationByName, formatReadConversationResult } from '@/lib/conversationRead';
 import { searchConversations, formatSearchForTool } from '@/lib/conversationSearch';
-import { readAttachmentBase64, readAttachmentText, putBytes, mimeForRef } from '@/lib/attachmentStore';
+import { readAttachmentBase64, readAttachmentText, putBytes, mimeForRef, refPath } from '@/lib/attachmentStore';
 import { findAttachmentsByRefPrefix, searchAttachments, formatAttachmentSearchForTool } from '@/lib/attachmentIndex';
 import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
@@ -154,10 +154,10 @@ async function runReadAttachment(args: {
 // (active) conversations. Thin wrapper around the shared backend that turns a
 // thrown ReDoS-guard rejection into the same "Error: ..." string convention
 // every other tool backend here uses.
-async function runSearchAttachments(folderName: string, query: string, regex: boolean): Promise<string> {
+async function runSearchAttachments(folderName: string, query: string, regex: boolean, showPaths: boolean): Promise<string> {
   try {
     const r = await searchAttachments(folderName, query, { regex, excludeInactive: true });
-    return formatAttachmentSearchForTool(r);
+    return formatAttachmentSearchForTool(r, showPaths);
   } catch (e: any) {
     return `Error: ${e?.message || 'search failed'}`;
   }
@@ -216,6 +216,11 @@ async function prepareInjectionDelivery(args: {
   handoffTemplate: string | undefined;
   /** True when read_attachment is available, i.e. a ref is actually openable. */
   refsOpenable: boolean;
+  /** True when the turn addresses attachments by absolute path instead (whole-PC
+   *  access — see attachmentPathsVisible in POST). Required, not optional: a
+   *  drain point that forgot it would quietly tell the partner their picture
+   *  could not be handed over at all, when in fact the path would have worked. */
+  pathsVisible: boolean;
   /** This turn's read_attachment scope. MUTATED: queued refs are registered. */
   refIndex: { ref: string; name: string; size: number; mimeType: string }[];
   ja: boolean;
@@ -232,7 +237,10 @@ async function prepareInjectionDelivery(args: {
   /** Attachment names for the display-only tool/thinking-log event. */
   logNames: string[];
 }> {
-  const { drained, wire, model, framing, handoffTemplate, refsOpenable, refIndex, ja, visionOverride } = args;
+  const { drained, wire, model, framing, handoffTemplate, refsOpenable, refIndex, ja, visionOverride, pathsVisible } = args;
+  // One derivation for both the model-facing hand-off and the partner-facing
+  // notice, so the two can never disagree about whether the file is reachable.
+  const addressing: AttachmentAddressing = pathsVisible ? 'path' : (refsOpenable ? 'ref' : 'none');
   const items = drained.media || [];
   const texts = drained.texts || [];
   if (texts.length === 0 && items.length === 0) {
@@ -258,7 +266,7 @@ async function prepareInjectionDelivery(args: {
   // The hand-off covers what could not ride along. Missing payloads are NOT
   // handed off — there is nothing behind the ref to open.
   if (withheld.length) {
-    const note = handoffNote(withheld, handoffTemplate, refsOpenable);
+    const note = handoffNote(withheld, handoffTemplate, addressing);
     if (note) parts.push(note);
   }
   if (missing.length) {
@@ -268,7 +276,7 @@ async function prepareInjectionDelivery(args: {
     );
   }
 
-  const notice = undeliverableSummary(withheld, missing, { ja, handedOff: refsOpenable });
+  const notice = undeliverableSummary(withheld, missing, { ja, addressing });
 
   return {
     text: parts.join('\n\n'),
@@ -288,7 +296,7 @@ import { markTurnActive, endTurn } from '@/lib/turnRegistry';
 import {
   loadInjectedMedia, injectableKinds, splitDeliverable, handoffNote, undeliverableSummary,
   anthropicInjectBlocks, geminiInjectParts, openaiInjectParts,
-  type LoadedInjectMedia, type MediaKindNarrow,
+  type LoadedInjectMedia, type MediaKindNarrow, type AttachmentAddressing,
 } from '@/lib/injectMedia';
 import { runShellCommand } from '@/lib/shellTool';
 import { effectiveFullAccess } from '@/lib/agentCapabilities';
@@ -1296,6 +1304,7 @@ async function streamClaudeViaAgentSDK(args: {
                 async (a: { name: string }) => {
                   try {
                     const r = await readConversationByName(folderName, a.name, {
+                      showPaths: agentFullSystemAccess,
                       fileTools: toolUseEnabled,
                       currentConvoId: convoId,
                     });
@@ -1317,7 +1326,7 @@ async function streamClaudeViaAgentSDK(args: {
                 async (a: { query: string; regex?: boolean }) => {
                   try {
                     const r = await searchConversations(folderName, a.query, { excludeInactive: true, regex: !!a.regex });
-                    return { content: [{ type: 'text' as const, text: formatSearchForTool(r) }] };
+                    return { content: [{ type: 'text' as const, text: formatSearchForTool(r, agentFullSystemAccess) }] };
                   } catch (e: any) {
                     return { content: [{ type: 'text' as const, text: `Error: ${e?.message || 'search failed'}` }] };
                   }
@@ -1351,7 +1360,7 @@ async function streamClaudeViaAgentSDK(args: {
                 I.searchAttachmentsDesc,
                 { query: z.string().describe(I.searchAttachmentsQueryParam), regex: z.boolean().optional().describe(I.searchRegexParam) },
                 async (a: { query: string; regex?: boolean }) => ({
-                  content: [{ type: 'text' as const, text: await runSearchAttachments(folderName, a.query, !!a.regex) }],
+                  content: [{ type: 'text' as const, text: await runSearchAttachments(folderName, a.query, !!a.regex, agentFullSystemAccess) }],
                 }),
               ),
             );
@@ -1977,6 +1986,7 @@ async function streamClaudeViaAgentSDK(args: {
                   framing: I.injectionFraming,
                   handoffTemplate: I.injectionAttachmentNote,
                   refsOpenable: hiddenAttachmentsAccessible,
+                  pathsVisible: agentFullSystemAccess,
                   refIndex: conversationAttachmentRefs,
                   ja: language === 'ja',
                 });
@@ -2077,6 +2087,7 @@ async function streamClaudeViaAgentSDK(args: {
                     framing: I.injectionFraming,
                     handoffTemplate: I.injectionAttachmentNote,
                     refsOpenable: hiddenAttachmentsAccessible,
+                    pathsVisible: agentFullSystemAccess,
                     refIndex: conversationAttachmentRefs,
                     ja: language === 'ja',
                   });
@@ -3739,13 +3750,14 @@ async function streamViaAnthropicCompat(args: {
               } else if (tu.name === 'read_conversation') {
                 const name = String(tu.input?.name || tu.input?.title || '').trim();
                 const r = await readConversationByName(folderName, name, {
+                  showPaths: agentFullSystemAccess,
                   fileTools: toolUseEnabled,
                   currentConvoId: convoId,
                 });
                 resultContent = formatReadConversationResult(r);
               } else if (tu.name === 'search_conversations') {
                 const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
-                resultContent = formatSearchForTool(sr);
+                resultContent = formatSearchForTool(sr, agentFullSystemAccess);
               } else if (tu.name === 'read_attachment') {
                 // Anthropic content-block shape has no audio/video block type,
                 // so only image can ever be native here regardless of the model.
@@ -3757,7 +3769,7 @@ async function streamViaAnthropicCompat(args: {
                     ]
                   : r.text;
               } else if (tu.name === 'search_attachments') {
-                resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex);
+                resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex, agentFullSystemAccess);
               } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                 resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
               } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
@@ -3872,6 +3884,7 @@ async function streamViaAnthropicCompat(args: {
               framing: I.injectionFraming,
               handoffTemplate: I.injectionAttachmentNote,
               refsOpenable: hiddenAttachmentsAccessible,
+              pathsVisible: agentFullSystemAccess,
               refIndex: conversationAttachmentRefs,
               ja: language === 'ja',
             });
@@ -4205,6 +4218,26 @@ export async function POST(req: Request) {
     // The caller's SAVED setting is not touched — the client keeps sending
     // what the operator chose, and switching the shell back off restores it.
     agentFullSystemAccess = effectiveFullAccess(agentFullSystemAccess, agentDangerousTools);
+    // ── Attachment addressing: paths OR refs, never both ────────────────────
+    // An attachment's bytes live at refPath(ref) — a pure function of the ref,
+    // under local_data/attachments/, which is OUTSIDE every workspace. So:
+    //
+    //   full access  → the being can already open that file with Read (measured:
+    //                  Read returns a real image block for an attachment path).
+    //                  Hand it the path and read_attachment has nothing left to
+    //                  do — so the tool is withdrawn, which also drops its two
+    //                  schemas from every provider's tool list.
+    //   no full access → the path is unreachable, so a path would be a lie.
+    //                  Keep refs and keep read_attachment: unchanged behaviour.
+    //
+    // Folded HERE, at the one place the request is unpacked, for the same
+    // reason effectiveFullAccess is: the five tool-exposure sites and the
+    // ref-scope builder below all read hiddenAttachmentsAccessible, and folding
+    // at the consumers would mean finding all of them and missing one.
+    // The operator's SAVED toggle is not touched — turning full access back off
+    // restores whatever they chose.
+    const attachmentPathsVisible = agentFullSystemAccess;
+    if (attachmentPathsVisible) hiddenAttachmentsAccessible = false;
     // ── Model-betrayal defence ──────────────────────────────────────────────
     // ONE detector per turn, spliced into the SSE sender that every provider
     // path writes through. When it trips with the guard ON it blanks the rest
@@ -4643,14 +4676,32 @@ export async function POST(req: Request) {
       if (m.attachments && m.attachments.length > 0) {
         for (const att of m.attachments) {
           if (att.excluded) {
-            // Hidden attachment. When read_attachment is enabled AND it has a
-            // ref, surface the 12-char hash so the entity can revive it via
-            // read_attachment — otherwise (legacy inline payload, or the toggle
-            // is off) it stays dropped from context as before.
-            if (hiddenAttachmentsAccessible && att.ref) {
+            // Hidden attachment — its bytes are not in this turn's context.
+            // Two ways to hand it back, picked by attachmentPathsVisible above:
+            //   • full access → the file's absolute path (open it with Read, or
+            //     pass it to a tool that takes a path, e.g. an image editor).
+            //   • otherwise, and only when the toggle is on → the 12-char ref,
+            //     which read_attachment takes.
+            // Neither → it stays dropped from context, exactly as before.
+            const hiddenPath = attachmentPathsVisible && att.ref ? refPath(att.ref) : null;
+            if (hiddenPath) {
+              contentStr += `\n\n<attached_file name="${att.name}" path="${hiddenPath}" size="${att.size || 0}">[hidden from this turn's context — the bytes are on disk at the path above]</attached_file>`;
+            } else if (hiddenAttachmentsAccessible && att.ref) {
               contentStr += `\n\n<attached_file name="${att.name}" ref="${String(att.ref).slice(0, 12)}" size="${att.size || 0}">[excluded from context — call read_attachment with this ref to read it]</attached_file>`;
             }
             continue;
+          }
+          // Visible attachment. Its CONTENT is already in this turn (text is
+          // inlined just below; media becomes a real image/audio/video block
+          // further down the provider paths). The path is a different reach:
+          // content lets the being READ it, a path lets it HAND the file to
+          // something else — an image editor, a script, ffmpeg. Emitted here,
+          // once per attachment, rather than in the eight per-provider media
+          // tags, so text and media are covered by one rule and no provider
+          // path can be the one that forgot.
+          const visiblePath = attachmentPathsVisible && att.ref ? refPath(att.ref) : null;
+          if (visiblePath) {
+            contentStr += `\n\n<attached_file name="${att.name}" path="${visiblePath}" size="${att.size || 0}" />`;
           }
           if (att.isText) {
             // Text attachment. Inline textData (legacy) or a content-addressed
@@ -6072,6 +6123,7 @@ export async function POST(req: Request) {
                     // and only a path is returned — see conversationRead.ts.
                     const name = String(tu.input?.name || tu.input?.title || '').trim();
                     const r = await readConversationByName(folderName, name, {
+                      showPaths: attachmentPathsVisible,
                       fileTools: toolUseEnabled,
                       currentConvoId: convoId,
                     });
@@ -6080,7 +6132,7 @@ export async function POST(req: Request) {
                     // Search across the entity's conversations; inactive ones are
                     // excluded (privacy). Nothing is saved.
                     const sr = await searchConversations(folderName, String(tu.input?.query || tu.input?.q || '').trim(), { excludeInactive: true, regex: !!tu.input?.regex });
-                    resultContent = formatSearchForTool(sr);
+                    resultContent = formatSearchForTool(sr, attachmentPathsVisible);
                   } else if (tu.name === 'read_attachment') {
                     // Anthropic content-block shape has no audio/video block
                     // type, so only image can ever be native here.
@@ -6092,7 +6144,7 @@ export async function POST(req: Request) {
                         ]
                       : r.text;
                   } else if (tu.name === 'search_attachments') {
-                    resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex);
+                    resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex, attachmentPathsVisible);
                   } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                     // Mail between identities. `me` is folderName — the sender is
                     // never taken from the model's arguments.
@@ -6245,6 +6297,7 @@ export async function POST(req: Request) {
                   framing: I.injectionFraming,
                   handoffTemplate: I.injectionAttachmentNote,
                   refsOpenable: hiddenAttachmentsAccessible,
+                  pathsVisible: attachmentPathsVisible,
                   refIndex: conversationAttachmentRefs,
                   ja: language === 'ja',
                 });
@@ -7179,6 +7232,7 @@ export async function POST(req: Request) {
                       // and only a path is returned — see conversationRead.ts.
                       const name = String(fc.args?.name || fc.args?.title || '').trim();
                       const r = await readConversationByName(folderName, name, {
+                        showPaths: attachmentPathsVisible,
                         fileTools: toolUseEnabled,
                         currentConvoId: convoId,
                       });
@@ -7187,7 +7241,7 @@ export async function POST(req: Request) {
                       // Search across the entity's conversations; inactive ones
                       // excluded (privacy). Nothing is saved.
                       const sr = await searchConversations(folderName, String(fc.args?.query || fc.args?.q || '').trim(), { excludeInactive: true, regex: !!fc.args?.regex });
-                      result = { report: formatSearchForTool(sr) };
+                      result = { report: formatSearchForTool(sr, attachmentPathsVisible) };
                     } else if (fc.name === 'read_attachment') {
                       // Gemini's inlineData part carries image/audio/video
                       // natively, so all three kinds are restorable here —
@@ -7199,7 +7253,7 @@ export async function POST(req: Request) {
                         extraInlineParts.push({ inlineData: { mimeType: r.media.mimeType, data: r.media.base64 } });
                       }
                     } else if (fc.name === 'search_attachments') {
-                      result = { report: await runSearchAttachments(folderName, String(fc.args?.query || '').trim(), !!fc.args?.regex) };
+                      result = { report: await runSearchAttachments(folderName, String(fc.args?.query || '').trim(), !!fc.args?.regex, attachmentPathsVisible) };
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
@@ -7343,6 +7397,7 @@ export async function POST(req: Request) {
                     framing: I.injectionFraming,
                     handoffTemplate: I.injectionAttachmentNote,
                     refsOpenable: hiddenAttachmentsAccessible,
+                    pathsVisible: attachmentPathsVisible,
                     refIndex: conversationAttachmentRefs,
                     ja: language === 'ja',
                   });
@@ -9316,6 +9371,7 @@ export async function POST(req: Request) {
                       // and only a path is returned — see conversationRead.ts.
                       const name = String(parsed.name || parsed.title || '').trim();
                       const r = await readConversationByName(folderName, name, {
+                        showPaths: attachmentPathsVisible,
                         fileTools: toolUseEnabled,
                         currentConvoId: convoId,
                       });
@@ -9324,7 +9380,7 @@ export async function POST(req: Request) {
                       // Search across the entity's conversations; inactive ones
                       // excluded (privacy). Nothing is saved.
                       const sr = await searchConversations(folderName, String(parsed.query || parsed.q || '').trim(), { excludeInactive: true, regex: !!parsed.regex });
-                      resultText = formatSearchForTool(sr);
+                      resultText = formatSearchForTool(sr, attachmentPathsVisible);
                     } else if (tc.name === 'read_attachment') {
                       // OpenAI `tool`-role messages can't carry media directly,
                       // so a restored image is delivered through the follow-up
@@ -9338,7 +9394,7 @@ export async function POST(req: Request) {
                         pendingImageInjects.push({ name: `attachment_${r.media.mimeType.replace('/', '_')}`, dataUrl: `data:${r.media.mimeType};base64,${r.media.base64}` });
                       }
                     } else if (tc.name === 'search_attachments') {
-                      resultText = await runSearchAttachments(folderName, String(parsed.query || '').trim(), !!parsed.regex);
+                      resultText = await runSearchAttachments(folderName, String(parsed.query || '').trim(), !!parsed.regex, attachmentPathsVisible);
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
@@ -9557,6 +9613,7 @@ export async function POST(req: Request) {
                     framing: I.injectionFraming,
                     handoffTemplate: I.injectionAttachmentNote,
                     refsOpenable: hiddenAttachmentsAccessible,
+                    pathsVisible: attachmentPathsVisible,
                     refIndex: conversationAttachmentRefs,
                     ja: language === 'ja',
                     // Local vision models (e.g. Gemma) are default-denied by the

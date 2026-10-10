@@ -29,7 +29,7 @@
  * (for the human).
  */
 
-import { readAttachmentBase64 } from './attachmentStore';
+import { readAttachmentBase64, refPath } from './attachmentStore';
 import { isVisionCapable, isAudioCapable, isVideoCapable } from './modelVision';
 import type { InjectedMedia } from './injectMessage';
 
@@ -177,12 +177,26 @@ export function audioFormatOf(mime: string): string {
 }
 
 /**
+ * How a handed-off attachment is ADDRESSED to the entity this turn. Mirrors
+ * attachmentPathsVisible in api/chat/route.ts — same two modes, same reason:
+ *
+ *   'path' — whole-PC access: the file under local_data/attachments/ is
+ *            reachable with Read, so hand over the path and skip the tool.
+ *   'ref'  — no whole-PC access, read_attachment exposed: a 12-char ref is the
+ *            only way in.
+ *   'none' — neither: say so instead of handing over an address that opens
+ *            nothing.
+ */
+export type AttachmentAddressing = 'path' | 'ref' | 'none';
+
+/**
  * The entity-facing note for attachments whose bytes could NOT ride along.
  *
- * This is the hand-off: the payload is in the content-addressed store, and the
- * 12-character ref is exactly what `read_attachment` takes — so an image that
- * cannot be pushed into an OAuth denial string is still reachable, by the
- * entity's own hand, inside the same turn. That is strictly more honest than
+ * This is the hand-off: the payload is in the content-addressed store, so an
+ * image that cannot be pushed into an OAuth denial string is still reachable,
+ * by the entity's own hand, inside the same turn — addressed either by the
+ * 12-character ref (what `read_attachment` takes) or by the file's absolute
+ * path, whichever this turn can actually open. See AttachmentAddressing. That is strictly more honest than
  * either dropping it or claiming it arrived, and it is the same mechanism that
  * already rescues hidden attachments.
  *
@@ -193,15 +207,24 @@ export function audioFormatOf(mime: string): string {
 export function handoffNote(
   items: { ref: string; name: string; mimeType: string; size: number }[],
   template: string | undefined,
-  readable: boolean,
+  addressing: AttachmentAddressing,
 ): string {
   if (!items.length) return '';
   const list = items
-    .map((m) => `• ${sanitizeName(m.name)} (${m.mimeType}, ${m.size || 0} bytes) — ref ${m.ref.slice(0, 12)}`)
+    .map((m) => {
+      const head = `• ${sanitizeName(m.name)} (${m.mimeType}, ${m.size || 0} bytes)`;
+      if (addressing === 'path') {
+        const abs = refPath(m.ref);
+        // An invalid/legacy ref has no file; fall back to the ref form rather
+        // than printing a path that opens nothing.
+        if (abs) return `${head} — ${abs}`;
+      }
+      return `${head} — ref ${m.ref.slice(0, 12)}`;
+    })
     .join('\n');
-  const body = readable
-    ? list
-    : `${list}\n(These cannot be opened on this connection.)`;
+  const body = addressing === 'none'
+    ? `${list}\n(These cannot be opened on this connection.)`
+    : list;
   const tpl = (template ?? '').trim();
   if (!tpl) return body;
   if (tpl.includes('{files}')) return tpl.replace('{files}', body);
@@ -218,7 +241,7 @@ export function handoffNote(
 export function undeliverableSummary(
   withheld: { name: string }[],
   missing: { name: string }[],
-  opts: { ja: boolean; handedOff: boolean },
+  opts: { ja: boolean; addressing: AttachmentAddressing },
 ): string {
   const parts: string[] = [];
   if (withheld.length) {
@@ -226,16 +249,20 @@ export function undeliverableSummary(
     if (opts.ja) {
       parts.push(
         `この接続はターン途中に次のファイルを直接運べません: ${names}。` +
-        (opts.handedOff
-          ? 'ref を渡したので、存在が read_attachment で自分で開ける。'
-          : 'この接続では開く手段もない。'),
+        (opts.addressing === 'path'
+          ? 'ファイルの絶対パスを渡したので、存在が自分で開ける。'
+          : opts.addressing === 'ref'
+            ? 'ref を渡したので、存在が read_attachment で自分で開ける。'
+            : 'この接続では開く手段もない。'),
       );
     } else {
       parts.push(
         `This connection can't carry these mid-turn: ${names}.` +
-        (opts.handedOff
-          ? ' The ref was handed over, so the entity can open them itself with read_attachment.'
-          : ' There is no way to open them on this connection either.'),
+        (opts.addressing === 'path'
+          ? ' The absolute path was handed over, so the entity can open them itself.'
+          : opts.addressing === 'ref'
+            ? ' The ref was handed over, so the entity can open them itself with read_attachment.'
+            : ' There is no way to open them on this connection either.'),
       );
     }
   }

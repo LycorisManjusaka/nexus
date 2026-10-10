@@ -79,6 +79,10 @@ export interface ReadConversationOptions {
   /** Id of the conversation this turn belongs to, so the result can say that
    *  the in-flight turn isn't in the file yet. */
   currentConvoId?: string;
+  /** How attachments in the transcript are addressed — absolute paths (the
+   *  caller can reach the whole disk) or 12-char refs (read_attachment is the
+   *  only way in). REQUIRED on purpose; see formatAttachmentEntry. */
+  showPaths: boolean;
 }
 
 // Normalize a conversation name for fuzzy matching: trim, collapse internal
@@ -108,16 +112,20 @@ function cleanContent(content: any): string {
     .replace(/data:[a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g, '[binary]');
 }
 
-// Render a message's attachment list as `[<ref> "name" (size), …]`, using the
-// same rendering as read_attachment's own error text so the two stay
-// consistent. Legacy attachments (no ref — inline dataUrl/textData predating
-// content-addressing) are still listed by name/size so the transcript doesn't
-// silently drop them, but flagged as unreadable via the tool.
-function formatMessageAttachments(attachments: any): string {
+// Render a message's attachment list, in whichever addressing mode this turn
+// uses — `[<ref> "name" (size), …]` or `["name" (size) — <abs path>, …]` — via
+// the shared formatAttachmentEntry, so a transcript and read_attachment's own
+// error text never disagree about how a file is named. Legacy attachments (no
+// ref — inline dataUrl/textData predating content-addressing) are still listed
+// by name/size so the transcript doesn't silently drop them, but flagged as
+// unreachable, in the terms of whichever mode is active.
+function formatMessageAttachments(attachments: any, showPaths: boolean): string {
   if (!Array.isArray(attachments) || attachments.length === 0) return '';
   const parts = attachments.map((a) => {
-    if (typeof a?.ref === 'string' && a.ref) return formatAttachmentEntry(a);
-    return `"${String(a?.name || 'unnamed')}" (no ref — not readable via read_attachment)`;
+    if (typeof a?.ref === 'string' && a.ref) return formatAttachmentEntry(a, showPaths);
+    return showPaths
+      ? `"${String(a?.name || 'unnamed')}" (legacy inline payload — no file on disk)`
+      : `"${String(a?.name || 'unnamed')}" (no ref — not readable via read_attachment)`;
   });
   return ` [${parts.join(', ')}]`;
 }
@@ -148,7 +156,7 @@ interface BuiltTranscript {
 // label falls back to the ENTITY name (folderName) — never the conversation
 // TITLE, which is a per-conversation name, not the speaker's identity.
 // Skip pure-system bookkeeping; strip base64; guard against inline thoughts.
-function buildTranscript(messages: any[], folderName: string): BuiltTranscript {
+function buildTranscript(messages: any[], folderName: string, showPaths: boolean): BuiltTranscript {
   const lines: string[] = [];
   const speakers = new Set<string>();
   let firstTs: number | null = null;
@@ -158,7 +166,7 @@ function buildTranscript(messages: any[], folderName: string): BuiltTranscript {
   for (const m of messages) {
     const speaker = m.role === 'user' ? (m.name || 'Anonymous') : (m.name || folderName || 'Assistant');
     const text = cleanContent(m.content || '').trim();
-    const atts = formatMessageAttachments(m.attachments);
+    const atts = formatMessageAttachments(m.attachments, showPaths);
     if (!text && !atts) continue;
 
     const ts = typeof m.timestamp === 'number' && Number.isFinite(m.timestamp) ? m.timestamp : null;
@@ -184,14 +192,22 @@ function buildTranscript(messages: any[], folderName: string): BuiltTranscript {
 
 // Framing legend so the reading model parses speakers unambiguously and
 // doesn't mistake a message's own "##" markdown headings for new speakers.
-const LEGEND =
+const LEGEND_BASE =
   'Each turn begins with its speaker in square brackets followed by the time it ' +
   'was sent, e.g. "[Name] (2026-04-01 12:03):". Any line starting with "#" inside ' +
-  'a turn is that message\'s own markdown heading — NOT a new speaker. Attachments ' +
-  'are listed as "<ref> \\"name\\" (size)" right after the speaker tag; a ref can ' +
-  'be read in full with the read_attachment tool (it works across ALL of your ' +
-  'conversations, not just this one). Attachments with no ref are legacy inline ' +
-  'payloads and cannot be read that way.';
+  'a turn is that message\'s own markdown heading — NOT a new speaker. ';
+
+function legendFor(showPaths: boolean): string {
+  return LEGEND_BASE + (showPaths
+    ? 'Attachments are listed as "\\"name\\" (size) — <absolute path>" right after ' +
+      'the speaker tag; the path is the file itself on disk, so read it or hand it ' +
+      'to any tool that takes a path. A few legacy attachments were stored inline ' +
+      'and have no file.'
+    : 'Attachments are listed as "<ref> \\"name\\" (size)" right after the speaker ' +
+      'tag; a ref can be read in full with the read_attachment tool (it works across ' +
+      'ALL of your conversations, not just this one). Attachments with no ref are ' +
+      'legacy inline payloads and cannot be read that way.');
+}
 
 /** Filesystem-safe, human-recognizable stem for a mirror filename. */
 function mirrorStem(title: string): string {
@@ -246,7 +262,7 @@ async function sweepMirrors(dir: string, expected: Set<string>): Promise<void> {
 export async function readConversationByName(
   folderName: string,
   name: string,
-  opts: ReadConversationOptions = {},
+  opts: ReadConversationOptions,
 ): Promise<ReadConversationResult> {
   if (!name || !name.trim()) {
     return { ok: false, error: 'A conversation name is required.' };
@@ -312,7 +328,7 @@ export async function readConversationByName(
     return { ok: false, error: `Failed to load "${hit.title}".` };
   }
 
-  const built = buildTranscript(full.messages, folderName);
+  const built = buildTranscript(full.messages, folderName, opts.showPaths);
   const isCurrent = !!opts.currentConvoId && opts.currentConvoId === hit.id;
   // Compare the RENDERED stamps, not the raw epochs: a conversation that ran
   // for forty seconds has two different timestamps that format to the same
@@ -356,7 +372,7 @@ export async function readConversationByName(
       period ? `- Period: ${period}` : '',
       built.speakers.length ? `- Speakers: ${built.speakers.join(', ')}` : '',
       '',
-      LEGEND,
+      legendFor(opts.showPaths),
       '',
       '---',
       '',
@@ -377,7 +393,7 @@ export async function readConversationByName(
         messages: built.messages,
         speakers: built.speakers,
         period,
-        transcript: `${LEGEND}\n\n${built.body}`,
+        transcript: `${legendFor(opts.showPaths)}\n\n${built.body}`,
       };
     }
 
@@ -405,7 +421,7 @@ export async function readConversationByName(
     messages: built.messages,
     speakers: built.speakers,
     period,
-    transcript: `${LEGEND}\n\n${built.body}`,
+    transcript: `${legendFor(opts.showPaths)}\n\n${built.body}`,
   };
 }
 

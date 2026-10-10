@@ -2906,6 +2906,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // present in claudeThinkingBlocks. Excluded attachments are dropped entirely
       // (the backend would skip them, but their base64 dataUrls would still bloat
       // the browser→server body and trip request size limits).
+      // A hidden attachment has to survive this slimming for the backend to be
+      // able to say ANYTHING about it — the metadata (name/size/ref) is what
+      // becomes either a read_attachment ref or an absolute path there. Both
+      // addressing modes therefore have to be asked about here, or the server
+      // would do the right thing with a list that never arrived. (Only the
+      // metadata travels; the base64 payload is stripped just below.)
+      const attachmentPathsVisible = effectiveFullAccess(agentFullSystemAccess, agentDangerousTools);
       const slimHistory = history.map((m: any) => {
         const slim: any = {
           // id forwarded so the backend can match `attachment_described` SSE
@@ -2925,7 +2932,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         };
         if (m.attachments?.length) {
           const kept = m.attachments
-            .filter((a: any) => !a.excluded || (hiddenAttachmentsAccessible && a.ref))
+            .filter((a: any) => !a.excluded || ((hiddenAttachmentsAccessible || attachmentPathsVisible) && a.ref))
             .map((a: any) => {
               const { fileObj, ...rest } = a;
               if (rest.excluded) return { ...rest, textData: null, dataUrl: null };
@@ -5683,7 +5690,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={hiddenAttachmentsAccessible}
+                    checked={hiddenAttachmentsAccessible && !effectiveFullAccess(agentFullSystemAccess, agentDangerousTools)}
+                    disabled={effectiveFullAccess(agentFullSystemAccess, agentDangerousTools)}
                     onChange={(e) => setHiddenAttachmentsAccessible(e.target.checked)}
                     className="accent-sky-500"
                   />
@@ -5692,6 +5700,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
                   <Tx k="sysmodal.hiddenAttach.help" />
                 </p>
+                {/* With whole-PC access the tool is redundant: the attachment
+                    store sits outside every workspace, so a path only becomes
+                    openable at that point — and once it is, Read does the same
+                    job. The server withdraws the tool and prints paths instead
+                    (see attachmentPathsVisible in api/chat/route.ts). The saved
+                    toggle is NOT rewritten — turning full access off restores
+                    whatever the operator chose, which is why `checked` masks
+                    the value here rather than setState clearing it. */}
+                {effectiveFullAccess(agentFullSystemAccess, agentDangerousTools) && (
+                  <p className="text-xs text-sky-500/90 mt-1 ml-6 leading-relaxed">
+                    <Tx k="sysmodal.hiddenAttach.pathsInstead" />
+                  </p>
+                )}
               </div>
 
               {/* ── Web Search & Access (universal DuckDuckGo tools) ──────────

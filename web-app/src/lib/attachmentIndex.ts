@@ -22,7 +22,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { beingLogsDir } from './beingPaths';
-import { readAttachmentText } from './attachmentStore';
+import { readAttachmentText, refPath } from './attachmentStore';
 import { isMediaMime } from './textSniff';
 import { compileSafeRegex, grepLines } from './safeRegex';
 
@@ -50,9 +50,33 @@ export function formatAttachmentSize(n: number): string {
   return i === 0 ? `${Math.round(v)} B` : `${v.toFixed(1)} ${units[i]}`;
 }
 
-/** One `<ref12> "name" (size)` fragment — the shared rendering for an entry. */
-export function formatAttachmentEntry(a: AttachmentIndexEntry): string {
-  return `${a.ref.slice(0, 12)} "${a.name}" (${formatAttachmentSize(a.size)})`;
+/**
+ * One attachment fragment — the shared rendering for an entry, in whichever of
+ * the two addressing modes this turn is using.
+ *
+ * `showPaths` is REQUIRED, not optional, and that is deliberate: every renderer
+ * that shows attachments to a model has to make this choice, and a default
+ * would let a new call site silently pick the wrong one. Making it mandatory
+ * turns "I forgot to thread the flag" into a compile error instead of a quiet
+ * downgrade. See the header of attachmentPathsVisible in api/chat/route.ts for
+ * which mode a turn is in and why.
+ *
+ *   showPaths=false → `<ref12> "name" (size)`    — the ref is what read_attachment takes
+ *   showPaths=true  → `"name" (size) — C:\…`     — the file itself, for Read/Bash/tools
+ *
+ * The path is not extra information: it is `refPath(ref)`, a pure function of
+ * the ref. The modes differ in what the being can DO with what it is handed,
+ * not in what it is being told.
+ */
+export function formatAttachmentEntry(a: AttachmentIndexEntry, showPaths: boolean): string {
+  const tail = `"${a.name}" (${formatAttachmentSize(a.size)})`;
+  if (showPaths) {
+    const p = refPath(a.ref);
+    if (p) return `${tail} — ${p}`;
+    // Invalid/legacy ref: refPath refuses it, so there is no file to point at.
+    // Fall through to the ref form rather than inventing a path.
+  }
+  return `${a.ref.slice(0, 12)} ${tail}`;
 }
 
 // Walk every conversation log of a being and collect every attachment
@@ -257,7 +281,7 @@ function fmtTs(ts: number | null): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export function formatAttachmentSearchForTool(r: AttachmentSearchResult): string {
+export function formatAttachmentSearchForTool(r: AttachmentSearchResult, showPaths: boolean): string {
   const relessNote = r.attachmentsWithoutRef
     ? ` (${r.attachmentsWithoutRef} more attachment(s) have no stored reference yet and could not be scanned at all — likely pre-migration text attachments; ask your steward to run the text-attachment migration)`
     : '';
@@ -270,10 +294,12 @@ export function formatAttachmentSearchForTool(r: AttachmentSearchResult): string
   lines.push(`${r.hits.length} attachment(s) match "${r.query}"${r.regex ? ' (regex mode)' : ''}${relessNote}:`);
   for (const h of r.hits) {
     lines.push('');
-    lines.push(`- ${formatAttachmentEntry(h)} — ${fmtTs(h.timestamp)}, from "${h.convoTitle}"`);
+    lines.push(`- ${formatAttachmentEntry(h, showPaths)} — ${fmtTs(h.timestamp)}, from "${h.convoTitle}"`);
     for (const s of h.snippets) lines.push(`    ${s}`);
   }
   lines.push('');
-  lines.push('Call read_attachment with the ref prefix shown above to read a match in full.');
+  lines.push(showPaths
+    ? 'Each match above ends in the file\'s absolute path — read it, or hand it to any tool that takes a path.'
+    : 'Call read_attachment with the ref prefix shown above to read a match in full.');
   return lines.join('\n');
 }

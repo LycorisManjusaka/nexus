@@ -527,7 +527,7 @@ function fmtTs(ts: number | null): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-export function formatSearchForTool(r: SearchResult): string {
+export function formatSearchForTool(r: SearchResult, showPaths: boolean): string {
   if (r.totalMatches === 0) {
     return `No matches for "${r.query}" across your ${r.conversationsSearched} conversation(s).`;
   }
@@ -553,7 +553,7 @@ export function formatSearchForTool(r: SearchResult): string {
       const shownAtts = g.attachments.slice(0, TOOL_MAX_ATTACHMENTS_PER_CONVO);
       const rest = g.attachments.length - shownAtts.length;
       lines.push(
-        `  attachments: ${shownAtts.map(formatAttachmentEntry).join(', ')}` +
+        `  attachments: ${shownAtts.map((a) => formatAttachmentEntry(a, showPaths)).join(', ')}` +
         (rest > 0 ? `, …and ${rest} more` : ''),
       );
     }
@@ -565,7 +565,9 @@ export function formatSearchForTool(r: SearchResult): string {
   lines.push('');
   lines.push(
     'To pull any of these into full context, call read_conversation with the exact title shown after "###". ' +
-    'To read an attachment listed above in full, call read_attachment with its ref prefix.',
+    (showPaths
+      ? 'Each attachment listed above ends in its absolute path — read it, or hand the path to any tool that takes one.'
+      : 'To read an attachment listed above in full, call read_attachment with its ref prefix.'),
   );
   return lines.join('\n');
 }
