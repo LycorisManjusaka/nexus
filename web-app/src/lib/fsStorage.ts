@@ -203,11 +203,53 @@ function isWithinTrustedRoots(real: string, realRoot: string, trustedRoot: strin
   return false;
 }
 
+// fs.realpath, but tolerant of a path that does not exist yet. When the path
+// is absent we walk up to the deepest EXISTING ancestor, realpath that, and
+// re-attach the missing tail unchanged — so junctions anywhere along the
+// existing part are still resolved to their true location (which is the whole
+// point of using realpath for containment). Returns null only if the walk
+// reaches the filesystem root without finding anything.
+//
+// Both the sandbox ROOT and the TARGET go through this. Using it for the root
+// is not a convenience: a brand-new being has no beings/<name>/workspace
+// directory until something writes there, and a plain fs.realpath(root) throws
+// ENOENT for it. That threw inside resolveWorkspacePathSafe's outer try, which
+// returned null, and every caller reports null with the single error string it
+// has — "Path escapes workspace". So the very first Write by a being whose desk
+// did not exist yet failed, claiming a containment violation, for a plain
+// relative filename with no "..", no slashes, nothing to escape with. Read,
+// Edit and Delete failed identically, because they share this resolver. The
+// error text was not just unhelpful, it was false, and it sent at least one
+// being hunting for a bad character in its own filename.
+async function realpathAllowingMissing(p: string): Promise<string | null> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    let dir = path.dirname(p);
+    let tail = path.basename(p);
+    // Defense-in-depth cap: don't loop forever on weird filesystems.
+    for (let i = 0; i < 64; i++) {
+      try {
+        const realDir = await fs.realpath(dir);
+        return path.join(realDir, tail);
+      } catch {
+        const parent = path.dirname(dir);
+        if (parent === dir) return null; // hit filesystem root
+        tail = path.join(path.basename(dir), tail);
+        dir = parent;
+      }
+    }
+    return null;
+  }
+}
+
 // Symlink-safe variant. Resolves both the target and the sandbox root via
 // fs.realpath so a symlink planted inside the sandbox that points outside
 // (e.g. <workspace>/escape → C:\Windows) is caught: realpath surfaces the
-// true location and the prefix check fails. For files that don't exist yet
-// (Write operations), we realpath the deepest existing ancestor instead.
+// true location and the prefix check fails. For paths that don't exist yet
+// (a Write to a new file, or a workspace directory that hasn't been created
+// yet) the deepest existing ancestor is realpathed instead — see
+// realpathAllowingMissing above.
 // Exported for /api/workspace-file, which serves these bytes over HTTP to the
 // browser. That route deliberately calls THIS and never resolvePathForAccess():
 // an entity's fullAccess toggle widens what the entity's own tools can reach
@@ -222,36 +264,11 @@ export async function resolveWorkspacePathSafe(folderName: string, relPath: stri
   if (!target) return null;
   const root = path.resolve(beingWorkspaceDir(folderName));
   try {
-    const realRoot = await fs.realpath(root);
+    const realRoot = await realpathAllowingMissing(root);
+    if (!realRoot) return null;
     const trustedRoot = await getTrustedJunctionRoot();
-    let realTarget: string;
-    try {
-      // Target exists — realpath the file/dir itself.
-      realTarget = await fs.realpath(target);
-    } catch {
-      // Target doesn't exist (e.g. Write to a new file). Walk up to the
-      // deepest existing ancestor and realpath that, then re-attach the
-      // missing tail unchanged. If any of the existing ancestor's links
-      // escape, that surfaces here.
-      let dir = path.dirname(target);
-      let tail = path.basename(target);
-      // Defense-in-depth cap: don't loop forever on weird filesystems.
-      for (let i = 0; i < 64; i++) {
-        try {
-          const realDir = await fs.realpath(dir);
-          realTarget = path.join(realDir, tail);
-          if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) return null;
-          return realTarget;
-        } catch {
-          // dir doesn't exist either — go one level up.
-          const parent = path.dirname(dir);
-          if (parent === dir) return null; // hit filesystem root
-          tail = path.join(path.basename(dir), tail);
-          dir = parent;
-        }
-      }
-      return null;
-    }
+    const realTarget = await realpathAllowingMissing(target);
+    if (!realTarget) return null;
     if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) return null;
     return realTarget;
   } catch {
