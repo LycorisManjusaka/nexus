@@ -45,6 +45,7 @@ import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireC
 import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
+import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
@@ -470,6 +471,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // (instead of being silently dropped) and the read_attachment tool is exposed
   // so the entity can read it back. OFF (default) = current behaviour.
   const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(false);
+  // Replay the entity's OWN past tool calls back to it across turn boundaries.
+  // `toolCalls` has always been display-only, so across turns a vessel read a
+  // past self that merely *talked* about calling tools — and a weak-handed
+  // vessel imitates what it reads. OFF (default) = the old wire, byte for byte.
+  // OpenAI-compatible route only. See lib/toolHistory.ts for the measurements.
+  const [toolHistoryEnabled, setToolHistoryEnabled] = useState(false);
   // Optional interactive "ask the user a multiple-choice question" tool. When
   // ON, the model can pause a turn to ask and wait for the user's selection.
   const [askUserEnabled, setAskUserEnabled] = useState(false);
@@ -1389,6 +1396,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAgentFullSystemAccess(data.agentFullSystemAccess === true);
         setAgentDangerousTools(data.agentDangerousTools === true);
         setHiddenAttachmentsAccessible(data.hiddenAttachmentsAccessible === true);
+        setToolHistoryEnabled(data.toolHistoryEnabled === true);
         setAskUserEnabled(data.askUserEnabled === true);
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setSubagentEnabled(data.subagentEnabled === true);
@@ -1472,6 +1480,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAgentFullSystemAccess(pick('agentFullSystemAccess', false));
         setAgentDangerousTools(pick('agentDangerousTools', false));
         setHiddenAttachmentsAccessible(pick('hiddenAttachmentsAccessible', false));
+        setToolHistoryEnabled(pick('toolHistoryEnabled', false));
         setAskUserEnabled(pick('askUserEnabled', false));
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setSubagentEnabled(pick('subagentEnabled', false));
@@ -1600,7 +1609,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1710,7 +1719,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2913,6 +2922,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // would do the right thing with a list that never arrived. (Only the
       // metadata travels; the base64 payload is stripped just below.)
       const attachmentPathsVisible = effectiveFullAccess(agentFullSystemAccess, agentDangerousTools);
+      // Which past turns may carry their own tool calls onto the wire. The
+      // window is applied HERE because this is the only side holding the whole
+      // conversation — so the POST body grows by at most one turn's calls, and
+      // the server receives exactly what it is allowed to replay. When the
+      // toggle is off this is empty and the body is byte-for-byte the old one.
+      const toolHistoryIds = toolHistoryEnabled ? selectToolHistoryIds(history) : new Set<string>();
       const slimHistory = history.map((m: any) => {
         const slim: any = {
           // id forwarded so the backend can match `attachment_described` SSE
@@ -2939,6 +2954,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               return rest;
             });
           if (kept.length) slim.attachments = kept;
+        }
+        // The entity's own tool calls from a past turn. slimHistory is an
+        // allowlist, so for every version of NEXUS before this one the field
+        // simply never travelled — the server could have been written to
+        // replay it and nothing would have arrived. Only the windowed ids get
+        // it, and only with the toggle on.
+        if (m.id && toolHistoryIds.has(m.id)) {
+          const calls = replayableCalls(m);
+          if (calls.length) slim.toolCalls = calls.map((c: any) => ({ name: c.name, input: c.input }));
         }
         // Only feed Claude its own past reasoning when the user opts in via the
         // "Save & reuse thinking process" toggle, and only for blocks the user
@@ -2989,7 +3013,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // aiName/specificModel are the EFFECTIVE pair: after a change_model
       // handoff the override decides who answers, while localAiName /
       // specificModel stay the being's saved default (see handoffOverride).
-      const bodyObj = { messages: slimHistory, aiName: turnAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
+      const bodyObj = { messages: slimHistory, aiName: turnAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
         browserEnabled,
         // Text in the UI, array on the wire. Split on newlines and commas so the
         // box accepts whichever way the host list was typed.
@@ -5714,6 +5738,34 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </p>
                 )}
               </div>
+
+              {/* ── Replay the entity's own past tool calls ───────────────────
+                  Shown only for the families that reach the OpenAI-compatible
+                  history assembly, because that is the only dialect this is
+                  wired for. Deliberately NOT the same list as web search below:
+                  Kimi and MiMo appear there but go through the Anthropic-format
+                  adapter, so a toggle would do nothing for them — and a control
+                  that changes nothing is worse than no control. Anthropic 400s
+                  on the shape existing logs can produce; Gemini calls the tool
+                  regardless of the broken history (3/3 measured). */}
+              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'Minimax' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local') && (
+                <div>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={toolHistoryEnabled}
+                      onChange={(e) => setToolHistoryEnabled(e.target.checked)}
+                      className="mt-0.5 accent-sky-500"
+                    />
+                    <span className="text-sm font-semibold text-foreground leading-tight">
+                      {t('sysmodal.toolHistory.label')}
+                      <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
+                        <Tx k="sysmodal.toolHistory.help" />
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* ── Web Search & Access (universal DuckDuckGo tools) ──────────
                   Moved here from the Model tab so every tool toggle lives in

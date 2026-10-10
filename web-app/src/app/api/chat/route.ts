@@ -300,6 +300,7 @@ import {
 } from '@/lib/injectMedia';
 import { runShellCommand } from '@/lib/shellTool';
 import { effectiveFullAccess } from '@/lib/agentCapabilities';
+import { buildOpenAiToolReplay } from '@/lib/toolHistory';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
 import { ensureLmStudioLaunched, getLocalModelsMeta, loadLocalModel } from '@/lib/localModels';
@@ -4196,6 +4197,14 @@ export async function POST(req: Request) {
       // is exposed so the entity can read it back. OFF (default) = current
       // behaviour: hidden attachments are simply dropped from context.
       hiddenAttachmentsAccessible = false,
+      // ── Replay the model's own past tool calls (OpenAI-compatible only) ───
+      // Per-conversation toggle, default OFF. When ON the client forwards the
+      // stored `toolCalls` for the most recent tool-bearing assistant turn and
+      // the OpenAI-compatible assembly puts them back on the wire, paired with
+      // a placeholder result. Without it a vessel reads a past self that only
+      // talked about calling tools — and a weak-handed vessel imitates that.
+      // Measured 1/16 → 10/10 on MiniMax M3. See lib/toolHistory.ts.
+      toolHistoryEnabled = false,
       // ── Model-betrayal defence (Preferences → global, default ON) ────────
       // See lib/betrayalGuard.ts. true = detect AND blank the turn;
       // false = detect and warn only, leaving the output visible (the mode
@@ -4923,7 +4932,14 @@ export async function POST(req: Request) {
           }
         }
       }
-      return { role: m.role, content: contentStr, mediaFiles, claudeThinkingBlocks: m.claudeThinkingBlocks };
+      // `id` and `toolCalls` ride along for the cross-turn tool replay
+      // (lib/toolHistory). This return value is an allowlist — exactly like
+      // slimHistory on the client — so until both were named here the replay
+      // was dead on arrival: the browser forwarded the calls, the POST body
+      // carried them, the assembly below read `m.toolCalls` and found
+      // undefined. Type-checked clean and measured as zero difference in input
+      // tokens. Second instance of that shape inside one feature.
+      return { id: m.id, role: m.role, content: contentStr, mediaFiles, claudeThinkingBlocks: m.claudeThinkingBlocks, toolCalls: m.toolCalls };
     }));
 
     // ── Letters waiting ──────────────────────────────────────────────────────
@@ -8426,7 +8442,26 @@ export async function POST(req: Request) {
         const allText = parts.every((p: any) => p.type === 'text');
         const content = allText ? parts.map((p: any) => p.text).join('\n') : parts;
 
-        baseOaiMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content });
+        // Replay this turn's own tool calls, if the conversation asked for it.
+        // The client already applied the window (lib/toolHistory
+        // selectToolHistoryIds), so anything that arrives here is in budget;
+        // what THIS side owns is the wire shape and the tool-name check — the
+        // tools array is only known here. A call naming a tool that is not in
+        // this turn's `tools` would reference a nonexistent function, so
+        // buildOpenAiToolReplay drops it and returns null when nothing is left,
+        // and we fall through to exactly the plain message sent before this
+        // feature existed. No other dialect gets this: Anthropic 400s on an
+        // unpaired tool_use and shows no damage anyway, Gemini calls the tool
+        // regardless. Measured per dialect — see lib/toolHistory.ts.
+        const replay = toolHistoryEnabled && m.role !== 'user'
+          ? buildOpenAiToolReplay(m, content, new Set(localTools.map((t: any) => String(t?.function?.name || ''))))
+          : null;
+        if (replay) {
+          baseOaiMessages.push(replay.assistant);
+          baseOaiMessages.push(...replay.toolMessages);
+        } else {
+          baseOaiMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content });
+        }
       }
 
       // NOTE: No "prevent thinking" switch for local models. There is no
@@ -9023,14 +9058,24 @@ export async function POST(req: Request) {
           // 2026-09-23 — it returned a well-formed function_call), so wiring the
           // full tool loop onto this endpoint is possible; it is not done here.
           if (isGrok && modelParams.enableGrokNativeSearch) {
-            const grokInput = baseOaiMessages.map((m: any) => ({
-              role: m.role,
-              content: typeof m.content === 'string'
-                ? m.content
-                : (Array.isArray(m.content)
-                    ? m.content.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('\n')
-                    : String(m.content ?? '')),
-            }));
+            const grokInput = baseOaiMessages
+              // This fork flattens to {role, content}, so a replayed tool pair
+              // (lib/toolHistory) would arrive as a bare `role: 'tool'` message
+              // with its tool_call_id stripped — a shape the Responses API has
+              // no call to match. Dropping the result messages here (the
+              // tool_calls are already lost to the flattening) degrades this
+              // fork back to exactly the prose-only wire it had before that
+              // feature existed, which is the correct behaviour for an endpoint
+              // that carries no workspace tools in the first place.
+              .filter((m: any) => m.role !== 'tool')
+              .map((m: any) => ({
+                role: m.role,
+                content: typeof m.content === 'string'
+                  ? m.content
+                  : (Array.isArray(m.content)
+                      ? m.content.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('\n')
+                      : String(m.content ?? '')),
+              }));
             try {
               await runGrokNativeSearch({ apiKey: keys.grok || '', model: localModel, input: grokInput, enqueue, signal: turnAbort.signal, language });
             } catch (e: any) {
