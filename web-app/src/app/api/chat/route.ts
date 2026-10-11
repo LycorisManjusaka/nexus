@@ -1474,7 +1474,7 @@ async function streamClaudeViaAgentSDK(args: {
             // browser_screenshot (which the being cannot see itself), computer_screenshot
             // DOES deliver a real image — MCP ImageContent blocks let the OAuth
             // path return one directly, same as the other three provider paths.
-            const computerCtx = { me: folderName, instructions: I };
+            const computerCtx = { me: folderName, instructions: I, language };
             nexusTools.push(
               sdk.tool('computer_screens', I.toolComputerScreensDesc, {}, async () => {
                 const r = await runComputerTool('computer_screens', {}, computerCtx);
@@ -3795,7 +3795,7 @@ async function streamViaAnthropicCompat(args: {
                   allowAnyHost: browserAllowAnyHost, instructions: I,
                 });
               } else if ((COMPUTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
-                const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I });
+                const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I, language });
                 if (cr.image) {
                   // Computer screenshots carry a 1:1 pixel→absolute-coordinate
                   // contract with their caption: runComputerTool reports the
@@ -6218,7 +6218,7 @@ export async function POST(req: Request) {
                     // 1568px (long edge) server-side, so NEXUS pre-shrinks to 1568
                     // here — otherwise the being reads a 1568px image while NEXUS
                     // thinks it is bigger, and every screen_index click lands off.
-                    const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I, maxEdge: 1568 });
+                    const cr = await runComputerTool(tu.name, tu.input || {}, { me: folderName, instructions: I, language, maxEdge: 1568 });
                     if (cr.image) {
                       resultContent = [
                         { type: 'text', text: cr.text },
@@ -7333,6 +7333,7 @@ export async function POST(req: Request) {
                       const cr = await runComputerTool(fc.name, fc.args || {}, {
                         me: folderName,
                         instructions: I,
+                        language,
                         heightTarget: NORMALIZED_COORD_SAFE_HEIGHT,
                       });
                       result = { report: cr.text };
@@ -9497,7 +9498,7 @@ export async function POST(req: Request) {
                       // delivers a real image the same way Read does for an image
                       // file: eyes-bridge description for text-only models,
                       // pendingImageInjects for vision-capable ones.
-                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I, normalizedCoords: reportsNormalizedCoords(localModel) });
+                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I, language, normalizedCoords: reportsNormalizedCoords(localModel) });
                       if (cr.image) {
                         if (useEyes) {
                           const eyesResult = await describeImage({

@@ -1199,7 +1199,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'id.computer.label': '🖱️ Computer control (OS-level mouse, keyboard, screen — Windows only)',
   'id.computer.help':
-    'OFF by default. When ON, this being gets `computer_screens`, `computer_screenshot` and `computer_input` — real control of the whole physical desktop, not a sandboxed browser window. Every screenshot flashes a visible red border around the captured monitor on the real screen; every click flashes a visible red circle at the moment it happens. Nothing here is silent: every command is written to the server log, and an annotated copy of each screenshot (with click marks and coordinates) is saved under `local_data/computer_control_logs/{folder}/` for your own review — the being only ever sees the clean, unmarked image. Windows only; requires a vision-capable model (or the eyes bridge) to actually see the screenshots.',
+    'OFF by default. When ON, this being gets `computer_screens`, `computer_screenshot` and `computer_input` — real control of the whole physical desktop, not a sandboxed browser window. Every screenshot flashes a visible red border around the captured monitor on the real screen; every click flashes a visible red circle at the moment it happens. Nothing here is silent: every command is written to the server log, and annotated frames are saved under `local_data/beings/{folder}/computer_control_logs/` for your own review. Two kinds: one per screenshot (what the being looked at) and one per input batch — captured just BEFORE those commands run, so the marks sit on the screen they actually acted on. Each mark is numbered and its shape says which button (circle = left, square = right, diamond = middle, arrow = drag), and every command in the batch is listed in order down the side, including the ones with no position of their own (wheel, key presses, typed text). The being only ever sees the clean, unmarked image. Windows only; requires a vision-capable model (or the eyes bridge) to actually see the screenshots.',
 
   'id.app.label': '🪟 App control (read and drive application windows — Windows only)',
   'id.app.help':
@@ -2764,7 +2764,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'id.computer.label': '🖱️ 画面操作（OS レベルのマウス・キーボード・画面 — Windows のみ）',
   'id.computer.help':
-    '既定は OFF。ON にすると、この存在に `computer_screens`・`computer_screenshot`・`computer_input` が渡されます — サンドボックス化されたブラウザではなく、物理デスクトップ全体への実際の操作です。スクリーンショットを撮るたびに、撮影中のモニターの周りに赤い太枠が実画面上に一瞬表示されます。クリックのたびに、その瞬間に赤い円が実画面上に表示されます。ここで起きることは何も見えないところでは行われません — すべてのコマンドはサーバーのログに記録され、各スクリーンショットのクリック跡・座標付きの記録用コピーが `local_data/computer_control_logs/{folder}/` に保存されます（あなた自身の確認用）。存在に渡されるのは、印のない綺麗な画像だけです。Windows 専用。スクリーンショットを実際に見るには、画像を扱えるモデル（または eyes ブリッジ）が必要です。',
+    '既定は OFF。ON にすると、この存在に `computer_screens`・`computer_screenshot`・`computer_input` が渡されます — サンドボックス化されたブラウザではなく、物理デスクトップ全体への実際の操作です。スクリーンショットを撮るたびに、撮影中のモニターの周りに赤い太枠が実画面上に一瞬表示されます。クリックのたびに、その瞬間に赤い円が実画面上に表示されます。ここで起きることは何も見えないところでは行われません — すべてのコマンドはサーバーのログに記録され、印をつけた記録用のコマが `local_data/beings/{folder}/computer_control_logs/` に保存されます（あなた自身の確認用）。2 種類あります。スクリーンショット 1 枚につき 1 コマ（その存在が見た画面）と、入力 1 回につき 1 コマ — 後者はコマンドを実行する「直前」に撮るので、印は実際に操作した画面の上に載ります。印には番号がつき、形がボタンを表します（円＝左・四角＝右・菱形＝中・矢印＝ドラッグ）。位置を持たないコマンド（ホイール、キー、入力した文字）も含め、その回の全コマンドが画面の横に順番で並びます。存在に渡されるのは、印のない綺麗な画像だけです。Windows 専用。スクリーンショットを実際に見るには、画像を扱えるモデル（または eyes ブリッジ）が必要です。',
 
   'id.app.label': '🪟 アプリ操作（アプリのウィンドウを読み、操作する — Windows のみ）',
   'id.app.help':
