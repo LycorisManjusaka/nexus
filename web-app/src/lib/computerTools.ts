@@ -582,7 +582,14 @@ const AUDIT_STACK_MAX = 14;
 const lastShotMonitor: { idx: number | null } = ((globalThis as any).__nexusLastShotMonitor ||= { idx: null });
 
 export interface AuditMark {
-  /** Display number — a command index, or "3-5" for a grouped drag. */
+  /** Display number, shared with this mark's stack row. Counts MARKS, not
+   *  commands: the number exists only to tie a shape on the picture to a row
+   *  in the stack, so numbering a command that draws nothing hands the viewer
+   *  a label with nothing behind it — and makes the numbers that DO point
+   *  somewhere look like they are skipping (Lizard-kun, 2026-10-12: the frame
+   *  read 1 → 3 → 5). MEASURED over the 420 computer_input calls saved in the
+   *  house's conversation logs: 58.2% of commands draw no mark, and 60.2% of
+   *  calls skipped at least one number. */
   n: string;
   kind: 'click' | 'down' | 'up' | 'move' | 'drag';
   /** 0 left, 1 right, 2 middle. */
@@ -595,6 +602,11 @@ export interface AuditMark {
   y2?: number;
 }
 
+/** One row of the right-hand stack. `n` is EMPTY for a command that drew no
+ *  mark on this frame (a wait, a keystroke, a wheel, a click on another
+ *  monitor). The row keeps its place in time — order is carried by position,
+ *  which needs no number — but it claims no number the viewer could go
+ *  looking for and not find. */
 export interface AuditStackEntry { n: string; label: string; }
 
 function xmlEsc(s: string): string {
@@ -692,18 +704,31 @@ export function buildAuditOverlaySvg(w: number, h: number, marks: AuditMark[], s
   // knows where to look for "what happened in this frame". Every row gets the
   // SAME width — per-row widths right-aligned leave a ragged left edge, and
   // these frames are shown to people outside the house.
-  const rows = stack.slice(0, AUDIT_STACK_MAX).map((e) => ({ text: `${e.n}  ${e.label}`, box: boxedLabel(0, 0, `${e.n}  ${e.label}`, stackFs, stackPad, 2 * ui) }));
-  const colW = Math.min(rows.reduce((mx, r) => Math.max(mx, r.box.w), 0), Math.round(w * 0.46));
+  // Two <text> columns, not one string: a row whose command drew no mark has
+  // no number, and leading spaces cannot hold its place — SVG's default
+  // xml:space collapses runs of whitespace and strips them at the start. A
+  // reserved number column keeps every label on the same left edge, and the
+  // blank is itself the information: that command is not on the picture.
+  const rows = stack.slice(0, AUDIT_STACK_MAX);
+  const numW = rows.reduce((mx, e) => Math.max(mx, e.n ? textWidthPx(e.n, stackFs) : 0), 0);
+  const numGap = numW ? Math.round(stackFs * 0.7) : 0;
+  const labW = rows.reduce((mx, e) => Math.max(mx, textWidthPx(e.label, stackFs)), 0);
+  const rowH = Math.round(stackFs * 1.42) + stackPad;
+  const colW = Math.min(stackPad * 2 + numW + numGap + labW, Math.round(w * 0.46));
   const bx = Math.max(margin, w - margin - colW);
+  const dy = rowH - Math.round(stackPad * 0.75) - Math.round(stackFs * 0.18);
   let sy = margin + 6 * ui;
   for (const r of rows) {
     parts.push(
-      `<rect x="${bx}" y="${sy}" width="${colW}" height="${r.box.h}" rx="${Math.round(stackFs * 0.25)}" fill="white" ` +
+      `<rect x="${bx}" y="${sy}" width="${colW}" height="${rowH}" rx="${Math.round(stackFs * 0.25)}" fill="white" ` +
       `fill-opacity="${AUDIT_PANEL_FILL_OPACITY}" stroke="red" stroke-width="${2 * ui}" stroke-opacity="${O}"/>` +
-      `<text x="${bx + stackPad}" y="${sy + r.box.h - Math.round(stackPad * 0.75) - Math.round(stackFs * 0.18)}" ` +
-      `font-size="${stackFs}" font-family="sans-serif" fill="#c00000">${xmlEsc(r.text)}</text>`,
+      (r.n
+        ? `<text x="${bx + stackPad}" y="${sy + dy}" font-size="${stackFs}" font-family="sans-serif" fill="#c00000">${xmlEsc(r.n)}</text>`
+        : '') +
+      `<text x="${bx + stackPad + numW + numGap}" y="${sy + dy}" font-size="${stackFs}" ` +
+      `font-family="sans-serif" fill="#c00000">${xmlEsc(r.label)}</text>`,
     );
-    sy += r.box.h + Math.round(6 * ui);
+    sy += rowH + Math.round(6 * ui);
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${parts.join('')}</svg>`;
 }
@@ -766,6 +791,10 @@ export function planAuditOverlay(cmds: ResolvedCommand[], mon: ComputerScreen, j
 
   const marks: AuditMark[] = [];
   const stack: AuditStackEntry[] = [];
+  /** Numbers count marks drawn, NOT commands consumed — so the picture reads
+   *  1, 2, 3 with nothing missing, and a command that draws nothing takes a
+   *  row without taking a number. */
+  let markNo = 0;
   const inside = (p: Pt) => !!p && p.x >= mon.x && p.x < mon.x + mon.width && p.y >= mon.y && p.y < mon.y + mon.height;
   const local = (p: { x: number; y: number }) => ({ x: p.x - mon.x, y: p.y - mon.y });
 
@@ -788,10 +817,14 @@ export function planAuditOverlay(cmds: ResolvedCommand[], mon: ComputerScreen, j
       // claim the commands do not support.
       const movedWhileHeld = moved || (!!start && !!end && (start.x !== end.x || start.y !== end.y));
       if (j < cmds.length && cmds[j].t === 'up' && cmds[j].btn === c.btn && movedWhileHeld) {
-        const n = `${i + 1}-${j + 1}`;
+        // One arrow is one mark, so it takes one number. It used to be stamped
+        // with the span of commands it ate ("2-4"); under mark numbering that
+        // span indexes nothing the viewer can count.
+        let n = '';
         if (inside(start) && end) {
           const a = local(start!);
           const b = local(end);
+          n = String(++markNo);
           marks.push({ n, kind: 'drag', btn: c.btn, x: a.x, y: a.y, x2: b.x, y2: b.y });
         }
         const b = c.btn === 1 ? (ja ? '右' : 'right') : c.btn === 2 ? (ja ? '中' : 'middle') : ja ? '左' : 'left';
@@ -800,7 +833,6 @@ export function planAuditOverlay(cmds: ResolvedCommand[], mon: ComputerScreen, j
         continue;
       }
     }
-    const n = String(i + 1);
     const p = pos[i];
     // A mouse_move whose only job is to put the cursor where the NEXT command
     // acts ("move then press", the ordinary idiom) draws a crosshair under the
@@ -811,8 +843,10 @@ export function planAuditOverlay(cmds: ResolvedCommand[], mon: ComputerScreen, j
       pos[i + 1]!.x === p.x && pos[i + 1]!.y === p.y;
     // mouse_wheel is deliberately stack-only: it has a position, but marking it
     // competes with the clicks for attention and the amount is the information.
+    let n = '';
     if (c.t !== 'wheel' && !positioningOnly && inside(p)) {
       const l = local(p!);
+      n = String(++markNo);
       marks.push({ n, kind: c.t as AuditMark['kind'], btn: c.btn, x: l.x, y: l.y });
     }
     stack.push({ n, label: auditLabel(c, ja) });
@@ -822,7 +856,9 @@ export function planAuditOverlay(cmds: ResolvedCommand[], mon: ComputerScreen, j
   if (stack.length > AUDIT_STACK_MAX) {
     const hidden = stack.length - (AUDIT_STACK_MAX - 1);
     stack.splice(AUDIT_STACK_MAX - 1);
-    stack.push({ n: '…', label: ja ? `ほか ${hidden} 件` : `+${hidden} more` });
+    // No number: the summary is not a command, and under mark numbering a "…"
+    // in the number column reads as a mark the viewer should be hunting for.
+    stack.push({ n: '', label: ja ? `ほか ${hidden} 件` : `+${hidden} more` });
   }
   return { marks, stack };
 }
