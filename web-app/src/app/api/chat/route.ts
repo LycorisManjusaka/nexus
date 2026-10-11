@@ -7713,6 +7713,55 @@ export async function POST(req: Request) {
       //     deepseek-chat/deepseek-reasoner) → api.deepseek.com directly.
       //     Requires a separate DeepSeek API key (keys.deepseek).
       const useDeepSeekDirect = isDeepSeek && !!specificModel && specificModel !== 'deepseek-v3.2';
+      // DeepSeek's thinking mode REJECTS a request whose LAST message is an
+      // assistant turn carrying no `reasoning_content`:
+      //   400 "The `reasoning_content` in the thinking mode must be passed
+      //        back to the API."
+      //
+      // That is the shape of every PREFILL CONTINUATION NEXUS builds: the SPU
+      // sends its partial output back as a trailing assistant turn so the model
+      // resumes mid-sentence (client-side; it arrives inside
+      // `processedMessages`), and this route's own MAX_TOKENS continuation does
+      // the same further down. Result: a soul update that hit the output cap
+      // could never finish — it 400'd on every continuation round, which is
+      // exactly the report that found this.
+      //
+      // Measured against api.deepseek.com 2026-10-12 — identical on BOTH
+      // deepseek-v4-pro and deepseek-flash:
+      //   trailing assistant + tools + thinking on,  no reasoning_content → 400
+      //   trailing assistant + tools + thinking on,  reasoning_content ''  → 200
+      //   trailing assistant + tools + thinking OFF, no reasoning_content  → 200
+      //   trailing assistant, NO tools,              reasoning_content ''  → 200
+      //   assistant in HISTORY (last message is user), no reasoning_content → 200
+      //
+      // Three facts come out of that table and together they pick the shape
+      // of this fix:
+      //   1. Only a TRAILING assistant turn is checked — ordinary multi-turn
+      //      history is unaffected, which is why normal DeepSeek chat never
+      //      showed this.
+      //   2. An EMPTY STRING satisfies the check. The real reasoning text is
+      //      better (DeepSeek's docs say echoed reasoning is concatenated into
+      //      context) and the MAX_TOKENS site below has it; the SPU does not
+      //      (it counts thought characters and discards the text), so '' is the
+      //      floor rather than the target.
+      //   3. The field is harmless when tools or thinking are absent — the docs
+      //      say it "will be ignored", and the no-tools arms returned 200. So
+      //      this is one unconditional field rather than a tools×thinking
+      //      condition matrix that would need re-measuring every time either
+      //      default moves.
+      //
+      // WHAT THIS IS *NOT*: the tool loop does not need it, and that was
+      // measured, not assumed. A fabricated tool_call ID with no
+      // reasoning_content 400s — which is what made this look like a second
+      // bug — but DeepSeek's OWN tool_call ID with no reasoning_content returns
+      // 200 on both models. The provider is matching the turn against its
+      // record of generating it; an ID it issued is such a match, a bare text
+      // prefill is not. NEXUS replays the provider's own `tc.id`, so the tool
+      // loop was never broken (verified end-to-end against the UNFIXED frozen
+      // copy: Glob called, tool result consumed, answer returned, no 400).
+      // Echoing reasoning there would be a change with no effect.
+      const dsPrefillRc = (reasoning?: string) =>
+        useDeepSeekDirect ? { reasoning_content: reasoning || '' } : {};
       // DigitalOcean Inference (inference.do-ai.run) serves open-weight models
       // — currently the GLM 5.x family — on US-hosted infrastructure. Selected
       // via a `digitalocean/` prefix on the model id (e.g. `digitalocean/glm-5.2`);
@@ -8488,6 +8537,19 @@ export async function POST(req: Request) {
           baseOaiMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content });
         }
       }
+      // A caller-built prefill continuation (the SPU sends the partial output
+      // back as a trailing assistant turn so the model resumes mid-sentence).
+      // DeepSeek-direct 400s on that turn unless it echoes reasoning_content —
+      // see `dsPrefillRc` above for the measurement table. Applied to the
+      // ASSEMBLED tail rather than inside the loop so the tool-replay branch
+      // above is untouched: when replay fires, the last message is a `tool`
+      // message, not an assistant turn, and there is nothing to satisfy.
+      {
+        const tail = baseOaiMessages[baseOaiMessages.length - 1];
+        if (tail && tail.role === 'assistant' && tail.reasoning_content === undefined) {
+          Object.assign(tail, dsPrefillRc());
+        }
+      }
 
       // NOTE: No "prevent thinking" switch for local models. There is no
       // portable, reliable way to force a local GGUF to skip its reasoning
@@ -9256,6 +9318,14 @@ export async function POST(req: Request) {
                   //    after a few rounds. A silent failure, which is why this
                   //    stayed broken far longer than the Kimi one.
                   //
+                  // DeepSeek-direct is NOT a third case, and this was measured
+                  // rather than assumed — see `dsPrefillRc` above. It rejects a
+                  // reasoning-less assistant turn only when it cannot match the
+                  // turn to its own record of generating it; a replayed
+                  // tool_call ID is such a match, and `tc.id` below is the
+                  // provider's own ID. Adding the echo here would be a change
+                  // with no effect.
+                  //
                   // Z.AI's docs require the replayed blocks to match the
                   // original sequence exactly — do not trim, summarize or
                   // reorder `reasoningText`. It is the raw accumulation of that
@@ -9792,7 +9862,13 @@ export async function POST(req: Request) {
                   break;
                 }
               }
-              msgs = [...msgs, { role: 'assistant', content: prefillContent }];
+              // ...plus DeepSeek's required reasoning echo on the prefill turn
+              // (see `dsPrefillRc`). Unlike the SPU, this site HAS the model's
+              // real reasoning text, so it echoes that instead of an empty
+              // string — DeepSeek's docs say an echoed reasoning_content is
+              // concatenated back into context, so the continuation keeps the
+              // thought it was in the middle of.
+              msgs = [...msgs, { role: 'assistant', content: prefillContent, ...dsPrefillRc(cumulativeReasoningText) }];
               attempt++;
             }
             // Flush any held-back tag-detection tail
