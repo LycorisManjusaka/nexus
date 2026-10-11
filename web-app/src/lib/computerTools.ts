@@ -569,7 +569,7 @@ $bmp.Dispose()
 const AUDIT_MARK_OPACITY = 192 / 255;
 /** The stack panels need a higher floor than the marks: their job is to make
  *  TEXT readable over whatever happens to be behind them. */
-const AUDIT_PANEL_FILL_OPACITY = 0.88;
+const AUDIT_PANEL_FILL_OPACITY = 0.5;
 /** A long batch must not paper over the screenshot it is describing. Anything
  *  past this is summarised in one final entry — never silently dropped. */
 const AUDIT_STACK_MAX = 14;
