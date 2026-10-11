@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal, Download } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal, Download, ImageOff } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -44,6 +44,76 @@ const MD_PLUGINS = [remarkGfm, remarkBreaks];
 // Do NOT promote these back to console.error to "make them visible". That
 // trades a readable indicator for a badge that covers the attach button.
 const ttsWarn = (...args: any[]) => console.warn(...args);
+
+/**
+ * Inline workspace media that explains itself instead of vanishing.
+ *
+ * A path the route refuses renders as a broken <img>, and a being writing bare
+ * `![](path)` supplies no alt text — so the message showed NOTHING AT ALL. That
+ * is how this reached me: "どう考えても見えるはずだけどさぁ、見えないの！". The
+ * reader could not tell a refused path from a missing file from a typo, and had
+ * to ask a person. Naming which of those it is turns "it doesn't work" into a
+ * one-line fix, so the reason is re-asked rather than generalised away.
+ *
+ * onError carries no status, so ask again with a 1-byte Range GET: one byte on
+ * success, and an error body here is ~30 bytes anyway. HEAD is deliberately NOT
+ * used — in one measurement it answered 404 for a path the same GET called 403,
+ * and a sign that states the wrong reason is worse than no sign. A re-ask that
+ * SUCCEEDS while the element failed is reported as undisplayable bytes rather
+ * than blamed on the path, because that is a different fix (wrong extension,
+ * truncated file) and the path is innocent.
+ */
+function InlineLocalMedia({ kind, url, src, alt, onZoom }: {
+  kind: 'image' | 'video' | 'audio';
+  url: string;
+  src: string;
+  alt?: string;
+  onZoom?: (u: string) => void;
+}) {
+  const t = useT();
+  const [why, setWhy] = useState<string | null>(null);
+  const explain = React.useCallback(() => {
+    (async () => {
+      let reason = t('bubble.media.unreachable');
+      try {
+        const r = await fetch(url, { headers: { Range: 'bytes=0-0' } });
+        if (r.status === 403) reason = t('bubble.media.outside');
+        else if (r.status === 404) reason = t('bubble.media.missing');
+        else if (r.status === 200 || r.status === 206) reason = t('bubble.media.unreadable');
+        else reason = `HTTP ${r.status}`;
+      } catch { /* leave the network wording */ }
+      setWhy(reason);
+    })();
+  }, [url, t]);
+
+  if (why) {
+    // The author wrote this path; show it verbatim (break-all so a long Windows
+    // path cannot push the bubble wider than the column).
+    return (
+      <span className="inline-flex items-start gap-1.5 my-2 text-xs italic opacity-70 break-all">
+        <ImageOff size={13} className="shrink-0 mt-0.5" />
+        <span>{alt ? `${alt} — ` : ''}{src} — {why}</span>
+      </span>
+    );
+  }
+  if (kind === 'video') {
+    // preload="metadata" so a long clip doesn't pull megabytes over the LAN
+    // before anyone presses play.
+    return <video src={url} controls preload="metadata" onError={explain} className="max-w-full rounded-lg my-2" />;
+  }
+  if (kind === 'audio') {
+    return <audio src={url} controls preload="metadata" onError={explain} className="w-full my-2" />;
+  }
+  return (
+    <img
+      src={url}
+      alt={alt || baseNameOf(src)}
+      onError={explain}
+      className="max-w-full h-auto rounded-lg my-2 cursor-zoom-in"
+      onClick={() => onZoom?.(url)}
+    />
+  );
+}
 
 // The rendered markdown body, as a memoised leaf.
 //
@@ -164,23 +234,10 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
         if (!isLocalFileRef(src)) return <img {...props} />;
         const kind = mediaKindOf(src);
         const url = workspaceFileUrl(folderName, src);
-        if (kind === 'video') {
-          // preload="metadata" so a long clip doesn't pull megabytes over the
-          // LAN before anyone presses play.
-          return <video src={url} controls preload="metadata" className="max-w-full rounded-lg my-2" />;
-        }
-        if (kind === 'audio') {
-          return <audio src={url} controls preload="metadata" className="w-full my-2" />;
-        }
-        if (kind === 'image') {
-          return (
-            <img
-              src={url}
-              alt={props.alt || baseNameOf(src)}
-              className="max-w-full h-auto rounded-lg my-2 cursor-zoom-in"
-              onClick={() => setZoomImage(url)}
-            />
-          );
+        if (kind === 'image' || kind === 'video' || kind === 'audio') {
+          // One component for all three: each can fail the same way, and the
+          // reason has to be asked for rather than guessed (see its comment).
+          return <InlineLocalMedia kind={kind} url={url} src={src} alt={props.alt} onZoom={setZoomImage} />;
         }
         // Image syntax pointing at something that is not media (e.g. a .zip the
         // model mislabelled). Offering the download beats a broken-image icon.

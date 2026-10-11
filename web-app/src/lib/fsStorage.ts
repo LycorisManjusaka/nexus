@@ -221,7 +221,11 @@ function isWithinTrustedRoots(real: string, realRoot: string, trustedRoot: strin
 // Edit and Delete failed identically, because they share this resolver. The
 // error text was not just unhelpful, it was false, and it sent at least one
 // being hunting for a bad character in its own filename.
-async function realpathAllowingMissing(p: string): Promise<string | null> {
+// Exported for /api/workspace-file, which uses it to recognise an absolute path
+// that points at the real target of a junction linked into the workspace. It
+// must tolerate a missing tail there too: a typo'd filename under the shared
+// folder should end as "file not found", not "outside this workspace".
+export async function realpathAllowingMissing(p: string): Promise<string | null> {
   try {
     return await fs.realpath(p);
   } catch {
