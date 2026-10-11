@@ -220,10 +220,48 @@ export function isVisionCapable(specificModel: string | undefined | null): boole
 // and multiply by the delivered monitor dimension to recover the image pixel,
 // BEFORE the usual screen_index offset — see computerTools.ts. This is an exact
 // identity (reported/1000 × width), not a fitted constant: NEXUS knows the size
-// it delivered, so zero guessing enters. Contrast Gemma, whose coordinate unit
-// changes with image CONTENT (synthetic → true pixels, real screenshot →
-// compressed grid) and is therefore NOT reversible by any single formula.
-export function reportsNormalizedCoords(specificModel: string | undefined | null): boolean {
+// it delivered, so zero guessing enters.
+//   CORRECTION 2026-10-11 to what this comment used to say next. It read:
+// "Contrast Gemma, whose coordinate unit changes with image CONTENT (synthetic
+// → true pixels, real screenshot → compressed grid) and is therefore NOT
+// reversible by any single formula." The observation is still true; the
+// CONCLUSION was wrong for this code path. `computer_screenshot` and `app_shot`
+// only ever deliver REAL screen content, and on real content Gemma is a stable
+// 0–1000 reporter across sizes and across unrelated captures — so the same
+// exact identity does apply, and the synthetic half of its behaviour can never
+// be reached from here. Measured: workspace/local-vision-coordinate-space.md.
+export function reportsNormalizedCoords(
+  specificModel: string | undefined | null,
+  // TRUE only for a LOCAL (LM Studio) engine whose catalog entry says it has
+  // eyes — the caller reads that flag, because a local id is opaque to the
+  // matching below. MEASURED 2026-10-11 (Cairn; probe + full numbers in
+  // workspace/localcoord_probe/, written up in
+  // workspace/local-vision-coordinate-space.md) after Lizard-kun reported every
+  // local model he tried answering "in that 1000 threshold".
+  //   The discriminator needs no ground truth: deliver the SAME real capture at
+  // native size and at half size. A model reporting true image pixels HALVES
+  // its answer; one reporting 0–1000 REPEATS it. On real screenshots, four of
+  // the five engines here repeated it and none of the five ever came back near
+  // the pixel value — glm-4.6v-flash (711→714), muse-glimmer (710→720),
+  // gemma-4-26b-a4b-qat (707,705→705,703), qwythos-27b (836→738).
+  //   It crosses ARCHITECTURES that share no weights (glm4, gemma4, qwen35,
+  // muse-glimmer), which is why this is a property of the open VLM training
+  // lineage — the 0–1000 grounding convention — and not a coincidence of ids.
+  //   The fifth, qwen3.8-27b, is NOT a counter-example to the unit: at native
+  // size it answered (2080,1082) inside a 1904x1064 frame — out of range in
+  // BOTH spaces, i.e. broken, not differently-calibrated — while at half size
+  // it answered (710,875) against a truth of (712,883). The >1000 guard in
+  // computerTools.ts catches exactly that case.
+  //   Why a flag and not the Gemini trick (deliver at a size where the two
+  // spaces coincide, which for both axes means 1000x1000): MEASURED, and it is
+  // NOT uniformly better. Square fixed Gemma (0/2 → 2/2 inside the target) and
+  // pulled Qwen back from garbage to sane — but it DESTROYED glm-4.6v-flash,
+  // the most accurate engine of the set, which goes from 1px off centre at
+  // native to 300px off, repeatably. Neither delivery dominates, so take the
+  // one that changes no pixels and risks no legibility.
+  localVisionEngine?: boolean,
+): boolean {
+  if (localVisionEngine) return true;
   if (!specificModel) return false;
   const lowered = specificModel.toLowerCase();
   if (lowered.includes('seed-2-0') || lowered.includes('seed-2-1')) return true;

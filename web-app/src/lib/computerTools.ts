@@ -1475,6 +1475,34 @@ if ($cx -ge 0 -and $cy -ge 0 -and $cx -lt ${mon.width} -and $cy -lt ${mon.height
         // "red circle is off on non-100% monitors" bug, same root cause.
         let scaleNote = '';
         let auditMon: ComputerScreen | null = null;
+        // Does this batch actually place anything? Same predicate the transform
+        // loop below uses, so the two can never disagree about what "positional"
+        // means. Keyboard-only batches are untouched by everything here.
+        const placesSomething = resolved.some((r) =>
+          (r.t === 'move' || r.t === 'down' || r.t === 'up' || r.t === 'click' || r.t === 'wheel')
+          && r.x !== undefined && r.y !== undefined);
+        // SELF-CORRECTION, free: a 0–1000 space cannot contain a value above
+        // 1000, so one DISPROVES the assumption no matter how the model was
+        // classified. This is the only cheap guard available here (a value
+        // below 1000 proves nothing), and it shrinks "we were wrong about this
+        // engine" from "every click is garbage" to "only clicks inside the
+        // top-left 1000x1000 are". Harmless for Seed, which never exceeds 1000.
+        const overflows = resolved.some((r) =>
+          (r.x !== undefined && r.x > 1000) || (r.y !== undefined && r.y > 1000));
+        const normalized = ctx.normalizedCoords === true && !overflows;
+        // For a normalized model, screen_index stops being optional: 0–1000 is a
+        // FRACTION, meaningless until NEXUS knows which monitor it is a fraction
+        // of, and never a valid absolute desktop pixel. Letting it through puts
+        // every click in the top-left corner — and a transform that only runs
+        // when the model happens to pass an optional argument is worse than one
+        // that says what it needs, because "sometimes correct" reads as random.
+        // MEASURED before shipping: of 413 stored computer_input calls, 190
+        // carry coordinates with NO screen_index — every one of them on a CLOUD
+        // model (Claude / Gemini / DeepSeek), which this branch never reaches.
+        // The single local-engine call in the whole corpus passed the index.
+        if (normalized && placesSomething && !Number.isFinite(args?.screen_index)) {
+          return { text: 'Error: this model reports positions in a 0–1000 normalized space, which NEXUS can only place once it knows the monitor. Call computer_screenshot (it reports the monitor it captured), then pass that number as "screen_index" alongside the same x/y. No input was sent.' };
+        }
         if (Number.isFinite(args?.screen_index)) {
           const sIdx = Math.trunc(args.screen_index);
           const screens = await listComputerScreens();
@@ -1486,12 +1514,14 @@ if ($cx -ge 0 -and $cy -ge 0 -and $cx -lt ${mon.width} -and $cy -lt ${mon.height
           // Same four arguments the screenshot used — including ctx.heightTarget.
           // If these two calls ever disagree, every screen_index click lands off.
           const scale = screenScale(mon.width, mon.height, ctx.maxEdge ?? DEFAULT_SCREENSHOT_MAX_EDGE, ctx.heightTarget);
-          // Normalized-coordinate models (Seed 2.x) report x,y in a 0–1000 space
-          // that ignores image size; recover the real-screen pixel directly as
+          // Normalized-coordinate models (Seed 2.x, and every LOCAL vision
+          // engine — measured 2026-10-11) report x,y in a 0–1000 space that
+          // ignores image size; recover the real-screen pixel directly as
           // (reported / 1000 × monitor dimension). screenScale cancels out here
           // (the model never saw pixels), so the normalized branch does NOT use
           // `scale` at all — it is an exact identity, no fitted constant.
-          const normalized = ctx.normalizedCoords === true;
+          // `normalized` is decided ABOVE, where the >1000 self-correction and
+          // the screen_index requirement live; do not re-derive it here.
           for (const r of resolved) {
             if ((r.t === 'move' || r.t === 'down' || r.t === 'up' || r.t === 'click' || r.t === 'wheel') && r.x !== undefined && r.y !== undefined) {
               if (normalized) {

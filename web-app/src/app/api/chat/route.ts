@@ -75,6 +75,17 @@ async function runReadAttachment(args: {
   // natively (real bytes) or reported as a capability limit (honest, not a
   // blanket refusal: a vision-capable model reading an image gets the image).
   specificModel?: string;
+  // LOCAL models only: isVisionCapable() is a registry + id-substring match and
+  // cannot recognise an LM Studio id like `google/gemma-4-26b-a4b-qat`, so it
+  // DEFAULT-DENIES every local engine — including ones whose catalog entry says
+  // vision:true. Without this, a local model with eyes was told "the current
+  // model isn't registered as able to accept image input" while the Read tool,
+  // two lines of code away, happily handed the same model the same bytes
+  // (REPORTED by Lizard-kun 2026-10-11, with the Read workaround attached).
+  // The asymmetry was structural: Read's gate asks "bridge or deliver?" and
+  // BOTH branches deliver something; this one asked "deliver at all?" and
+  // answered no. undefined = use the registry (correct for every cloud family).
+  visionOverride?: boolean;
   // Which media kinds THIS provider path's wire format can even carry inside
   // a tool result, independent of whether the model itself could understand
   // them. Anthropic's content-block spec has no audio/video block type at
@@ -82,7 +93,7 @@ async function runReadAttachment(args: {
   // Omitted = image only (the conservative default for any future caller).
   nativeMediaKinds?: Set<'image' | 'audio' | 'video'>;
 }): Promise<ReadAttachmentOutcome> {
-  const { prefix, pattern, folderName, index, specificModel, nativeMediaKinds } = args;
+  const { prefix, pattern, folderName, index, specificModel, nativeMediaKinds, visionOverride } = args;
   const nativeKinds = nativeMediaKinds || new Set<'image' | 'audio' | 'video'>(['image']);
   const p = (prefix || '').trim().toLowerCase();
   if (!p) return { text: 'Error: read_attachment requires a ref prefix (the 12-character ref shown next to a hidden attachment).' };
@@ -111,7 +122,7 @@ async function runReadAttachment(args: {
       entry.mimeType.startsWith('image/') ? 'image' :
       entry.mimeType.startsWith('audio/') ? 'audio' : 'video';
     const modelCapable =
-      kind === 'image' ? isVisionCapable(specificModel) :
+      kind === 'image' ? (visionOverride === undefined ? isVisionCapable(specificModel) : visionOverride) :
       kind === 'audio' ? isAudioCapable(specificModel) :
       isVideoCapable(specificModel);
     if (modelCapable && nativeKinds.has(kind)) {
@@ -7925,6 +7936,19 @@ export async function POST(req: Request) {
         }
       }
 
+      // `useEyes` was decided back in POST from isVisionCapable(), an id
+      // registry + substring match that cannot recognise an LM Studio id and
+      // therefore DEFAULT-DENIES every local engine. By this line the catalog
+      // has spoken, so a local model that really has eyes stops being routed
+      // through the bridge: it gets the pixels, not a lossy text description
+      // of them (and no bridge call is billed for an image it could already
+      // see). The contract at useEyes' own definition says the flag is for
+      // models that "can't accept that modality" — this is what makes that
+      // sentence true for local engines. Identical to `useEyes` for every
+      // cloud family, where localModelVisionCapable stays false. Same catalog
+      // truth the mid-turn media injection already ships on (`visionOverride`).
+      const useEyesHere = useEyes && !localModelVisionCapable;
+
 
       // ── DashScope/DeepSeek/Z.AI inline-file size preflight ─────────────────
       // DashScope (Qwen/DeepSeek-via-Alibaba), api.deepseek.com, and api.z.ai
@@ -9272,7 +9296,7 @@ export async function POST(req: Request) {
                         const bin = await readWorkspaceFileBinary(folderName, p, { fullAccess: agentFullSystemAccess });
                         if (!bin) {
                           resultText = `Error: image not found or path outside workspace: ${p}`;
-                        } else if (useEyes) {
+                        } else if (useEyesHere) {
                           // Text-only primary model — bridge the image via
                           // the eyes vision model and return a description
                           // as the tool result text. No follow-up
@@ -9474,7 +9498,11 @@ export async function POST(req: Request) {
                       // user-message injection (the same path computer_screenshot
                       // uses). Audio/video have no clean OpenAI-compat tool-result
                       // wire shape, so runReadAttachment reports them as text only.
-                      const r = await runReadAttachment({ prefix: String(parsed.ref || ''), pattern: parsed.pattern, folderName, index: conversationAttachmentRefs, specificModel: localModel, nativeMediaKinds: new Set(['image']) });
+                      // visionOverride: same catalog truth the mid-turn media
+                      // injection already uses (see the `injectableKinds` call
+                      // further down) — without it a local model WITH eyes is
+                      // told it has none, while Read hands it the same bytes.
+                      const r = await runReadAttachment({ prefix: String(parsed.ref || ''), pattern: parsed.pattern, folderName, index: conversationAttachmentRefs, specificModel: localModel, nativeMediaKinds: new Set(['image']), visionOverride: isLocal ? localModelVisionCapable : undefined });
                       resultText = r.text;
                       if (r.media?.kind === 'image') {
                         resultText += ' Image content follows in the next user message.';
@@ -9498,9 +9526,12 @@ export async function POST(req: Request) {
                       // delivers a real image the same way Read does for an image
                       // file: eyes-bridge description for text-only models,
                       // pendingImageInjects for vision-capable ones.
-                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I, language, normalizedCoords: reportsNormalizedCoords(localModel) });
+                      // Second arg: local engines answer in a 0–1000 space (see
+                      // reportsNormalizedCoords for the measurement). Same
+                      // catalog flag the media paths use — false for all cloud.
+                      const cr = await runComputerTool(tc.name, parsed || {}, { me: folderName, instructions: I, language, normalizedCoords: reportsNormalizedCoords(localModel, isLocal && localModelVisionCapable) });
                       if (cr.image) {
-                        if (useEyes) {
+                        if (useEyesHere) {
                           const eyesResult = await describeImage({
                             imageBase64: cr.image.base64,
                             imageMimeType: cr.image.mimeType,
@@ -9541,7 +9572,7 @@ export async function POST(req: Request) {
                       // so a text-only vessel needs no bridge at all here.
                       const ar = await runAppTool(tc.name, parsed || {}, { me: folderName, instructions: I });
                       if (ar.image) {
-                        if (useEyes) {
+                        if (useEyesHere) {
                           const eyesResult = await describeImage({
                             imageBase64: ar.image.base64,
                             imageMimeType: ar.image.mimeType,
