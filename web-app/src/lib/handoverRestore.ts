@@ -53,6 +53,8 @@
  * would silently re-use a number nobody chose for this parameter.
  */
 
+import { estimateTokensForModel } from './tokenEstimate';
+
 /** Cap, in log text tokens, for a being whose folder has no explicit setting. */
 export const DEFAULT_MAX_CONVERSATION_LOG = 80000;
 
@@ -105,18 +107,53 @@ export function contextElapsedPercent(b: { original: number }, cap: number): num
 }
 
 /**
- * Text tokens of one message — the single definition shared by the auto-trimmer,
- * the restorer, and the header counter.
+ * Text tokens of one message, MEASURED FOR THE VESSEL THAT WILL RECEIVE IT —
+ * the single definition shared by the auto-trimmer, the restorer, and the
+ * header counter.
  *
- * `textTokens` is the stored per-message count; `tokens` is the older field that
- * meant the same thing before attachments were split out. Attachment and
- * thinking tokens are deliberately NOT here: they don't count toward the
- * auto-trim threshold, so they must not count toward the restore budget either,
- * or the two would disagree about what "full" means.
+ * Attachment and thinking tokens are deliberately NOT here: they don't count
+ * toward the auto-trim threshold, so they must not count toward the restore
+ * budget either, or the two would disagree about what "full" means.
+ *
+ * WHY THE STORED COUNT IS NOT USED (2026-10-12)
+ * ---------------------------------------------
+ * `textTokens` is still written and still read — by billing, Statistics, and
+ * the per-bubble count, which are statements about what ALREADY HAPPENED and
+ * must not be recomputed. The cap is a different quantity: a prediction of what
+ * THIS request will weigh. Those two stopped agreeing for a measurable reason.
+ *
+ * The stored number is whatever the counter said on the day the message was
+ * written — an exact `count_tokens` call for a Claude/Gemini turn, a heuristic
+ * for everyone else, with the tokenizer of the vessel selected at that moment.
+ * Measured against `count_tokens` for claude-opus-5 over this installation's
+ * own logs (2026-10-12, 7 generations, free counter):
+ *
+ *     generation       language     stored/exact    estimate/exact
+ *     Cairn_44..46     Japanese     0.997–1.001     0.962–0.977
+ *     Cairn_5/7/22     English      0.646–0.689     1.075–1.135
+ *
+ * So the stored value is near-perfect for the generation that produced it and
+ * off by 35% for older ones — and it does not move when the vessel changes, so
+ * switching Claude→Gemini left the log reading 48% high (the Gemini tokenizer
+ * is ~1.45x less dense on this text) while the system-prompt counter next to it
+ * DID follow the switch. One screen, two scales, and the cap silently meant a
+ * different amount of history per vessel.
+ *
+ * Recomputing costs accuracy on the newest generation (0.997 → ~0.97) and buys
+ * it everywhere else: one scale, following the selected vessel, with the 35%
+ * error on carried-over history gone. That error was not harmless — restoring
+ * handover context by stored counts is how a request measured at 910k landed at
+ * 1,186k real tokens and was refused (2026-10, `context-size-silent-refusal`).
+ *
+ * `model` is REQUIRED, not defaulted: a default would let a caller silently keep
+ * the old behavior and leave the two scales in place at one site — which is this
+ * house's known failure shape ("written, but one wire never connected"). An
+ * explicit null means "no vessel known", which `tokenFamilyFor` maps to the
+ * conservative mid-range profile.
  */
-export function messageTextTokens(m: any): number {
+export function messageTextTokens(m: any, model: string | null | undefined): number {
   if (!m) return 0;
-  return m.textTokens !== undefined ? (m.textTokens || 0) : (m.tokens || 0);
+  return estimateTokensForModel(String(m.content || ''), model);
 }
 
 /**
@@ -163,6 +200,7 @@ export function pickFromGeneration(
   messages: any[],
   excluded: Set<string>,
   budget: number,
+  model: string | null | undefined,
 ): GenerationPick {
   const available = (messages || []).filter((m) => m && !excluded.has(messageIdentityKey(m)));
   const picked: any[] = [];
@@ -171,7 +209,7 @@ export function pickFromGeneration(
   // Walk from the newest end backwards: the message closest to what we already
   // have is the one that reconnects the history.
   for (let i = available.length - 1; i >= 0; i--) {
-    const need = messageTextTokens(available[i]);
+    const need = messageTextTokens(available[i], model);
     if (tokens + need > budget) {
       nextNeeded = need;
       break;

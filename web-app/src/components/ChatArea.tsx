@@ -1784,7 +1784,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let total = 0;
     let convoTotal = 0;
     messages.forEach((m, mi) => {
-      const textTokens = messageTextTokens(m);
+      const textTokens = messageTextTokens(m, localAiName);
       total += textTokens;
       convoTotal += textTokens;
       // Thinking tokens are treated like attachments: counted in the grand
@@ -1896,7 +1896,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // One definition, shared with handover restore (lib/handoverRestore.ts). The
   // trimmer and the restorer stand on opposite sides of the same threshold; a
   // second copy of this arithmetic is how the two drift apart and start fighting.
-  const computeMsgTextTokens = messageTextTokens;
+  // Bound to the SELECTED vessel's tokenizer — the same `localAiName` the
+  // system-prompt counter above is keyed on (`fetchSysTokens`). That is the
+  // whole point: before 2026-10-12 the system number followed a vessel switch
+  // and the log number did not, so one screen carried two scales and the cap
+  // silently meant a different amount of history per vessel.
+  const computeMsgTextTokens = (m: any) => messageTextTokens(m, localAiName);
   const attachmentEffectiveTokens = (a: any, isPastMessage: boolean) =>
     attachmentTokens(a, isPastMessage, deliveryCtx);
   const computeMsgAttachTokens = (m: any, msgIndex?: number) => {
@@ -2077,7 +2082,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         const res = await fetch('/api/logs/restore-handover', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ convoId, budgetTokens: budget, excludeKeys }),
+          // `model` carries the selected vessel so the server measures candidate
+          // messages on the SAME scale the client just used to compute `budget`.
+          // Without it the two sides size the same messages differently and the
+          // restorer either overshoots the cap or stops short of it.
+          body: JSON.stringify({ convoId, budgetTokens: budget, excludeKeys, model: localAiName }),
         });
         if (!res.ok) {
           // Stop asking for this conversation, but say so — a restore that

@@ -39,6 +39,12 @@ export async function POST(req: Request) {
   const convoId: string = body?.convoId;
   const budgetTokens: number = Number(body?.budgetTokens);
   const excludeKeys: string[] = Array.isArray(body?.excludeKeys) ? body.excludeKeys : [];
+  // The vessel the client sized `budgetTokens` against. Both sides must measure
+  // candidate messages on one scale or the restore over/undershoots the cap.
+  // Absent (an older client, or a caller that cannot know) is an explicit null
+  // rather than a substituted default: `tokenFamilyFor` maps it to the
+  // conservative mid-range profile instead of pretending a vessel was chosen.
+  const model: string | null = typeof body?.model === 'string' ? body.model : null;
 
   if (!convoId) return NextResponse.json({ error: 'Missing convoId' }, { status: 400 });
   if (!Number.isFinite(budgetTokens) || budgetTokens <= 0) {
@@ -78,7 +84,7 @@ export async function POST(req: Request) {
     const log: any = await loadLog(l.id);
     if (!log) continue;
 
-    const pick = pickFromGeneration(log.messages || [], excluded, remaining);
+    const pick = pickFromGeneration(log.messages || [], excluded, remaining, model);
     for (const m of pick.picked) excluded.add(messageIdentityKey(m));
 
     if (pick.picked.length > 0) {
