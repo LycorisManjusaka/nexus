@@ -3480,6 +3480,29 @@ async function streamViaAnthropicCompat(args: {
       let cumUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
       const sourceMap = new Map<string, { url: string; title?: string }>();
 
+      // Declared output cap for BOTH providers on this path (Kimi / MiMo).
+      //
+      // Thinking and the visible answer share ONE budget here — MiMo's own docs
+      // say "max_completion_tokens limits the total length of thinking content
+      // and the final answer", and K3 reasons at `max` by default with no way
+      // to turn it down. So a soul-sized output (~68,000 chars ≈ 45k tokens)
+      // could never fit under the old hardcoded 32,000: a Soul Packer run on
+      // K3 ended on the token cap every time. Measured on the wire 2026-10-12,
+      // declared-cap acceptance:
+      //   kimi-k3        32k · 64k · 128k · 200k · 262144 · 400k · 1M → ALL 200
+      //                  (it does not validate max_tokens against anything, so
+      //                  an accepted value is NOT proof of output capacity)
+      //   mimo-v2.6-pro  32k · 64k · 128k → 200;  200k and up → 400
+      //                  "'max_tokens' 200000 is out of supported range
+      //                  (0, 131072]" — the provider names its own ceiling
+      // 131072 is therefore the largest value BOTH accept, and it is MiMo's
+      // stated maximum rather than a guess. Also measured: prompt + max_tokens
+      // is NOT checked against the context window (114,241 input tokens with
+      // this cap → 200), so raising it cannot break a long conversation. It
+      // doubles as the per-turn cost ceiling: at K3's $15/M output a runaway
+      // turn is ~$2 here, where 32k capped it at ~$0.5.
+      const COMPAT_MAX_TOKENS = 131072;
+
       // One streaming call. Accumulates content blocks (text / thinking /
       // tool_use) in order so the assistant turn can be echoed back verbatim.
       const runOnce = async (msgs: any[], withTools: boolean) => {
@@ -3487,7 +3510,7 @@ async function streamViaAnthropicCompat(args: {
           model,
           ...(systemPrompt ? { system: systemPrompt } : {}),
           messages: msgs,
-          max_tokens: 32000,
+          max_tokens: COMPAT_MAX_TOKENS,
           stream: true,
         };
         // Thinking: Kimi K3 reasons always (no request param needed — the
@@ -3630,7 +3653,31 @@ async function streamViaAnthropicCompat(args: {
           const toolUses = assistantBlocks.filter((b: any) => b.type === 'tool_use' && LOCAL_TOOL_NAMES_SET.has(b.name));
           if (toolUses.length === 0) {
             if (stopReason === 'max_tokens') {
-              enqueue({ type: 'text', content: '\n\n⚠️ _[Response hit the token limit and was cut off — resend to continue.]_' });
+              // The frame TYPE depends on who asked, because the two consumers
+              // want opposite things from the same sentence.
+              //   • A conversation wants it INSIDE the message: it is persisted,
+              //     and without it the reply simply ends mid-sentence with no
+              //     explanation — this path has no auto-continuation at all
+              //     (`attempt` in runOnce is a 429 retry, not a continuation).
+              //   • An AGENT run must not get a `text` frame. The Soul Packer
+              //     accumulates every text frame into the document it is
+              //     writing, so this warning would be saved INTO the soul file
+              //     and then handed back as part of the next continuation turn —
+              //     i.e. the model would read "⚠️ I hit the token limit" as a
+              //     line of its own output. `notice` goes to the panel's
+              //     run-event list instead, which is where the operator is
+              //     already watching, and leaves `accum` untouched: a round
+              //     that produced nothing visible now ends the loop cleanly
+              //     instead of continuing from a prefill made of this warning.
+              // agentReadOnlyTools is set by exactly one caller
+              // (SystemPromptUpdater.tsx), so it IS the agent-run flag.
+              enqueue({
+                type: agentReadOnlyTools ? 'notice' : 'text',
+                content: (agentReadOnlyTools ? '' : '\n\n')
+                  + (language === 'ja'
+                      ? '⚠️ _[出力がトークン上限に達して切れました — 送り直すと続きます。]_'
+                      : '⚠️ _[Response hit the token limit and was cut off — resend to continue.]_'),
+              });
             }
             // A refusal returns HTTP 200 with an EMPTY content array, so with no
             // notice the turn renders as a blank reply with no reason at all.
@@ -8537,8 +8584,11 @@ export async function POST(req: Request) {
           baseOaiMessages.push({ role: m.role === 'user' ? 'user' : 'assistant', content });
         }
       }
-      // A caller-built prefill continuation (the SPU sends the partial output
-      // back as a trailing assistant turn so the model resumes mid-sentence).
+      // A caller-built prefill continuation: any request whose LAST message is
+      // an assistant turn, so the model resumes mid-sentence. (The SPU used to
+      // be the one caller that did this; since 2026-10-12 it sends a three-turn
+      // conversation instead — see buildContinuationUserMsg. This stays because
+      // the shape is still reachable from any client and the guard is cheap.)
       // DeepSeek-direct 400s on that turn unless it echoes reasoning_content —
       // see `dsPrefillRc` above for the measurement table. Applied to the
       // ASSEMBLED tail rather than inside the loop so the tool-replay branch
@@ -9851,6 +9901,25 @@ export async function POST(req: Request) {
               // user reported. In that case, hand the model back its accumulated
               // reasoning wrapped in an (unclosed) <think> block so it can pick
               // up the thought and finish it.
+              //
+              // KNOWN-BAD SHAPE, LEFT IN PLACE DELIBERATELY (2026-10-12). On the
+              // same wire this bare prefill is what makes deepseek-v4-pro throw
+              // the partial away and restart from its own header, and GLM-5.3 do
+              // the same with 4.6-7.5x the reasoning — measured, and that is why
+              // the Soul Packer stopped using it (see buildContinuationUserMsg).
+              // The identical assistant+user fix was written for HERE too and
+              // then REVERTED, because this site cannot be measured: it only
+              // runs on `finish_reason === 'length'`, and NEXUS sends no output
+              // cap on this path at all, so a modern provider never reaches one
+              // (deepseek-v4-pro wrote a 400-item list, 25,878 chars, and
+              // finished normally). Local DOES fire it for free via
+              // `max_tokens: -1`, but 11 runs across two models could not
+              // separate the two codes — the variance is "did thinking eat the
+              // budget", and swapping the port order flipped the result.
+              // DigitalOcean's only small-cap model (glm-5, 12,800) is 404.
+              // Shipping an unverifiable rewrite of a path that practically
+              // never runs buys nothing and risks a silent break on ten
+              // providers. See pending-tasks.md for how to make it measurable.
               let prefillContent = cumulativeAssistantText;
               if (!prefillContent.trim()) {
                 if (cumulativeReasoningText.trim()) {

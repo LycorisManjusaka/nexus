@@ -153,6 +153,54 @@ export function buildUpdateUserMsg(a: UpdateScaffoldArgs): string {
   ].join('\n');
 }
 
+// ── continuation (shared by all four SPU loops) ────────────────────────────
+// Sent as a trailing USER turn when a run ends without the end sentinel, so
+// the model resumes THE SAME document instead of restarting it.
+//
+// This used to be a bare PREFILL — [user, assistant(partial)] with nothing
+// after it. Measured 2026-10-12, that shape is wrong in three different ways
+// depending on the provider:
+//   • GLM-5.3 — HTTP 200, but reasoning EXPLODES 4.6-7.5x (12,231-48,838
+//     chars, vs 4,270 reaching the same point via a user turn), the visible
+//     answer SHRINKS (630-1,260 chars), and it restarts from "## Changelog" —
+//     so six continuation rounds rewrite the same opening forever and the run
+//     never advances. `finish_reason` stays `stop`, so nothing in NEXUS could
+//     see it: this was トカゲくん's "it just stops, no error" report.
+//   • DeepSeek-direct — HTTP 400 unless the prefill echoes reasoning_content
+//     (`dsPrefillRc` in the chat route). A trailing user turn removes the
+//     requirement outright: the request no longer ENDS on a model turn.
+//   • Gemini 3.5-flash-lite and newer — 400 "Requests ending with a model turn
+//     are not supported" (see gemini-prefill-rejected.md). The SPU could not
+//     continue on those models at all.
+// The wording fights four habits — restarting, repeating, re-emitting the
+// Changelog, and opening with a preamble — and RESTATES the sentinel: without
+// it the model continues but never signals the end, so the loop burns all six
+// rounds. Mirrors the vocabulary of `resumeBlock` above, which already asks
+// for exactly this ("continuation only", "do not rewrite from the start").
+export function buildContinuationUserMsg(a: { lang: ScaffoldLang; endSentinel: string }): string {
+  const L = a.lang === 'en';
+  return (L
+    ? [
+        `=== The previous output was cut off ===`,
+        `Your output above stopped partway because it reached the output token limit.`,
+        `Output ONLY the continuation of it. Do not rewrite the whole thing from the start.`,
+        `Do not repeat any line or section you have already written, and do not output the Changelog again.`,
+        `Do not open with a preamble such as "Continuing" or "As I was saying".`,
+        `If you stopped in the middle of a word, sentence, code block, or table, resume from exactly that point — your text is joined directly onto the previous part with nothing in between.`,
+        `When all output is complete, end by writing exactly "${a.endSentinel}" (half-width) alone on the final line.`,
+      ]
+    : [
+        `=== 直前の出力が途中で切れました ===`,
+        `上の出力は、出力トークン上限に達したため途中で停止しています。`,
+        `その**続きのみ**を出力してください。最初から全体を書き直さないこと。`,
+        `すでに出力した行・節を繰り返さないこと。Changelog を再度出力しないこと。`,
+        `「続きです」「先ほどの続き」のような前置きも書かないこと。`,
+        `単語・文・コードブロック・表の途中で切れている場合は、その地点から直接続けてください（あなたの出力はそのまま直前の部分に連結されます）。`,
+        `すべての出力が完了したら、最後の行に必ず半角で「${a.endSentinel}」とだけ記述して終了してください。`,
+      ]
+  ).join('\n');
+}
+
 // ── redistribute (interlayer_redistributor.md) ─────────────────────────────
 export interface RedistributeScaffoldArgs {
   lang: ScaffoldLang;

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
-import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
+import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, buildContinuationUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
 import { useDevice } from './DeviceProvider';
@@ -294,6 +294,27 @@ interface IndexReport {
 // output. Its absence after a stream means the output was truncated at the
 // model's token cap → we prefill-continue. Stripped before saving.
 const END_SENTINEL = '<<<NEXUS_END>>>';
+
+// One source for the turns every SPU loop sends — all four actions (update,
+// redistribute, genesis, index) had the identical four lines inline.
+//
+// attempt 0 is the plain request. A continuation is THREE turns: the request,
+// what the model produced so far, and a user turn asking for the rest. It is
+// deliberately NOT a prefill (a request ending on the assistant turn): that
+// shape makes GLM-5.3 rewrite its own Changelog with 4.6-7.5x the reasoning,
+// 400s DeepSeek-direct unless reasoning_content is echoed, and 400s Gemini
+// 3.5-flash-lite and newer outright. See buildContinuationUserMsg for the
+// measurement table.
+function buildSpuTurns(attempt: number, userMsg: string, accum: string, lang: 'en' | 'ja') {
+  const now = Date.now();
+  const request = { role: 'user', content: userMsg, timestamp: now };
+  if (attempt === 0) return [request];
+  return [
+    request,
+    { role: 'assistant', content: accum, timestamp: now },
+    { role: 'user', content: buildContinuationUserMsg({ lang, endSentinel: END_SENTINEL }), timestamp: now },
+  ];
+}
 
 // ── Fixed agent filenames ────────────────────────────────────────────────────
 // Each action button used to run whichever .md file the user happened to have
@@ -1466,13 +1487,7 @@ export default function SystemPromptUpdater({
     try {
       for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
         if (controller.signal.aborted) break;
-        // First attempt: just the user message. Continuations: prefill the
-        // assistant turn with everything produced so far so the model resumes
-        // exactly where it stopped (works for GLM/OpenAI-compat prefill).
-        const messages = attempt === 0
-          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
-          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
-             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
         const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;        // finished cleanly
@@ -1633,10 +1648,7 @@ export default function SystemPromptUpdater({
     try {
       for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
         if (controller.signal.aborted) break;
-        const messages = attempt === 0
-          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
-          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
-             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
         const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;
@@ -1821,10 +1833,7 @@ export default function SystemPromptUpdater({
     try {
       for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
         if (controller.signal.aborted) break;
-        const messages = attempt === 0
-          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
-          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
-             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
         const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;
@@ -1999,10 +2008,7 @@ export default function SystemPromptUpdater({
     try {
       for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
         if (controller.signal.aborted) break;
-        const messages = attempt === 0
-          ? [{ role: 'user', content: userMsg, timestamp: Date.now() }]
-          : [{ role: 'user', content: userMsg, timestamp: Date.now() },
-             { role: 'assistant', content: accum, timestamp: Date.now() }];
+        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
         const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
         accum += piece;
         if (accum.includes(END_SENTINEL)) break;
