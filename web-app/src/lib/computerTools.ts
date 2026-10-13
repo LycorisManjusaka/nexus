@@ -573,6 +573,40 @@ const AUDIT_PANEL_FILL_OPACITY = 0.5;
 /** A long batch must not paper over the screenshot it is describing. Anything
  *  past this is summarised in one final entry — never silently dropped. */
 const AUDIT_STACK_MAX = 14;
+/** librsvg resolves a GENERIC family ("sans-serif") from whatever the MACHINE
+ *  has installed, so the same code and the same SVG produce a different
+ *  typeface on every PC. On the work machine that generic lands on a
+ *  handwriting face and the panels stop being readable; here it lands on a
+ *  gothic one. Nothing in the repo chose either. So the family is PINNED.
+ *
+ *  Measured, not assumed (overlay_probe/font_list.mjs): librsvg does honour a
+ *  comma list, and the first INSTALLED member wins — not the last, not a merge.
+ *  The trailing generic only runs on a machine that has none of them, which is
+ *  exactly today's behaviour: this can only improve, never regress.
+ *
+ *  The ORDER is measured too, not taste. These panels are small red text over
+ *  whatever happened to be on screen, so stroke weight is what carries them;
+ *  ink per horizontal pixel at the shipping size of 19px, over a mixed label:
+ *  Meiryo UI 3.83, MS UI Gothic 3.86, MS Gothic 3.72, Noto Sans JP 3.55,
+ *  Yu Gothic UI 3.35, Yu Gothic 2.36. Yu Gothic is demoted to last-but-one for
+ *  that 2.36 — it is the Windows default in places, and it is the thinnest face
+ *  on the list by a wide margin. MS UI Gothic scores highest but is a dated
+ *  bitmap-era design, so Meiryo leads: same weight, modern shapes, and it was
+ *  drawn for on-screen Japanese legibility in the first place.
+ *
+ *  EM_BANDS below is an envelope over exactly THIS list — every member was
+ *  rendered and checked to fit inside the box the list produces, worst label of
+ *  a realistic batch and of a pathological one (overlay_probe/font_fix_verify.
+ *  mjs). Adding a family therefore means re-running glyph_width_classes.mjs to
+ *  re-derive the bands AND font_fix_verify.mjs to confirm nothing overflows;
+ *  a name added without that is a box that is too narrow on someone's PC and
+ *  nobody's here. BIZ UDPGothic was left out on those grounds: a fine UD face,
+ *  but its latin runs 0.667 em against the others' 0.48–0.58 and it was never
+ *  put through the bands.
+ *
+ *  textLength/lengthAdjust would make the box fit any face and remove the need
+ *  for all of this — librsvg 2.61.2 ignores both (same probe). */
+const AUDIT_FONT = `'Meiryo UI', 'Meiryo', 'Yu Gothic UI', 'MS UI Gothic', 'MS PGothic', 'MS Gothic', 'Noto Sans JP', 'Yu Gothic', sans-serif`;
 
 /** Which monitor the being last looked at, so a keyboard-only computer_input
  *  (no coordinates anywhere, no screen_index) still gets a frame of the screen
@@ -614,14 +648,41 @@ function xmlEsc(s: string): string {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c] as string));
 }
 
+/** Advance of one non-full-width character, as an UPPER BOUND over every face
+ *  AUDIT_FONT can land on. This used to be a flat 0.58 em, which is a MEAN and
+ *  not a bound: measured in 20-glyph runs across all nine pinned faces
+ *  (overlay_probe/glyph_width_classes.mjs, font-size 30), 70 of the 94
+ *  printable ASCII exceed 0.58 and '%' reaches 1.03. Labels as ordinary as
+ *  入力「WWW」 therefore ran past their own panel edge — that is pre-existing,
+ *  but pinning the face makes it reachable, so it is fixed here instead of
+ *  left. A panel a few px roomy is invisible; a panel a few px short is the
+ *  only one of the two a reader can see.
+ *
+ *  …↑↓ are in the widest band on purpose: auditLabel() emits them itself (the
+ *  clip marker and the wheel arrows), they are full-width in these faces, and
+ *  the old code charged them as ASCII — a silent 40% undercount on every
+ *  clipped or scrolled row. */
+const EM_BANDS: ReadonlyArray<readonly [string, number]> = [
+  ['%@Wm…↑↓', 1.03],
+  ['M', 0.91],
+  ['w&#~+<=^>OQ', 0.83],
+  ['DNHUGKV', 0.75],
+  ['ARCBXPTYZS_', 0.68],
+];
+/** Every remaining printable ASCII measured at or below 0.617 em. */
+const EM_REST = 0.62;
+function asciiEm(ch: string): number {
+  const band = EM_BANDS.find(([set]) => set.includes(ch));
+  return band ? band[1] : EM_REST;
+}
+
 /** SVG cannot size a <rect> to the <text> inside it, so the box has to be
- *  measured here. The two ratios are MEASURED, not assumed: librsvg's default
- *  sans advances ASCII at 0.58 em and CJK at 0.98 em (font_and_alpha.mjs, at
- *  font-size 30: 17.4 and 29.5 px per character). */
+ *  measured here. Full-width characters are 1.00 em by construction and the
+ *  widest ink measured was 0.99; everything else goes through asciiEm(). */
 function textWidthPx(s: string, fontSize: number): number {
   let em = 0;
   for (const ch of s) {
-    em += /[\u1100-\u11ff\u2e80-\ua4cf\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/.test(ch) ? 1.0 : 0.58;
+    em += /[\u1100-\u11ff\u2e80-\ua4cf\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/.test(ch) ? 1.0 : asciiEm(ch);
   }
   return Math.ceil(em * fontSize);
 }
@@ -640,7 +701,7 @@ function boxedLabel(x: number, y: number, text: string, fontSize: number, pad: n
       `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="white" fill-opacity="${AUDIT_PANEL_FILL_OPACITY}" ` +
       `stroke="red" stroke-width="${stroke}" stroke-opacity="${AUDIT_MARK_OPACITY}"/>` +
       `<text x="${x + pad}" y="${y + h - Math.round(pad * 0.75) - Math.round(fontSize * 0.18)}" font-size="${fontSize}" ` +
-      `font-family="sans-serif" fill="#c00000">${xmlEsc(text)}</text>`,
+      `font-family="${AUDIT_FONT}" fill="#c00000">${xmlEsc(text)}</text>`,
   };
 }
 
@@ -723,10 +784,10 @@ export function buildAuditOverlaySvg(w: number, h: number, marks: AuditMark[], s
       `<rect x="${bx}" y="${sy}" width="${colW}" height="${rowH}" rx="${Math.round(stackFs * 0.25)}" fill="white" ` +
       `fill-opacity="${AUDIT_PANEL_FILL_OPACITY}" stroke="red" stroke-width="${2 * ui}" stroke-opacity="${O}"/>` +
       (r.n
-        ? `<text x="${bx + stackPad}" y="${sy + dy}" font-size="${stackFs}" font-family="sans-serif" fill="#c00000">${xmlEsc(r.n)}</text>`
+        ? `<text x="${bx + stackPad}" y="${sy + dy}" font-size="${stackFs}" font-family="${AUDIT_FONT}" fill="#c00000">${xmlEsc(r.n)}</text>`
         : '') +
       `<text x="${bx + stackPad + numW + numGap}" y="${sy + dy}" font-size="${stackFs}" ` +
-      `font-family="sans-serif" fill="#c00000">${xmlEsc(r.label)}</text>`,
+      `font-family="${AUDIT_FONT}" fill="#c00000">${xmlEsc(r.label)}</text>`,
     );
     sy += rowH + Math.round(6 * ui);
   }
