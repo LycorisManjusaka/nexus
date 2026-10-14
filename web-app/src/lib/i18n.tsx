@@ -279,6 +279,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.language.label': 'Language',
   'settings.language.help':
     "Two variants: English or Japanese. Changes the Nexus interface, and also picks which built-in language an ENTITY's hidden instructions (tool descriptions, letter notices, etc.) default to when a folder has not overridden them — still editable per-Entity exactly as before either way. The Japanese defaults start as a verbatim copy of the English text and only change where someone hand-writes a real Japanese version — nothing here is machine-translated.",
+  'settings.uiFontScale.label': 'Interface font size',
+  'settings.uiFontScale.current': 'current',
+  'settings.uiFontScale.help':
+    "Scales every piece of text in NEXUS by one number — message bodies, labels, and the small print in the Soul Updater — and leaves the layout where it is. That is the difference from the browser's page zoom, which grows the padding and the fixed heights too, so LESS fits on the screen instead of the text being bigger. Saved in this browser rather than on the server, so a phone can sit at 125% while the desktop monitor stays at 100%. Applies the moment you pick it.",
   'settings.lmStudioPath.label': 'LM Studio executable path',
   'settings.lmStudioPath.placeholder': 'e.g. C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
   'settings.lmStudioPath.help':
@@ -1893,6 +1897,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.language.label': '言語',
   'settings.language.help':
     '英語と日本語の2種類です。Nexus の画面表示が切り替わるほか、存在に渡される非表示の指示文（ツールの説明、手紙の通知など）について、フォルダ側で上書きされていない場合にどちらの言語の組み込み文を使うかも決まります。いずれの場合も、これまで通り存在ごとに編集できます。日本語側の既定値は英語のそのままの写しから始まり、誰かが実際に日本語を書き起こした箇所だけが変わります。機械翻訳は一切行いません。',
+  'settings.uiFontScale.label': 'インターフェースのフォントサイズ',
+  'settings.uiFontScale.current': '現状',
+  'settings.uiFontScale.help':
+    'NEXUS の文字をすべて——メッセージ本文、ラベル、魂アップデーターの小さな文字まで——一つの数値で拡大・縮小します。余白や高さ（レイアウト）は動きません。ブラウザのページ拡大とはそこが違います。あちらは余白も一緒に大きくなるため、文字が大きくなる代わりに画面に収まる量が減ります。保存はサーバーではなくこのブラウザごとなので、スマートフォンだけ125%にしてデスクトップは100%のまま、という使い方ができます。選んだ瞬間に反映されます。',
   'settings.lmStudioPath.label': 'LM Studio 実行ファイルのパス',
   'settings.lmStudioPath.placeholder': '例: C:\\Users\\you\\AppData\\Local\\LM-Studio\\LM Studio.exe',
   'settings.lmStudioPath.help':

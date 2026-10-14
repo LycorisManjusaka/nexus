@@ -9,6 +9,7 @@ import { useT, Tx } from '@/lib/i18n';
 import { ensureAudioPermission, supportsSinkId, invalidateDeviceCache } from '@/lib/audioSink';
 import { buildTag, loadBuildTag } from '@/lib/buildVersion';
 import { AUDIO_SESSION_KEEP_MESSAGES_DEFAULT, resolveKeepMessages } from '@/lib/attachmentVisibility';
+import { resolveUiFontScale, uiFontScaleOptions, UI_FONT_SCALE_DEFAULT } from '@/lib/uiFontScale';
 
 // Preferences is split into tabs because the three groups have nothing to do
 // with each other and the API-key list alone is twelve providers long. Add a
@@ -60,6 +61,11 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // icon — the whole point is that it can be copied into a message.
   const [buildLabel, setBuildLabel] = React.useState<string>(buildTag());
   React.useEffect(() => { loadBuildTag().then(setBuildLabel); }, []);
+  // Resolved through the same helper NexusApp applies with, so the number drawn
+  // in the picker is the number on screen. A stored value that is not one of
+  // the offered steps gets its own option rather than being silently drawn as
+  // 100% -- see src/lib/uiFontScale.ts.
+  const fontScale = resolveUiFontScale(globalSettings.uiFontScale);
   // claudeAuthMode + claudeOAuthToken are OPT-IN additions for using your
   // Claude Pro/Max subscription billing instead of pay-per-token API billing.
   // Default is 'api-key' so existing setups keep working exactly as before.
@@ -829,6 +835,32 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </label>
               <p className="text-xs text-muted-foreground mt-1">
                 <Tx k="settings.language.help" />
+              </p>
+            </div>
+
+            {/* Next to Language because it is the same kind of setting -- how
+                this browser draws the interface, not how NEXUS behaves. The
+                change applies the moment it is picked (globalSettings is live
+                state, not a staged copy), so the whole panel resizes under the
+                cursor; that live preview IS the control's feedback and is why
+                this is a picker and not a text field. */}
+            <div>
+              <label className="block">
+                <span className="text-sm text-foreground">{t('settings.uiFontScale.label')}</span>
+                <select
+                  value={String(fontScale)}
+                  onChange={e => setGlobalSettings({ ...globalSettings, uiFontScale: Number(e.target.value) })}
+                  className="mt-1 w-40 px-2 py-1 rounded-md border border-border bg-background text-sm block"
+                >
+                  {uiFontScaleOptions(fontScale).map(v => (
+                    <option key={v} value={String(v)}>
+                      {Math.round(v * 100)}%{v === UI_FONT_SCALE_DEFAULT ? ` (${t('settings.uiFontScale.current')})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="text-xs text-muted-foreground mt-1">
+                <Tx k="settings.uiFontScale.help" />
               </p>
             </div>
 

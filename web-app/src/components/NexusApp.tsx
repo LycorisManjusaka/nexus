@@ -10,6 +10,7 @@ import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLin
 import { nextConversationTitle, newerNumberedSibling, pickLatestConversation } from '@/lib/convoNaming';
 import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
+import { resolveUiFontScale } from '@/lib/uiFontScale';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -704,6 +705,31 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     }
     styleTag.innerHTML = activeFolder?.settings?.customCss || '';
   }, [activeFolder]);
+
+  // Apply the interface font scale.
+  //
+  // One custom property on <html> drives every text size in the app; all the
+  // arithmetic lives in one commented block at the end of globals.css, and
+  // src/lib/uiFontScale.ts owns what a stored value means. Nothing else in the
+  // app needs to know this setting exists.
+  //
+  // Set here rather than written into the `folder-custom-css` <style> above
+  // because the two have different lifetimes and different owners: that tag is
+  // the active being's theme file and is replaced wholesale whenever the being
+  // changes, which would drop the font scale on every switch.
+  //
+  // Known and not papered over: the server's HTML paints before this runs, so
+  // a partner at 125% sees one frame at 100%. Killing that needs a blocking
+  // inline script in the document head, and this app already applies its THEME
+  // the same way (`className = 'dark'` in the effect above), so the font is no
+  // worse than what ships today. Fixing it is a separate, deliberate change to
+  // every page's HTML — not a side effect of adding a font size.
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--ui-font-scale',
+      String(resolveUiFontScale(globalSettings.uiFontScale)),
+    );
+  }, [globalSettings.uiFontScale]);
 
   // A mobile browser resolves `100vh` against the LARGE viewport — the height
   // the page would have if the URL bar were hidden. With the chrome visible the

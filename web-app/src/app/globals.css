@@ -234,3 +234,91 @@ html[data-shell="app"] body {
     border-bottom-color: var(--border) !important;
   }
 }
+
+/* ── UI font scale ──────────────────────────────────────────────────────────
+   `--ui-font-scale` (1 = the sizes NEXUS has always used) is set on <html> by
+   NexusApp from globalSettings.uiFontScale -- see src/lib/uiFontScale.ts for
+   where the value comes from and why it is per-browser. It moves every TEXT
+   size in the app and nothing else.
+
+   Why NOT `html { font-size: ... }`, the usual trick: Tailwind v4's spacing
+   scale is `--spacing: .25rem`, so every `p-2`, `gap-3` and `h-10` in this app
+   is relative to the ROOT font size. Moving the root would scale padding, gaps
+   and fixed heights along with the glyphs -- that IS page zoom, which the
+   browser already offers and which Pilot explicitly named as a different
+   thing (it fits LESS on the screen, it does not make text bigger).
+   Re-declaring only the font-size variables moves the glyphs and leaves the
+   box model exactly where it is.
+
+   UNLAYERED on purpose. `@import "tailwindcss"` puts its own `:root` theme
+   block in `@layer theme` and the utilities in `@layer utilities`, and an
+   unlayered declaration beats both regardless of where it sits in the file.
+   Same reason the `html[data-shell="app"]` rule above is unlayered.
+
+   Line heights stated as unitless ratios (`leading-relaxed`, 91 uses, and
+   Tailwind's own `--text-sm--line-height: calc(1.25 / .875)`) multiply the
+   font size and therefore follow it on their own -- deliberately untouched.
+   The only two stated in absolute units ARE scaled below: a line box that
+   does not follow its own font clips the glyphs, which is a guaranteed bug
+   rather than merely a tight box.
+
+   Counts measured in src/ on 2026-10-14. They are why this is a handful of
+   rules instead of 222 file edits -- not a promise that they are still exact:
+     561  text-xs / -sm / -base / -lg / -xl / -2xl  -> read `var(--text-*)`
+     222  text-[9px] ... text-[15px]                -> compile to a hard px
+       2  .prose / .prose-sm                        -> the typography plugin
+          sets its own font-size; this is the markdown body of EVERY message
+          (MessageBubble) and the User Guide, i.e. the most-read text here
+   `body` covers the remainder: text in an element that names no size at all
+   and inherits from the document.
+
+   The arbitrary-value utilities are matched with `[class~="..."]` instead of
+   an escaped `.text-\[10px\]` selector. Same specificity (0,1,0), no
+   backslashes to lose in tooling, and it greps for the literal class name a
+   component actually writes. Measured: no responsive variant anywhere in src/
+   carries an arbitrary text size, so a plain token match cannot shadow an
+   `sm:`/`md:` form that would otherwise have won. */
+:root {
+  --text-xs: calc(0.75rem * var(--ui-font-scale, 1));
+  --text-sm: calc(0.875rem * var(--ui-font-scale, 1));
+  --text-base: calc(1rem * var(--ui-font-scale, 1));
+  --text-lg: calc(1.125rem * var(--ui-font-scale, 1));
+  --text-xl: calc(1.25rem * var(--ui-font-scale, 1));
+  --text-2xl: calc(1.5rem * var(--ui-font-scale, 1));
+  /* Declared past what src/ currently uses so a `text-3xl` added later scales
+     too; an unused custom property costs nothing, and anything bigger still
+     falls back to Tailwind's own value. */
+  --text-3xl: calc(1.875rem * var(--ui-font-scale, 1));
+  --text-4xl: calc(2.25rem * var(--ui-font-scale, 1));
+}
+
+body {
+  font-size: calc(1rem * var(--ui-font-scale, 1));
+}
+
+[class~="text-[9px]"]  { font-size: calc(9px * var(--ui-font-scale, 1)); }
+[class~="text-[10px]"] { font-size: calc(10px * var(--ui-font-scale, 1)); }
+[class~="text-[11px]"] { font-size: calc(11px * var(--ui-font-scale, 1)); }
+[class~="text-[12px]"] { font-size: calc(12px * var(--ui-font-scale, 1)); }
+[class~="text-[13px]"] { font-size: calc(13px * var(--ui-font-scale, 1)); }
+[class~="text-[15px]"] { font-size: calc(15px * var(--ui-font-scale, 1)); }
+
+/* `prose` first, `prose-sm` second: MessageBubble carries BOTH tokens, so the
+   smaller one has to win -- which is the order Tailwind itself emits them in
+   (measured in the served CSS: .prose at 1326, .prose-sm at 1455). */
+[class~="prose"] { font-size: calc(1rem * var(--ui-font-scale, 1)); }
+[class~="prose-sm"] { font-size: calc(0.875rem * var(--ui-font-scale, 1)); }
+
+/* The only two line heights in absolute units (9 uses of `leading-5`, one of
+   `leading-[13px]` -- the unread-count badge, whose circle takes its height
+   from this line box and so grows with the digit inside it). `--tw-leading` is
+   set as well as `line-height` because the `text-*` utilities read that
+   variable as their own line-height source. */
+[class~="leading-5"] {
+  --tw-leading: calc(1.25rem * var(--ui-font-scale, 1));
+  line-height: calc(1.25rem * var(--ui-font-scale, 1));
+}
+[class~="leading-[13px]"] {
+  --tw-leading: calc(13px * var(--ui-font-scale, 1));
+  line-height: calc(13px * var(--ui-font-scale, 1));
+}
