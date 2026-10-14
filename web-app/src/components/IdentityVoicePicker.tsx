@@ -1,5 +1,8 @@
 import React from 'react';
 import { useT } from '@/lib/i18n';
+import {
+  TTS_ENGINES, type SpeakerCatalogs, catalogFor, ttsEngineByKey,
+} from '@/lib/ttsEngineCatalog';
 
 // The voice half of a Preferences → User Identity row: engine + character +
 // style, all optional (an identity can be a bare name with no TTS voice at
@@ -22,7 +25,7 @@ import { useT } from '@/lib/i18n';
 // the engine's own default when none is saved here.
 
 export interface IdentityVoiceValue {
-  engine?: string; // engine's own NAME string: "voicevox" | "coeiroink" | "aivisspeech" | future engines
+  engine?: string; // engine's own NAME string — the `key` field of TTS_ENGINES
   character?: string;
   defaultStyle?: string;
 }
@@ -30,27 +33,30 @@ export interface IdentityVoiceValue {
 interface Props {
   value: IdentityVoiceValue;
   onChange: (val: IdentityVoiceValue) => void;
-  speakers: { voicevox: any[]; coeiroink: any[]; aivisspeech: any[] };
+  speakers: SpeakerCatalogs;
   onStartEngine: (engine: number) => void;
   starting: boolean;
   startMsg: string | null;
 }
 
-// The TTS engine SOFTWARE processes Nexus can launch/poll are a small, fixed,
-// hardcoded set (unlike character/style, which live inside each engine's own
-// ever-changing speaker list) — this mapping only grows when a genuinely new
-// engine is integrated into Nexus, which already requires code changes
-// elsewhere. It never drifts on its own the way a speaker index does.
-const ENGINE_TO_NUM: Record<string, number> = { voicevox: 0, coeiroink: 1, aivisspeech: 2 };
-const ENGINE_LABEL_KEY: Record<string, string> = { voicevox: 'Voicevox', coeiroink: 'Coeiroink', aivisspeech: 'voice.engine.aivis' };
+// The TTS engine SOFTWARE processes Nexus can launch/poll are a small, fixed
+// set (unlike character/style, which live inside each engine's own
+// ever-changing speaker list) — but they were restated here, in VoiceSelector,
+// in UserIdentityEditor and in two server routes. They now come from the one
+// catalog, which is also what decides whether an engine has a process to
+// start at all.
 
 export default function IdentityVoicePicker({ value, onChange, speakers, onStartEngine, starting, startMsg }: Props) {
   const t = useT();
   const hasVoice = !!value.engine;
   const engineKey = value.engine || 'voicevox';
-  const engineLabel = engineKey === 'aivisspeech' ? t('voice.engine.aivis') : (ENGINE_LABEL_KEY[engineKey] || engineKey);
+  const engineMeta = ttsEngineByKey(engineKey);
+  const engineLabel = engineMeta
+    ? (engineMeta.labelKey ? t(engineMeta.labelKey) : engineMeta.label)
+    : engineKey;
+  const needsProcess = !!engineMeta?.needsProcess;
 
-  const currentEngineData = engineKey === 'voicevox' ? speakers.voicevox : engineKey === 'aivisspeech' ? speakers.aivisspeech : speakers.coeiroink;
+  const currentEngineData = catalogFor(engineKey, speakers);
   const resolvedCharIdx = value.character
     ? (currentEngineData || []).findIndex((c: any) => (c.name || c.speakerName) === value.character)
     : -1;
@@ -72,9 +78,9 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
 
   const handleEngineChange = (eng: string) => {
     onChange({ engine: eng });
-    if (eng === 'voicevox') return;
-    const list = eng === 'aivisspeech' ? speakers.aivisspeech : speakers.coeiroink;
-    if (list.length === 0 && !starting) onStartEngine(ENGINE_TO_NUM[eng] ?? 0);
+    const meta = ttsEngineByKey(eng);
+    if (!meta?.needsProcess) return;   // catalog is a file on disk
+    if (catalogFor(eng, speakers).length === 0 && !starting) onStartEngine(meta.num);
   };
 
   return (
@@ -96,9 +102,9 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
             onChange={e => handleEngineChange(e.target.value)}
             className="w-full px-2 py-1 bg-background border border-border rounded text-xs outline-none"
           >
-            <option value="voicevox">Voicevox</option>
-            <option value="coeiroink">Coeiroink</option>
-            <option value="aivisspeech">{t('voice.engine.aivis')}</option>
+            {TTS_ENGINES.map(e => (
+              <option key={e.key} value={e.key}>{e.labelKey ? t(e.labelKey) : e.label}</option>
+            ))}
           </select>
 
           {/* Voicevox has no process to start from here — its catalog is a file
@@ -106,17 +112,17 @@ export default function IdentityVoicePicker({ value, onChange, speakers, onStart
               dropdown below simply doesn't render, which used to leave a blank
               gap with no explanation. Say what's missing instead of offering a
               Start button that wouldn't do anything for this engine. */}
-          {engineKey === 'voicevox' && currentEngineData.length === 0 && (
+          {!needsProcess && currentEngineData.length === 0 && (
             <p className="text-[10px] text-amber-500">{t('voice.noVoicevox')}</p>
           )}
 
-          {engineKey !== 'voicevox' && currentEngineData.length === 0 && (
+          {needsProcess && currentEngineData.length === 0 && (
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-[10px] text-amber-500 flex-1 min-w-[10rem]">
                 {startMsg || t('voice.notRunning').replace('{engine}', engineLabel)}
               </p>
               <button
-                onClick={() => onStartEngine(ENGINE_TO_NUM[engineKey] ?? 0)}
+                onClick={() => { if (engineMeta) onStartEngine(engineMeta.num); }}
                 disabled={starting}
                 className="text-[10px] px-2 py-1 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/25 transition disabled:opacity-40 disabled:cursor-not-allowed"
               >

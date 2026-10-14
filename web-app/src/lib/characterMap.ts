@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { speakersJsonPath, coeiroinkSpeakersJsonPath } from './voicechangerPaths';
+import { TTS_ENGINES } from './ttsEngineCatalog';
 
 /**
  * local_data/character_map.json — the list of human identities Nexus knows.
@@ -66,8 +67,13 @@ export const EMPTY_MAP: CharacterMap = {
   humanLabel: DEFAULT_OTHERS_LABEL,
 };
 
-/** Legacy numeric engine ids, as written by the pre-name schema. */
-const LEGACY_ENGINE_BY_NUM: Record<string, string> = { '0': 'voicevox', '1': 'coeiroink', '2': 'aivisspeech' };
+/** Legacy numeric engine ids, as written by the pre-name schema. Derived from
+ *  the shared engine catalog rather than restated, so a newly integrated engine
+ *  cannot be missing here — the symptom would be a saved rule losing its voice
+ *  with no error. */
+const LEGACY_ENGINE_BY_NUM: Record<string, string> = Object.fromEntries(
+  TTS_ENGINES.map(e => [String(e.num), e.key])
+);
 
 function readJson<T>(p: string, fallback: T): T {
   try {

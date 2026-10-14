@@ -9,6 +9,10 @@ import { findPidByPort } from './audioServices';
 // cycle. (The reverse — putting this logic in audioServices — would, since
 // ttsEngines already imports from there.)
 import { readCharacterMap } from './characterMap';
+// Engine identity (number ↔ key ↔ label ↔ catalogue field) lives in a
+// client-safe module so React components can read the same list; this file
+// adds the server-only half (ports, health paths, process launching).
+import { TTS_ENGINES, ttsEngineByKey } from './ttsEngineCatalog';
 
 // Auto-start for the local TTS engines.
 //
@@ -40,21 +44,35 @@ export const ENGINES: Record<number, EngineDef> = {
   0: { key: 'voicevox',    name: 'VOICEVOX',    base: 'http://127.0.0.1:50021', health: '/version' },
   1: { key: 'coeiroink',   name: 'COEIROINK',   base: 'http://127.0.0.1:50032', health: '/v1/speakers' },
   2: { key: 'aivisspeech', name: 'AivisSpeech', base: process.env.NEXUS_AIVISSPEECH_URL || 'http://127.0.0.1:10101', health: '/speakers' },
+  // Russian: vosk-tts + RUAccent, both Apache-2.0. Not a bundled binary — a
+  // small HTTP service (server.py) living wherever the user unpacked it, named
+  // by absolute path in Preferences like the three above. /health answers 200
+  // only once BOTH models are loaded (MEASURED: 44.9s + 11.5s = 56.4s cold,
+  // inside BOOT_TIMEOUT_MS below), so "running" never means "will 503".
+  3: { key: 'vosk_ra',     name: 'vosk-tts + RUAccent', base: process.env.NEXUS_RU_TTS_URL || 'http://127.0.0.1:50040', health: '/health' },
 };
 
-/** Engine name → numeric id, so callers with the new name-based identity system
- *  can still look up engine configs keyed by number. */
-const ENGINE_NAME_TO_NUM: Record<string, number> = {};
-for (const [num, def] of Object.entries(ENGINES)) {
-  ENGINE_NAME_TO_NUM[def.key] = Number(num);
+// The numeric ids here and in ttsEngineCatalog.ts are the SAME identity read by
+// two halves of the app (this file launches processes; the catalog file is what
+// React components can import). Drift between them would mean the server starts
+// one engine while the picker lists another's voices — so it is checked at
+// module load instead of trusted.
+for (const e of TTS_ENGINES) {
+  const def = ENGINES[e.num];
+  if (!def || def.key !== e.key) {
+    throw new Error(
+      `TTS engine registry drift: ttsEngineCatalog has ${e.num}="${e.key}" but ttsEngines has ${e.num}="${def?.key ?? '(missing)'}"`
+    );
+  }
 }
 
 /** Accept an engine reference in either form (number or name string) and return
  *  the numeric id. Returns -1 for unrecognised names, leaving the caller to
- *  decide whether that's an error. */
+ *  decide whether that's an error. Delegates to the shared catalog so the
+ *  name→number mapping exists exactly once. */
 export function resolveEngineNum(engine: number | string): number {
   if (typeof engine === 'number') return engine;
-  return ENGINE_NAME_TO_NUM[engine.toLowerCase()] ?? -1;
+  return ttsEngineByKey(engine)?.num ?? -1;
 }
 
 export type EnginePaths = Partial<Record<string, string>>;
@@ -85,7 +103,7 @@ export async function loadEnginePaths(): Promise<EnginePaths> {
 
 export async function saveEnginePaths(paths: EnginePaths): Promise<void> {
   await fsp.mkdir(DATA_DIR, { recursive: true });
-  // Keep only the three known keys, trimmed. Stops arbitrary junk from a
+  // Keep only the known engine keys, trimmed. Stops arbitrary junk from a
   // malformed request landing in the file.
   const clean: EnginePaths = {};
   for (const def of Object.values(ENGINES)) {
@@ -147,6 +165,54 @@ export interface EnsureResult {
   error?: string;
 }
 
+/**
+ * Turn a configured path into the (command, args) pair to spawn.
+ *
+ * The three original engines are .exe files, which spawn directly. A
+ * Python-based engine cannot, and the obvious workarounds do not work here —
+ * MEASURED on this machine (Node v24.15.0, workspace/ru_tts_lab probes):
+ *
+ *   <engine>.exe                                      spawns, runs
+ *   <venv>\Scripts\python.exe  <script.py>            spawns, runs, exit 0
+ *   launcher.bat  (spawned directly)                  throws EINVAL
+ *   cmd.exe /c launcher.bat   WITH detached:true      returns a pid, runs
+ *                                                     NOTHING, emits no error
+ *
+ * That last row is why .bat is refused with its reason rather than attempted:
+ * a detached child gets no console, so cmd.exe exits having done nothing and
+ * the failure is indistinguishable from an engine that started and never
+ * answered. (Same shape as the PowerShell detached-spawn trap already recorded
+ * for the computer-control actors.)
+ *
+ * The interpreter is looked for BESIDE the script because a Python TTS engine
+ * only works inside the virtualenv that holds its dependencies; a `python` on
+ * PATH would start and then fail on import, inside a process whose stdio is
+ * discarded. Better to refuse here, where the message reaches the user.
+ */
+function resolveLaunch(exePath: string): { cmd: string; args: string[] } | { error: string } {
+  const ext = path.extname(exePath).toLowerCase();
+  if (ext === '.py') {
+    const dir = path.dirname(exePath);
+    const candidates = [
+      path.join(dir, 'venv', 'Scripts', 'python.exe'),
+      path.join(dir, '.venv', 'Scripts', 'python.exe'),
+    ];
+    const py = candidates.find(p => fs.existsSync(p));
+    if (!py) {
+      return {
+        error: `no interpreter found next to "${exePath}" — expected venv\\Scripts\\python.exe or .venv\\Scripts\\python.exe in the same folder`,
+      };
+    }
+    return { cmd: py, args: [exePath] };
+  }
+  if (ext === '.bat' || ext === '.cmd') {
+    return {
+      error: `a .bat/.cmd launcher cannot be started in the background (measured: Node throws EINVAL, and "cmd /c" detached silently does nothing) — point this at the .exe or the .py instead`,
+    };
+  }
+  return { cmd: exePath, args: [] };
+}
+
 async function launchAndWait(engine: number, rawPath: string): Promise<EnsureResult> {
   const def = ENGINES[engine];
   // Defensive: a config written before normalizeExePath existed may still carry
@@ -164,19 +230,24 @@ async function launchAndWait(engine: number, rawPath: string): Promise<EnsureRes
     return { ok: false, wasRunning: false, launched: false, error: `${def.name}: cannot read "${exePath}" (${e.message})` };
   }
 
+  const launch = resolveLaunch(exePath);
+  if ('error' in launch) {
+    return { ok: false, wasRunning: false, launched: false, error: `${def.name}: ${launch.error}` };
+  }
+
   try {
     // cwd MUST be the engine's own directory — these apps resolve their model
     // and dictionary files relative to it, and launching from Nexus's cwd makes
     // them start and then fail to synthesize.
     // detached + unref so the engine outlives this request and isn't killed
     // when the Next.js dev server reloads.
-    const child = spawn(exePath, [], {
+    const child = spawn(launch.cmd, launch.args, {
       cwd: path.dirname(exePath),
       detached: true,
       stdio: 'ignore',
     });
     child.unref();
-    console.log(`[tts-engine] launching ${def.name}: ${exePath}`);
+    console.log(`[tts-engine] launching ${def.name}: ${launch.cmd} ${launch.args.join(' ')}`);
   } catch (e: any) {
     return { ok: false, wasRunning: false, launched: false, error: `${def.name}: failed to launch (${e.message})` };
   }
@@ -327,8 +398,11 @@ export async function startEngine(engine: number): Promise<EngineActionResult> {
   // cooldown so it always actually tries rather than replaying a stale error.
   state.failedUntil.delete(engine);
 
+  const launch = resolveLaunch(exePath);
+  if ('error' in launch) return { ok: false, message: `${def.name}: ${launch.error}` };
+
   try {
-    const child = spawn(exePath, [], { cwd: path.dirname(exePath), detached: true, stdio: 'ignore' });
+    const child = spawn(launch.cmd, launch.args, { cwd: path.dirname(exePath), detached: true, stdio: 'ignore' });
     child.unref();
   } catch (e: any) {
     return { ok: false, message: `${def.name}: failed to launch (${e.message})` };

@@ -1,6 +1,7 @@
 "use client";
 
 import React from 'react';
+import { TTS_ENGINES } from '@/lib/ttsEngineCatalog';
 import { useT } from '@/lib/i18n';
 
 // Live TTS pipeline indicator, and the store that feeds it.
@@ -19,8 +20,13 @@ import { useT } from '@/lib/i18n';
 // single boolean (is the bar on screen) because two LAYOUT decisions read it,
 // and that flips twice per playback rather than 5-7 times per phrase.
 //
-// The engine labels live here because this bar is their only consumer.
-const TTS_ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
+// Engine labels come from the shared catalog rather than a fourth copy of
+// the same three-entry map: this bar names the engine in a diagnostic, and a
+// bar that says "Coeiroink" while Russian audio plays is worse than one that
+// says nothing.
+const TTS_ENGINE_NAMES: Record<number, string> = Object.fromEntries(
+  TTS_ENGINES.map(e => [e.num, e.label])
+);
 
 export type TtsStatusStore = {
   get: () => any;

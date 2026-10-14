@@ -2,8 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { useT } from '@/lib/i18n';
 import { fetchJsonSafe } from '@/lib/fetchJson';
 
-type SpeakerCatalogs = { voicevox: any[]; coeiroink: any[]; aivisspeech: any[] };
-const NO_SPEAKERS: SpeakerCatalogs = { voicevox: [], coeiroink: [], aivisspeech: [] };
+import {
+  TTS_ENGINES, type SpeakerCatalogs, emptyCatalogs, normalizeCatalogs,
+  catalogFor, ttsEngineByNum,
+} from '@/lib/ttsEngineCatalog';
+
+// Engine identity (which field of /api/tts/speakers holds which engine's
+// voices, whether it has a process to start) comes from the shared catalog.
+// This file used to decide it with `eng === 0 ? vv : eng === 2 ? aivis : coe`,
+// whose final branch is a default — a fourth engine landed on COEIROINK's
+// voice list with nothing in the type system to notice.
+const NO_SPEAKERS: SpeakerCatalogs = emptyCatalogs();
 
 interface VoiceSettings {
   engine: number;
@@ -35,7 +44,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   const [starting, setStarting] = useState(false);
   const [startMsg, setStartMsg] = useState<string | null>(null);
 
-  const ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
+  const engineName = (n: number) => ttsEngineByNum(n)?.label ?? `engine ${n}`;
 
   // Never rejects — see lib/fetchJson.ts. With no engine installed (or the
   // route unreachable) this resolves to empty catalogs, which is exactly what
@@ -44,11 +53,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   // unhandled rejection.
   const loadSpeakers = React.useCallback(async (): Promise<SpeakerCatalogs> => {
     const data = await fetchJsonSafe<any>('/api/tts/speakers', NO_SPEAKERS);
-    const next: SpeakerCatalogs = {
-      voicevox: data.voicevox || [],
-      coeiroink: data.coeiroink || [],
-      aivisspeech: data.aivisspeech || [],
-    };
+    const next = normalizeCatalogs(data);
     setSpeakers(next);
     return next;
   }, []);
@@ -71,7 +76,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
    */
   const startEngineAndWait = React.useCallback(async (eng: number) => {
     setStarting(true);
-    setStartMsg(t('voice.starting').replace('{engine}', ENGINE_NAMES[eng]));
+    setStartMsg(t('voice.starting').replace('{engine}', engineName(eng)));
     try {
       const r = await fetchJsonSafe<any>('/api/tts/engines', null, {
         method: 'POST',
@@ -83,7 +88,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
         setStartMsg(r?.message || t('voice.startFailed'));
         return;
       }
-      setStartMsg(t('voice.startingLong').replace('{engine}', ENGINE_NAMES[eng]));
+      setStartMsg(t('voice.startingLong').replace('{engine}', engineName(eng)));
 
       // Poll the speaker list rather than a health endpoint: the list appearing
       // is the thing we actually need, and these engines answer /speakers only
@@ -92,7 +97,7 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
       while (Date.now() < deadline) {
         await new Promise(res => setTimeout(res, 2500));
         const d = await loadSpeakers();
-        const got = eng === 2 ? (d.aivisspeech || []) : (d.coeiroink || []);
+        const got = catalogFor(eng, d);
         if (got.length > 0) { setStartMsg(null); return; }
       }
       setStartMsg(t('voice.startTimeout'));
@@ -106,14 +111,15 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
   const handleEngineChange = (eng: number) => {
     onChange({ ...value, engine: eng, char_idx: 0, style_idx: 0, char_name: undefined, style_name: undefined, speed: value.speed || 1.0 });
     setStartMsg(null);
-    if (eng === 0) return;                       // reads from disk, no engine needed
-    const list = eng === 2 ? speakers.aivisspeech : speakers.coeiroink;
-    if (list.length === 0 && !starting) startEngineAndWait(eng);
+    if (!ttsEngineByNum(eng)?.needsProcess) return;   // catalog is a file on disk
+    if (catalogFor(eng, speakers).length === 0 && !starting) startEngineAndWait(eng);
   };
 
   if (loading) return <div className="text-xs text-muted-foreground">{t('voice.loading')}</div>;
 
-  const currentEngineData = value.engine === 0 ? speakers.voicevox : value.engine === 2 ? speakers.aivisspeech : speakers.coeiroink;
+  const engineMeta = ttsEngineByNum(value.engine);
+  const needsProcess = !!engineMeta?.needsProcess;
+  const currentEngineData = catalogFor(value.engine, speakers);
   // Resolve by NAME first, so a saved selection keeps pointing at the same
   // character/style even if the engine's list order changed since last save
   // (e.g. a new voice model added ahead of this one). Falls back to the saved
@@ -138,23 +144,23 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
           onChange={e => handleEngineChange(parseInt(e.target.value))}
           className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none"
         >
-          <option value={0}>Voicevox</option>
-          <option value={1}>Coeiroink</option>
-          <option value={2}>{t('voice.engine.aivis')}</option>
+          {TTS_ENGINES.map(e => (
+            <option key={e.num} value={e.num}>{e.labelKey ? t(e.labelKey) : e.label}</option>
+          ))}
         </select>
         {/* Voicevox's catalog is a file on disk, not a running process — there
             is nothing to start from here, so say what's missing rather than
             leaving an empty Character dropdown with no explanation. */}
-        {value.engine === 0 && currentEngineData.length === 0 && (
+        {!needsProcess && currentEngineData.length === 0 && (
           <p className="text-[10px] text-amber-500 mt-1">{t('voice.noVoicevox')}</p>
         )}
-        {/* Engines 1 and 2 serve their character list from the running process.
-            Rather than the old "go start the app yourself, then reopen this
-            panel", offer the launch right here. */}
-        {value.engine !== 0 && currentEngineData.length === 0 && (
+        {/* The other engines serve their character list from the running
+            process. Rather than the old "go start the app yourself, then reopen
+            this panel", offer the launch right here. */}
+        {needsProcess && currentEngineData.length === 0 && (
           <div className="mt-1 flex items-center gap-2 flex-wrap">
             <p className="text-[10px] text-amber-500 flex-1 min-w-[12rem]">
-              {startMsg || t('voice.notRunning').replace('{engine}', ENGINE_NAMES[value.engine])}
+              {startMsg || t('voice.notRunning').replace('{engine}', engineName(value.engine))}
             </p>
             <button
               onClick={() => startEngineAndWait(value.engine)}
@@ -166,8 +172,15 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
           </div>
         )}
         {/* Loaded, but a start/restart message is still worth showing. */}
-        {value.engine !== 0 && currentEngineData.length > 0 && startMsg && (
+        {needsProcess && currentEngineData.length > 0 && startMsg && (
           <p className="text-[10px] text-muted-foreground mt-1">{startMsg}</p>
+        )}
+        {/* vosk-tts takes speech_rate but has no pitch parameter at all
+            (measured by introspecting its Synth class). The Pitch control for
+            this being lives in folder settings, not here, so without this line
+            it would look like a working control that does nothing. */}
+        {engineMeta?.key === 'vosk_ra' && (
+          <p className="text-[10px] text-muted-foreground mt-1">{t('voice.engine.voskra.note')}</p>
         )}
       </div>
 

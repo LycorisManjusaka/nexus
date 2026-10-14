@@ -222,7 +222,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.engines.refresh': 'Refresh status',
   'settings.engines.refresh.title': 'Re-check which engines are currently running',
   'settings.engines.help':
-    "Full path to each engine's `.exe`. When TTS needs an engine that isn't running, Nexus starts it automatically and waits for it to finish loading. Leave a field empty to disable auto-start for that engine.",
+    "Full path to each engine's `.exe` — or, for a script engine, its `.py` (Nexus runs it with the `venv` beside it). A `.bat` cannot be launched in the background and is refused with that reason. When TTS needs an engine that isn't running, Nexus starts it automatically and waits for it to finish loading. Leave a field empty to disable auto-start for that engine.",
   'settings.engines.running': 'running',
   'settings.engines.stopped': 'stopped',
   'settings.engines.start': 'Start',
@@ -520,6 +520,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'voice.loading': 'Loading voices…',
   'voice.engine': 'TTS Engine',
   'voice.engine.aivis': 'AivisSpeech (context-aware)',
+  'voice.engine.voskra': 'vosk-tts + RUAccent (Russian)',
+  'voice.engine.voskra.note':
+    'Russian. Style = accent frontend: RUAccent resolves homographs (замок lock vs castle), "Dictionary only" is bare vosk and does not. Speed works; this engine has no pitch control, so Pitch is ignored. First line after a cold start takes about a minute while the models load.',
   'voice.notRunning': '{engine} is not running — no voices to list.',
   'voice.noVoicevox':
     'No Voicevox voices found. Voicevox voices are read from a catalog the voice changer writes to local_data/voicechanger/speakers.json — install and run Voicevox, or pick another engine.',
@@ -1840,7 +1843,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.engines.refresh': '状態を再確認',
   'settings.engines.refresh.title': '各エンジンが現在起動しているか再確認します',
   'settings.engines.help':
-    '各エンジンの `.exe` へのフルパスを指定します。TTS が必要とするエンジンが起動していない場合、Nexus が自動的に起動し、読み込み完了まで待機します。空欄にすると、そのエンジンの自動起動は行いません。',
+    '各エンジンの `.exe`（スクリプト型のエンジンは `.py`。隣にある `venv` で実行します）へのフルパスを指定します。`.bat` はバックグラウンドで起動できないため、理由を添えて拒否します。TTS が必要とするエンジンが起動していない場合、Nexus が自動的に起動し、読み込み完了まで待機します。空欄にすると、そのエンジンの自動起動は行いません。',
   'settings.engines.running': '起動中',
   'settings.engines.stopped': '停止中',
   'settings.engines.start': '起動',
@@ -2126,6 +2129,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'voice.loading': '音声を読み込み中…',
   'voice.engine': 'TTS エンジン',
   'voice.engine.aivis': 'AivisSpeech（文脈対応）',
+  'voice.engine.voskra': 'vosk-tts + RUAccent（ロシア語）',
+  'voice.engine.voskra.note':
+    'ロシア語。スタイルはアクセント処理の選択です — RUAccent は同形異義語を判別し（замок は錠か城か）、「Dictionary only」は素の vosk で判別しません。速度は効きますが、このエンジンにはピッチの指定が無いためピッチは無視されます。起動直後の1行目はモデル読み込みで約1分かかります。',
   'voice.notRunning': '{engine} が起動していません — 一覧を取得できません。',
   'voice.noVoicevox':
     'Voicevox の音声が見つかりません。Voicevox の音声一覧は、ボイスチェンジャーが local_data/voicechanger/speakers.json に書き出すカタログから読み込まれます。Voicevox をインストールして起動するか、別のエンジンを選んでください。',

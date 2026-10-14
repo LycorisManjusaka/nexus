@@ -5,6 +5,9 @@ import { Plus, Trash2, Lock } from 'lucide-react';
 import { useT } from '@/lib/i18n';
 import { fetchJsonSafe } from '@/lib/fetchJson';
 import IdentityVoicePicker, { IdentityVoiceValue } from './IdentityVoicePicker';
+import {
+  type SpeakerCatalogs, emptyCatalogs, normalizeCatalogs, catalogFor, ttsEngineByNum,
+} from '@/lib/ttsEngineCatalog';
 
 interface Rule extends IdentityVoiceValue {
   name: string;
@@ -12,8 +15,9 @@ interface Rule extends IdentityVoiceValue {
 
 const ANONYMOUS = 'Anonymous';
 
-type SpeakerCatalogs = { voicevox: any[]; coeiroink: any[]; aivisspeech: any[] };
-const NO_SPEAKERS: SpeakerCatalogs = { voicevox: [], coeiroink: [], aivisspeech: [] };
+// Engine identity comes from the shared catalog (see lib/ttsEngineCatalog.ts);
+// this file used to restate both the catalogue shape and the engine labels.
+const NO_SPEAKERS: SpeakerCatalogs = emptyCatalogs();
 
 // What this editor shows when the identity map can't be read at all. Not an
 // empty list: "Anonymous" is the one identity that must always exist, and the
@@ -38,11 +42,7 @@ export default function UserIdentityEditor() {
   // a Start button). It is not a reason to withhold the identity list.
   const loadSpeakers = useCallback(async (): Promise<SpeakerCatalogs> => {
     const data = await fetchJsonSafe<any>('/api/tts/speakers', NO_SPEAKERS);
-    const next: SpeakerCatalogs = {
-      voicevox: data.voicevox || [],
-      coeiroink: data.coeiroink || [],
-      aivisspeech: data.aivisspeech || [],
-    };
+    const next = normalizeCatalogs(data);
     setSpeakers(next);
     return next;
   }, []);
@@ -72,10 +72,10 @@ export default function UserIdentityEditor() {
     return () => { cancelled = true; };
   }, [loadSpeakers]);
 
-  const ENGINE_NAMES: Record<number, string> = { 0: 'Voicevox', 1: 'Coeiroink', 2: 'AivisSpeech' };
+  const engineName = (n: number) => ttsEngineByNum(n)?.label ?? `engine ${n}`;
   const startEngineAndWait = useCallback(async (eng: number) => {
     setStarting(true);
-    setStartMsg(t('voice.starting').replace('{engine}', ENGINE_NAMES[eng]));
+    setStartMsg(t('voice.starting').replace('{engine}', engineName(eng)));
     try {
       // fetchJsonSafe, not raw .json(): a route that answers with an HTML error
       // page would otherwise surface as "Unexpected token '<'", which tells the
@@ -86,12 +86,12 @@ export default function UserIdentityEditor() {
         body: JSON.stringify({ action: 'start', engine: eng }),
       });
       if (!r?.ok) { setStartMsg(r?.message || t('voice.startFailed')); return; }
-      setStartMsg(t('voice.startingLong').replace('{engine}', ENGINE_NAMES[eng]));
+      setStartMsg(t('voice.startingLong').replace('{engine}', engineName(eng)));
       const deadline = Date.now() + 95000;
       while (Date.now() < deadline) {
         await new Promise(res => setTimeout(res, 2500));
         const d = await loadSpeakers();
-        const got = eng === 2 ? (d.aivisspeech || []) : (d.coeiroink || []);
+        const got = catalogFor(eng, d);
         if (got.length > 0) { setStartMsg(null); return; }
       }
       setStartMsg(t('voice.startTimeout'));

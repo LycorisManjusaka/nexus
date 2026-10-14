@@ -3,7 +3,8 @@ import fs from 'fs';
 import { convertEnglishToKatakana } from '@/lib/ttsEnToKatakana';
 import { speakersJsonPath } from '@/lib/voicechangerPaths';
 import { loadTtsDictPairs, applyTtsDict } from '@/lib/ttsDictionary';
-import { ensureEngineRunning } from '@/lib/ttsEngines';
+import { ensureEngineRunning, ENGINES } from '@/lib/ttsEngines';
+import { TTS_ENGINES, ttsEngineByKey, ttsEngineByNum } from '@/lib/ttsEngineCatalog';
 
 // A segment produces ZERO phonemes — and crashes the OpenJTalk-based engines —
 // when it contains no kana, kanji, or alphanumeric characters. Coeiroink fails
@@ -35,6 +36,30 @@ const LEADING_NONSPEAKABLE_RE =
   /^[^\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}A-Za-z0-9０-９Ａ-Ｚａ-ｚｦ-ﾝ]+/u;
 function stripLeadingPause(text: string): string {
   return (text || '').replace(LEADING_NONSPEAKABLE_RE, '');
+}
+
+// Both predicates above are OpenJTalk-shaped on purpose, and Cyrillic is absent
+// from their character class because none of the Japanese engines can read it.
+// For a Russian engine that absence is not a no-op — MEASURED on the unmodified
+// pipeline:
+//   "Привет, как дела?"  hasSpeakableContent === false  -> segment dropped
+//   "Версия NEXUS 1.0"   stripLeadingPause()            -> "NEXUS 1.0"
+// Silence, or a sentence with its Russian words deleted, reported as success at
+// every layer.
+//
+// The Japanese class is deliberately NOT widened to include Cyrillic: that
+// would change what VOICEVOX/COEIROINK/AivisSpeech receive (they would start
+// being handed Russian-only chunks they cannot voice), which is a different
+// change and an unmeasured one. The engine declares its own pipeline in
+// ttsEngineCatalog.ts instead.
+//
+// There is no Cyrillic equivalent of stripLeadingPause: that strip exists for
+// OpenJTalk's "First mora should not be short pause" stall, which is specific
+// to those engines. The Russian service does its own character handling
+// (guillemets, dashes, digits, Latin) before synthesis.
+const RU_SPEAKABLE_RE = /[\p{Script=Cyrillic}A-Za-z0-9]/u;
+function hasCyrillicSpeakableContent(text: string): boolean {
+  return RU_SPEAKABLE_RE.test(text || '');
 }
 
 /**
@@ -92,45 +117,55 @@ function resolveByName(list: any[], idx: number, name?: string): any {
   return list[idx];
 }
 
-// TTS engine name → legacy numeric engine id. The new identity system stores
-// engines by name (voicevox/coeiroink/aivisspeech), matching the voice-changer
-// rewrite, but this route's synthesis backends still dispatch on a numeric id.
-// A name that isn't in this map silently degrades: the `else` branch at the
-// bottom throws `Invalid engine` with a clear message.
-const ENGINE_NAME_TO_NUM: Record<string, number> = { voicevox: 0, coeiroink: 1, aivisspeech: 2 };
+// Engine name → numeric id used to be restated here as a second literal map.
+// It is now read from the shared catalog: this file and ttsEngines.ts dispatch
+// on the same identity, and adding an engine in one place cannot leave the
+// other throwing "Invalid engine" for a voice the picker happily offers.
 
 async function synthesizeSegment(text: string, engine: number | string, char_idx: number, style_idx: number, speed: number = 1.0, pitch: number = 0.0, dictPairs: [string, string][] = [], meta?: SynthMeta, char_name?: string, style_name?: string): Promise<ArrayBuffer | null> {
-    // Resolve engine names to numeric ids so the three `if (engine === N)` branches
+    // Resolve engine names to numeric ids so the `if (engine === N)` branches
     // below still discriminate correctly. The caller (MessageBubble → TTS context)
     // passes whatever the identity system hands it, which is now always a name.
     if (typeof engine === 'string') {
-      const resolved = ENGINE_NAME_TO_NUM[engine.toLowerCase()];
-      if (resolved === undefined) {
-        throw new Error(`Invalid engine: "${engine}". Expected voicevox, coeiroink, or aivisspeech.`);
+      const resolved = ttsEngineByKey(engine);
+      if (!resolved) {
+        throw new Error(
+          `Invalid engine: "${engine}". Expected one of: ${TTS_ENGINES.map(e => e.key).join(', ')}.`
+        );
       }
-      engine = resolved;
+      engine = resolved.num;
     }
+
+    // Which text pre-processing this engine's input needs — data, not a special
+    // case bolted on here. See the comment on RU_SPEAKABLE_RE above for what
+    // running Russian through the Japanese pipeline actually did.
+    const pipeline = ttsEngineByNum(engine)?.textPipeline ?? 'japanese';
 
     // Per-entity pronunciation dictionary (local_data/tts_dict/<folder>.json):
     // literal CJK-friendly substring replacement, applied FIRST so an entity can
     // override any reading (names, jargon) before the generic passes below.
     text = applyTtsDict(text, dictPairs);
 
-    // Replace English words/phrases with Katakana equivalents before synthesis
-    // so Voicevox / Coeiroink pronounce them correctly instead of spelling them.
-    // Dictionary: local_data/en_katakana_dict.json (user-editable).
-    text = convertEnglishToKatakana(text);
+    if (pipeline === 'japanese') {
+      // Replace English words/phrases with Katakana equivalents before synthesis
+      // so Voicevox / Coeiroink pronounce them correctly instead of spelling them.
+      // Dictionary: local_data/en_katakana_dict.json (user-editable).
+      text = convertEnglishToKatakana(text);
 
-    // Trim any leading pause-inducing characters so OpenJTalk doesn't try to
-    // make the first mora a short pause (the "First mora should not be short
-    // pause" warning + 1-2s stall). Done before the speakable check so a chunk
-    // that was ALL leading punctuation correctly drops out as empty.
-    text = stripLeadingPause(text);
+      // Trim any leading pause-inducing characters so OpenJTalk doesn't try to
+      // make the first mora a short pause (the "First mora should not be short
+      // pause" warning + 1-2s stall). Done before the speakable check so a chunk
+      // that was ALL leading punctuation correctly drops out as empty.
+      text = stripLeadingPause(text);
+    }
 
     // Skip unspeakable (phoneme-less) chunks. Returning null tells the caller to
     // drop this segment instead of pushing a buffer — prevents the 500 above.
     if (meta) { meta.engine = engine; meta.chars = text.length; }
-    if (!hasSpeakableContent(text)) { if (meta) meta.skipped = true; return null; }
+    const speakable = pipeline === 'cyrillic'
+      ? hasCyrillicSpeakableContent(text)
+      : hasSpeakableContent(text);
+    if (!speakable) { if (meta) meta.skipped = true; return null; }
 
     // Start the engine if it isn't running and the user configured its path in
     // Preferences → VRChat & Audio. Deliberately placed AFTER the speakable
@@ -244,8 +279,57 @@ async function synthesizeSegment(text: string, engine: number | string, char_idx
       }
 
       return await synthRes.arrayBuffer();
+    }
+    else if (engine === 3) {
+      // vosk-tts + RUAccent (Russian). An external HTTP service, not a bundled
+      // binary — see workspace/ru_tts_lab/server.py and the engine row in
+      // Preferences → VRChat & Audio.
+      //
+      // Deliberately NOT VOICEVOX-API-shaped. audio_query exists to hand back
+      // OpenJTalk accent phrases for editing; faking one so this engine could
+      // reuse the flow above would mean inventing a Japanese-prosody object for
+      // Russian text and reading it back unchanged. One POST that says what it
+      // does is the smaller lie-free option.
+      //
+      // Text travels in the BODY, not the query string: the two branches above
+      // both have to warn about audio_query URLs blowing past uvicorn's request
+      // line, because Japanese costs 9 bytes per character once percent-encoded
+      // (Cyrillic costs 6). A body has no such ceiling, so that whole failure
+      // mode does not exist here.
+      const base = ENGINES[3].base;
+      const spkRes = await fetch(`${base}/speakers`);
+      if (!spkRes.ok) throw await engineError('vosk-tts + RUAccent /speakers', spkRes);
+      const spkData = await spkRes.json();
+      const char = resolveByName(spkData, char_idx, char_name);
+      if (!char) throw new Error('vosk-tts + RUAccent voice not found');
+      // Style here is the accent frontend: "RUAccent" (neural homograph
+      // resolution) or "Dictionary only" (bare vosk). styles[0] is RUAccent.
+      const style = resolveByName(char.styles, style_idx, style_name) || char.styles[0];
+      const speakerId = style.id;
+
+      const synthRes = await fetch(`${base}/synthesis?speaker=${speakerId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ text, speedScale: speed, pitchScale: pitch }),
+      });
+      if (!synthRes.ok) {
+        throw await engineError('vosk-tts + RUAccent synthesis', synthRes, {
+          speaker: speakerId, textChars: text.length,
+          styleName: style?.name ?? '?', charName: char?.name ?? '?',
+        });
+      }
+      // vosk-tts has no pitch parameter (its synth() takes speech_rate,
+      // noise_level, duration_noise_level, scale — measured by introspection).
+      // The service says so in a header rather than accepting the value and
+      // discarding it, so a voicePitch set for this being is reported instead
+      // of looking like it worked.
+      if (synthRes.headers.get('X-Ru-Pitch-Ignored') === '1') {
+        console.warn(`[tts] vosk-tts has no pitch control; voicePitch=${pitch} was ignored for this segment.`);
+      }
+
+      return await synthRes.arrayBuffer();
     } else {
-        throw new Error('Invalid engine');
+        throw new Error(`Invalid engine: ${engine}`);
     }
 }
 

@@ -596,6 +596,14 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 { key: 'voicevox',    label: 'VOICEVOX',    port: '50021', ph: 'C:\\path\\to\\VOICEVOX\\VOICEVOX.exe' },
                 { key: 'coeiroink',   label: 'COEIROINK',   port: '50032', ph: 'C:\\path\\to\\COEIROINK\\COEIROINK.exe' },
                 { key: 'aivisspeech', label: 'AivisSpeech', port: '10101', ph: 'C:\\path\\to\\AivisSpeech\\AivisSpeech.exe' },
+                // Russian (vosk-tts + RUAccent). Unlike the three above this is
+                // not an installed .exe: it is a small HTTP service shipped as a
+                // Python script with its own virtualenv beside it, so the path
+                // ends in .py and Nexus launches it with that venv's
+                // python.exe. A .bat launcher does NOT work here — measured:
+                // Node throws EINVAL on a .bat, and "cmd /c" detached silently
+                // runs nothing. See resolveLaunch() in src/lib/ttsEngines.ts.
+                { key: 'vosk_ra', label: 'vosk-tts + RUAccent', port: '50040', ph: 'C:\\path\\to\\ru_tts_lab\\server.py' },
               ].map(eng => {
                 const st = engineStatus.find((s: any) => s.key === eng.key);
                 const busy = engineBusy === eng.key;

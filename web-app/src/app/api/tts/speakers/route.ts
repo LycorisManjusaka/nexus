@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import { speakersJsonPath } from '@/lib/voicechangerPaths';
+import { ENGINES } from '@/lib/ttsEngines';
 
 // Probing an engine that isn't installed normally fails in milliseconds
 // (ECONNREFUSED on a closed loopback port). But "refused" is not the only way a
@@ -46,7 +47,27 @@ export async function GET() {
       console.error('Failed to fetch AivisSpeech speakers', e);
     }
 
-    return NextResponse.json({ voicevox, coeiroink, aivisspeech });
+    // vosk-tts + RUAccent (Russian). Same treatment: an engine that isn't
+    // installed, or is still loading its models, contributes an empty list
+    // rather than failing the whole response — the picker then shows "not
+    // running" and a Start button, exactly as for the two above.
+    //
+    // Its /speakers deliberately answers 503 until BOTH models are loaded, and
+    // this is why: the voice picker treats "the list appeared" as "the engine
+    // is ready" and stops waiting.
+    let vosk_ra = [];
+    try {
+      const rRes = await fetch(`${ENGINES[3].base}/speakers`, {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      if (rRes.ok) {
+        vosk_ra = await rRes.json();
+      }
+    } catch(e) {
+      console.error('Failed to fetch vosk-tts + RUAccent speakers', e);
+    }
+
+    return NextResponse.json({ voicevox, coeiroink, aivisspeech, vosk_ra });
   } catch(e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }

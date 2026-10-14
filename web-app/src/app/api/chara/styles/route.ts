@@ -3,6 +3,7 @@ import fs from 'fs';
 import { speakersJsonPath, coeiroinkSpeakersJsonPath } from '@/lib/voicechangerPaths';
 import { readCharacterMap, findIdentity } from '@/lib/characterMap';
 import { resolveUserIdentity } from '@/lib/userIdentity';
+import { ENGINES } from '@/lib/ttsEngines';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,6 +50,13 @@ async function loadCatalog(engine: string): Promise<any[]> {
       const res = await fetch(`${base}/speakers`);
       if (res.ok) return await res.json();
     } catch { /* engine down; no disk cache exists for AivisSpeech */ }
+    return [];
+  }
+  if (engine === 'vosk_ra') {
+    try {
+      const res = await fetch(`${ENGINES[3].base}/speakers`);
+      if (res.ok) return await res.json();
+    } catch { /* engine down; no disk cache exists for this one either */ }
     return [];
   }
   return [];
