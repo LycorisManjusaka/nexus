@@ -24,6 +24,9 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
 
   // ── Google Gemini ──────────────────────────────────────────────────────────
   // All current Gemini models support vision.
+  // argon measured 2026-10-14: synthetic 320x200 PNG reading "K7Q" -> answered
+  // "K7Q" through generateContentStream (the production SDK path).
+  'gemini-4-argon',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
@@ -277,6 +280,11 @@ export function reportsNormalizedCoords(
 
 export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // Google Gemini — all current models handle audio inline.
+  // argon measured 2026-10-14 against a control: 1s of 220 Hz followed by 1s of
+  // 1760 Hz, asked "does the pitch go UP or DOWN". argon 2/2 UP (correct);
+  // gemini-3.8-flash, already in this set, answered DOWN 2/2. So argon is not
+  // merely accepted here, it outperforms a member that already ships.
+  'gemini-4-argon',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
@@ -322,6 +330,9 @@ export function isAudioCapable(specificModel: string | undefined | null): boolea
 // bridge.
 
 export const VIDEO_CAPABLE_MODELS = new Set<string>([
+  // argon measured 2026-10-14: 2s mp4, 1s solid blue then 1s solid red ->
+  // "Blue, red" (correct order).
+  'gemini-4-argon',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
@@ -392,7 +403,15 @@ export function isVideoCapable(specificModel: string | undefined | null): boolea
 // from a substring match on "flash". Gemini 3.8 Flash inherits the same gap
 // (ai.google.dev/gemini-api/docs/latest-model: "the 'minimal' thinking level
 // is not supported for Gemini 3.8 Flash and will return an error").
+// Gemini 4 Argon rejects it too — measured 2026-10-14, not inferred from the
+// pattern above: thinkingLevel 'minimal' returns
+//   400 INVALID_ARGUMENT "Thinking level MINIMAL is not supported for this
+//   model. Please retry with other thinking level."
+// while 'low' / 'medium' / 'high' all return 200. Without this entry the UI's
+// default path (minimal) 400s on every single turn, because the `pro` substring
+// rule in resolveGeminiMinThinkingLevel does not match the id "gemini-4-argon".
 const GEMINI_NO_MINIMAL_THINKING = new Set<string>([
+  'gemini-4-argon',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
 ]);

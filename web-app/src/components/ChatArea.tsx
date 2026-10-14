@@ -117,7 +117,12 @@ Claude   | claude-sonnet-5              | on  | Claude Sonnet 5 Thinking
 Claude   | claude-sonnet-4-6            | on  | Claude Sonnet 4.6 Thinking
 Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
 
-# ── Gemini (Google) — 3.x always has thinking; level controls budget ──
+# ── Gemini (Google) — always thinking; level controls budget ──────
+# gemini-4-argon and gemini-3.8-flash REJECT thinkingLevel 'minimal' with a 400
+# ("Thinking level MINIMAL is not supported for this model") — both are listed
+# in GEMINI_NO_MINIMAL_THINKING so the UI's minimal is clamped to 'low'.
+# Argon's catalogue output ceiling is 32768, half of every 3.x sibling's 65536.
+Gemini   | gemini-4-argon               | on  | Gemini 4 Argon
 Gemini   | gemini-3.8-flash             | on  | Gemini 3.8 Flash
 Gemini   | gemini-3.7-flash             | on  | Gemini 3.7 Flash
 Gemini   | gemini-3.6-flash             | on  | Gemini 3.6 Flash
@@ -6259,6 +6264,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
                           { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
                           { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
+                          { value: 'gemini-4-argon', label: 'gemini-4-argon (Google key)' },
                           { value: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Google key)' },
                           { value: 'gemini-3.7-flash', label: 'gemini-3.7-flash (Google key)' },
                           { value: 'gemini-3.6-flash', label: 'gemini-3.6-flash (Google key)' },
@@ -6315,6 +6321,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       >
                         <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
                         <option value="qwen3.5-omni-plus">qwen3.5-omni-plus</option>
+                        <option value="gemini-4-argon">gemini-4-argon</option>
                         <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                         <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
@@ -6367,6 +6374,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         onChange={(e) => setWatcherModel(e.target.value)}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                       >
+                        <option value="gemini-4-argon">gemini-4-argon</option>
                         <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                         <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
@@ -6546,6 +6554,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      <option value="gemini-4-argon">Gemini 4 Argon</option>
                       <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                       <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                       <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
