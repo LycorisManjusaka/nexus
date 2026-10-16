@@ -47,6 +47,7 @@ import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
 import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
+import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
 
@@ -5087,8 +5088,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6 scroll-smooth custom-scrollbar" ref={scrollRef}>
-        <div className="max-w-4xl mx-auto space-y-6">
+      {/* The mobile bottom padding is not cosmetic. The LAST message's action
+          bar hangs below its bubble and is out of flow, so this padding is the
+          only room it has before the input box. Measured in the frozen copy at
+          the old sizes: bar bottom 730.78 against a container bottom of 731 —
+          0.22px of clearance, i.e. exactly touching, with nothing to spare.
+          Written as `px-6 pt-6` + an explicit `pb-*` rather than `p-6 pb-*` so
+          that no two padding utilities compete and the result does not depend
+          on Tailwind's sort order. Size comes from `bubbleActionBar.ts`. */}
+      <div className={`flex-1 overflow-y-auto ${isMobile ? `px-6 pt-6 ${MOBILE_LIST_PAD_BOTTOM}` : 'p-6'} scroll-smooth custom-scrollbar`} ref={scrollRef}>
+        {/* This gutter is what the per-message action bar hangs in on mobile —
+            it must stay >= the bar's height, or the bar covers the next
+            message with no error anywhere. Same single source. */}
+        <div className={`max-w-4xl mx-auto ${isMobile ? MOBILE_MSG_GAP : 'space-y-6'}`}>
           {messages.map((msg, msgIdx) => (
             // The scroll anchor for /c/<folder>/<convoId>/m/<messageId>. Wraps
             // the marker too so a linked first-original message scrolls to the

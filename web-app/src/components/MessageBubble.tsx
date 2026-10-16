@@ -18,6 +18,7 @@ import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/li
 import { attachmentTokens, attachmentKind, undeliverableReason } from '@/lib/attachmentVisibility';
 import { copyText } from '@/lib/clipboard';
 import { isLocalFileRef, mediaKindOf, workspaceFileUrl, baseNameOf, makeMarkdownUrlTransform } from '@/lib/inlineMedia';
+import { MOBILE_ACTION_ICON, MOBILE_ACTION_PAD } from '@/lib/bubbleActionBar';
 
 // Module-level so the reference is stable across renders for free (see the
 // memoisation note on mdComponents — react-markdown re-parses every tick).
@@ -1824,10 +1825,12 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                 7-8 button column overhangs and covers the message above.
                 Reported from a phone: "it overlaps the message above".
             (3) Below the bubble the whole row width is available, so neither
-                failure applies. 22px of buttons (`p-1` + a 14px icon) sit
-                inside the 24px gutter ChatArea already leaves between messages
-                (`space-y-6`). That coupling is real: shrink that spacing and
-                this bar starts poking into the next message.
+                failure applies. The bar's height and the room ChatArea leaves
+                for it are ONE definition, in `bubbleActionBar.ts`: 35px of
+                buttons inside a 40px mobile gutter. That coupling is real and
+                it fails SILENTLY (the bar is out of flow, so too little room
+                just draws over the next message) — which is exactly why it is
+                no longer two numbers sitting in two files.
             Anchored to the bubble's own outer edge — user right, assistant
             left — so it grows toward the middle of the screen: into the empty
             space for a short bubble, under the bubble for a long one. Neither
@@ -1840,7 +1843,22 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
           // `p-1.5` on desktop is the original padding, unchanged. `transition-colors`
           // is added per-button below exactly where it already was, so the
           // desktop class sets stay byte-for-byte what they were.
-          const btnBase = `${isMobile ? 'p-1' : 'p-1.5'} bg-background border border-border rounded-lg shadow-sm`;
+          // The mobile buttons are deliberately larger than desktop's: on a
+          // phone they were reported as too small to hit. Their size and the
+          // room ChatArea leaves for this bar are ONE definition — see
+          // `bubbleActionBar.ts`. They cannot drift apart without the bar
+          // silently drawing on top of the next message.
+          const btnBase = `${isMobile ? MOBILE_ACTION_PAD : 'p-1.5'} bg-background border border-border rounded-lg shadow-sm`;
+          // Read-aloud wears the send button's skin on mobile, by request:
+          // `bg-primary` is the one colour in this UI that already means "this
+          // is THE action". Mobile only — the desktop bar is untouched. The
+          // two branches never both set a `text-*` utility, so which colour
+          // wins is not left to Tailwind's sort order to decide.
+          const btnPrimary = `${MOBILE_ACTION_PAD} bg-primary text-primary-foreground border border-primary rounded-lg shadow-sm`;
+          // Only the PRIMARY row grows. The tail icons stay 14 because on
+          // mobile they render inside the "…" popup next to 12px labels, where
+          // 21px would tower over its own caption.
+          const actIcon = isMobile ? MOBILE_ACTION_ICON : 14;
           // The tail actions as DATA, not JSX: they render in two places
           // (inline on desktop, inside the menu on mobile) and the menu has to
           // close itself after acting — a menu still open after you pick from
@@ -1859,16 +1877,16 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
               ? `top-full ${isUser ? 'right-0' : 'left-0'}`
               : `bottom-2 ${isUser ? 'right-full mr-2' : 'left-full ml-2'}`}`}>
             {ttsState === 'idle' ? (
-              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={`${btnBase} transition-colors text-muted-foreground hover:text-green-500`} title={t('bubble.tts.read')}>
-                <Volume2 size={14} />
+              <button onMouseDown={(e) => e.preventDefault()} onClick={handleTTS} className={isMobile ? `${btnPrimary} transition-colors` : `${btnBase} transition-colors text-muted-foreground hover:text-green-500`} title={t('bubble.tts.read')}>
+                <Volume2 size={actIcon} />
               </button>
             ) : (
               <>
                 <button onClick={handlePauseResume} className={`${btnBase} transition-colors text-blue-500 hover:text-blue-600`} title={ttsState === 'playing' ? t('bubble.tts.pause') : t('bubble.tts.resume')}>
-                  {ttsState === 'playing' ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                  {ttsState === 'playing' ? <Pause size={actIcon} fill="currentColor" /> : <Play size={actIcon} fill="currentColor" />}
                 </button>
                 <button onClick={stopTTS} className={`${btnBase} transition-colors text-red-500 hover:text-red-600`} title={t('bubble.tts.stop')}>
-                  <Square size={14} fill="currentColor" />
+                  <Square size={actIcon} fill="currentColor" />
                 </button>
               </>
             )}
@@ -1881,12 +1899,12 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
               }`}
               title={copiedBody === 'fail' ? t('common.copyFailed') : t('bubble.copyMd')}
             >
-              {copiedBody === 'ok' ? <Check size={14} />
-                : copiedBody === 'fail' ? <X size={14} />
-                : <Copy size={14} />}
+              {copiedBody === 'ok' ? <Check size={actIcon} />
+                : copiedBody === 'fail' ? <X size={actIcon} />
+                : <Copy size={actIcon} />}
             </button>
             <button onClick={() => setIsEditing(true)} className={`${btnBase} text-muted-foreground hover:text-foreground`} title={t('bubble.edit')}>
-              <Pencil size={14} />
+              <Pencil size={actIcon} />
             </button>
             {isMobile
               ? tail.length > 0 && (
@@ -1909,7 +1927,7 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                       </div>
                     )}
                   >
-                    <MoreHorizontal size={14} />
+                    <MoreHorizontal size={actIcon} />
                   </ClickTip>
                 )
               : tail.map((a) => (
