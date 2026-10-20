@@ -99,7 +99,10 @@ async function callMimoVision(params: {
   const dataUrl = `data:${imageMimeType};base64,${imageBase64}`;
   // Xiaomi MiMo hosted API is OpenAI-compatible. Reasoning is built in (no
   // thinking toggle), so we send a plain chat-completions request. Only the
-  // `mimo-v2.5` tier accepts image input — `mimo-v2.5-pro` is text-only.
+  // V2.6 tiers all accept image input (measured 2026-09-22, image_tokens=256).
+  // The old V2.5 split — only the standard tier could see, `-pro` was text-only
+  // and 404d on an image — is gone, and both V2.5 ids were withdrawn by Xiaomi
+  // on 2026-10-21 and removed from the Eyes picker.
   const body = {
     model: eyesModel,
     messages: [

@@ -155,8 +155,13 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // split, where only the standard tier could see and `-pro` was TEXT-ONLY, is
   // gone. (The old note here said v2.5-pro returned 404 "No endpoints found that
   // support image input"; that was true of v2.5 and is not true of v2.6.)
-  // v2.5-pro and v2.5 are deprecated 2026-10-21 and stay listed so existing
-  // conversations keep working until then.
+  // v2.5 reached its deprecation date on 2026-10-21 and is gone from every
+  // picker. It stays in this set because the set answers "can this id see",
+  // which does not stop being true when a provider withdraws the id — and
+  // folders saved on it before the withdrawal still send it. Measured on the
+  // morning of 2026-10-21: both V2.5 ids still returned 200 with real usage on
+  // BOTH endpoints, so dropping them here would hide attachments from a model
+  // that can still read them.
   'mimo-v2.6-pro',
   'mimo-v2.6-flash',
   'mimo-v2.5',
@@ -307,6 +312,17 @@ export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // alone, and the model reported hearing nothing). Staying off this list makes
   // the ears bridge engage, so the user gets a real transcript instead of a
   // silent drop. Add V2.6 only when the adapter can actually carry audio.
+  //
+  // Do NOT read this as "V2.6 must not appear in the ears MODEL PICKER". Two
+  // different questions: this set asks whether the VESSEL hears natively (and
+  // V2.6 does not, through our adapter); the picker asks which model the
+  // BRIDGE calls, and the bridge posts straight to the OpenAI-compatible
+  // endpoint (earsBridge.ts:123), where V2.6 does hear. Measured 2026-10-21
+  // with the exact production payload: mimo-v2.6-pro returned audio_tokens
+  // 2433 and a faithful transcript of long Russian speech, with mimo-v2.5 as
+  // the control arm (the control is what proved an earlier empty answer was a
+  // too-short fixture, not a deaf model). The picker offers v2.6-pro for that
+  // reason. mimo-v2.5 stays in this set for the same reason as the image set.
 ]);
 
 export function isAudioCapable(specificModel: string | undefined | null): boolean {

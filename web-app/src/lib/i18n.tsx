@@ -179,7 +179,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'Get one at `platform.openai.com`. Required for the ChatGPT (GPT-5) family — GPT-5.6 Sol / Terra / Luna, GPT-5.5, GPT-5.4, GPT-5.4 Mini.',
   'settings.keys.mimo.label': 'MiMo (Xiaomi) API Key',
   'settings.keys.mimo.help':
-    'Get one at `api.xiaomimimo.com`. Required for the Xiaomi MiMo family — MiMo V2.5 Pro, MiMo V2.5.',
+    'Get one at `api.xiaomimimo.com`. Required for the Xiaomi MiMo family — MiMo V2.6 Pro, V2.6 Flash, V2.6 Pro UltraSpeed.',
   'settings.keys.bytedance.label': 'ByteDance / BytePlus API Key',
   'settings.keys.bytedance.help':
     'Get one at `console.byteplus.com` (BytePlus ModelArk). Required for the ByteDance Seed family — Seed 2.0 Pro / Lite / Mini / Code.',
@@ -1336,7 +1336,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'model.mimo.label': 'MiMo Model',
   'model.mimo.help':
-    'Served by Xiaomi’s OpenAI-compatibility endpoint at `api.xiaomimimo.com/v1`. Set the MiMo API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to MiniMax / DeepSeek R1). **Image input is only supported on `mimo-v2.5`** — the `mimo-v2.5-pro` tier is text-only on the hosted API (sending an image returns a 404). When you attach an image on Pro, the Eyes bridge (if enabled) will describe it via another model.',
+    'Served by Xiaomi at `api.xiaomimimo.com`. Set the MiMo API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to MiniMax / DeepSeek R1). **All three V2.6 tiers read images and watch video natively**, so no bridge is needed for either. **Audio is the exception**: the endpoint accepts it, but NEXUS routes MiMo over its native Anthropic-format API, which silently drops audio — so the Ears bridge (if enabled) transcribes it instead, which is why you get a real transcript rather than a model that heard nothing. The V2.5 pair was deprecated by Xiaomi on 2026-10-21 and removed from this list; a folder still saved on one keeps working and shows it marked as retired.',
 
   'model.bytedance.label': 'ByteDance (Seed) Model',
   'model.bytedance.ph': 'e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)',
@@ -1547,7 +1547,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.summaryNote': 'This summary appears in the live Layer-4 summaries index for all conversations of this being. Inactive conversations are excluded from the index.',
   'spu.summaryInstrLabel': 'Custom instructions for the summary writer (per-being)',
   'spu.summaryInstrPh': 'Optional. e.g. "Summarize in English", "Focus on decisions and emotional shifts, skip greetings", "Keep under 4 sentences".',
-  'spu.forceMimo': 'Always use MiMo V2.5 Pro as the summary writer',
+  'spu.forceMimo': 'Always use MiMo V2.6 Pro as the summary writer',
   'spu.indexHintLabel': 'Index hint shown to the entity (per-being)',
   'spu.indexHintPh': "Prepended above the summaries index in the entity's context. Leave blank to omit it.",
   'spu.indexHintNote': '`{example}` is replaced with a real conversation title. Clear the field to show no hint.',
@@ -1800,7 +1800,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
     '`platform.openai.com` で取得します。ChatGPT（GPT-5）ファミリー — GPT-5.6 Sol / Terra / Luna、GPT-5.5、GPT-5.4、GPT-5.4 Mini に必要です。',
   'settings.keys.mimo.label': 'MiMo（Xiaomi）APIキー',
   'settings.keys.mimo.help':
-    '`api.xiaomimimo.com` で取得します。Xiaomi MiMo ファミリー — MiMo V2.5 Pro、MiMo V2.5 に必要です。',
+    '`api.xiaomimimo.com` で取得します。Xiaomi MiMo ファミリー — MiMo V2.6 Pro、V2.6 Flash、V2.6 Pro UltraSpeed に必要です。',
   'settings.keys.bytedance.label': 'ByteDance / BytePlus APIキー',
   'settings.keys.bytedance.help':
     '`console.byteplus.com`（BytePlus ModelArk）で取得します。ByteDance Seed ファミリー — Seed 2.0 Pro / Lite / Mini / Code に必要です。',
@@ -2908,7 +2908,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'model.mimo.label': 'MiMo モデル',
   'model.mimo.help':
-    'Xiaomi の OpenAI 互換エンドポイント `api.xiaomimimo.com/v1` が提供します。設定で MiMo の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（MiniMax / DeepSeek R1 と同様）。**画像入力に対応しているのは `mimo-v2.5` だけです** — ホスト版 API の `mimo-v2.5-pro` はテキスト専用で、画像を送ると 404 が返ります。Pro に画像を添付した場合は、「目」ブリッジ（有効なら）が別のモデルで説明します。',
+    'Xiaomi の `api.xiaomimimo.com` が提供します。設定で MiMo の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（MiniMax / DeepSeek R1 と同様）。**V2.6 の3ティアはすべて画像を読み、動画もそのまま見ます**ので、どちらにもブリッジは要りません。**音声だけが例外です**：エンドポイント自体は受け取りますが、NEXUS は MiMo を Anthropic 形式のネイティブ API で通すため音声が黙って落ちます。そのため「耳」ブリッジ（有効なら）が書き起こしを担当します — これで「何も聞こえなかった」モデルではなく本物の書き起こしが得られます。V2.5 の2つは 2026-10-21 に Xiaomi が廃止予定としたため、この一覧から外しました。既にそれを保存しているフォルダはそのまま動き、「廃止済み」と明示されます。',
 
   'model.bytedance.label': 'ByteDance（Seed）モデル',
   'model.bytedance.ph': '例: seed-2-0-pro-260328（または ep-… のエンドポイント ID）',
@@ -3116,7 +3116,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.summaryNote': 'この要約は、このフォルダの全会話に対する Layer 4 要約インデックスに表示されます。非アクティブな会話はインデックスから除外されます。',
   'spu.summaryInstrLabel': '要約ライターへの追加指示（フォルダごと）',
   'spu.summaryInstrPh': '任意。例：「英語で要約して」「決定と感情の変化に集中し、挨拶は省く」「4文以内に収める」。',
-  'spu.forceMimo': '要約ライターには常に MiMo V2.5 Pro を使う',
+  'spu.forceMimo': '要約ライターには常に MiMo V2.6 Pro を使う',
   'spu.indexHintLabel': 'エンティティに見せるインデックスの説明文（フォルダごと）',
   'spu.indexHintPh': 'エンティティのコンテキスト内で、要約インデックスの上に付加されます。空にすると表示されません。',
   'spu.indexHintNote': '`{example}` は実際の会話タイトルに置き換えられます。空にすると説明文は表示されません。',

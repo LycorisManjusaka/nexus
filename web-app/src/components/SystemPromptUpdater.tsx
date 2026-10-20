@@ -644,14 +644,22 @@ export default function SystemPromptUpdater({
   // undefined for every other model so the route keeps its usual 'auto'.
   const effectiveAuthMode = forceUpdaterModel ? updaterModel.authMode : undefined;
 
-  // Summary writer model override — MiMo V2.5 Pro. Default OFF for the same
+  // Summary writer model override — MiMo V2.6 Pro. Default OFF for the same
   // reason as above, plus one specific to a fresh install: MiMo needs its own
   // API key, and a default-ON checkbox pointing at a provider the user has
   // never configured fails at the moment they press "Write Summary", with an
   // error about a model they never chose.
+  //
+  // Was `mimo-v2.5-pro` until 2026-10-21, when Xiaomi deprecated the V2.5 pair.
+  // ONE constant, because the id was hardcoded twice — here and in the label
+  // next to the checkbox — and a folder that has the checkbox saved as `true`
+  // stores only the boolean, never the id. That is what makes this a one-line
+  // migration for every being already using it: 先輩's folder carries
+  // `forceMimoForSummary: true` and nothing else, so it follows this constant.
+  const SUMMARY_MIMO_MODEL = 'mimo-v2.6-pro';
   const [forceMimoForSummary, setForceMimoForSummary] = useState<boolean>(false);
   const summaryAiName = forceMimoForSummary ? 'MiMo' : effectiveAiName;
-  const summarySpecificModel = forceMimoForSummary ? 'mimo-v2.5-pro' : effectiveSpecificModel;
+  const summarySpecificModel = forceMimoForSummary ? SUMMARY_MIMO_MODEL : effectiveSpecificModel;
   // When the summary inherits the updater's model it must inherit its auth path too.
   const summaryAuthMode = forceMimoForSummary ? undefined : effectiveAuthMode;
 
@@ -3090,7 +3098,7 @@ export default function SystemPromptUpdater({
                 />
                 <span className="text-[11px] font-medium text-foreground">{t('spu.forceMimo')}</span>
                 <span className="text-[10px] text-muted-foreground">
-                  ({forceMimoForSummary ? 'mimo-v2.5-pro' : `${summaryAiName} / ${summarySpecificModel}`})
+                  ({forceMimoForSummary ? SUMMARY_MIMO_MODEL : `${summaryAiName} / ${summarySpecificModel}`})
                 </span>
               </label>
             </div>

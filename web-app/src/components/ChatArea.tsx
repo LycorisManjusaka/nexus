@@ -28,6 +28,7 @@ import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_IN
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
 import { dedupeMessageIds } from '@/lib/messageIds';
+import { retiredModelLabel } from '@/lib/retiredModels';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { effectiveFullAccess, fullAccessForcedByShell } from '@/lib/agentCapabilities';
@@ -213,8 +214,9 @@ ChatGPT  | gpt-5.4-mini                 | off | GPT-5.4 Mini
 MiMo     | mimo-v2.6-pro                | on  | MiMo V2.6 Pro
 MiMo     | mimo-v2.6-flash              | on  | MiMo V2.6 Flash
 MiMo     | mimo-v2.6-pro-ultraspeed     | on  | MiMo V2.6 Pro UltraSpeed
-MiMo     | mimo-v2.5-pro                | on  | MiMo V2.5 Pro (deprecated 2026-10-21)
-MiMo     | mimo-v2.5                    | on  | MiMo V2.5 (deprecated 2026-10-21)
+# The V2.5 pair (mimo-v2.5-pro, mimo-v2.5) was deprecated by Xiaomi on
+# 2026-10-21 and removed from this table. Removing the rows here also removes
+# them from the Subagent dropdown, which is parsed out of this same table.
 
 # ── ByteDance Seed (BytePlus ModelArk) — reasoning-first, no toggle ─
 ByteDance | seed-2-0-pro-260328          | on  | Seed 2.0 Pro
@@ -243,6 +245,19 @@ const SUBAGENT_MODEL_OPTIONS: { family: string; model: string; label: string }[]
     .filter(l => l && !l.startsWith('#') && l.includes('|'))
     .map(l => { const p = l.split('|').map(s => s.trim()); return { family: p[0], model: p[1], label: p[3] || p[1] }; })
     .filter(o => o.family && o.model);
+
+// Renders a saved-but-retired model id as a visibly-marked option, so a
+// <select> never silently displays its first child in place of what the folder
+// actually holds. The table and the rationale live in lib/retiredModels.ts.
+function RetiredOption({ value, id }: { value: string; id?: string }) {
+  const label = retiredModelLabel(id ?? value);
+  if (!label) return null;
+  return (
+    <option value={value} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
+      ⚠ {label}
+    </option>
+  );
+}
 
 // Group the rows by family for <optgroup>s, preserving first-seen order.
 const SUBAGENT_MODEL_GROUPS: { family: string; items: { model: string; label: string }[] }[] = (() => {
@@ -6077,6 +6092,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             ))}
                           </optgroup>
                         ))}
+                        <RetiredOption value={`${subagentFamily}|${subagentModel}`} id={subagentModel} />
                       </select>
                       <p className="text-xs text-muted-foreground mt-1">
                         <Tx k="id.subagent.modelHelp" />
@@ -6286,7 +6302,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview (Google key)' },
                           { value: 'mimo-v2.6-pro', label: 'mimo-v2.6-pro (MiMo key)' },
                           { value: 'mimo-v2.6-flash', label: 'mimo-v2.6-flash (MiMo key)' },
-                          { value: 'mimo-v2.5', label: 'mimo-v2.5 (MiMo key)' },
                         ]}
                       />
                     </div>
@@ -6341,8 +6356,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
                         <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                        <option value="mimo-v2.5">mimo-v2.5 (Xiaomi)</option>
+                        <option value="mimo-v2.6-pro">mimo-v2.6-pro (Xiaomi)</option>
                         <option value="seed-2-0-lite-260428">seed-2-0-lite (ByteDance — omnimodal)</option>
+                        <RetiredOption value={earsModel} />
                       </select>
                     </div>
                   </>
@@ -6396,8 +6412,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
                         <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
                         <option value="qwen3.5-omni-plus">qwen3.5-omni-plus (higher quality)</option>
-                        <option value="mimo-v2.5">mimo-v2.5 (Xiaomi)</option>
+                        <option value="mimo-v2.6-pro">mimo-v2.6-pro (Xiaomi)</option>
                         <option value="seed-2-0-lite-260428">seed-2-0-lite (ByteDance — omnimodal)</option>
+                        <RetiredOption value={watcherModel} />
                       </select>
                     </div>
                   </>
@@ -6738,8 +6755,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="mimo-v2.6-pro">MiMo V2.6 Pro (flagship — text + image + video + audio)</option>
                       <option value="mimo-v2.6-flash">MiMo V2.6 Flash (fast + cheap — same modalities)</option>
                       <option value="mimo-v2.6-pro-ultraspeed">MiMo V2.6 Pro UltraSpeed (up to 20x faster, 10x the price)</option>
-                      <option value="mimo-v2.5-pro">MiMo V2.5 Pro (deprecated 2026-10-21 — text only)</option>
-                      <option value="mimo-v2.5">MiMo V2.5 (deprecated 2026-10-21 — text + image)</option>
+                      <RetiredOption value={specificModel} />
                     </select>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.mimo.help'))}
