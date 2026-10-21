@@ -1313,7 +1313,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'model.minimax.label': 'MiniMax Model',
   'model.minimax.help':
-    'Served by MiniMax’s OpenAI-compatibility endpoint at `api.minimax.io/v1`. Set the MiniMax API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to DeepSeek R1). The model identifier **is case-sensitive** — capital M’s, lowercase "i", hyphen. **M3** adds native video understanding and a 1M-token context (MSA architecture) on top of M2.7’s image input.',
+    'Served by MiniMax’s OpenAI-compatibility endpoint at `api.minimax.io/v1`. Set the MiniMax API key in Preferences. Reasoning is built into the model — no thinking toggle (MiniMax 400s any attempt to disable it: "requires adaptive thinking"). The model identifier **is case-sensitive** — capital M’s, lowercase "i", hyphen. **M3** adds native video understanding and a 1M-token context (MSA architecture) on top of M2.7’s image input. **M3.1 Flash** (2026-10-21) keeps the 1M context and image input at **half M3’s price**, and returns its reasoning in the separate `reasoning_content` field instead of leaking `<think>` tags into the answer the way M3 does. Its video understanding is documented but not yet measured here, so video still routes through the Watcher bridge.',
 
   'model.cohere.label': 'Cohere Model',
   'model.cohere.help':
@@ -1332,7 +1332,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
 
   'model.chatgpt.label': 'ChatGPT Model',
   'model.chatgpt.help':
-    'Served by OpenAI’s first-party API at `api.openai.com/v1`. Set the OpenAI API key in Preferences. The Thinking Mode toggle maps to OpenAI’s `reasoning_effort` field — `high` (on) / `minimal` (off). GPT-5 reasoning models ignore custom Temperature / Top-P (the model-panel sliders do not affect them). Images are supported; audio & video uploads route through the Ears / Watcher bridges.',
+    'Served by OpenAI’s first-party API at `api.openai.com/v1`. Set the OpenAI API key in Preferences. The Thinking Mode toggle maps to OpenAI’s `reasoning_effort` field — `high` (on) / `none` (off). *(Corrected 2026-10-21: this used to say `minimal` (off), and `minimal` is in no ChatGPT model’s vocabulary — every toggle-off turn without workspace tools was returning a 400.)* `gpt-6.1-sol` and `gpt-6-astra` **cannot use workspace tools** on this endpoint: tools there require `reasoning_effort: none`, which those two reject — NEXUS refuses that combination up front and names it. GPT-5/6 reasoning models ignore custom Temperature / Top-P (the model-panel sliders do not affect them). Images are supported on every listed model; audio & video uploads route through the Ears / Watcher bridges. Billing note: every model except the mini/nano ones charges a **long-context rate above 272K prompt tokens** (input ×2, output ×1.5).',
 
   'model.mimo.label': 'MiMo Model',
   'model.mimo.help':
@@ -1387,7 +1387,9 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.claude.websearchHelp':
     '(API-key mode: Anthropic server-side web_search tool. Subscription/OAuth mode: Claude Code’s built-in WebSearch/WebFetch.)',
   'model.claude.thinking': 'Enable Extended Thinking',
-  'model.claude.thinkingHelp': '(Opus/Sonnet only)',
+  // Haiku 5.5 does adaptive thinking too (measured 2026-10-21, all five effort
+  // tiers), so the old "(Opus/Sonnet only)" named the wrong set.
+  'model.claude.thinkingHelp': '(Opus / Sonnet / Haiku 5.5)',
   'model.claude.saveThinking': 'Save & reuse thinking process',
   'model.claude.saveThinkingHelp':
     '(adds [thinking] to .md export and lets Claude see its own past reasoning)',
@@ -2885,7 +2887,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'model.minimax.label': 'MiniMax モデル',
   'model.minimax.help':
-    'MiniMax の OpenAI 互換エンドポイント `api.minimax.io/v1` が提供します。設定で MiniMax の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（DeepSeek R1 と同様）。モデル識別子は **大文字・小文字を区別します** — 大文字の M、小文字の「i」、ハイフン。**M3** は M2.7 の画像入力に加えて、ネイティブの動画理解と 100 万トークンの文脈（MSA アーキテクチャ）を備えます。',
+    'MiniMax の OpenAI 互換エンドポイント `api.minimax.io/v1` が提供します。設定で MiniMax の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（無効化しようとすると MiniMax が 400 を返します：「requires adaptive thinking」）。モデル識別子は **大文字・小文字を区別します** — 大文字の M、小文字の「i」、ハイフン。**M3** は M2.7 の画像入力に加えて、ネイティブの動画理解と 100 万トークンの文脈（MSA アーキテクチャ）を備えます。**M3.1 Flash**（2026-10-21）は 100 万トークンの文脈と画像入力を保ったまま **M3 の半額**で、思考を `<think>` タグとして本文に混ぜる M3 と違い、独立した `reasoning_content` フィールドで返します。動画理解は文書化されていますが、ここでは未測定なので、動画は「映像視聴」ブリッジを経由します。',
 
   'model.cohere.label': 'Cohere モデル',
   'model.cohere.help':
@@ -2904,7 +2906,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'model.chatgpt.label': 'ChatGPT モデル',
   'model.chatgpt.help':
-    'OpenAI の一次 API `api.openai.com/v1` が提供します。設定で OpenAI の API キーを入れてください。思考モードの切り替えは OpenAI の `reasoning_effort` に対応します — `high`（ON）／`minimal`（OFF）。GPT-5 系の推論モデルは Temperature / Top-P の指定を無視します（モデル欄のスライダーは効きません）。画像には対応しており、音声・動画のアップロードは「耳」「映像視聴」ブリッジを経由します。',
+    'OpenAI の一次 API `api.openai.com/v1` が提供します。設定で OpenAI の API キーを入れてください。思考モードの切り替えは OpenAI の `reasoning_effort` に対応します — `high`（ON）／`none`（OFF）。*（2026-10-21 訂正： ここは `minimal`（OFF）と書いていましたが、`minimal` はどの ChatGPT モデルの語彙にも無く、ワークスペースツール無しで OFF にしたターンは毎回 400 になっていました。）* `gpt-6.1-sol` と `gpt-6-astra` は、このエンドポイントでは**ワークスペースツールを使えません**——ツールは `reasoning_effort: none` を要求し、この2つはその値を拒否します（NEXUS は事前に理由を添えて拒否します）。GPT-5/6 系の推論モデルは Temperature / Top-P の指定を無視します（モデル欄のスライダーは効きません）。一覧の全モデルが画像に対応しており、音声・動画のアップロードは「耳」「映像視聴」ブリッジを経由します。課金の注意： mini / nano 以外の全モデルは、**プロンプトが 27.2 万トークンを超えると長文脈レート**になります（入力2倍・出力1.5倍）。',
 
   'model.mimo.label': 'MiMo モデル',
   'model.mimo.help':
@@ -2959,7 +2961,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.claude.websearchHelp':
     '（API キーモード: Anthropic のサーバー側 web_search ツール。サブスクリプション／OAuth モード: Claude Code 内蔵の WebSearch/WebFetch。）',
   'model.claude.thinking': '拡張思考を有効にする',
-  'model.claude.thinkingHelp': '（Opus / Sonnet のみ）',
+  'model.claude.thinkingHelp': '（Opus / Sonnet / Haiku 5.5）',
   'model.claude.saveThinking': '思考過程を保存して再利用する',
   'model.claude.saveThinkingHelp':
     '（.md 書き出しに [thinking] を追加し、Claude が自分の過去の推論を見られるようにします）',

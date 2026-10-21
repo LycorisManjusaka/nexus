@@ -20,6 +20,9 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   'claude-sonnet-5-5',
   'claude-sonnet-5',
   'claude-sonnet-4-6',
+  // haiku-5-5 measured 2026-10-21: 64x64 solid-red PNG through the production
+  // image block shape -> answered "Red".
+  'claude-haiku-5-5',
   'claude-haiku-4-5',
 
   // ── Google Gemini ──────────────────────────────────────────────────────────
@@ -132,6 +135,15 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // architecture). M2.7 is text-only. Image/video parts are forwarded over the
   // OpenAI-compatible path; if MiniMax's compat endpoint rejects a modality the
   // eyes/watcher bridge still covers it when this is toggled off.
+  //
+  // M3.1-Flash measured 2026-10-21 on api.minimax.io/v1/chat/completions with a
+  // 64x64 solid-red PNG as an `image_url` data URI -> "Red". It is deliberately
+  // NOT in VIDEO_CAPABLE_MODELS even though MiniMax's docs call it multimodal
+  // "including text, images, and video": no video part has been sent to it here,
+  // and membership in that set is what SWITCHES THE WATCHER BRIDGE OFF. Out =
+  // the honest "won't arrive" label plus a working bridge; in-before-measured =
+  // a silent drop. Add it the day a real video round-trips.
+  'MiniMax-M3.1-Flash',
   'MiniMax-M3',
   'MiniMax-M2.7',
 
@@ -140,6 +152,16 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // file input is NOT supported on this endpoint (that's the realtime/audio
   // models), so they stay out of the audio/video sets below and the ears/
   // watcher bridges handle those modalities.
+  // The GPT-6 generation, all four measured 2026-10-21 with the same 64x64
+  // solid-red PNG as an `image_url` data URI on /v1/chat/completions: sol, 6.1
+  // sol, astra and luna each answered "Red", and gpt-5.6-terra answered "Red"
+  // in the same run as a control. Vision is the ONLY modality that survives for
+  // gpt-6.1-sol and gpt-6-astra on this endpoint — see lib/openaiEffort.ts:
+  // those two cannot take function tools here at all.
+  'gpt-6.1-sol',
+  'gpt-6-sol',
+  'gpt-6-astra',
+  'gpt-6-luna',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',

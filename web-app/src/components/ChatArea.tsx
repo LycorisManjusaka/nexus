@@ -117,6 +117,13 @@ Claude   | claude-opus-4-7              | on  | Claude Opus 4.7 Thinking
 Claude   | claude-sonnet-5-5           | on  | Claude Sonnet 5.5 Thinking
 Claude   | claude-sonnet-5              | on  | Claude Sonnet 5 Thinking
 Claude   | claude-sonnet-4-6            | on  | Claude Sonnet 4.6 Thinking
+# haiku-5-5 (2026-10-21): adaptive-only in request SHAPE but the on/off column is
+# real here, unlike the rows above. Measured: classic enabled/budget_tokens 400s,
+# a plain temperature 400s ("deprecated for this model"), while
+# thinking:{type:disabled} returns 200 — so OFF is a genuine off. 1M input,
+# 128k output, all five effort tiers. Cheapest Claude by an order of magnitude,
+# with a 5x price cliff above 100k prompt tokens (see modelPricing.json).
+Claude   | claude-haiku-5-5             | off | Claude Haiku 5.5
 Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
 
 # ── Gemini (Google) — always thinking; level controls budget ──────
@@ -199,10 +206,22 @@ Cohere   | command-a-reasoning-08-2025  | on  | Command A Reasoning
 Cohere   | command-a-vision-07-2025     | off | Command A Vision (multimodal)
 
 # ── MiniMax — always-on reasoning, no toggle ───────────────────────
+MiniMax  | MiniMax-M3.1-Flash           | on  | MiniMax M3.1 Flash
 MiniMax  | MiniMax-M3                   | on  | MiniMax M3
 MiniMax  | MiniMax-M2.7                 | on  | MiniMax M2.7
 
 # ── OpenAI (ChatGPT / GPT-5 family) ────────────────────────────────
+# GPT-6 (2026-10-21). gpt-6.1-sol and gpt-6-astra CANNOT use function tools on
+# /v1/chat/completions: tools there require reasoning_effort 'none', and those two
+# ids reject 'none' as a value (their vocabulary is low|medium|high|xhigh). NEXUS
+# refuses that combination up front with the reason. A row copied for a being that
+# has workspace tools on will therefore not run until the tools are turned off —
+# which is why it says so in the label too. gpt-6-sol and gpt-6-luna take tools
+# normally. Vision measured on all four.
+ChatGPT  | gpt-6.1-sol                  | on  | GPT-6.1 Sol (no workspace tools)
+ChatGPT  | gpt-6-sol                    | on  | GPT-6 Sol
+ChatGPT  | gpt-6-astra                  | on  | GPT-6 Astra (no workspace tools)
+ChatGPT  | gpt-6-luna                   | off | GPT-6 Luna (cheapest)
 ChatGPT  | gpt-5.6-sol                  | on  | GPT-5.6 Sol
 ChatGPT  | gpt-5.6-terra                | on  | GPT-5.6 Terra
 ChatGPT  | gpt-5.6-luna                 | off | GPT-5.6 Luna
@@ -6546,6 +6565,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (adaptive thinking, 1M ctx, newest)</option>
                       <option value="claude-sonnet-5">Claude Sonnet 5 (adaptive thinking, 1M ctx)</option>
                       <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (thinking)</option>
+                      <option value="claude-haiku-5-5">Claude Haiku 5.5 (adaptive thinking, 1M ctx, cheapest)</option>
                       <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
                     </select>
                   </div>
@@ -6654,6 +6674,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      <option value="MiniMax-M3.1-Flash">MiniMax M3.1 Flash (newest — multimodal, 1M context, 2× cheaper than M3)</option>
                       <option value="MiniMax-M3">MiniMax M3 (flagship — multimodal, 1M context, agentic coding)</option>
                       <option value="MiniMax-M2.7">MiniMax M2.7 (coding + reasoning, 200K context)</option>
                     </select>
@@ -6731,6 +6752,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      {/* The "no workspace tools" note is in the LABEL on purpose: it is
+                          a hard 400 on this endpoint, not a degradation, and the label is
+                          what someone reads before choosing. See lib/openaiEffort.ts
+                          for the measured matrix. */}
+                      <option value="gpt-6.1-sol">GPT-6.1 Sol (newest — NO workspace tools)</option>
+                      <option value="gpt-6-sol">GPT-6 Sol (tools OK)</option>
+                      <option value="gpt-6-astra">GPT-6 Astra (most capable, $10/$50 — NO workspace tools)</option>
+                      <option value="gpt-6-luna">GPT-6 Luna (cheapest, tools OK)</option>
                       <option value="gpt-5.6-sol">GPT-5.6 Sol (flagship, deepest reasoning)</option>
                       <option value="gpt-5.6-terra">GPT-5.6 Terra (balanced, ~2× cheaper)</option>
                       <option value="gpt-5.6-luna">GPT-5.6 Luna (fast, budget)</option>

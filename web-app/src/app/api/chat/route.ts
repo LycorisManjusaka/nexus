@@ -17,6 +17,7 @@ import { findAttachmentsByRefPrefix, searchAttachments, formatAttachmentSearchFo
 import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
+import { openAiCannotUseTools, openAiOffEffort, openAiToolsNeedNoneEffort } from '@/lib/openaiEffort';
 import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFailureInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
@@ -565,8 +566,32 @@ function sanitizeClaudeEffort(v: any): 'low' | 'medium' | 'high' | 'xhigh' | 'ma
 // `disabled`, including it here only means toggle-off sends adaptive+effort'low'
 // instead of disabled (shallow thinking, no error); excluding it when it in
 // fact rejects would be a 400 — the exact bug this guard exists to prevent.
-// Replace this analogy with a measurement the first time a real Sonnet 5.5
-// toggle-off turn runs.
+//
+// MEASURED 2026-10-21 (this replaces the analogy the previous paragraph asked
+// to replace). Sonnet 5.5 + thinking:{type:'disabled'} -> 400, so the analogy's
+// DIRECTION was right and this guard was doing real work. But the error named a
+// shape neither hypothesis contained:
+//
+//   "To turn thinking off on this model, send \"thinking\": {\"type\":
+//    \"between_tools\"} instead of {\"type\": \"disabled\"}. The model does not
+//    think before responding. The short updates it writes between tool calls
+//    come back as thinking blocks."
+//
+// There is a THIRD thinking type. Probed across the family the same day:
+// between_tools returns 200 on claude-sonnet-5-5 and 400 ("not supported for
+// this model") on opus-5-5, fable-5-1, haiku-5-5 AND opus-5 — it is specific to
+// Sonnet 5.5, not a generation-wide replacement for `disabled`.
+//
+// NOT acted on yet, deliberately. Today Sonnet 5.5's toggle-off runs
+// adaptive+effort'low', i.e. shallow thinking; between_tools would make OFF
+// mean genuinely off. That is an improvement, but it changes what a toggle does
+// on a model in daily use, so it wants a verified turn rather than a drive-by
+// edit at the end of a long one. The measurement is the deliverable; the switch
+// is a separate, checkable step.
+//
+// Also measured the same day: claude-haiku-5-5 ACCEPTS `disabled` (200), which
+// is why it is absent here — it is adaptive-only in the OTHER two shapes
+// (classic enabled, and temperature), handled by isHaiku55 in the Claude branch.
 //
 // `/v1/models` cannot be used to derive this: the catalog reports
 // thinking.types = { enabled:false, adaptive:true } IDENTICALLY for Opus 5,
@@ -1850,8 +1875,15 @@ async function streamClaudeViaAgentSDK(args: {
         // pass it to Sonnet/Haiku; default 'high' = same as omitting it.
         // Sonnet 5 is adaptive+effort like Opus 4.7/4.8, so it takes the effort
         // control too. (The classic non-adaptive Sonnet 4.6/Haiku do not.)
+        // haiku-5-5 added 2026-10-21: measured on the API-key surface to accept
+        // ALL FIVE effort tiers (low…max), so the toggle means the same thing on
+        // both paths. Whether the bundled Claude Code binary even offers this id
+        // over OAuth is NOT verified — but the direction is safe either way: if
+        // it is absent the model never reaches here, and if it is present the
+        // effort field is one it accepts. (haiku-4-5 cannot match: the pattern
+        // requires the second 5.)
         const isAdaptiveOauth = isNoDisableThinkingOauth
-          || /opus-4-?7|opus-4-?8|opus-?5|sonnet-?5/.test(model || '');
+          || /opus-4-?7|opus-4-?8|opus-?5|sonnet-?5|haiku-?5[-.]?5/.test(model || '');
         const isSonnet5Oauth = /sonnet-?5/.test(model || '');
         let oauthEffort = sanitizeClaudeEffort(modelParams?.claudeEffort);
         // Sonnet 5 tops out at 'xhigh' (no 'max' tier) — clamp to avoid a 400.
@@ -5301,6 +5333,26 @@ export async function POST(req: Request) {
       // same request shape as Opus 4.7/4.8 (classic enabled/budget_tokens is
       // rejected). Its top effort tier is 'xhigh' (NOT 'max'), so clamp below.
       const isSonnet5 = claudeModel.includes('sonnet-5') || claudeModel.includes('sonnet5');
+      // Claude Haiku 5.5 (created_at 2026-10-07, added here 2026-10-21). It is
+      // ADAPTIVE-ONLY, and this flag is load-bearing in BOTH directions —
+      // measured against the live API, not inferred from the generation:
+      //   classic thinking:{type:'enabled',budget_tokens:8000}  -> 400
+      //        ("not supported for this model. Use thinking.type.adaptive and
+      //         output_config.effort to control thinking behavior")
+      //   temperature: 0.7                                      -> 400
+      //        ("`temperature` is deprecated for this model")
+      // Those are precisely the two things the non-adaptive branches send (ON
+      // sends classic, OFF sends temperature), so WITHOUT this flag haiku-5-5
+      // would 400 with the toggle in EITHER position — a model that is listed
+      // and can never answer.
+      // It is NOT in claudeRejectsDisabledThinking: thinking:{type:'disabled'}
+      // returns 200, so toggle-off is a real off here.
+      // Catalog + live check the same day: max_input 1M (5x haiku 4.5's 200K),
+      // max_tokens 128000, and all five effort tiers (low…max) accepted — so it
+      // needs neither the Sonnet-5 'max'->'xhigh' clamp nor a lower ceiling.
+      // Must not match haiku-4-5: 'haiku-5-5' / 'haiku5' cannot.
+      const isHaiku55 = claudeModel.includes('haiku-5-5')
+        || claudeModel.includes('haiku-5.5') || claudeModel.includes('haiku55');
       // Claude Fable 5 / Mythos 5: adaptive thinking is the ONLY thinking mode —
       // `thinking: { type: 'disabled' }` is rejected, so thinking is effectively
       // always on. Depth is controlled by `output_config.effort`. Raw chain of
@@ -5311,7 +5363,7 @@ export async function POST(req: Request) {
       // Newer Opus models (4.7, 4.8) and Fable/Mythos 5 reject the classic
       // `thinking: { type: 'enabled', budget_tokens }` shape and require the
       // adaptive format with an `output_config.effort` control instead.
-      const isAdaptiveThinking = isOpus47 || isOpus48 || isOpus5 || isFable5 || isSonnet5;
+      const isAdaptiveThinking = isOpus47 || isOpus48 || isOpus5 || isFable5 || isSonnet5 || isHaiku55;
       // Models where thinking cannot be switched off at all — Fable/Mythos 5 and
       // Opus 5.5 both 400 on `disabled`. See claudeRejectsDisabledThinking() for
       // the measured error and why /v1/models cannot detect it. NOTE this is NOT
@@ -7863,6 +7915,21 @@ export async function POST(req: Request) {
           error: `ChatGPT (OpenAI) requires the OpenAI API key in Preferences (sk-...).`,
         }, { status: 400 });
       }
+      // Refuse the dead end before spending anything, and say which two knobs
+      // fix it. `toolUseEnabled` is a faithful predicate for "tools reach the
+      // wire": the builder below pushes Read unconditionally when it is true,
+      // so true always means localTools is non-empty.
+      // Same shape as the `.bat` launch refusal in ttsEngines: a combination
+      // that cannot work is named up front instead of failing opaquely later.
+      if (isOpenAI && toolUseEnabled && openAiCannotUseTools(specificModel || '')) {
+        return NextResponse.json({
+          error: `${specificModel} cannot use workspace tools: OpenAI's /v1/chat/completions `
+            + `requires reasoning_effort 'none' for function tools, and this model's only `
+            + `accepted values are low/medium/high/xhigh (measured 2026-10-21). `
+            + `Either turn the workspace tools off for this being, or pick gpt-6-sol / `
+            + `gpt-6-luna / gpt-5.6-* — those take tools on this endpoint.`,
+        }, { status: 400 });
+      }
       if (isMimo && !keys.mimo) {
         return NextResponse.json({
           error: `MiMo (Xiaomi) requires the MiMo API key in Preferences.`,
@@ -8916,14 +8983,27 @@ export async function POST(req: Request) {
         // behavior with tools worked). Net effect on 5.6+tools: tools work, but
         // the model does NOT reason on that turn — reasoning+tools together needs
         // the /v1/responses API (not used here).
+        // See lib/openaiEffort.ts for the full measured matrix.
         if (isOpenAI) {
+          const oaModel = String(requestBody.model || '');
           if (requestBody.tools) {
-            if (/gpt-5\.6/i.test(requestBody.model || '')) {
+            // gpt-5.6-* and gpt-6-* both NEED 'none' with tools — omitting the
+            // field 400s on all of them (measured). gpt-5.5 / gpt-5.4 /
+            // gpt-5.4-mini are the opposite: omitted works, so they are left
+            // alone rather than "unified" into something unmeasured.
+            if (openAiToolsNeedNoneEffort(oaModel)) {
+              // The ids that refuse 'none' never get here: the preflight above
+              // already returned, because 'none' is the only value that enables
+              // tools and they do not accept it.
               requestBody.reasoning_effort = 'none';
             }
             // older gpt-5.x with tools: leave reasoning_effort unset (omitted).
           } else {
-            requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false ? 'high' : 'minimal';
+            // 'minimal' used to be sent here for OFF. It is in NO ChatGPT
+            // model's vocabulary and 400'd every such turn.
+            requestBody.reasoning_effort = modelParams.qwenEnableThinking !== false
+              ? 'high'
+              : openAiOffEffort(oaModel);
           }
         }
 

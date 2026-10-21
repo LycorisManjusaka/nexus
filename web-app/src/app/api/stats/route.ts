@@ -225,7 +225,12 @@ export async function GET() {
               if (mc) { usd = mc.usd; estimated = false; }
               else { unpriced = !price; estimated = false; }
             } else if (price) {
-              const eff = effectivePrice(price, m.timestamp);
+              // `running` is the conversation's accumulated input tokens up to
+              // this message — i.e. this turn's prompt size, which is exactly
+              // what selects a model's long-context tier (OpenAI >272K,
+              // Haiku 5.5 >100K). Without it this estimate path would keep
+              // reporting short-context rates on turns billed at the long one.
+              const eff = effectivePrice(price, m.timestamp, running);
               usd = (running * eff.input + output * eff.output) / 1_000_000;
               estimated = true;
             } else {

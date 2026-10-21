@@ -13,6 +13,26 @@
 // weekends, and any message priced WITHOUT a timestamp — it is billed at the
 // base (off-peak) rates.
 //
+// Long-context tiers (added 2026-10-21): several providers now charge a HIGHER
+// rate once the prompt crosses a size threshold, which the flat four-field row
+// could not express at all. Measured from the providers' own price pages:
+//   • OpenAI gpt-5.4 / 5.5 / 5.6-* / every gpt-6-*: >272K input tokens doubles
+//     input and raises output ~1.5x. ("Short context: <=272K input tokens.
+//     Long context: >272K input tokens." — developers.openai.com/api/docs/pricing)
+//   • Anthropic Claude Haiku 5.5: >100K prompt tokens is 5x on every bucket.
+// This house routinely crosses both thresholds (one soul file is ~145 KB), so
+// short-context-only numbers under-report the models most used for long work.
+//
+// The mechanism is deliberately the SAME SHAPE as peak/off-peak: optional
+// fields, absent on every row that has no tier, and absence is a no-op. That is
+// what makes this safe to add to a live table — no existing row changes
+// behaviour because no existing row carries the fields.
+//
+// NOTE: no row carries BOTH a peak schedule and a long-context tier today
+// (DeepSeek has peak; OpenAI/Anthropic have long). If one ever does, peak wins
+// below — and that precedence is NOT verified against any provider's rules.
+// Measure it before relying on it.
+//
 // OAuth Claude is priced exactly like the Claude API (same model ids, no
 // separation) — the user pays real subscription/credit value either way and
 // wants to see it. Local models are never priced (caller skips them).
@@ -29,6 +49,15 @@ export interface ModelPrice {
   peakCachedInput?: number;
   peakOutput?: number;
   peakHoursUtc?: [number, number][]; // [startHour, endHour) UTC ranges; weekends off-peak
+  // Optional long-context tier (OpenAI GPT-5.4+ / GPT-6: 272000; Claude Haiku
+  // 5.5: 100000). The base fields above are the SHORT-context rates; these
+  // replace them once the prompt exceeds `longContextThreshold` INPUT tokens.
+  // Absent → no tier → the base rates always apply.
+  longContextThreshold?: number;
+  longContextInput?: number;
+  longContextCachedInput?: number;
+  longContextCacheWrite?: number;
+  longContextOutput?: number;
 }
 
 export interface CacheUsageLike {
@@ -71,11 +100,29 @@ export function isPeakTime(timestamp: number | null | undefined, peakHoursUtc?: 
   return peakHoursUtc.some(([start, end]) => h >= start && h < end);
 }
 
-/** The effective rate row for a timestamp: peak rates inside the window, base
- *  (off-peak) rates otherwise. Returns the same object when the model has no
- *  peak schedule or no timestamp is available. */
-export function effectivePrice(price: ModelPrice, timestamp?: number | null): ModelPrice {
-  if (isPeakTime(timestamp, price.peakHoursUtc)) {
+/** True when a prompt is large enough to be billed at a model's long-context
+ *  rates. False whenever the model has no tier or the prompt size is unknown —
+ *  an unknown size must not silently pick the EXPENSIVE row. */
+export function isLongContext(price: ModelPrice, promptTokens?: number | null): boolean {
+  const threshold = price.longContextThreshold;
+  if (!threshold || !promptTokens || promptTokens <= 0) return false;
+  return promptTokens > threshold;
+}
+
+/** The effective rate row for a timestamp and prompt size: peak rates inside a
+ *  peak window, long-context rates above the threshold, base rates otherwise.
+ *  Returns the same object when neither applies. */
+export function effectivePrice(
+  price: ModelPrice,
+  timestamp?: number | null,
+  promptTokens?: number | null,
+): ModelPrice {
+  const peak = isPeakTime(timestamp, price.peakHoursUtc);
+  const long = isLongContext(price, promptTokens);
+  if (!peak && !long) return price;
+  if (peak) {
+    // See the header note: no row carries both tiers today, and peak winning
+    // here is a choice, not a measured provider rule.
     return {
       input: price.peakInput ?? price.input,
       cachedInput: price.peakCachedInput ?? price.cachedInput,
@@ -83,7 +130,12 @@ export function effectivePrice(price: ModelPrice, timestamp?: number | null): Mo
       output: price.peakOutput ?? price.output,
     };
   }
-  return price;
+  return {
+    input: price.longContextInput ?? price.input,
+    cachedInput: price.longContextCachedInput ?? price.cachedInput,
+    cacheWrite: price.longContextCacheWrite ?? price.cacheWrite,
+    output: price.longContextOutput ?? price.output,
+  };
 }
 
 /** Format a USD amount with precision that stays meaningful for tiny costs. */
@@ -119,10 +171,8 @@ export function messageCost(
     };
   }
 
-  const hasPeak = !!resolved.peakHoursUtc?.length;
-  const peak = hasPeak && isPeakTime(timestamp, resolved.peakHoursUtc);
-  const price = peak ? effectivePrice(resolved, timestamp) : resolved;
-
+  // Buckets FIRST: the long-context tier is selected by prompt size, so the
+  // rate row cannot be chosen before the tokens are known.
   const cached = cu.cachedInputTokens ?? 0;
   const uncached =
     cu.uncachedInputTokens ??
@@ -132,13 +182,32 @@ export function messageCost(
 
   if (uncached + cached + cacheWrite + output === 0) return null;
 
+  // Every input token the provider counted toward this prompt. Anthropic's
+  // threshold is stated over the prompt, and cache-read/cache-write tokens are
+  // part of the prompt — billing them at the short rate while the uncached
+  // remainder crossed the line would split one request across two tiers.
+  const promptTokens = uncached + cached + cacheWrite;
+
+  const hasPeak = !!resolved.peakHoursUtc?.length;
+  const peak = hasPeak && isPeakTime(timestamp, resolved.peakHoursUtc);
+  const long = isLongContext(resolved, promptTokens);
+  const price = peak || long ? effectivePrice(resolved, timestamp, promptTokens) : resolved;
+
   const cIn = (uncached * price.input) / M;
   const cCached = (cached * price.cachedInput) / M;
   const cWrite = (cacheWrite * price.cacheWrite) / M;
   const cOut = (output * price.output) / M;
   const usd = cIn + cCached + cWrite + cOut;
 
-  const rateTag = hasPeak ? (peak ? ' · PEAK rate' : ' · off-peak rate') : '';
+  // Name the tier that was actually used. A long-context turn costs 2–5x the
+  // headline number, so a figure with no label invites "that can't be right".
+  const rateTag =
+    (hasPeak ? (peak ? ' · PEAK rate' : ' · off-peak rate') : '') +
+    (resolved.longContextThreshold
+      ? long
+        ? ` · long-context rate (>${resolved.longContextThreshold.toLocaleString()} prompt tokens)`
+        : ' · short-context rate'
+      : '');
   // When the provider reported its own total, that is the number to show and
   // the number to sum — the token lines below then explain only the part the
   // price table can account for, and the remainder is named as what it is.
