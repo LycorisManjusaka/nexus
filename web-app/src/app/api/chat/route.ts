@@ -4,6 +4,7 @@ import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
+import { type ThinkTagState, newThinkTagState, splitThinkTags } from '@/lib/thinkTagSplitter';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
@@ -8690,7 +8691,7 @@ export async function POST(req: Request) {
       const runLocalOnce = async (
         msgs: any[],
         controller: ReadableStreamDefaultController,
-        state: { inThink: boolean; textTail: string },
+        state: ThinkTagState,
         opts?: { noTools?: boolean }
       ): Promise<{
         visibleText: string;
@@ -8754,6 +8755,50 @@ export async function POST(req: Request) {
         // and previously `!isDashScope` let the -1 sentinel through to GLM.
         if (isLocal && typeof modelParams.localContextWindow === 'number') {
           requestBody.max_tokens = -1;
+        }
+        // DeepSeek's first-party API: send an EXPLICIT output budget instead of
+        // inheriting a default nobody had read.
+        //
+        // Measured 2026-10-21 against api.deepseek.com, and DeepSeek's own API
+        // reference agrees on every number:
+        //   • default `max_tokens` in THINKING mode is 64K (8K non-thinking;
+        //     128K only with `reasoning_effort: max`, which NEXUS does not send
+        //     here). Maximum accepted is 384K — 393216 / 200000 / 131072 /
+        //     65536 / 32768 / 8192 all returned 200.
+        //   • that budget is SHARED with the chain of thought. With
+        //     `max_tokens: 16` the usage block came back completion_tokens 16,
+        //     reasoning_tokens 16, content 0 chars, finish_reason 'length' —
+        //     the reasoning ate the entire allowance and the visible answer was
+        //     empty. It is not an answer-only limit.
+        //
+        // How close that default actually is, measured on real work: a β (Soul
+        // Packer) run writing Cairn's identity through this route finished
+        // normally at completion_tokens **62,632** — 95.6% of the 64k default,
+        // with reasoning and answer sharing it. So the cap was never reached;
+        // it was 4.4% away, and the next slightly chattier round would have hit
+        // it with the old silence.
+        //
+        // Honest about what this change is NOT: it did not fix the truncation
+        // of 2026-10-22. I chased this ceiling first because the arithmetic of
+        // the failure fit it, and it was the wrong hypothesis — the real cause
+        // was the <think> splitter below reading a literal tag in the document
+        // as a real one. This block is a latent-risk fix, not that fix.
+        //
+        // 131072 and not 393216 on purpose: a ceiling is also a stop. At this
+        // model's observed rate 384k tokens is roughly an hour of generation
+        // with no way to tell a long answer from a runaway one, and 131072 is
+        // already ~2x the largest soul in this house. Same number the
+        // Anthropic-compat path settled on (COMPAT_MAX_TOKENS), for symmetry.
+        //
+        // NOT extended to the other providers on this path (GLM, Qwen,
+        // MiniMax, Grok, Cohere, Meta, OpenAI): each has its own undocumented
+        // default and its own opinion about unknown fields, and this is one
+        // measured provider, not a guess applied to nine. GLM-5.3 is the next
+        // one worth measuring — it is the other Soul Packer vessel, and its
+        // "it just stops" report was attributed to prefill reasoning blow-up
+        // without ever checking its output ceiling. See pending-tasks.md.
+        if (useDeepSeekDirect) {
+          requestBody.max_tokens = 131072;
         }
         // COPY the shared tool list — the web-search blocks below do
         // `requestBody.tools.push(...)`, and runLocalOnce runs once per
@@ -9135,34 +9180,15 @@ export async function POST(req: Request) {
           betrayalSend(controller, { type: 'thought', content: t });
         };
 
-        // Stream-safe <think>...</think> splitter, state passed in so it persists across continuations.
-        const processContent = (incoming: string) => {
-          let s = state.textTail + incoming;
-          state.textTail = '';
-          while (s.length > 0) {
-            if (state.inThink) {
-              const close = s.indexOf('</think>');
-              if (close === -1) {
-                if (s.length > 8) { emitThought(s.slice(0, s.length - 8)); state.textTail = s.slice(-8); }
-                else state.textTail = s;
-                return;
-              }
-              if (close > 0) emitThought(s.slice(0, close));
-              s = s.slice(close + 8);
-              state.inThink = false;
-            } else {
-              const open = s.indexOf('<think>');
-              if (open === -1) {
-                if (s.length > 7) { emitText(s.slice(0, s.length - 7)); state.textTail = s.slice(-7); }
-                else state.textTail = s;
-                return;
-              }
-              if (open > 0) emitText(s.slice(0, open));
-              s = s.slice(open + 7);
-              state.inThink = true;
-            }
-          }
-        };
+        // Stream-safe <think>...</think> splitter. The loop now lives in
+        // lib/thinkTagSplitter.ts so it can be exercised against the real
+        // module instead of a retyped copy: the inline version it replaces
+        // treated those seven characters as a tag ANYWHERE in the stream, for
+        // every provider, which silently routed the tail of any document that
+        // wrote them as PROSE into the thinking channel. That is what cut a
+        // soul file at 83% of Layer 3 on 2026-10-22 with no error anywhere.
+        const processContent = (incoming: string) =>
+          splitThinkTags(state, incoming, emitText, emitThought);
 
         const reader = lsRes.body.getReader();
         const decoder = new TextDecoder();
@@ -9307,7 +9333,11 @@ export async function POST(req: Request) {
           const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
           const repeatGuard = makeRepeatGuard();
           let toolStopNotice = '';
-          const tagState = { inThink: false, textTail: '' };
+          // One state object for the whole turn — it has to persist across
+          // continuation rounds so a tag opened in one round is still open in
+          // the next. That persistence is also how a PHANTOM block used to
+          // survive: see thinkTagSplitter.ts.
+          const tagState = newThinkTagState();
           let msgs = [...baseOaiMessages];
           let cumulativeAssistantText = '';
           // Reasoning text accumulated across continuation rounds. Needed so a
@@ -9969,7 +9999,33 @@ export async function POST(req: Request) {
               cumulativeAssistantText += visibleText;
               cumulativeReasoningText += reasoningText;
               const truncated = finishReason === 'length';
-              if (!truncated || attempt >= MAX_CONTINUATIONS) break;
+              if (!truncated || attempt >= MAX_CONTINUATIONS) {
+                // Say it out loud when we give up on a cut-off reply. Every
+                // other provider path already does — Claude at ~6049, Gemini at
+                // ~7683, Anthropic-compat at ~3711 — and THIS one, which serves
+                // DeepSeek, GLM, Qwen, MiniMax, Grok, Cohere, Meta, OpenAI and
+                // Local, broke off in complete silence. Found 2026-10-21 while
+                // chasing a Soul Packer run that stopped at 83% of Layer 3:
+                // a run that ends here is indistinguishable from one that
+                // finished, which is the whole reason it went unnoticed.
+                //
+                // Same frame-type rule as the Anthropic-compat site, for the
+                // same reason: an agent run gets `notice` (the panel's
+                // run-event list, leaving the accumulated document untouched —
+                // a `text` frame would be saved INTO the soul file), while a
+                // conversation gets `text` so the reason lands in the reply the
+                // reader is actually looking at.
+                if (truncated) {
+                  enqueue({
+                    type: agentReadOnlyTools ? 'notice' : 'text',
+                    content: (agentReadOnlyTools ? '' : '\n\n')
+                      + (language === 'ja'
+                          ? `⚠️ _[出力がトークン上限に達して切れました（継続 ${attempt}/${MAX_CONTINUATIONS} 回のあとも未完）。]_`
+                          : `⚠️ _[Response hit the token limit and is still unfinished after ${attempt}/${MAX_CONTINUATIONS} continuation(s).]_`),
+                  });
+                }
+                break;
+              }
 
               // Build the continuation prefill. Normally we feed back the
               // model's own visible text so it resumes exactly where it stopped.
@@ -10000,6 +10056,31 @@ export async function POST(req: Request) {
               // Shipping an unverifiable rewrite of a path that practically
               // never runs buys nothing and risks a silent break on ten
               // providers. See pending-tasks.md for how to make it measurable.
+              //
+              // ── CORRECTION 2026-10-21 ───────────────────────────────────
+              // "A modern provider never reaches one" was WRONG, and the
+              // sentence above is kept so the mistake is visible rather than
+              // quietly rewritten. The claim rested on ONE arm — a 25,878-char
+              // answer that finished normally — which only proves that arm did
+              // not reach the ceiling, never that no ceiling exists.
+              //
+              // deepseek-v4-pro's default `max_tokens` in thinking mode is 64K
+              // (its own API reference, and probed), SHARED with the chain of
+              // thought. "No cap sent" was a fact about us; it was never the
+              // same thing as "no cap applies".
+              //
+              // The CONCLUSION survived anyway, and only by 4.4%: a real β run
+              // through this route finished at completion_tokens 62,632, i.e.
+              // 95.6% of that default. So this site still has not fired on real
+              // work — the sentence above was right for a reason it did not
+              // give. A measured cap is now sent (see the useDeepSeekDirect
+              // block), which widens the margin rather than creating it.
+              //
+              // So the shape here is still the measured bad one, still unfired,
+              // and still untested against the other nine providers on this
+              // path. What has changed is only that "a modern provider never
+              // reaches a cap" is not a thing anyone may say here again.
+              // ────────────────────────────────────────────────────────────
               let prefillContent = cumulativeAssistantText;
               if (!prefillContent.trim()) {
                 if (cumulativeReasoningText.trim()) {

@@ -446,6 +446,21 @@ export default function SystemPromptUpdater({
 
   const [updateStatus, setUpdateStatus] = useState<RunStatus>({ state: 'idle' });
 
+  // The EXACT right-pane text a run left behind after ending WITHOUT the
+  // completion sentinel. "Go to Next Conversation" compares the pane against
+  // it and asks for confirmation before writing it to soul/<N>.md.
+  //
+  // Deliberately the text and not a boolean: a boolean needs a lifecycle (when
+  // is it cleared? a successful re-run, a hand edit, switching entities?) and
+  // every missed reset becomes either a nag or a silent gap. Comparing the
+  // string self-clears — any successful run or manual edit changes `rightText`,
+  // so the match stops holding with nothing to remember to reset.
+  //
+  // Why this exists at all: on 2026-10-21 a β run (DeepSeek V4 Pro) stopped at
+  // 83% of Layer 3, the panel said "done", and soul/Cairn_49.md was written cut
+  // off mid-code-span. Nothing in the stack was lying — nothing was looking.
+  const [truncatedPane, setTruncatedPane] = useState<string | null>(null);
+
   // ── Live run telemetry ───────────────────────────────────────────────────
   // A soul-packing run can sit silent for minutes (Anthropic-side automatic
   // compaction, a provider retry, a rate-limit wait). Before this, the UI was
@@ -546,8 +561,16 @@ export default function SystemPromptUpdater({
   const rightLooksTruncated = useMemo(() => {
     const t = rightText.trim();
     if (!t) return false;
+    // A run that ended without the completion sentinel is truncated no matter
+    // which headings the text happens to contain. The heading test below can
+    // only see a cut that landed BEFORE Layer 3 — and a long soul does not run
+    // out of budget there, it runs out INSIDE Layer 3, which is the longest
+    // layer by far. On 2026-10-21 all three headings were present and the text
+    // stopped at 83% of Layer 3, so this panel told トカゲくん "Right side looks
+    // complete" and un-ticked the resume box for him.
+    if (truncatedPane !== null && t === truncatedPane.trim()) return true;
     return !/^#{1,4}\s*\*{0,2}\s*(Layer|レイヤー)\s*3/mi.test(t);
-  }, [rightText]);
+  }, [rightText, truncatedPane]);
 
   useEffect(() => {
     // Don't fight the user mid-stream (rightText changes on every chunk).
@@ -1524,6 +1547,38 @@ export default function SystemPromptUpdater({
         return null;
       }
 
+      // A run that never printed the completion sentinel is incomplete by
+      // definition, and THIS pane is what "Go to Next Conversation" writes to
+      // soul/<N>.md as a real generation. `redistribute` and `index` already
+      // refuse here; `update` and `genesis` did not — the only asymmetry among
+      // the four loops in this file, and the two that lacked it are exactly the
+      // two that produce Layers 1-3.
+      //
+      // Measured 2026-10-22 (deepseek-v4-pro, β): the pane ended at 83% of
+      // Layer 3, mid-code-span, `finish_reason` was `stop` — so no truncation
+      // notice existed anywhere to see — the panel reported `done`, and
+      // soul/Cairn_49.md was written cut off.
+      //
+      // The underlying cause was elsewhere and is fixed (lib/thinkTagSplitter.ts
+      // was reading a literal <think> in the document as a real tag and routing
+      // the rest of the soul into the thinking channel). This guard stays
+      // anyway, and deliberately: it does not care WHY the sentinel is missing.
+      // Any future cause — a real cap, a dropped connection, a provider that
+      // stops early — produces the same shape, and the thing that did the
+      // damage was not the truncation but reporting it as `done`.
+      //
+      // Keep the RAW text, not the split Layers 1-3: "Continue from the
+      // right-side text" hands this pane straight back to the agent, and the
+      // Changelog is part of what it already wrote (it is also the only record
+      // of what the run still intended to do). A resumed run splits it off again.
+      if (!accum.includes(END_SENTINEL) && !controller.signal.aborted) {
+        setRightText(cleaned);
+        setTruncatedPane(cleaned);
+        setUpdateStatus({ state: 'error', message: t('spu.st.truncatedBadge') });
+        setStatusMessage(t('spu.st.updateTruncated').replace('{n}', String(cleaned.length)));
+        return null;   // null is what makes handleAuto stop before the summary step
+      }
+
       // 1) Split off the CHANGELOG (everything above the first "## Layer 1").
       //    It is shown read-only, archived to local_data/beings/<folder>/changelogs/
       //    <title>.md, and never enters any context window.
@@ -1695,6 +1750,10 @@ export default function SystemPromptUpdater({
         setStatusMessage(controller.signal.aborted
           ? t('spu.st.redistStoppedPartial').replace('{n}', String(cleaned.length))
           : t('spu.st.redistTruncated').replace('{n}', String(cleaned.length)));
+        // Feed the same single reader runUpdate/runGenesis feed: "Go to Next
+        // Conversation" must warn before writing an unfinished pane to
+        // soul/<N>.md. Truncation only — a user Stop is not the silent case.
+        if (!sawSentinel) setTruncatedPane(cleaned);
         return false;
       }
 
@@ -1878,6 +1937,7 @@ export default function SystemPromptUpdater({
         setStatusMessage(controller.signal.aborted
           ? t('spu.st.indexStoppedPartial').replace('{n}', String(cleaned.length))
           : t('spu.st.indexTruncated').replace('{n}', String(cleaned.length)));
+        if (!sawSentinel) setTruncatedPane(cleaned);   // see runRedistribute
         return false;
       }
 
@@ -2039,6 +2099,17 @@ export default function SystemPromptUpdater({
         const msg = t('spu.st.emptyResponse');
         setUpdateStatus({ state: 'error', message: msg });
         setStatusMessage(t('spu.st.genesisNoText'));
+        return null;
+      }
+
+      // Same guard as runUpdate() — see the long note there. Genesis writes the
+      // FIRST generation of a being's soul, so an unnoticed truncation here is
+      // the worst version of it: there is no earlier file to fall back to.
+      if (!accum.includes(END_SENTINEL) && !controller.signal.aborted) {
+        setRightText(cleaned);
+        setTruncatedPane(cleaned);
+        setUpdateStatus({ state: 'error', message: t('spu.st.truncatedBadge') });
+        setStatusMessage(t('spu.st.genesisTruncated').replace('{n}', String(cleaned.length)));
         return null;
       }
 
@@ -2354,6 +2425,27 @@ export default function SystemPromptUpdater({
 
   // ── Go to Next Conversation ──────────────────────────────────────────────
   const goToNextConversation = useCallback(async () => {
+    // The ONE reader of `truncatedPane`. This click writes the right pane to
+    // soul/<N>.md, which becomes the being's standing identity for every turn
+    // of the next generation — so "the run that produced this text never
+    // finished" has to be said HERE, not only in a status line that has already
+    // scrolled past. The status line is what failed on 2026-10-21: it said
+    // "done", so there was nothing to read.
+    //
+    // A confirm and not a hard block: the pane is editable, and finishing a
+    // truncated soul by hand is a legitimate thing to do. The dialog reports
+    // what happened; it does not claim to know whether the text is now good.
+    if (truncatedPane !== null && rightText.trim() === truncatedPane.trim()) {
+      const ok = window.confirm(
+        t('spu.commitTruncatedConfirm')
+          .replace('{n}', String(rightText.trim().length))
+          .replace('{file}', `${baseName}_${currentIndex + 1}.md`)
+      );
+      if (!ok) {
+        setStatusMessage(t('spu.commitTruncatedCancelled'));
+        return;
+      }
+    }
     setLoading(true);
     setStatusMessage('Saving current + next prompt files…');
     try {
@@ -2410,7 +2502,7 @@ export default function SystemPromptUpdater({
     } finally {
       setLoading(false);
     }
-  }, [baseName, currentIndex, deletionPatterns, header, leftText, rightText, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
+  }, [baseName, currentIndex, deletionPatterns, header, leftText, rightText, truncatedPane, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
 
   if (!open) return null;
 

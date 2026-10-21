@@ -1615,6 +1615,14 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.st.redistNoText': 'Redistribute returned no text — model may have refused or hit a filter.',
   'spu.st.redistStoppedPartial': 'Redistribute stopped — kept the raw partial output ({n} chars) in the right pane. NO summary file was written. Tick "Continue from the right-side text" to resume.',
   'spu.st.redistTruncated': 'Output ended without the completion marker — treating it as truncated. Kept the raw output ({n} chars); NO summary file was written. Tick "Continue from the right-side text" and re-run.',
+  'spu.st.truncatedBadge': 'incomplete — no completion marker',
+  'spu.st.updateTruncated': 'Output ended without the completion marker — treating it as truncated. Kept the RAW output ({n} chars) in the right pane; the Layers were NOT split out, and the auto chain was stopped before the summary step. Do NOT commit this as a generation — tick "Continue from the right-side text" and re-run.',
+  'spu.st.genesisTruncated': 'Genesis ended without the completion marker — treating it as truncated. Kept the RAW output ({n} chars) in the right pane. Do NOT commit this as the first generation — tick "Continue from the right-side text" and re-run.',
+  'spu.commitTruncatedConfirm':
+    'The run that produced the right-side text ended WITHOUT the completion marker, so it is very likely cut off part-way ({n} chars).\n\n' +
+    'Writing it to {file} makes it the standing identity this being is given on every turn of the next generation.\n\n' +
+    'Write it anyway?',
+  'spu.commitTruncatedCancelled': 'Cancelled — nothing was written. The right pane still holds the unfinished text; tick "Continue from the right-side text" and re-run.',
   'spu.st.redistNoLayer4': 'Redistribute finished but the output contained no Layer 4 heading — Layers 1-3 are in the right pane, no summary file was written.',
   'spu.st.redistNoEntries': 'Redistribute finished but no "### <title>" entries were found inside Layer 4 — no summary file was written.',
   'spu.st.redistBackingUp': 'Backing up {folder} summaries and writing {n} entries...',
@@ -3184,6 +3192,14 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.redistNoText': '再配分エージェントがテキストを返しませんでした — モデルが拒否したか、フィルターに掛かった可能性があります。',
   'spu.st.redistStoppedPartial': '再配分を停止しました — 未加工の途中出力（{n} 文字）を右ペインに残しています。要約ファイルは書き込んでいません。「右側のテキストから続ける」にチェックして再開してください。',
   'spu.st.redistTruncated': '完了マーカーが無いまま出力が終わりました — 途中で切れたものとして扱います。未加工の出力（{n} 文字）は残しましたが、要約ファイルは書き込んでいません。「右側のテキストから続ける」にチェックして再実行してください。',
+  'spu.st.truncatedBadge': '未完成 — 完了マーカーなし',
+  'spu.st.updateTruncated': '完了マーカーが無いまま出力が終わりました — 途中で切れたものとして扱います。未加工の出力（{n} 文字）を右ペインに残し、Layer の切り出しは行わず、自動連鎖も要約の手前で止めました。これを世代としてコミットしないこと — 「右側のテキストから続ける」にチェックして再実行してください。',
+  'spu.st.genesisTruncated': '完了マーカーが無いままジェネシスの出力が終わりました — 途中で切れたものとして扱います。未加工の出力（{n} 文字）を右ペインに残しました。これを第1世代としてコミットしないこと — 「右側のテキストから続ける」にチェックして再実行してください。',
+  'spu.commitTruncatedConfirm':
+    '右側のテキストを作った実行は、完了マーカーが無いまま終わっています（{n} 文字）。途中で切れている可能性が非常に高いです。\n\n' +
+    '{file} に書き込むと、それが次の世代で毎ターン渡される常設のアイデンティティになります。\n\n' +
+    'それでも書き込みますか？',
+  'spu.commitTruncatedCancelled': '中止しました — 何も書き込んでいません。右ペインには未完成のテキストが残っています。「右側のテキストから続ける」にチェックして再実行してください。',
   'spu.st.redistNoLayer4': '再配分は終わりましたが、出力に Layer 4 の見出しがありませんでした — Layer 1〜3 は右ペインにあります。要約ファイルは書き込んでいません。',
   'spu.st.redistNoEntries': '再配分は終わりましたが、Layer 4 の中に「### <タイトル>」の項目が見つかりませんでした — 要約ファイルは書き込んでいません。',
   'spu.st.redistBackingUp': '{folder} の要約をバックアップし、{n} 件を書き込んでいます…',
