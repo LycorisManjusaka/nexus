@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import { getBuildInfo, invalidateBuildInfo } from '@/lib/buildInfo';
-import { classifyChangedFiles } from '@/lib/updateClassify';
+import { classifyChangedFiles, parseChangedFiles } from '@/lib/updateClassify';
 
 const run = promisify(execFile);
 
@@ -169,7 +169,7 @@ export async function POST() {
   }
 
   const diff = await git(root, ['diff', '--name-only', beforeSha, afterSha], 60_000);
-  const changed = diff.stdout.split('\n').map(s => s.trim()).filter(Boolean);
+  const changed = parseChangedFiles(diff.stdout);
 
   return NextResponse.json({
     ok: true,

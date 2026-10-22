@@ -12,6 +12,25 @@
  *     web-app/package-lock.json
  */
 
+/**
+ * `git diff --name-only` stdout → one path per entry.
+ *
+ * Three operations, extracted anyway: it sits on the ONE branch of
+ * /api/update that cannot be exercised on an install that is already up to
+ * date, so leaving it inline meant the first real pull would be its first
+ * execution. Here it can be measured against captured git output.
+ *
+ * Blank lines are dropped rather than becoming "" entries — an empty string
+ * would make `.split('/').pop()` return "" and quietly participate in every
+ * comparison below.
+ */
+export function parseChangedFiles(stdout: string): string[] {
+  return String(stdout || '')
+    .split('\n')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
 export interface UpdateObligations {
   /** `npm ci` is needed. NEVER run automatically: it takes minutes and
    *  removes node_modules out from under the running server. */
