@@ -71,8 +71,18 @@ reads his own words back as hers. Use headphones.
 
 `recognize_ru` ships with `40`, copied from the proven real-microphone row
 (`recognize_mic`) rather than invented. **It is not transferable between
-microphones.** Measured on a virtual cable, `40` gated the entire signal
-*including speech* — zero phrases of any kind.
+microphones** — the right value depends on the absolute level of the signal that
+particular device delivers.
+
+> **Retracted, 2026-10-22.** An earlier draft of this file said `40` had been
+> *measured* to gate the entire signal including speech. That was wrong. Two
+> runs in a ten-minute window produced zero audio, and I attributed one of them
+> to the threshold; both were actually playing into the wrong device, because
+> the probe took a device **index** and the enumeration was flapping (an HDMI
+> audio endpoint appearing and disappearing as a monitor slept and woke). Re-run
+> with the device resolved **by name**, threshold `40` passed every phrase.
+> The claim is withdrawn; the "not transferable" part stands on its own.
+> The probe now refuses to play rather than fall back to a default device.
 
 To set it for her microphone and her room:
 
