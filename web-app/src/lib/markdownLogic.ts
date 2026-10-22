@@ -61,6 +61,229 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
   return md.trim() + '\n';
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Import dialects
+//
+// Three on-disk shapes carry the same thing — a transcript. NEXUS writes one
+// of them; the other two come out of browser extensions that export a chat
+// from a vendor's web app:
+//
+//   nexus              "[Name]:" on its own line            (exportToMarkdown)
+//   deepseek-exporter  "You:" / "DeepSeek:"                 (Chrome "DeepSeek Chat Exporter")
+//   generic-plugin     "# you asked" / "# <family> response" (older multi-vendor plugin)
+//
+// There is ONE parser. A dialect only changes which line is a message
+// boundary and which lines are the exporter's own furniture; everything after
+// that — timestamps, [thinking] blocks, [username] tags, roles — is the same
+// code for all three. A second parser would be a second place for those rules
+// to drift.
+//
+// Why boundary-detection and NOT a text-to-text normalisation into "[Name]:":
+// rewriting a foreign log into the native shape makes every body line that
+// already looks like a native header ("[Anonymous]:" inside a reply) into a
+// real boundary. Detecting per-dialect means a native-looking body line in a
+// DeepSeek export is just text, because in that dialect "[X]:" is not a
+// boundary at all.
+// ───────────────────────────────────────────────────────────────────────────
+
+export type ImportDialect = 'nexus' | 'deepseek-exporter' | 'generic-plugin';
+
+export interface DialectInfo {
+  dialect: ImportDialect;
+  /** deepseek-exporter: the assistant-side label actually found ("DeepSeek"). */
+  assistantLabel?: string;
+  /** deepseek-exporter: the human-side label actually found ("You"). */
+  userLabel?: string;
+  /** How many boundary lines the detector saw — shown in the import plan. */
+  boundaries: number;
+}
+
+/** "You:"-style label line. Deliberately narrow: a short, single-token-ish
+ *  label alone on the line with a trailing colon. A sentence ending in a colon
+ *  does not match (spaces are allowed but the whole line is capped at 31 chars
+ *  and must start with a letter). */
+const DIALECT_LABEL_RE = /^([A-Za-zÀ-ɏЀ-ӿ][\w .\-À-ɏЀ-ӿ]{0,30}):[ \t]*$/;
+const GENERIC_USER_RE = /^#[ \t]*you asked[ \t]*$/i;
+const GENERIC_AI_RE = /^#[ \t]*(.+?)[ \t]+response[ \t]*$/i;
+
+function normName(s: string): string {
+  return s
+    .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Which dialect is this file?
+ *
+ * THE FILE DECLARES ITS DIALECT ON ITS FIRST NON-BLANK LINE. All three
+ * producers put a speaker boundary there and nowhere else can they put one:
+ * `exportToMarkdown` opens with "[Name]:", the DeepSeek exporter with "You:",
+ * the older plugin with "# you asked".
+ *
+ * Counting evidence across the whole file was tried first and is WRONG — a
+ * DeepSeek export whose reply happens to contain the line "[Anonymous]:" has
+ * one recognised native header, so "any native header wins" made the whole
+ * transcript native and cut it at that one false boundary. Measured, not
+ * reasoned: the test for exactly that case failed. Content can imitate any
+ * dialect's boundary; only the FIRST line is written by the producer before
+ * any content exists. (Same shape as `thinkTagSplitter`: a stream declares
+ * whether it uses tags with its first bytes, not by what appears later.)
+ *
+ * Falling off the end means native, which is what every file did before this
+ * function existed — including a hand-written file with a preamble above its
+ * first header, which still reaches the native path through clause 4.
+ */
+export function detectDialect(
+  markdown: string,
+  customAiName?: string,
+  validUserNames: string[] = [],
+): DialectInfo {
+  const lines = markdown.split(/\r?\n/);
+  const firstLine = lines.find((l) => l.trim() !== '') ?? '';
+
+  const validSet = new Set(
+    [customAiName || '', 'User', 'Anonymous', ...validUserNames].filter(Boolean).map(normName),
+  );
+  const isRecognised = (h: string) => {
+    const parts = h.split(/[,、]/).map(normName).filter(Boolean);
+    return parts.length > 0 && parts.every((p) => validSet.has(p));
+  };
+  const nativeHeaderOf = (line: string) => {
+    const m = line.match(/^\[(.+)\]:[ \t]*$/);
+    return m && isRecognised(m[1].trim()) ? m[1].trim() : null;
+  };
+  let nativeCount = 0;
+  for (const line of lines) if (nativeHeaderOf(line)) nativeCount++;
+
+  // 1. Native — every NEXUS export opens with its first speaker header.
+  if (nativeHeaderOf(firstLine)) return { dialect: 'nexus', boundaries: nativeCount };
+
+  // 2. Older multi-vendor plugin. Both halves must exist: a document that
+  //    merely contains "# Foo response" as a heading is not a transcript.
+  let gpUser = 0, gpAi = 0;
+  for (const line of lines) {
+    if (GENERIC_USER_RE.test(line)) gpUser++;
+    else if (GENERIC_AI_RE.test(line)) gpAi++;
+  }
+  if ((GENERIC_USER_RE.test(firstLine) || GENERIC_AI_RE.test(firstLine)) && gpUser > 0 && gpAi > 0) {
+    return { dialect: 'generic-plugin', boundaries: gpUser + gpAi };
+  }
+
+  // 3. DeepSeek-style "You:" / "<Label>:". The exporter alternates, so the
+  //    assistant label is the non-"You" label whose count is within one of
+  //    the "You" count. Any OTHER label line ("Note:", "Example:") fails that
+  //    test and stays ordinary body text — which is the correct outcome, not
+  //    a missed boundary.
+  const firstLabel = firstLine.match(DIALECT_LABEL_RE);
+  if (firstLabel) {
+    const labelCounts = new Map<string, { raw: string; n: number }>();
+    for (const line of lines) {
+      const m = line.match(DIALECT_LABEL_RE);
+      if (!m) continue;
+      const raw = m[1].trim();
+      const k = normName(raw);
+      const e = labelCounts.get(k);
+      if (e) e.n++; else labelCounts.set(k, { raw, n: 1 });
+    }
+    // The human side is whatever label opens the file; "You" is what the
+    // Chrome exporter writes, but nothing here is hard-coded to that word.
+    const userKey = normName(firstLabel[1]);
+    const you = labelCounts.get(userKey);
+    if (you && you.n > 0) {
+      let best: { raw: string; n: number } | null = null;
+      for (const [k, v] of labelCounts) {
+        if (k === userKey) continue;
+        if (Math.abs(v.n - you.n) > 1) continue;
+        if (!best || v.n > best.n) best = v;
+      }
+      if (best) {
+        return {
+          dialect: 'deepseek-exporter',
+          userLabel: you.raw,
+          assistantLabel: best.raw,
+          boundaries: you.n + best.n,
+        };
+      }
+    }
+  }
+
+  // 4. Native by default: a hand-written file with a preamble, a file with no
+  //    headers at all (one "Anonymous" message), or anything unrecognised.
+  return { dialect: 'nexus', boundaries: nativeCount };
+}
+
+export interface ParseOptions {
+  /** Result of detectDialect(). Omitted → native, exactly as before. */
+  dialect?: DialectInfo;
+  /** Who the human side becomes in a foreign dialect. Default "Anonymous". */
+  userName?: string;
+}
+
+/**
+ * Split a parsed transcript into conversations no larger than `cap` tokens.
+ *
+ * Why this is not optional and not a mode: `SystemPromptUpdater`'s
+ * `conversationLogText` concatenates EVERY original message with no cap of its
+ * own, so one oversized conversation is sent whole to the Layer-4 writer and
+ * the request itself is what fails. The cap is a property of the log, not a
+ * preference about tidiness.
+ *
+ * A message is never split. When a part has to end, any trailing USER turns
+ * move to the next part, so every part starts with a human turn and ends with
+ * a reply — a part that opened mid-reply would read as if its question had
+ * been lost.
+ *
+ * INVARIANT: a part exceeds `cap` only when it is a SINGLE message that alone
+ * exceeds it. (So an oversized message sits by itself and its reply opens the
+ * next part. Letting the reply join would enlarge an already-over-cap part
+ * for no stated reason — chosen deliberately, with a test on it.)
+ */
+export function planSplitByTokens(
+  messages: any[],
+  cap: number,
+  tokenOf: (m: any) => number,
+): any[][] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  if (!Number.isFinite(cap) || cap <= 0) return [messages];
+  const tok = (m: any) => Math.max(0, Number(tokenOf(m)) || 0);
+
+  const parts: any[][] = [];
+  let cur: any[] = [];
+  let sum = 0;
+  for (const m of messages) {
+    const t = tok(m);
+    if (cur.length > 0 && sum + t > cap) {
+      const carry: any[] = [];
+      while (cur.length > 1 && cur[cur.length - 1]?.role === 'user') {
+        carry.unshift(cur.pop());
+      }
+      parts.push(cur);
+      cur = carry;
+      sum = carry.reduce((a, x) => a + tok(x), 0);
+    }
+    cur.push(m);
+    sum += t;
+  }
+  if (cur.length) parts.push(cur);
+  return parts;
+}
+
+/**
+ * Title for part `i` (0-based) of `n`. One part keeps the file's own name;
+ * more than one gets "-1", "-2", … appended.
+ *
+ * MEASURED 2026-10-23: this shape already exists on disk — 先輩_1-1, 先輩_1-2,
+ * 先輩_1-3, 先輩_2-1 … (12 conversations). It is also deliberately OUTSIDE the
+ * generation chain: `numberedIdentityTitleIndex` matches `^<name>_(\d+)$`, so
+ * "Аналитик_1-2" is not a generation. Imported archives therefore cannot
+ * hijack "latest conversation" or the handover walk — which is what we want
+ * for material that is history, not the live thread.
+ */
+export function splitPartTitle(baseTitle: string, i: number, n: number): string {
+  return n <= 1 ? baseTitle : `${baseTitle}-${i + 1}`;
+}
+
 /**
  * `tokenModel` is the folder's `aiName` ("Claude", "Gemini", …) and is used
  * ONLY to pick a tokenizer profile for the thinking-token estimate. It is
@@ -70,7 +293,7 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
  * Message `tokens` stay 0 here on purpose: the caller recounts them against
  * the exact counter, which this pure function cannot reach.
  */
-export function parseMarkdown(markdown: string, customAiName?: string, validUserNames: string[] = [], tokenModel?: string) {
+export function parseMarkdown(markdown: string, customAiName?: string, validUserNames: string[] = [], tokenModel?: string, opts: ParseOptions = {}) {
   // Split on CRLF or LF so a "[Name]:\r" header from a Windows-edited file still
   // matches the header regex (a stray trailing \r otherwise breaks recognition).
   const lines = markdown.split(/\r?\n/);
@@ -81,11 +304,9 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
   // Normalize a header/name for comparison: fold full-width digits to ASCII,
   // trim, lowercase. Keeps matching tolerant of digit-width and case
   // differences (e.g. a "先輩_４６" header matches a "先輩_46" character name).
-  const norm = (s: string) =>
-    s
-      .replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
-      .trim()
-      .toLowerCase();
+  // One definition (`normName`, module scope) shared by the parser, the
+  // dialect detector and the diagnostic — there were three identical copies.
+  const norm = normName;
 
   // The ONLY headers that legitimately start a new message: the entity /
   // assistant (customAiName), the built-in "Anonymous" fallback header
@@ -210,9 +431,28 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
     }
   };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // ── Which line starts a new message, in this dialect ────────────────────
+  const dialect = opts.dialect?.dialect ?? 'nexus';
+  const importUserName = (opts.userName || '').trim() || 'Anonymous';
+  const importAiName = (customAiName || '').trim() || 'Assistant';
+  const dsUser = normName(opts.dialect?.userLabel || 'You');
+  const dsAi = normName(opts.dialect?.assistantLabel || '');
 
+  /** The speaker header this line opens, or null when it is body text. */
+  const boundaryOf = (line: string): string | null => {
+    if (dialect === 'deepseek-exporter') {
+      const m = line.match(DIALECT_LABEL_RE);
+      if (!m) return null;
+      const k = normName(m[1]);
+      if (k === dsUser) return importUserName;
+      if (dsAi && k === dsAi) return importAiName;
+      return null;
+    }
+    if (dialect === 'generic-plugin') {
+      if (GENERIC_USER_RE.test(line)) return importUserName;
+      if (GENERIC_AI_RE.test(line)) return importAiName;
+      return null;
+    }
     // A new message starts ONLY at a "[Name]:" line — the name alone on the line,
     // trailing colon, nothing after it — AND only when the name is a recognized
     // speaker (entity / "User" / character_map). NOTHING else is a boundary:
@@ -220,15 +460,43 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
     // unrecognized "[x]:" lines are all ordinary body text. (The legacy "## Name"
     // speaker format is intentionally no longer honored — only "[Name]:".)
     const bracketMatch = line.match(/^\[(.+)\]:[ \t]*$/);
+    if (bracketMatch && isRecognizedHeader(bracketMatch[1].trim())) return bracketMatch[1].trim();
+    return null;
+  };
 
-    if (bracketMatch && isRecognizedHeader(bracketMatch[1].trim())) {
+  // ── The exporter's own furniture, dropped ONLY where it cannot be content ─
+  // "2 / 2" is DeepSeek's regenerate counter; "---" ends a turn in the older
+  // plugin's output. Both shapes are also legal body text ("3 / 4" in prose, a
+  // markdown horizontal rule inside a long reply), so neither is dropped on
+  // sight: a line is furniture only when the next non-blank line is a speaker
+  // boundary or the end of the file — i.e. when it sits in the gap BETWEEN
+  // turns, which is the only place the exporter writes it.
+  const furnitureRe =
+    dialect === 'deepseek-exporter' ? /^[ \t]*\d+[ \t]*\/[ \t]*\d+[ \t]*$/ :
+    dialect === 'generic-plugin'    ? /^[ \t]*-{3,}[ \t]*$/ :
+    null;
+  const sitsInTheGap = (i: number): boolean => {
+    for (let j = i + 1; j < lines.length; j++) {
+      if (lines[j].trim() === '') continue;
+      return boundaryOf(lines[j]) !== null;
+    }
+    return true; // end of file
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const header = boundaryOf(line);
+
+    if (header !== null) {
       if (currentHeader) {
         addMessage();
       } else {
         flushOrphan();
       }
-      currentHeader = bracketMatch[1].trim();
+      currentHeader = header;
       currentContent = [];
+    } else if (furnitureRe && furnitureRe.test(line) && sitsInTheGap(i)) {
+      // drop
     } else {
       currentContent.push(line);
     }
@@ -259,9 +527,10 @@ export function diagnoseMarkdown(
   recognizedNames: string[];
   headersFound: { text: string; recognized: boolean }[];
   nonEmpty: boolean;
+  /** Which dialect the detector settled on — so a refusal names what was tried. */
+  dialect: ImportDialect;
 } {
-  const norm = (s: string) =>
-    s.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).trim().toLowerCase();
+  const norm = normName;
   const recognizedNames = [customAiName || '', 'User', 'Anonymous', ...validUserNames].filter(Boolean);
   const validSet = new Set(recognizedNames.map(norm));
   const isRecognized = (h: string): boolean => {
@@ -278,10 +547,12 @@ export function diagnoseMarkdown(
     }
   }
 
+  const info = detectDialect(markdown, customAiName, validUserNames);
   return {
-    messageCount: parseMarkdown(markdown, customAiName, validUserNames).length,
+    messageCount: parseMarkdown(markdown, customAiName, validUserNames, undefined, { dialect: info }).length,
     recognizedNames,
     headersFound,
     nonEmpty: markdown.trim().length > 0,
+    dialect: info.dialect,
   };
 }

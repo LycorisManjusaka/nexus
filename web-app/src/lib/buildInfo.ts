@@ -134,3 +134,16 @@ export async function getBuildInfo(): Promise<BuildInfo> {
   cache = { at: Date.now(), value };
   return value;
 }
+
+/**
+ * Drop the cache NOW.
+ *
+ * The TTL exists so a settings dialog does not stat `.git` on every render;
+ * it is wrong in exactly one situation — the moment something in this process
+ * MOVED the checkout. `/api/update` calls this straight after a successful
+ * pull, so the build label it reports back is the build that is now on disk
+ * and not the one from up to a minute ago.
+ */
+export function invalidateBuildInfo(): void {
+  cache = null;
+}

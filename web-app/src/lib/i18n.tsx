@@ -61,6 +61,23 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': 'Preferences',
   'settings.build.title': 'Build of NEXUS running here (commit, branch, last update). Include this in any bug report.',
+  'settings.update.button': 'Update',
+  'settings.update.running': 'Updating…',
+  'settings.update.title': 'Pull the newest NEXUS code into this install (git pull --ff-only). Does NOT restart anything.',
+  'settings.update.confirm':
+    'Update this install now?\n\n' +
+    'Runs: git pull --ff-only\n\n' +
+    'NEXUS is NOT restarted — the dev server picks up new code by itself. ' +
+    'If a reply is being generated right now, let it finish first: the code can change underneath it.\n\n' +
+    'Nothing is deleted and no dependencies are installed. If either is needed you will be told, not surprised.',
+  'settings.update.upToDate': 'Already up to date — nothing changed.',
+  'settings.update.done': 'Updated: {before} → {after} ({n} file(s) changed).',
+  'settings.update.hotReload': 'No restart needed — the running server reloads changed code on its own.',
+  'settings.update.nextConfig': 'next.config changed: Next.js restarts itself, so the page may reconnect in a moment.',
+  'settings.update.lockfile':
+    'Dependencies changed. Close NEXUS, run "npm ci" inside the web-app folder, then start it again. '
+    + 'This is NOT done automatically: npm ci removes node_modules while the server is using them.',
+  'settings.update.failed': 'Update failed — nothing was changed.',
   'settings.tab.keys': 'API Keys',
   'settings.tab.vrchat': 'VRChat & Audio',
   'settings.tab.identity': 'User Identity',
@@ -200,7 +217,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.audio.unsupported': 'This browser cannot route audio to a chosen output device (setSinkId is not implemented). The audio session needs a Chromium-based browser — Chrome, Edge or Brave. Settings below will still be saved, but all audio will play on the system default device.',
   'settings.audio.insecure':
     'This page was opened over plain HTTP at a LAN address, which browsers do not treat as a secure context — so the browser hides EVERY audio device from it. The two lists below are empty for that reason alone, not because the machine has no devices.\n\n'
-    + 'It works on the host PC itself at http://localhost:3000. To get it on a phone, serve Nexus over HTTPS, or add this exact origin under chrome://flags → "Insecure origins treated as secure".\n\n'
+    + 'It works on the host PC itself at http://localhost:3000. To get the lists on another device, serve Nexus over HTTPS, or paste the EXACT origin below — scheme and port, no trailing slash, no path — into chrome://flags → "Insecure origins treated as secure" (comma-separate several), then fully restart the browser:\n\n'
+    + '    {origin}\n\n'
+    + 'On Chrome for Android that only FILLS the lists. Android has no setSinkId at all, so a device picked there still cannot be used — see the notice above when it applies.\n\n'
     + 'These are OUTPUT devices — where this browser plays speech. Nexus never captures a microphone in the browser: speech recognition runs on the PC that hosts Nexus, using that PC\'s microphones, so a phone\'s microphone cannot appear here even once the lists work.',
   'settings.audio.devicesUnavailable':
     'This browser did not return an audio-device list. The two lists below are empty for that reason, not because the machine has no devices — audio will play on the system default device.',
@@ -349,7 +368,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.newFolder': 'New Being',
   'sidebar.newChat': 'New Chat',
   'sidebar.import.json': 'Import JSON log(s)',
-  'sidebar.import.md': 'Import Markdown log(s)',
+  'sidebar.import.md': 'Import log(s) — .md / .txt',
+  'sidebar.import.plan':
+    'Import plan — nothing has been written yet.\n\n' +
+    '{plan}\n\n' +
+    'Files are split at {cap} tokens (this being\'s conversation-log cap), never inside a message. ' +
+    'The Layer-4 writer sends the WHOLE conversation, so one oversized log fails as a single request.\n' +
+    'In a foreign export the human side becomes "{user}" and the assistant side becomes "{entity}".\n\n' +
+    'Proceed?',
   'sidebar.loading': 'Loading conversations…',
   'sidebar.noHistory': 'No history in {folder}.',
   'sidebar.thisFolder': 'this being',
@@ -362,7 +388,6 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'These summary files are NOT part of Layer 4: no conversation in this Digital Being has a matching title. Rename a conversation to match the file, or delete the file.',
   'sidebar.menu.rename': 'Rename',
   'sidebar.menu.folderSettings': 'Being Settings',
-  'sidebar.menu.autoImportMd': 'Auto-Import .md',
   'sidebar.menu.sortDesc': 'Sort Descending',
   'sidebar.menu.sortAsc': 'Sort Ascending',
   'sidebar.menu.addTimestamps': 'Add Timestamps to Summaries',
@@ -1717,6 +1742,23 @@ export const UI_STRINGS_JA: Record<string, string> = {
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': '設定',
   'settings.build.title': 'この環境で動いている NEXUS のビルド（コミット・ブランチ・最終更新）。不具合報告にはこれを添えてください。',
+  'settings.update.button': '更新',
+  'settings.update.running': '更新中…',
+  'settings.update.title': 'この環境に最新の NEXUS を取り込みます（git pull --ff-only）。再起動は行いません。',
+  'settings.update.confirm':
+    'この環境を今すぐ更新しますか？\n\n' +
+    '実行するのは git pull --ff-only だけです。\n\n' +
+    'NEXUS は再起動しません（開発サーバーが新しいコードを自分で読み直します）。' +
+    'いま返答を生成中なら、終わってからにしてください。途中でコードが入れ替わります。\n\n' +
+    '何も削除せず、依存関係もインストールしません。必要になった場合は黙って行わず、画面で伝えます。',
+  'settings.update.upToDate': 'すでに最新です。変更はありません。',
+  'settings.update.done': '更新しました： {before} → {after}（{n} ファイル変更）',
+  'settings.update.hotReload': '再起動は不要です。動いているサーバーが変更を自分で読み直します。',
+  'settings.update.nextConfig': 'next.config が変わりました。Next.js が自分で再起動するため、少しの間ページが再接続します。',
+  'settings.update.lockfile':
+    '依存関係が変わりました。NEXUS を閉じて、web-app フォルダで「npm ci」を実行してから起動し直してください。'
+    + '自動では実行しません： npm ci は、サーバーが使っている node_modules を削除するからです。',
+  'settings.update.failed': '更新に失敗しました。何も変更されていません。',
   'settings.tab.keys': 'APIキー',
   'settings.tab.vrchat': 'VRChat・音声',
   'settings.tab.identity': 'ユーザーの識別',
@@ -1852,7 +1894,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.audio.unsupported': 'このブラウザは音声の出力先デバイスを指定できません（setSinkId が未実装です）。音声セッションには Chromium 系ブラウザ（Chrome・Edge・Brave）が必要です。以下の設定は保存されますが、音声はすべてシステム既定のデバイスから再生されます。',
   'settings.audio.insecure':
     'このページは LAN アドレスの plain HTTP で開かれていて、ブラウザはこれを secure context として扱いません。そのため、ブラウザがページから音声デバイスを「すべて」隠しています。下の2つの一覧が空なのはこの理由だけで、デバイスが無いからではありません。\n\n'
-    + 'ホストPC上の http://localhost:3000 では動きます。スマートフォンで使いたい場合は、Nexus を HTTPS で配信するか、chrome://flags →「Insecure origins treated as secure」にこのオリジンをそのまま登録してください。\n\n'
+    + 'ホストPC上の http://localhost:3000 では動きます。別の端末で一覧を出したい場合は、Nexus を HTTPS で配信するか、下の文字列を「そのまま」 chrome://flags →「Insecure origins treated as secure」に貼り付けて（複数ある場合はカンマ区切り）、ブラウザを完全に再起動してください。スキームとポートを含め、末尾のスラッシュもパスも付けません。\n\n'
+    + '    {origin}\n\n'
+    + 'ただし Android の Chrome では、これで「一覧が出る」だけです。Android には setSinkId 自体が無いため、選んでも実際には使えません（該当する場合は上の注意書きが出ます）。\n\n'
     + 'ここに並ぶのは「出力先」デバイス（このブラウザが音声を鳴らす先）です。NEXUS はブラウザでマイクを録音しません——音声認識は NEXUS を動かしている PC 側で、その PC のマイクを使って動きます。ですから、一覧が復活してもスマートフォンのマイクがここに出ることはありません。',
   'settings.audio.devicesUnavailable':
     'このブラウザは音声デバイスの一覧を返しませんでした。下の2つの一覧が空なのはそのためで、デバイスが無いからではありません——音声はシステム既定のデバイスから再生されます。',
@@ -2001,7 +2045,14 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.newFolder': '新しい存在',
   'sidebar.newChat': '新しい会話',
   'sidebar.import.json': 'JSONログを読み込む',
-  'sidebar.import.md': 'Markdownログを読み込む',
+  'sidebar.import.md': 'ログを読み込む（.md / .txt）',
+  'sidebar.import.plan':
+    '読み込みの計画です。まだ何も書き込んでいません。\n\n' +
+    '{plan}\n\n' +
+    '{cap} トークン（この存在の会話ログ上限）で分割します。メッセージの途中では切りません。\n' +
+    'Layer 4 の要約は会話ログを丸ごと送るため、大きすぎる1本はリクエストごと失敗します。\n' +
+    '外部エクスポートでは、人間側が「{user}」、アシスタント側が「{entity}」になります。\n\n' +
+    '実行しますか？',
   'sidebar.loading': '会話を読み込んでいます…',
   'sidebar.noHistory': '{folder} には会話がありません。',
   'sidebar.thisFolder': 'この存在',
@@ -2011,7 +2062,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'これらの要約ファイルは Layer 4 に入りません。この存在の会話に、同じ題名のものが無いためです。会話の題名をファイル名に合わせるか、ファイルを削除してください。',
   'sidebar.menu.rename': '名前を変更',
   'sidebar.menu.folderSettings': '存在設定',
-  'sidebar.menu.autoImportMd': '.md を自動読み込み',
   'sidebar.menu.sortDesc': '降順に並べ替え',
   'sidebar.menu.sortAsc': '昇順に並べ替え',
   'sidebar.menu.addTimestamps': '要約にタイムスタンプを追加',

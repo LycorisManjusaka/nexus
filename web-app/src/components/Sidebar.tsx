@@ -4,7 +4,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock, HelpCircle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
-import { parseMarkdown, diagnoseMarkdown } from '@/lib/markdownLogic';
+import {
+  parseMarkdown,
+  diagnoseMarkdown,
+  detectDialect,
+  planSplitByTokens,
+  splitPartTitle,
+  type DialectInfo,
+} from '@/lib/markdownLogic';
 import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
@@ -15,6 +22,7 @@ import {
   LOG_CAP_MIN_UNITS,
   LOG_CAP_MAX_UNITS,
   clampLogCapUnits,
+  messageTextTokens,
 } from '@/lib/handoverRestore';
 import { useT, Tx } from '@/lib/i18n';
 import { useDevice } from './DeviceProvider';
@@ -350,7 +358,6 @@ export default function Sidebar({
     setFolderMenuOpen(false);
   };
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const importMdRef = useRef<HTMLInputElement>(null);
   const importJsonRef = useRef<HTMLInputElement>(null);
 
@@ -464,7 +471,6 @@ export default function Sidebar({
     // picking the same file again fires no change event, and the reader would
     // read that silence as the import being broken rather than declined.
     if (!confirmActionIfBusy()) {
-      if (fileInputRef.current) fileInputRef.current.value = '';
       if (importMdRef.current) importMdRef.current.value = '';
       return;
     }
@@ -503,15 +509,51 @@ export default function Sidebar({
             .filter((n: any): n is string => typeof n === 'string' && n.trim().length > 0);
         }
       } catch {}
+
+      // Who the human side of a FOREIGN-dialect log becomes. A DeepSeek export
+      // says "You:", which is a pronoun, not a name — the house's answer to
+      // "who is speaking right now" is the selected user identity, the same
+      // file the input area and the voice pipeline read. Native .md files are
+      // unaffected: they carry real speaker names already.
+      let importUserName = 'Anonymous';
+      try {
+        const ur = await fetch('/api/chara/current');
+        if (ur.ok) {
+          const ud = await ur.json();
+          if (typeof ud?.name === 'string' && ud.name.trim()) importUserName = ud.name.trim();
+        }
+      } catch {}
+
+      // The tokenizer profile is the folder's aiName, not its display name
+      // (the folder NAME is what matches speaker headers). Same value feeds
+      // the split planner and /api/tokens so one screen never shows two scales.
+      const tokenModel = activeFolder.settings?.aiName || activeFolder.name || 'Claude';
+      const logCap = activeFolder.settings?.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+
+      // ── Phase 1: parse and PLAN. Nothing is written in this pass. ─────────
+      // Splitting and dialect detection both change what the import produces,
+      // and both are invisible once it has happened. So the plan is computed
+      // first, stated once, and only then carried out.
+      type ImportPlan = {
+        fileName: string;
+        title: string;
+        dialect: DialectInfo;
+        parts: any[][];
+        messages: number;
+        tokens: number;
+      };
+      const plans: ImportPlan[] = [];
+
       for (const file of filesArray) {
         try {
           const text = await file.text();
           const title = file.name.replace(/\.[^/.]+$/, "");
+          const dialect = detectDialect(text, activeFolder.name, validUserNames);
           // 4th arg picks the tokenizer profile for thinking-token estimates
           // only; it is the folder's aiName, not its display name (which the
           // 2nd arg already carries for speaker-header matching).
           const parsed = parseMarkdown(text, activeFolder.name, validUserNames,
-            activeFolder.settings?.aiName || activeFolder.name);
+            tokenModel, { dialect, userName: importUserName });
           if (parsed.length === 0) {
             // Explain the refusal instead of silently skipping. The usual cause:
             // the file's speaker headers don't match a recognized name (the
@@ -522,7 +564,9 @@ export default function Sidebar({
             if (!diag.nonEmpty) {
               reason = 'file is empty / whitespace only';
             } else if (diag.headersFound.length === 0) {
-              reason = 'no speaker headers found — expected "[Name]:" on its own line (or legacy "## Name")';
+              reason = 'no speaker headers found in any supported dialect — expected "[Name]:" on its own line, ' +
+                       'or "You:" / "<Assistant>:" (DeepSeek Chat Exporter), ' +
+                       'or "# you asked" / "# <family> response" (older multi-vendor plugin)';
             } else {
               reason = `no header matched a recognized speaker (unrecognized: ${unrecognized.map(n => `"${n}"`).join(', ')})`;
             }
@@ -539,48 +583,109 @@ export default function Sidebar({
             continue;
           }
 
-          // Compute tokens for every imported message — parseMarkdown produces
-          // tokens:0 since it doesn't know which model is in use. Without this
-          // the imported conversation shows blank token counts until each
-          // message is manually edited.
-          const modelName = activeFolder.settings?.aiName || activeFolder.name || 'Claude';
-          await Promise.all(parsed.map(async (m) => {
-            try {
-              const r = await fetch('/api/tokens', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: m.content || '', model: modelName }),
-              });
-              if (r.ok) {
-                const d = await r.json();
-                const tok = d.tokens || 0;
-                m.tokens = tok;
-                m.textTokens = tok;
-              }
-            } catch {}
-          }));
-
-          const convoId = uuidv4();
-          await fetch('/api/logs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id: convoId,
-              logData: {
-                id: convoId,
-                folderName: activeFolder.name,
-                title,
-                messages: parsed,
-                aiName: activeFolder.name,
-                updatedAt: Date.now(),
-              },
-            }),
+          // Size the plan with the SAME function the conversation-log cap uses
+          // (`messageTextTokens`), not with /api/tokens. Two counters on one
+          // screen is the 2026-10-12 bug: the cap read stored numbers while
+          // the bar recomputed, and the two disagreed. The exact counter still
+          // runs below for the per-message display values.
+          const parts = planSplitByTokens(parsed, logCap, (m) => messageTextTokens(m, tokenModel));
+          plans.push({
+            fileName: file.name,
+            title,
+            dialect,
+            parts,
+            messages: parsed.length,
+            tokens: parsed.reduce((a, m) => a + messageTextTokens(m, tokenModel), 0),
           });
-          newIds.push(convoId);
         } catch (err: any) {
-          console.error(`[md-import] "${file.name}" threw during import:`, err);
+          console.error(`[md-import] "${file.name}" threw while parsing:`, err);
           importErrors.push(`${file.name}: ${err?.message || err}`);
           alert(withBuildTag(`${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}`));
+        }
+      }
+
+      // ── State the plan, but only when it is not the plain case ───────────
+      // A one-file, one-part, native import behaves exactly as it always has,
+      // with no extra click. The dialog appears only when the import will do
+      // something the file name does not already say: split, or read a
+      // foreign export.
+      const willSplit = plans.some(p => p.parts.length > 1);
+      const foreign = plans.some(p => p.dialect.dialect !== 'nexus');
+      if (plans.length > 0 && (willSplit || foreign)) {
+        const dialectName = (d: DialectInfo) =>
+          d.dialect === 'deepseek-exporter'
+            ? `${d.userLabel ?? 'You'}/${d.assistantLabel ?? '?'}`
+            : d.dialect === 'generic-plugin' ? '# … response'
+            : 'NEXUS';
+        const lines = plans.map(p =>
+          `• ${p.fileName}  [${dialectName(p.dialect)}]  ${p.messages} msg / ~${p.tokens.toLocaleString()} tok` +
+          (p.parts.length > 1
+            ? `\n    → ${p.parts.length} × ${splitPartTitle(p.title, 0, p.parts.length)} … ${splitPartTitle(p.title, p.parts.length - 1, p.parts.length)}`
+            : `\n    → ${p.title}`)
+        ).join('\n');
+        const msg = t('sidebar.import.plan')
+          .replace('{cap}', logCap.toLocaleString())
+          .replace('{user}', importUserName)
+          .replace('{entity}', activeFolder.name)
+          .replace('{plan}', lines);
+        if (!window.confirm(msg)) {
+          console.warn('[md-import] cancelled by user at the plan dialog.');
+          return;
+        }
+      }
+
+      // ── Phase 2: write ───────────────────────────────────────────────────
+      for (const p of plans) {
+        // Parts go in DESCENDING order for the same reason the file list is
+        // sorted descending: the block is prepended, so whatever is pushed
+        // first ends up on top, and "newest at top" is this sidebar's rule
+        // everywhere else. It also means selectConvo(newIds[0]) opens the
+        // part the archive ENDS on, which is where the thread continues.
+        for (let i = p.parts.length - 1; i >= 0; i--) {
+          const slice = p.parts[i];
+          try {
+            // Compute tokens for every imported message — parseMarkdown produces
+            // tokens:0 since it doesn't know which model is in use. Without this
+            // the imported conversation shows blank token counts until each
+            // message is manually edited.
+            await Promise.all(slice.map(async (m) => {
+              try {
+                const r = await fetch('/api/tokens', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: m.content || '', model: tokenModel }),
+                });
+                if (r.ok) {
+                  const d = await r.json();
+                  const tok = d.tokens || 0;
+                  m.tokens = tok;
+                  m.textTokens = tok;
+                }
+              } catch {}
+            }));
+
+            const convoId = uuidv4();
+            await fetch('/api/logs', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: convoId,
+                logData: {
+                  id: convoId,
+                  folderName: activeFolder.name,
+                  title: splitPartTitle(p.title, i, p.parts.length),
+                  messages: slice,
+                  aiName: activeFolder.name,
+                  updatedAt: Date.now(),
+                },
+              }),
+            });
+            newIds.push(convoId);
+          } catch (err: any) {
+            console.error(`[md-import] "${p.fileName}" part ${i + 1}/${p.parts.length} threw during import:`, err);
+            importErrors.push(`${p.fileName} (${i + 1}/${p.parts.length}): ${err?.message || err}`);
+            alert(withBuildTag(`${t('sidebar.import.failed')} "${p.fileName}": ${err?.message || err}`));
+          }
         }
       }
       if (newIds.length === 0) {
@@ -617,7 +722,6 @@ export default function Sidebar({
       selectConvo(newIds[0]);
     })();
 
-    if (fileInputRef.current) fileInputRef.current.value = '';
     setFolderMenuOpen(false);
   };
 
@@ -841,15 +945,12 @@ export default function Sidebar({
                   >
                     <Settings2 size={14} /> {t('sidebar.menu.folderSettings')}
                   </button>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      fileInputRef.current?.click();
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Upload size={14} /> {t('sidebar.menu.autoImportMd')}
-                  </button>
+                  {/* "Auto-Import .md" used to be here. It called the SAME
+                      function as "Import Markdown log(s)" below — its handler
+                      was literally `handleAutoImport(e)` with one extra line —
+                      and only differed in accepting ".md,.txt" instead of
+                      ".md,.markdown,.txt". Two entries, one behaviour, and the
+                      narrower one on top: removed 2026-10-23. */}
                   {/* Moved here from the row under "New conversation", where
                       they were two always-visible buttons eating sidebar
                       width. Same refs, same handlers — only the entry point
@@ -1508,15 +1609,6 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Hidden File Input for Auto-Import */}
-      <input 
-        type="file" 
-        multiple 
-        accept=".md,.txt" 
-        className="hidden" 
-        ref={fileInputRef} 
-        onChange={handleAutoImport}
-      />
     </div>
     </>
   );

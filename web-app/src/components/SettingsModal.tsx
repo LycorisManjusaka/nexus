@@ -1,13 +1,13 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users } from 'lucide-react';
+import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users, DownloadCloud, Loader2 } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
 import UserIdentityEditor from './UserIdentityEditor';
 import AdminLoginEditor from './AdminLoginEditor';
 import { useT, Tx } from '@/lib/i18n';
 import { ensureAudioPermission, supportsSinkId, invalidateDeviceCache } from '@/lib/audioSink';
-import { buildTag, loadBuildTag } from '@/lib/buildVersion';
+import { buildTag, loadBuildTag, setBuildTag } from '@/lib/buildVersion';
 import { AUDIO_SESSION_KEEP_MESSAGES_DEFAULT, resolveKeepMessages } from '@/lib/attachmentVisibility';
 import { resolveUiFontScale, uiFontScaleOptions, UI_FONT_SCALE_DEFAULT } from '@/lib/uiFontScale';
 
@@ -61,6 +61,38 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // icon — the whole point is that it can be copied into a message.
   const [buildLabel, setBuildLabel] = React.useState<string>(buildTag());
   React.useEffect(() => { loadBuildTag().then(setBuildLabel); }, []);
+
+  // ── Update this install (git pull --ff-only) ───────────────────────────
+  // Lives in the TITLE BAR, not in a tab: it is about the install, not about
+  // any one group of settings. Offered only when this really is a checkout —
+  // a button that can only ever answer "there is nothing to pull here" is a
+  // signpost pointing at no road.
+  const [canUpdate, setCanUpdate] = React.useState(false);
+  const [updating, setUpdating] = React.useState(false);
+  const [updateResult, setUpdateResult] = React.useState<any>(null);
+  React.useEffect(() => {
+    fetch('/api/update')
+      .then(r => r.json())
+      .then(d => setCanUpdate(!!d?.isRepo))
+      .catch(() => setCanUpdate(false));
+  }, []);
+
+  const runUpdate = async () => {
+    if (updating) return;
+    if (!window.confirm(t('settings.update.confirm'))) return;
+    setUpdating(true);
+    setUpdateResult(null);
+    try {
+      const r = await fetch('/api/update', { method: 'POST' });
+      const d = await r.json();
+      setUpdateResult(d);
+      if (d?.ok && d?.label) { setBuildTag(d.label); setBuildLabel(d.label); }
+    } catch (e: any) {
+      setUpdateResult({ ok: false, code: 'unreachable', message: String(e?.message || e) });
+    } finally {
+      setUpdating(false);
+    }
+  };
   // Resolved through the same helper NexusApp applies with, so the number drawn
   // in the picker is the number on screen. A stored value that is not one of
   // the offered steps gets its own option rather than being silently drawn as
@@ -96,6 +128,18 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // Why the device lists are empty, when the emptiness has a cause the reader
   // can act on. '' = nothing to report (devices enumerated normally).
   const [deviceBlockReason, setDeviceBlockReason] = useState<'insecure' | 'unavailable' | ''>('');
+  /**
+   * The insecure-origin explanation, with the ACTUAL origin substituted in.
+   *
+   * The instruction used to be "add this exact origin to chrome://flags",
+   * which is a signpost that does not say where it points — the reader then
+   * has to work out whether it means the hostname, the URL from the address
+   * bar, or something with a trailing slash. The page knows its own origin;
+   * printing it is shorter than any instruction and cannot be mistranscribed.
+   */
+  const insecureNotice = () =>
+    t('settings.audio.insecure').replace('{origin}',
+      typeof window !== 'undefined' ? window.location.origin : '');
   const [tab, setTab] = useState<TabId>('keys');
 
   // TTS engine executables. Stored SERVER-SIDE (local_data/tts_engines.json),
@@ -298,7 +342,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
       // phone to grant a permission they were never offered sends them to a
       // settings screen that has no such entry.
       alert(deviceBlockReason === 'insecure'
-        ? t('settings.audio.insecure')
+        ? insecureNotice()
         : t('settings.audio.permissionNeeded'));
       return;
     }
@@ -397,10 +441,81 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               </span>
             )}
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {canUpdate && (
+              <button
+                onClick={runUpdate}
+                disabled={updating}
+                title={t('settings.update.title')}
+                className="px-2 py-1 rounded text-xs font-medium flex items-center gap-1.5 border border-border
+                           text-muted-foreground hover:text-foreground hover:bg-muted transition-colors
+                           disabled:opacity-60 disabled:cursor-wait"
+              >
+                {updating
+                  ? <Loader2 size={14} className="animate-spin" />
+                  : <DownloadCloud size={14} />}
+                <span className="hidden sm:inline">{updating ? t('settings.update.running') : t('settings.update.button')}</span>
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+              <X size={20} />
+            </button>
+          </div>
         </div>
+
+        {/* Result of the last update, if any. Rendered between the title bar
+            and the tabs because it belongs to neither tab, and dismissible
+            rather than auto-hiding: the list of changed files is the one
+            moment anyone can see what an update actually did. */}
+        {updateResult && (
+          <div className={`px-6 py-3 text-xs border-b border-border shrink-0 max-h-48 overflow-auto ${
+            updateResult.ok ? 'bg-secondary/20' : 'bg-destructive/10'
+          }`}>
+            <div className="flex items-start gap-2">
+              <div className="flex-1 min-w-0 space-y-1">
+                {updateResult.ok && updateResult.upToDate && (
+                  <div className="font-medium">{t('settings.update.upToDate')}</div>
+                )}
+                {updateResult.ok && !updateResult.upToDate && (
+                  <>
+                    <div className="font-medium">
+                      {t('settings.update.done')
+                        .replace('{before}', String(updateResult.beforeSha || '').slice(0, 7))
+                        .replace('{after}', String(updateResult.afterSha || '').slice(0, 7))
+                        .replace('{n}', String((updateResult.changed || []).length))}
+                    </div>
+                    <div className="text-muted-foreground">{t('settings.update.hotReload')}</div>
+                    {updateResult.nextConfigChanged && (
+                      <div className="text-amber-500">{t('settings.update.nextConfig')}</div>
+                    )}
+                    {updateResult.lockfileChanged && (
+                      <div className="text-amber-500 whitespace-pre-wrap">{t('settings.update.lockfile')}</div>
+                    )}
+                    {(updateResult.changed || []).length > 0 && (
+                      <pre className="font-mono text-[10px] leading-4 text-muted-foreground whitespace-pre-wrap select-all">
+                        {(updateResult.changed as string[]).join('\n')}
+                      </pre>
+                    )}
+                  </>
+                )}
+                {!updateResult.ok && (
+                  <>
+                    <div className="font-medium">{t('settings.update.failed')}</div>
+                    <pre className="font-mono text-[10px] leading-4 whitespace-pre-wrap select-all">
+                      {String(updateResult.message || updateResult.code || '')}
+                    </pre>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={() => setUpdateResult(null)}
+                className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Tab bar */}
         <div className="px-6 pt-3 border-b border-border bg-secondary/10 shrink-0 flex gap-1">
@@ -585,7 +700,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                 reason has to arrive before the thing it explains. */}
             {deviceBlockReason !== '' && (
               <div className="text-xs leading-relaxed p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 whitespace-pre-line">
-                {t(deviceBlockReason === 'insecure' ? 'settings.audio.insecure' : 'settings.audio.devicesUnavailable')}
+                {deviceBlockReason === 'insecure' ? insecureNotice() : t('settings.audio.devicesUnavailable')}
               </div>
             )}
             <div>

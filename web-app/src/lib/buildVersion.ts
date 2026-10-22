@@ -39,6 +39,16 @@ export function buildTag(): string {
 }
 
 /**
+ * Replace the cached label after this tab caused the checkout to move
+ * (`/api/update`). Without this, every failure message produced for the rest
+ * of the session would carry the PREVIOUS build — a build tag whose whole job
+ * is to identify the running code, naming code that is no longer there.
+ */
+export function setBuildTag(label: string): void {
+  if (typeof label === 'string' && label.trim()) cachedLabel = label.trim();
+}
+
+/**
  * Append the build identifier to a message destined for a human to copy.
  * Used on failure paths only: when the report is the sole channel back to
  * whoever maintains this code, the build has to travel WITH the complaint.
