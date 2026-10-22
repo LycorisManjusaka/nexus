@@ -93,6 +93,9 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // setSinkId does not exist during SSR, so rendering the "unsupported" notice
   // straight from supportsSinkId() would flash it on every Chromium load too.
   const [sinkSupported, setSinkSupported] = useState<boolean | null>(null);
+  // Why the device lists are empty, when the emptiness has a cause the reader
+  // can act on. '' = nothing to report (devices enumerated normally).
+  const [deviceBlockReason, setDeviceBlockReason] = useState<'insecure' | 'unavailable' | ''>('');
   const [tab, setTab] = useState<TabId>('keys');
 
   // TTS engine executables. Stored SERVER-SIDE (local_data/tts_engines.json),
@@ -216,6 +219,31 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     });
 
     const getDevices = async () => {
+      // Audio devices are a SECURE-CONTEXT feature, and on a plain-HTTP LAN
+      // address -- which is how every phone in this house reaches Nexus --
+      // navigator.mediaDevices is not an empty list, it is UNDEFINED. The line
+      // below therefore threw
+      //   TypeError: Cannot read properties of undefined (reading 'enumerateDevices')
+      // the catch logged it with console.error (which the Next dev overlay
+      // patches, so it surfaced as a red "1 Issue" panel over the app), and the
+      // dropdowns stayed blank with nothing on screen saying why.
+      //
+      // Measured 2026-10-23, same browser build, ONE run, both origins:
+      //   http://127.0.0.1:3000    isSecureContext true   mediaDevices present
+      //   http://192.168.10.2:3000 isSecureContext false  mediaDevices undefined
+      //
+      // Same family as navigator.clipboard on this host (see lib/clipboard.ts).
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
+        // Name only the cause the measurement supports. isSecureContext===false
+        // is provable here; if the API is missing on a SECURE origin the cause
+        // is something else and saying "insecure" would be a wrong signpost.
+        setDeviceBlockReason(
+          typeof window !== 'undefined' && window.isSecureContext === false ? 'insecure' : 'unavailable'
+        );
+        setDevices([]);
+        return;
+      }
+      setDeviceBlockReason('');
       try {
         let devs = await navigator.mediaDevices.enumerateDevices();
         devs = devs.filter(d => d.kind === 'audiooutput');
@@ -240,7 +268,11 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
         }
         backfillDeviceLabels(devs);
       } catch(e) {
-        console.error("Error enumerating devices:", e);
+        // warn, not error: the Next dev overlay patches console.error only, and
+        // a condition the UI already explains on screen must not also raise a
+        // full-screen red panel over the app. Same reason as ttsWarn.
+        console.warn("Error enumerating devices:", e);
+        setDeviceBlockReason('unavailable');
       }
     };
     getDevices();
@@ -261,7 +293,13 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     // ritual the other depends on.
     const granted = await ensureAudioPermission();
     if (!granted) {
-      alert(t('settings.audio.permissionNeeded'));
+      // ensureAudioPermission() returns false both for "the user said no" and
+      // for "this origin has no mediaDevices at all". Telling someone on a
+      // phone to grant a permission they were never offered sends them to a
+      // settings screen that has no such entry.
+      alert(deviceBlockReason === 'insecure'
+        ? t('settings.audio.insecure')
+        : t('settings.audio.permissionNeeded'));
       return;
     }
     invalidateDeviceCache();
@@ -538,6 +576,16 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             {sinkSupported === false && (
               <div className="text-xs leading-relaxed p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400">
                 {t('settings.audio.unsupported')}
+              </div>
+            )}
+            {/* Why the two dropdowns below are empty. Without this the page
+                shows two working-looking selects with nothing in them, which
+                reads as "Nexus is broken" rather than "this address cannot see
+                audio devices". Shown ABOVE the selects, not after them: the
+                reason has to arrive before the thing it explains. */}
+            {deviceBlockReason !== '' && (
+              <div className="text-xs leading-relaxed p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 whitespace-pre-line">
+                {t(deviceBlockReason === 'insecure' ? 'settings.audio.insecure' : 'settings.audio.devicesUnavailable')}
               </div>
             )}
             <div>

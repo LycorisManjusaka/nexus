@@ -3,6 +3,7 @@ import asyncio
 import json
 import queue
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -74,11 +75,92 @@ class Config:
     # observation, not shared knowledge.
     DROP_LOG = DATA_DIR / "dropped_phrases.log"
     DEVICE_SETTINGS_FILE = VcConfig.DEVICE_SETTINGS_FILE
+    # Everything this process prints, mirrored to a file.
+    #
+    # Nexus launches audio services with `stdio: 'ignore'` (see
+    # src/lib/audioServices.ts) and relies on `showConsole` to give the child a
+    # real console window. That window exists, but during a session it is one of
+    # six behind VRChat -- so the startup banner, which is the ONLY place this
+    # service reports that its beep is misconfigured, is written where nobody is
+    # looking. A silent beep is exactly the failure this service exists to make
+    # visible, so its diagnosis may not depend on a window being in front.
+    SERVICE_LOG = DATA_DIR / "voice_service_confirm.log"
 
-    DEFAULT_PORT = 13002
+    DEFAULT_PORT = 13000
     # Sentence-final punctuation only. Commas are NOT stripped: trimming them
     # would make "Спасибо, за просмотр" match a blocklist entry it is not.
     TRAILING_PUNCT = re.compile(r"[。．.!?！？…\s]+$")
+
+
+class _Tee:
+    """Writes to the console AND to SERVICE_LOG, and never raises on either.
+
+    Two separate problems, one object:
+
+    * The console cannot be trusted to carry the text. A Windows console runs
+      in the machine's ANSI codepage (cp932 here), and this service prints
+      recognized Russian. An unencodable character raises UnicodeEncodeError
+      from inside `print`, which on the websocket path would kill the handler
+      for a phrase that was already written to kohai.txt correctly. The console
+      stream is therefore reconfigured to errors='replace' (readable ASCII, '?'
+      for Cyrillic) and the FILE gets faithful UTF-8. The console stays usable;
+      the log stays true.
+    * The console cannot be trusted to be read. See Config.SERVICE_LOG.
+
+    Failures to write the mirror are swallowed on purpose: a locked or full log
+    file must not take down a voice logger. The console copy is the one that
+    must survive, and it is written first.
+    """
+
+    def __init__(self, stream, path):
+        self._s = stream
+        self._f = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._f = open(path, "a", encoding="utf-8", errors="replace")
+        except Exception:
+            self._f = None
+
+    def write(self, s):
+        try:
+            self._s.write(s)
+        except Exception:
+            pass
+        if self._f is not None:
+            try:
+                self._f.write(s)
+                self._f.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        for t in (self._s, self._f):
+            if t is not None:
+                try:
+                    t.flush()
+                except Exception:
+                    pass
+
+    def isatty(self):
+        return bool(getattr(self._s, "isatty", lambda: False)())
+
+
+def install_log_mirror():
+    """Make stdout/stderr survivable and recorded. Best effort, never fatal."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is None:
+            continue
+        try:
+            # Keep the console's own codepage -- only stop it from raising.
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+        try:
+            setattr(sys, name, _Tee(stream, Config.SERVICE_LOG))
+        except Exception:
+            pass
+    print("\n===== %s  started =====" % time.strftime("%Y-%m-%d %H:%M:%S"))
 
 
 class PhraseFilter:
@@ -294,9 +376,13 @@ class ConfirmService:
             source = "device_settings.json: notification_speaker_keyword"
         if not keyword:
             self.notify_reason = (
-                "no speaker configured -- pass --notify-device \"<part of the "
-                "speaker name>\", or set the notification speaker in Nexus "
-                "(Settings -> voice changer devices)")
+                "no notification speaker configured. Set the SECONDARY audio "
+                "output device in Nexus (Settings -> VRChat & Audio Routing); "
+                "that writes notification_speaker_keyword into\n"
+                "  !! %s\n"
+                "  !! which is the same field voice_changer.py reads. "
+                "--notify-device overrides it for this service only."
+                % Config.DEVICE_SETTINGS_FILE)
             return
         idx, name = self.am.select_device_by_keyword(devices, keyword, is_output=True)
         if idx is None:
@@ -392,6 +478,10 @@ class ConfirmService:
               % (self.args.port, self.args.port))
         print("  Log file:  %s%s"
               % (self.kohai_path, "   <-- NOT the live kohai.txt" if self.args.kohai else ""))
+        # Printed so that the one place this banner can be re-read names itself
+        # IN the banner -- otherwise knowing where to look requires having read
+        # the banner already.
+        print("  This log:  %s" % Config.SERVICE_LOG)
         print("  Identity:  %s%s" % (ident.name, (" (%s)" % style) if style else ""))
         print("  Language:  %s  (filter set; the recognizer decides the actual language)"
               % self.args.lang)
@@ -491,10 +581,17 @@ def parse_args(argv=None):
     p.add_argument("--lang", default="ru",
                    help="which hallucination set in hallucinations.json to use (default ru)")
     p.add_argument("--notify-device", default="",
-                   help="part of the output device name to play the sound on. "
-                        "Overrides device_settings.json's notification speaker, so "
-                        "this service can beep into headphones while the voice "
-                        "changer keeps its own devices.")
+                   help="OPTIONAL. Part of the output device name to play the "
+                        "sound on. Leave it out and the speaker comes from "
+                        "device_settings.json's notification_speaker_keyword -- "
+                        "the same field voice_changer.py reads, set from Nexus's "
+                        "secondary output device. Pass it only to beep somewhere "
+                        "ELSE than the voice changer does. NOTE: a value that "
+                        "matches no device does NOT fall back; an explicit "
+                        "choice is honoured even when it is wrong, because "
+                        "silently beeping into some other speaker would be the "
+                        "false 'it was heard' signal this service exists to "
+                        "prevent.")
     p.add_argument("--notify-sound", default="processing",
                    choices=sorted(VcConfig.NOTIFICATIONS.keys()),
                    help="which file in notifications/ to play (default processing)")
@@ -516,6 +613,9 @@ def parse_args(argv=None):
 
 def main():
     args = parse_args()
+    # After parse_args, so --help and a bad flag still behave like a normal CLI
+    # and do not append a banner to the log for a run that never started.
+    install_log_mirror()
     if args.list_devices:
         am = AudioManager()
         print("index | outputs | name")

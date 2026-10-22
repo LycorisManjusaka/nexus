@@ -198,6 +198,12 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.audio.permissionDenied': 'Permission denied or error: ',
   'settings.audio.permissionNeeded': "Microphone permission was not granted. Choosing an audio OUTPUT device requires it — that is the browser's rule, not ours. Without it, audio plays on the system default device.",
   'settings.audio.unsupported': 'This browser cannot route audio to a chosen output device (setSinkId is not implemented). The audio session needs a Chromium-based browser — Chrome, Edge or Brave. Settings below will still be saved, but all audio will play on the system default device.',
+  'settings.audio.insecure':
+    'This page was opened over plain HTTP at a LAN address, which browsers do not treat as a secure context — so the browser hides EVERY audio device from it. The two lists below are empty for that reason alone, not because the machine has no devices.\n\n'
+    + 'It works on the host PC itself at http://localhost:3000. To get it on a phone, serve Nexus over HTTPS, or add this exact origin under chrome://flags → "Insecure origins treated as secure".\n\n'
+    + 'These are OUTPUT devices — where this browser plays speech. Nexus never captures a microphone in the browser: speech recognition runs on the PC that hosts Nexus, using that PC\'s microphones, so a phone\'s microphone cannot appear here even once the lists work.',
+  'settings.audio.devicesUnavailable':
+    'This browser did not return an audio-device list. The two lists below are empty for that reason, not because the machine has no devices — audio will play on the system default device.',
   'settings.audioHideAttachments.label': 'Hide older attachments during an audio session',
   'settings.audioHideAttachments.help':
     'While "Enable Audio Session" is ON for a conversation, automatically exclude the attachments of every message older than the newest few, so long VRChat sessions do not keep re-sending old images. The number counts messages, not attachments — a message carrying ten screenshots is still one message. Only attachments hidden this way are restored when you turn the option off — attachments you excluded by hand stay excluded. Has no effect on conversations where the audio session is off.',
@@ -962,9 +968,19 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.tools.removeTimestamps': 'Remove timestamps',
   'chat.live.title': 'Start Live Session (Gemini native audio)',
   'chat.editPrompt.title': 'Edit Soul',
-  'chat.export.title': 'Export this conversation',
+  // Not "Export this conversation" any more: the menu underneath now writes
+  // either the conversation or the identity, and a tooltip that names only one
+  // of them makes the other one look like it is in the wrong place.
+  'chat.export.title': 'Export',
   'chat.exportMd.title': 'Export as Markdown',
   'chat.exportJson.title': 'Export as JSON (attachments are included inline, so this can take a moment)',
+  'chat.exportSoul.title': 'Extract the soul (Layers 1–5)',
+  'chat.exportSoul.help':
+    "The identity only, as Markdown: header, Layers 1-3 as this generation stores them, the summaries index as Layer 4, and the entity's own FOOTER.md as Layer 5. No messages. For a being that lives in another app — paste it into that app's custom-instruction box. Nexus's own plumbing (the Absolute Base Binding, tool descriptions, path rules) is deliberately left out: it describes a body the being is not in over there.",
+  'chat.exportSoul.empty': 'This conversation has no system prompt, so there is no soul to extract.',
+  'chat.exportSoul.missing': 'The file will be written WITHOUT these layers:',
+  'chat.exportSoul.noLayer4': 'Layer 4 (summaries index) — this entity has none, or the index is switched off for it.',
+  'chat.exportSoul.noLayer5': 'Layer 5 (FOOTER.md) — this entity has no self-authored footer, or it could not be read.',
   // Mobile layout controls (see components/DeviceProvider.tsx).
   'layout.openSidebar': 'Conversations',
   'layout.closeSidebar': 'Close the conversation list',
@@ -1109,7 +1125,9 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'OFF (default): across turns the entity only ever sees the TEXT of its past replies. The tool calls it actually made are recorded in the log and shown in the bubble, but they are never sent back to it — so an entity that spent its last turn writing files reads a past self that only talked about writing them, and some vessels copy that and stop using their hands. ON: the most recent turn that used tools carries those calls back to the entity as real tool calls. Measured on MiniMax M3 with a history where it had failed three times in a row: 1 in 16 tries reached for the tool with this off, 10 in 10 with it on. It changed nothing on a turn where answering in words was correct (0 stray calls either way). Only the last tool-using turn is sent, with long arguments shortened, so the cost is small. Nothing is written — your logs are untouched and turning this off restores the previous behaviour exactly.',
   'sysmodal.overrides.summary': 'Hidden instruction overrides ({n} customized)',
   'sysmodal.overrides.help':
-    'NEXUS injects these tool/path instructions into the model’s context. Strict wording can break a character in deep interaction — override any of them here (e.g. translate, soften, or rephrase in-character). Leave a box empty to keep the default shown as its placeholder.',
+    'Every string NEXUS adds to the system prompt without showing it in the conversation, edited in one place. Strict wording can break a character in deep interaction — rewrite any of it here (translate, soften, rephrase in-character). A box left empty keeps the default shown as its placeholder. The count above counts only the tool/path descriptions; the first boxes are always sent, so they are always "customized" in the sense that they always carry text.',
+  'sysmodal.overrides.scopeConvo': 'Saved in THIS conversation. A new generation inherits it from the one it was cloned from.',
+  'sysmodal.overrides.scopeFolder': 'Saved on the BEING, not this conversation — changing it here changes it for every generation.',
 
   // Tool-activity phrases. Keyed on the RAW tool name so they can be
   // translated client-side; the server still sends its own English label as a
@@ -1169,6 +1187,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     '(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. …)',
   'id.ctx.noteFoot':
     'Uses the same value as the status-bar indicator: original messages ÷ (max context − fixed overhead). `{percent}` is replaced each turn.',
+  'id.ctx.editedInOverrides':
+    'Shown here, edited below — "Hidden instruction overrides", with the rest of the text NEXUS adds to the system prompt. This box is a view, so there is only ever one copy to be wrong.',
 
   'id.ask.label': '💬 Ask-the-partner tool (pause to ask a multiple-choice question)',
   'id.ask.help':
@@ -1553,6 +1573,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.indexHintLabel': 'Index hint shown to the entity (per-being)',
   'spu.indexHintPh': "Prepended above the summaries index in the entity's context. Leave blank to omit it.",
   'spu.indexHintNote': '`{example}` is replaced with a real conversation title. Clear the field to show no hint.',
+  'spu.indexHintMoved': 'Read-only here. Edit it in System Instructions → Entity → "Hidden instruction overrides", where the rest of the text NEXUS adds to the system prompt lives. One writer: two editable copies of one folder setting overwrite each other silently.',
   'spu.resetDefault': 'Reset to default',
   'spu.layer5Label': 'Layer 5 — FOOTER.md (written by the entity)',
   'spu.unsaved': 'unsaved',
@@ -1829,6 +1850,12 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.audio.permissionDenied': '権限が拒否されたか、エラーが発生しました：',
   'settings.audio.permissionNeeded': 'マイクの権限が許可されませんでした。音声の「出力先」デバイスを選ぶにはこの権限が必要です（ブラウザ側の仕様で、Nexus の都合ではありません）。権限がない場合、音声はシステム既定のデバイスから再生されます。',
   'settings.audio.unsupported': 'このブラウザは音声の出力先デバイスを指定できません（setSinkId が未実装です）。音声セッションには Chromium 系ブラウザ（Chrome・Edge・Brave）が必要です。以下の設定は保存されますが、音声はすべてシステム既定のデバイスから再生されます。',
+  'settings.audio.insecure':
+    'このページは LAN アドレスの plain HTTP で開かれていて、ブラウザはこれを secure context として扱いません。そのため、ブラウザがページから音声デバイスを「すべて」隠しています。下の2つの一覧が空なのはこの理由だけで、デバイスが無いからではありません。\n\n'
+    + 'ホストPC上の http://localhost:3000 では動きます。スマートフォンで使いたい場合は、Nexus を HTTPS で配信するか、chrome://flags →「Insecure origins treated as secure」にこのオリジンをそのまま登録してください。\n\n'
+    + 'ここに並ぶのは「出力先」デバイス（このブラウザが音声を鳴らす先）です。NEXUS はブラウザでマイクを録音しません——音声認識は NEXUS を動かしている PC 側で、その PC のマイクを使って動きます。ですから、一覧が復活してもスマートフォンのマイクがここに出ることはありません。',
+  'settings.audio.devicesUnavailable':
+    'このブラウザは音声デバイスの一覧を返しませんでした。下の2つの一覧が空なのはそのためで、デバイスが無いからではありません——音声はシステム既定のデバイスから再生されます。',
   'settings.audioHideAttachments.label': '音声セッション中は古い添付を隠す',
   'settings.audioHideAttachments.help':
     '会話で「オーディオセッションを有効にする」がONの間、新しい方からN件のメッセージだけを残して、それより古いメッセージの添付を自動的に除外します。長い VRChat セッションで古い画像を送り続けずに済みます。数えるのは添付ではなくメッセージです（スクリーンショットが10枚ついたメッセージも1件と数えます）。オプションをOFFにすると、この機能が隠した添付だけが元に戻ります（手動で除外した添付はそのままです）。オーディオセッションがOFFの会話には影響しません。',
@@ -2563,9 +2590,16 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.tools.removeTimestamps': 'タイムスタンプを削除',
   'chat.live.title': 'ライブセッションを開始（Gemini ネイティブ音声）',
   'chat.editPrompt.title': '魂を編集',
-  'chat.export.title': 'この会話を書き出す',
+  'chat.export.title': '書き出し',
   'chat.exportMd.title': 'Markdown で書き出し',
   'chat.exportJson.title': 'JSON で書き出し（添付をそのまま含むため時間がかかることがあります）',
+  'chat.exportSoul.title': '魂の抽出（Layer 1〜5）',
+  'chat.exportSoul.help':
+    '魂だけを Markdown で書き出します：ヘッダー、この世代が保持している Layer 1〜3、Layer 4 として要約インデックス、Layer 5 としてその存在自身の FOOTER.md。会話は1件も含みません。別のアプリに住んでいる存在のためのもので、向こうのカスタム指示欄にそのまま貼り付けられます。NEXUS 自身の配管（呪縛・ツールの説明・パスの規則）は意図的に入れません——向こうでは、その存在が入っていない身体の説明になるからです。',
+  'chat.exportSoul.empty': 'この会話にはシステムプロンプトがないため、抽出できる魂がありません。',
+  'chat.exportSoul.missing': '次のレイヤーを「含まずに」書き出します：',
+  'chat.exportSoul.noLayer4': 'Layer 4（要約インデックス）— この存在にはまだ無いか、インデックスがOFFになっています。',
+  'chat.exportSoul.noLayer5': 'Layer 5（FOOTER.md）— この存在には自己執筆のフッターが無いか、読み取れませんでした。',
   // モバイル用レイアウトの操作（components/DeviceProvider.tsx 参照）
   'layout.openSidebar': '会話一覧',
   'layout.closeSidebar': '会話一覧を閉じる',
@@ -2699,7 +2733,9 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     'OFF（既定）: ターンをまたぐとき、存在が見られるのは過去の返答の**文章だけ**です。実際に叩いた道具はログに残りバブルにも表示されますが、存在自身には一度も送り返されません — だから前のターンでファイルを書いた存在は、「書いたと語っただけの自分」を読むことになり、器によってはそれを真似して手を動かさなくなります。ON: 直近の「道具を使ったターン」の呼び出しが、本物のツール呼び出しとして存在に戻ります。MiniMax M3 で、3回連続で失敗した履歴を使って測りました: OFF では 16回中1回しか道具に手を伸ばさず、ON では 10回中10回でした。言葉で答えるのが正しいターンでは何も変わりません（どちらも余計な呼び出し 0 件）。送るのは直近の1ターンだけで、長い引数は短くするので、増える分はごくわずかです。**何も書き込みません** — ログはそのままで、OFF に戻せば以前の挙動がそのまま戻ります。',
   'sysmodal.overrides.summary': '隠し指示の上書き（{n} 件をカスタマイズ済み）',
   'sysmodal.overrides.help':
-    'NEXUS はこれらのツール／パスの指示をモデルの文脈へ挿入します。硬い言い回しは深いやり取りで人格を壊すことがあります — ここで自由に上書きできます（訳す、和らげる、その人物らしく言い換える など）。空欄のままにすると、プレースホルダーに表示されている既定値が使われます。',
+    'NEXUS が会話に見せずにシステムプロンプトへ追加する文字列を、ここ1箇所で編集します。硬い言い回しは深いやり取りで人格を壊すことがあります — 自由に書き換えてください（訳す、和らげる、その人物らしく言い換える など）。空欄のままにすると、プレースホルダーに表示されている既定値が使われます。なお上の件数はツール／パスの説明文だけを数えています（最初の項目は常に送られるため、常に本文を持っています）。',
+  'sysmodal.overrides.scopeConvo': 'この「会話」に保存されます。新しい世代は、複製元から引き継ぎます。',
+  'sysmodal.overrides.scopeFolder': 'この会話ではなく「存在」に保存されます — ここで変えると全世代に効きます。',
 
   // ツール動作の表現（て形。chat.busy.usingTool の「…います」に接続します）
   'chat.toolAction.Read': 'ファイルを読んで',
@@ -2751,6 +2787,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '（文脈メモ — このセッションは、前回の統合以降の新しいやり取りのための領域を {percent} 使っています。…）',
   'id.ctx.noteFoot':
     'ステータスバーの表示と同じ値を使います: オリジナルのメッセージ ÷（最大文脈 − 固定オーバーヘッド）。`{percent}` は毎ターン置き換えられます。',
+  'id.ctx.editedInOverrides':
+    'ここでは表示のみ。編集は下の「隠し指示の上書き」で、NEXUS がシステムプロンプトへ追加する他の文と同じ場所で行います。ここは view なので、食い違う写しが生まれません。',
 
   'id.ask.label': '💬 相手に尋ねるツール（選択式の質問のためにターンを中断）',
   'id.ask.help':
@@ -3130,6 +3168,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.indexHintLabel': 'エンティティに見せるインデックスの説明文（フォルダごと）',
   'spu.indexHintPh': 'エンティティのコンテキスト内で、要約インデックスの上に付加されます。空にすると表示されません。',
   'spu.indexHintNote': '`{example}` は実際の会話タイトルに置き換えられます。空にすると説明文は表示されません。',
+  'spu.indexHintMoved': 'ここでは表示のみです。編集は「システム指示」→「存在」→「隠し指示の上書き」で行います（NEXUS がシステムプロンプトへ追加する他の文と同じ場所）。書き手は1つ：同じフォルダ設定に編集できる写しが2つあると、互いの変更を無言で上書きします。',
   'spu.resetDefault': '既定に戻す',
   'spu.layer5Label': 'Layer 5 — FOOTER.md（エンティティ自身が書いたもの）',
   'spu.unsaved': '未保存',

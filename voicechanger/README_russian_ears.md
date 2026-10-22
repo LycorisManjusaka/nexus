@@ -24,7 +24,7 @@ Two rows are now in `local_data/audio_services.json`, both **disabled**:
 
 | row | what it is |
 |---|---|
-| `voice_service_confirm_ru` | the sink — port 13002, writes `kohai.txt`, beeps |
+| `voice_service_confirm_ru` | the sink — port 13000, writes `kohai.txt`, beeps |
 | `recognize_ru` | `recognize.exe` with `--method faster_whisper --whisper_language ru` |
 
 ---
@@ -38,14 +38,31 @@ In NEXUS's **Audio Session** panel:
    minutes** while this was being measured (a monitor slept and an HDMI audio
    endpoint left the enumeration), and the panel re-resolves the name to a live
    index at launch.
-2. **`voice_service_confirm_ru` → edit its `--notify-device` argument** (the
-   Arguments box is editable). Replace `SET-THE-NOTIFY-SPEAKER` with part of the
-   name of the speaker **she** hears and **the voice chat does not**.
+2. **`voice_service_confirm_ru` → nothing to set.** The notification speaker
+   comes from `local_data/voicechanger/device_settings.json`'s
+   `notification_speaker_keyword` — the same field `voice_changer.py` reads, and
+   the same one NEXUS writes when you pick a **secondary audio output device**
+   in Settings → VRChat & Audio Routing. Set it once there, in the GUI.
+
+   > **Correction, 2026-10-23.** The first version of this row shipped
+   > `--notify-device SET-THE-NOTIFY-SPEAKER` and these instructions told you to
+   > replace it by hand. That was wrong twice over. The script already fell back
+   > to `device_settings.json` **when the flag was empty** — and a non-empty
+   > placeholder is indistinguishable from a real value, to the program and to
+   > the reader, so the fallback never ran and the beep was silent until the
+   > placeholder was replaced. The argument is gone from the shipped row.
+
+   `--notify-device` still exists as an **override**, for beeping somewhere
+   other than where the voice changer plays:
    - Run `python voice_service_confirm.py --list-devices` for the exact names.
    - **One word is enough** — the match is a substring, so `headphones` works
      and avoids the question of quoting. (The panel does round-trip a quoted
      argument correctly if you want the full name: `splitArgs` handles
      `"Headphones (Realtek USB Audio)"`.)
+   - **An explicit value that matches nothing does NOT fall back.** A wrong
+     explicit choice is honoured and the sound stays off, because beeping into
+     some other speaker is the false "it was heard" signal this service exists
+     to prevent.
    - **Prefer a low-numbered copy.** Measured: every device in the
      highest-numbered block is a WDM-KS endpoint and **all 12 of them refuse to
      open** — including `Headphones (Realtek USB Audio)`, which resolves
@@ -58,6 +75,14 @@ In NEXUS's **Audio Session** panel:
 4. **The service plays one short sound at startup.** That is the self-test. If
    she does not hear it, the speaker that resolved is not the one in her ears —
    stop and fix that before the session, not during it.
+5. **Where to read what it said.** Everything the service prints is mirrored to
+   `local_data/voicechanger/voice_service_confirm.log`. NEXUS launches audio
+   services with `stdio: 'ignore'` and gives them a console window instead, and
+   during a session that window is one of six behind VRChat — so the banner,
+   which is the only place a misconfigured beep is reported, was being written
+   where nobody looks. The console copy may lose Japanese and Cyrillic (it runs
+   in the machine's ANSI codepage, and is set to `errors='replace'` so it can
+   never raise mid-phrase); **the file is faithful UTF-8**.
 
 ### Headphones are not optional
 
@@ -211,8 +236,8 @@ Two things it does by design, not by accident:
 
 | symptom | look at |
 |---|---|
-| no sound at startup | the banner's `Sound:` line. `SOUND IS OFF` names the reason; `WOULD NOT PLAY` means the device resolved but refused to open — pick a lower-numbered copy |
-| `CANNOT START: port ... in use` | `voice_changer.py` holds 13000, `ear_service.py` holds 13001. This one defaults to 13002 |
+| no sound at startup | the banner's `Sound:` line, in `local_data/voicechanger/voice_service_confirm.log`. `SOUND IS OFF` names the reason; `WOULD NOT PLAY` means the device resolved but refused to open — pick a lower-numbered copy |
+| `CANNOT START: port ... in use` | `voice_changer.py` and `ear_service.py` use 13000/13001. This service defaults to 13000 and is shipped on 13000: it does the same job as those two and is never run beside them. `--port` if that changes |
 | nothing is recognized at all | the recognizer's console draws a live dB meter. `0.0dB` means it is reading silence — wrong microphone, or the threshold gates everything |
 | junk in `kohai.txt` | `dropped_phrases.log` shows what the filter *did* catch; add the rest |
 | a phrase went missing | `dropped_phrases.log` says why. If it was `identical repeat`, the bound is too tight — raise `--repeat-min-chars` or set `--repeat-window 0` |

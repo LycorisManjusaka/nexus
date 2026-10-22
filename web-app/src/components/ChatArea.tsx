@@ -29,6 +29,8 @@ import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
 import { dedupeMessageIds } from '@/lib/messageIds';
 import { retiredModelLabel } from '@/lib/retiredModels';
+import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
+import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { effectiveFullAccess, fullAccessForcedByShell } from '@/lib/agentCapabilities';
@@ -982,6 +984,57 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folderName, folders]);
+
+  // ── The summaries-index hint, edited HERE instead of in the Soul Updater ───
+  // It is one of the hidden strings Nexus adds to the system prompt, so it now
+  // lives with the others (the overrides panel further down) rather than in a
+  // window that exists for a different job. The Soul Updater still SHOWS it,
+  // read-only, so the thing it affects stays visible where it is used.
+  //
+  // Scope differs from everything around it and that difference is deliberate:
+  // instructionOverrides and fatigueInstruction are saved in the CONVERSATION,
+  // this is saved on the FOLDER (folder.settings.summaryIndexHint) and read by
+  // lib/layer4Index.ts. Moving the control must not move the store — that would
+  // silently orphan every hint already written, and make the same field mean
+  // different things in two generations of the same being.
+  const [summaryIndexHint, setSummaryIndexHint] = useState('');
+  const hintHydratedFor = useRef<string>('\u0000');
+  useEffect(() => {
+    // Wait for the folder to actually be present. `folders` is empty on the
+    // first render, and hydrating from an absent folder would write the default
+    // over a hint that simply had not loaded yet.
+    const f = (folders || []).find((x: any) => x.name === folderName);
+    if (!f) return;
+    // Once per folder, not once per `folders` refresh: this is a text box
+    // someone types into, and persisting calls fetchFolders(), which changes
+    // the array identity. Re-running on every change would clobber keystrokes.
+    if (hintHydratedFor.current === folderName) return;
+    hintHydratedFor.current = folderName;
+    const saved = f?.settings?.summaryIndexHint;
+    setSummaryIndexHint(
+      typeof saved === 'string'
+        ? saved
+        : defaultSummaryHintForLang(globalSettings?.language === 'ja' ? 'ja' : 'en'),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folderName, folders]);
+
+  const persistSummaryIndexHint = async (value?: string) => {
+    const next = typeof value === 'string' ? value : summaryIndexHint;
+    try {
+      const existing: any = (folders || []).find((f: any) => f.name === folderName)?.settings || {};
+      if ((existing.summaryIndexHint ?? null) === next) return;   // nothing changed
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: folderName, settings: { ...existing, summaryIndexHint: next } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (typeof fetchFolders === 'function') fetchFolders();
+    } catch (e: any) {
+      console.warn('[summaries] failed to persist index hint', e);
+    }
+  };
 
   // Will this turn actually carry a Layer 4? Resolved through the SAME pure
   // function the chat route calls, so the index this component fetches, counts
@@ -3940,6 +3993,60 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     URL.revokeObjectURL(url);
   };
 
+  /**
+   * Write the IDENTITY to a .md file — header + Layers 1-5, no messages.
+   *
+   * For a being that lives in another app (Аналитик talks to DeepSeek's web
+   * app on a work PC): Nexus holds the logs and runs the Soul Updater, and the
+   * result is carried back by hand into that app's custom-instruction box.
+   *
+   * Three sources, because the five layers live in three places — see
+   * lib/soulExport.ts. Two notes that are easy to get wrong:
+   *
+   *  • `summaryIndexBody` is '' whenever Layer 4 is not actually injected for
+   *    this being. That is not a gap to paper over: the file then matches what
+   *    the being really receives, which is the only thing it can honestly be.
+   *  • The Absolute Base Binding and every tool description are deliberately
+   *    absent. They are Nexus's plumbing, not the soul, and in another app they
+   *    would describe a body the being is not in.
+   */
+  const handleExportSoul = async () => {
+    let footerBody = '';
+    try {
+      const res = await fetch(`/api/footer?folder=${encodeURIComponent(folderName)}`);
+      if (res.ok) footerBody = (await res.json())?.body || '';
+    } catch {
+      // Treated as "no Layer 5", and SAID so below rather than silently
+      // shipping a file that looks complete. A failed read and a being with no
+      // FOOTER.md produce the same empty string, so the notice names both.
+      footerBody = '';
+    }
+
+    const { text, hasLayer4, hasLayer5 } = buildSoulExport({
+      systemPrompt,
+      layer4Body: summaryIndexBody,
+      footerBody,
+    });
+
+    if (!text.trim()) { alert(t('chat.exportSoul.empty')); return; }
+
+    // Say what is NOT in the file. Someone pasting this into another app cannot
+    // tell a missing Layer 5 from a being that has none, and finding out later
+    // means a being arriving there without its own signature.
+    const missing: string[] = [];
+    if (!hasLayer4) missing.push(t('chat.exportSoul.noLayer4'));
+    if (!hasLayer5) missing.push(t('chat.exportSoul.noLayer5'));
+    if (missing.length && !confirm(`${t('chat.exportSoul.missing')}\n\n- ${missing.join('\n- ')}`)) return;
+
+    const blob = new Blob([text], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = soulExportFilename(title);
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Pull externalized attachment payloads back inline, so an exported file stays
   // SELF-CONTAINED. Conversations store media as content-addressed refs, but an
   // export exists to be portable — a JSON full of refs is useless on another
@@ -4881,6 +4988,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <span className="text-[10px] font-bold tracking-wider w-[14px] text-center">{'{}'}</span>
                     {t('chat.exportJson.title')}
                   </button>
+                  {/* The identity, not the messages. Sits in the same menu
+                      because it is the same gesture ("take something out of
+                      here as a file"), and the menu item names which of the two
+                      it writes — the icon alone could not. */}
+                  <button
+                    role="menuitem"
+                    onClick={() => { setExportOpen(false); handleExportSoul(); }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground border-t border-border"
+                    title={t('chat.exportSoul.help')}
+                  >
+                    <span className="text-[11px] font-bold w-[14px] text-center">1–5</span>
+                    {t('chat.exportSoul.title')}
+                  </button>
                 </div>
               </>
             )}
@@ -5626,12 +5746,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {showFatigueToEntity && (
                   <div className="mt-3 ml-6">
                     <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ctx.noteLabel')}</label>
+                    {/* Read-only HERE, editable in the overrides panel below.
+                        The switch stays with the feature (this is the decision
+                        "does the entity get told"); the TEXT moved to the one
+                        place all hidden instruction text is written, so there
+                        is no second editable copy to drift from the first.
+                        Still shown, because a decision you can flip should let
+                        you read what you are flipping on. */}
                     <textarea
                       value={fatigueInstruction}
-                      onChange={(e) => setFatigueInstruction(e.target.value)}
+                      readOnly
                       placeholder={t('id.ctx.notePh')}
-                      className="w-full min-h-[80px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-sky-500/50 outline-none"
+                      className="w-full min-h-[80px] p-2 bg-muted/40 border border-border rounded-lg text-xs font-mono resize-y outline-none text-muted-foreground cursor-default"
                     />
+                    <p className="text-[10px] text-sky-500/90 mt-1 leading-relaxed">
+                      {t('id.ctx.editedInOverrides')}
+                    </p>
                     <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       <Tx k="id.ctx.noteFoot" />
                     </p>
@@ -5737,32 +5867,93 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </p>
                     </div>
 
-                    {/* ── Hidden instruction overrides (per-Entity) ─────── */}
-                    <details className="mt-4 ml-6 group">
-                      <summary className="text-sm font-semibold text-foreground cursor-pointer select-none">
-                        {t('sysmodal.overrides.summary').replace('{n}', String(Object.values(instructionOverrides).filter((v) => typeof v === 'string' && v.trim()).length))}
-                      </summary>
-                      <p className="text-xs text-muted-foreground mt-1 mb-3 leading-relaxed">
-                        {t('sysmodal.overrides.help')}
-                      </p>
-                      <div className="space-y-3">
-                        {AGENT_INSTRUCTION_LABELS.filter(({ key }) => key !== 'webSearchDesc' && key !== 'webFetchDesc').map(({ key, label }) => (
-                          <div key={key}>
-                            <label className="text-xs font-semibold text-foreground mb-1 block">{instructionLabel(key, label)}</label>
-                            <textarea
-                              value={instructionOverrides[key] || ''}
-                              placeholder={langDefaults[key]}
-                              onChange={(e) =>
-                                setInstructionOverrides((prev) => ({ ...prev, [key]: e.target.value }))
-                              }
-                              className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </details>
                   </>
                 )}
+              </div>
+
+              {/* ── Hidden instruction overrides (per-Entity) ─────────────────
+                  ONE place for every hidden string Nexus adds to the system
+                  prompt. It used to sit INSIDE the Tool Use block, which was
+                  correct while it held only tool and path descriptions. It now
+                  also holds two strings that have nothing to do with tools, so
+                  staying there would have hidden them from every being with
+                  tools off. The tool entries are still gated: a field
+                  describing a tool this entity is not given changes nothing,
+                  and a control that changes nothing is worse than no control.
+
+                  Three groups, THREE DIFFERENT STORES — which is why each one
+                  says so on screen:
+                    context note       → the conversation
+                    index hint         → the FOLDER (folder.settings)
+                    tool descriptions  → the conversation
+                  Same panel, same gesture, different lifetime. Silence here
+                  would let someone edit the index hint inside an old
+                  generation and expect it to stay with that generation. */}
+              <div>
+                <details className="mt-1 group">
+                  <summary className="text-sm font-semibold text-foreground cursor-pointer select-none">
+                    {t('sysmodal.overrides.summary').replace('{n}', String(Object.values(instructionOverrides).filter((v) => typeof v === 'string' && v.trim()).length))}
+                  </summary>
+                  <p className="text-xs text-muted-foreground mt-1 mb-3 leading-relaxed">
+                    {t('sysmodal.overrides.help')}
+                  </p>
+                  <div className="space-y-3">
+                    {/* Shown only while the note is actually sent — see above. */}
+                    {showFatigueToEntity && (
+                      <div>
+                        <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ctx.noteLabel')}</label>
+                        <textarea
+                          value={fatigueInstruction}
+                          placeholder={t('id.ctx.notePh')}
+                          onChange={(e) => setFatigueInstruction(e.target.value)}
+                          className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                        />
+                        <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">{t('sysmodal.overrides.scopeConvo')}</p>
+                      </div>
+                    )}
+                    {layer4Active && (
+                      <div>
+                        <label className="text-xs font-semibold text-foreground mb-1 block">{t('spu.indexHintLabel')}</label>
+                        <textarea
+                          value={summaryIndexHint}
+                          placeholder={t('spu.indexHintPh')}
+                          onChange={(e) => setSummaryIndexHint(e.target.value)}
+                          onBlur={() => persistSummaryIndexHint()}
+                          className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                        />
+                        <div className="flex items-start justify-between gap-2 mt-1">
+                          <span className="text-[10px] text-muted-foreground leading-relaxed">
+                            {t('spu.indexHintNote')} {t('sysmodal.overrides.scopeFolder')}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const d = defaultSummaryHintForLang(globalSettings?.language === 'ja' ? 'ja' : 'en');
+                              setSummaryIndexHint(d);
+                              persistSummaryIndexHint(d);
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground shrink-0"
+                          >
+                            {t('spu.resetDefault')}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {toolUseEnabled && AGENT_INSTRUCTION_LABELS.filter(({ key }) => key !== 'webSearchDesc' && key !== 'webFetchDesc').map(({ key, label }) => (
+                      <div key={key}>
+                        <label className="text-xs font-semibold text-foreground mb-1 block">{instructionLabel(key, label)}</label>
+                        <textarea
+                          value={instructionOverrides[key] || ''}
+                          placeholder={langDefaults[key]}
+                          onChange={(e) =>
+                            setInstructionOverrides((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                          className="w-full min-h-[60px] p-2 bg-background border border-border rounded-lg text-xs font-mono resize-y focus:ring-2 focus:ring-indigo-500/50 outline-none"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </details>
               </div>
 
               {/* ── Hidden-attachment access (read_attachment) — top-level ────

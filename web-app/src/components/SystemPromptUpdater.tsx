@@ -802,9 +802,13 @@ export default function SystemPromptUpdater({
             setEntityFooterExists(!!f.exists);
           }
         } catch { /* leave it blank */ }
+        // Shape must match the auto-save effect's snapshot EXACTLY (same keys,
+        // same order) or the first comparison differs and the window saves
+        // itself the moment it opens. summaryIndexHint left out of both — it is
+        // read-only here now.
         lastSavedFolderRef.current = JSON.stringify({
           header: hydratedHeader, focusPoint: hydratedFocus,
-          summaryInstructions: hydratedSummaryInstr, summaryIndexHint: hydratedSummaryHint,
+          summaryInstructions: hydratedSummaryInstr,
           forceUpdaterModel: hydratedForceUpdater, updaterModelKey: hydratedUpdaterKey,
           forceMimoForSummary: hydratedForceMimo,
         });
@@ -1162,8 +1166,14 @@ export default function SystemPromptUpdater({
   useEffect(() => {
     if (!open || !folder) return;
     if (lastSavedFolderRef.current === null) return;
+    // summaryIndexHint is DELIBERATELY absent from this snapshot and from the
+    // patch below. It is now edited in one place only — the hidden-instruction
+    // overrides panel (System Instructions → Entity) — and this window shows it
+    // read-only. Leaving it in the payload would make editing an unrelated
+    // field here write this window's copy of the hint back over whatever was
+    // typed there: two writers, last one wins, no error. One writer.
     const snapshot = JSON.stringify({
-      header, focusPoint, summaryInstructions, summaryIndexHint,
+      header, focusPoint, summaryInstructions,
       forceUpdaterModel, updaterModelKey, forceMimoForSummary,
     });
     if (snapshot === lastSavedFolderRef.current) return;
@@ -1174,7 +1184,6 @@ export default function SystemPromptUpdater({
           systemPromptHeader: header,
           systemPromptFocusPoint: focusPoint,
           summaryInstructions,
-          summaryIndexHint,
           forceUpdaterModel,
           updaterModelKey,
           // Written alongside the new key so an older Nexus build reading this
@@ -2391,15 +2400,17 @@ export default function SystemPromptUpdater({
   const persistHeaderFooter = useCallback(async () => {
     if (!folder) return;
     try {
+      // summaryIndexHint omitted on purpose — see the auto-save effect above.
       await saveFolderSettings(folderName, {
         systemPromptHeader: header,
         systemPromptFocusPoint: focusPoint,
         summaryInstructions,
-        summaryIndexHint,
       });
-      lastSavedFolderRef.current = JSON.stringify({ header, focusPoint, summaryInstructions, summaryIndexHint });
+      lastSavedFolderRef.current = JSON.stringify({ header, focusPoint, summaryInstructions });
     } catch {}
-  }, [folder, folderName, header, focusPoint, summaryInstructions, summaryIndexHint, saveFolderSettings]);
+    // summaryIndexHint dropped from the deps with the write: a dependency on a
+    // value the callback no longer reads only rebuilds the callback for nothing.
+  }, [folder, folderName, header, focusPoint, summaryInstructions, saveFolderSettings]);
 
   // FOOTER.md is a FILE, not a folder setting, so it saves through its own
   // route rather than saveFolderSettings. Only writes when the text actually
@@ -3195,32 +3206,32 @@ export default function SystemPromptUpdater({
               </label>
             </div>
 
-            {/* Editable index hint */}
+            {/* Index hint — READ-ONLY here.
+                It is one of the hidden strings Nexus adds to the system prompt,
+                so it is edited with the others, in System Instructions →
+                Entity → hidden-instruction overrides. This window keeps showing
+                it because the summaries it labels are configured right above —
+                but a second editable copy is a second writer, and two writers
+                of one folder setting lose each other's work with no error.
+                The Reset button went with the editing: a button that cannot
+                persist what it changes is worse than no button. */}
             <div className="mt-3 pt-3 border-t border-emerald-500/20">
               <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1 block">
                 {t('spu.indexHintLabel')}
               </label>
               <textarea
                 value={summaryIndexHint}
-                onChange={(e) => setSummaryIndexHint(e.target.value)}
-                onBlur={persistHeaderFooter}
+                readOnly
                 rows={4}
                 placeholder={t('spu.indexHintPh')}
-                className="w-full px-2 py-1.5 bg-background border border-border rounded text-[12px] font-mono outline-none focus:ring-1 focus:ring-emerald-500 resize-y"
+                className="w-full px-2 py-1.5 bg-muted/40 border border-border rounded text-[12px] font-mono outline-none resize-y text-muted-foreground cursor-default"
               />
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-[10px] text-muted-foreground leading-relaxed">
-                  {t('spu.indexHintNote')}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSummaryIndexHint(defaultSummaryHintForLang(agentFolder))}
-                  onBlur={persistHeaderFooter}
-                  className="text-[10px] px-2 py-0.5 rounded border border-border hover:bg-muted text-muted-foreground shrink-0 ml-2"
-                >
-                  {t('spu.resetDefault')}
-                </button>
-              </div>
+              <p className="text-[10px] text-emerald-500/90 mt-1 leading-relaxed">
+                {t('spu.indexHintMoved')}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                {t('spu.indexHintNote')}
+              </p>
             </div>
           </div>
 
