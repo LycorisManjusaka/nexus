@@ -1,0 +1,110 @@
+{
+  "_README": [
+    "Phrases the speech recognizer produces when nobody is speaking.",
+    "",
+    "WHY THIS FILE EXISTS AT ALL",
+    "whisper was trained on subtitled video, so when it is handed audio with no",
+    "speech in it, it emits the boilerplate that appears at the end of such",
+    "videos. voice_service.py and ear_service.py already carry a hard-coded",
+    "Japanese set for exactly this ('ご視聴ありがとうございました' and friends) --",
+    "that set is evidence this house has met the failure before. This file is the",
+    "same knowledge, in data, so a new language can be added without touching",
+    "code and so each entry can say where it came from.",
+    "",
+    "MEASURED, NOT ASSUMED",
+    "The 'ru' entries marked (measured) came out of 60 seconds of synthetic",
+    "noise played into a virtual cable on 2026-10-22 against",
+    "faster_whisper/medium with --whisper_language ru. 6 hallucinations with",
+    "webrtc VAD, 15 with silero VAD. Probe + raw output:",
+    "beings/Cairn/workspace/ru_ears_probe/.",
+    "",
+    "THE DANGER OF THIS FILE",
+    "Every line here is speech that will be silently discarded. A blocklist that",
+    "is too eager eats what the human actually said -- and because the beep",
+    "fires only on a KEPT phrase, an over-eager entry looks exactly like a",
+    "recognition failure. So the rule is: an entry belongs here only if it was",
+    "measured as a hallucination, OR it is documented boilerplate that no one",
+    "would plausibly say in this context.",
+    "",
+    "DELIBERATELY NOT BLOCKED: 'Всем пока!' ('bye everyone') is on every public",
+    "list of whisper-ru hallucinations. It is also an ordinary thing to say when",
+    "leaving a VRChat world. Letting a rare hallucination through is cheaper",
+    "than eating a goodbye.",
+    "",
+    "HOW TO EXTEND IT",
+    "The service appends every dropped phrase to",
+    "local_data/voicechanger/dropped_phrases.log with a reason. Read that file,",
+    "and add what is genuinely boilerplate. Do not add anything from it that a",
+    "person might say.",
+    "",
+    "WHY THE COUNT IN THE BANNER IS LOWER THAN THE NUMBER OF LINES HERE",
+    "Both the entries and the incoming phrase have sentence-final punctuation",
+    "stripped before comparison, so 'Спасибо за просмотр!' and the same string",
+    "with a full stop collapse to one. The pairs below are kept anyway, because",
+    "a person reading this file should not have to know that to trust it. The",
+    "7 'ru' exact entries load as 4 -- that is the normalizer, not a dropped",
+    "line. Commas are NOT stripped: trimming them would make",
+    "'Спасибо, за просмотр' match an entry it is not."
+  ],
+
+  "ru": {
+    "exact": [
+      "Спасибо за просмотр!",
+      "Спасибо за просмотр.",
+      "Фондю любит тебя!",
+      "Продолжение следует...",
+      "Продолжение следует.",
+      "Подписывайтесь на канал!",
+      "Подписывайтесь на канал."
+    ],
+    "exact_source": {
+      "Спасибо за просмотр!": "measured 2026-10-22 (x3, both VAD engines)",
+      "Фондю любит тебя!": "measured 2026-10-22 (webrtc VAD, white noise)",
+      "Продолжение следует...": "documented whisper-ru boilerplate; not seen in this probe",
+      "Подписывайтесь на канал!": "documented whisper-ru boilerplate; not seen in this probe"
+    },
+    "regex": [
+      "^Редактор\\s+субтитров\\b.*$",
+      "^Субтитры\\s+(сделал|создавал|делал|подготовил)\\b.*$",
+      "^Корректор\\s+[А-ЯЁ]\\.[А-ЯЁ].*$"
+    ],
+    "regex_source": {
+      "^Редактор\\s+субтитров\\b.*$": "measured 2026-10-22 -- 21 hits with THREE different names (А.Олзоева, А.Синецкая, Е.Воинова), which is why this is a pattern and not an exact list",
+      "^Субтитры\\s+(сделал|создавал|делал|подготовил)\\b.*$": "documented whisper-ru boilerplate; not seen in this probe",
+      "^Корректор\\s+[А-ЯЁ]\\.[А-ЯЁ].*$": "the second half of the credit line, in case VAD splits it off on its own"
+    }
+  },
+
+  "ja": {
+    "exact": [
+      "ごめん",
+      "ありがとうございました",
+      "ご視野",
+      "ご視野の",
+      "ん"
+    ],
+    "exact_source": {
+      "_all": "copied verbatim from voice_service.py / ear_service.py so a Japanese speaker gets identical behaviour from this service. If that set changes, change it in both places -- or better, delete it there and read this file."
+    },
+    "regex": [
+      "^ご視聴(いただき)?ありがとうございました[。！]?$",
+      "^チャンネル登録(と高評価)?(を)?(お願いします|よろしくお願いします)[。！]?$"
+    ],
+    "regex_source": {
+      "_all": "documented ja whisper boilerplate. NOT measured here -- this session's probe was Russian only."
+    }
+  },
+
+  "en": {
+    "exact": [
+      "Thanks for watching!",
+      "Thank you for watching!",
+      "Please subscribe to my channel.",
+      "Subtitles by the Amara.org community"
+    ],
+    "exact_source": {
+      "_all": "documented en whisper boilerplate. NOT measured here."
+    },
+    "regex": []
+  }
+}
