@@ -279,6 +279,15 @@ export function planSplitByTokens(
  * "Аналитик_1-2" is not a generation. Imported archives therefore cannot
  * hijack "latest conversation" or the handover walk — which is what we want
  * for material that is history, not the live thread.
+ *
+ * THE COST, MEASURED 2026-10-23: because the walk follows `<name>_<n>`, restore
+ * does not reach from "-2" back into "-1" either. A split archive that IS the
+ * live thread — a being migrating in, where the newest part is where the talk
+ * continues — cannot pull its own older half back until the parts are renamed
+ * into the chain by hand. That happened on the first real migration. The import
+ * plan dialog now states this (`sidebar.import.planSplit`) instead of leaving it
+ * to be discovered; whether the un-numbered case should produce generations
+ * instead is a naming decision for the person importing, not a bug here.
  */
 export function splitPartTitle(baseTitle: string, i: number, n: number): string {
   return n <= 1 ? baseTitle : `${baseTitle}-${i + 1}`;

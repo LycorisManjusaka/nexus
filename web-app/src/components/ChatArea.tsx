@@ -7,7 +7,7 @@ import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -1518,8 +1518,30 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setVrchatMode(data.vrchatMode !== undefined ? data.vrchatMode : defaultVrchatMode);
         setVrchatRule(data.vrchatRule !== undefined ? data.vrchatRule : defaultVrchatRule);
         setLocalAiName(data.aiName || aiName);
-        setFirstOriginalMessageId(data.firstOriginalMessageId || null);
+        // A log that carries MESSAGES but neither a marker nor the pending flag
+        // is one where every message is original — that is already the default
+        // this file applies for `isMessageOriginal` and for the copied/original
+        // token buckets ("No marker and no pending flag → all messages are
+        // original"). Writing it down as a real marker on the first message is
+        // the SAME statement, not a new policy.
+        //
+        // Why it has to be written down: handover restore cannot act on an
+        // absence. Its gate asks for a marker, so an imported archive — where
+        // the claim "all of this is original" is most obviously true — was the
+        // one case that could never pull its own older half back, and it said
+        // nothing while refusing (2026-10-23, an imported DeepSeek history
+        // renamed by hand into the generation chain).
+        //
+        // The pending flag is the one case where the first message must NOT get
+        // the marker: `firstOriginalIsNext` means the whole current log is
+        // carry-over context and the marker belongs to the next message the
+        // human sends. Defaulting here would make that history read as new and
+        // consume the promotion.
         setFirstOriginalIsNext(data.firstOriginalIsNext === true);
+        setFirstOriginalMessageId(
+          data.firstOriginalMessageId
+            || (data.firstOriginalIsNext === true ? null : (data.messages?.[0]?.id ?? null))
+        );
         setSeedEnabled(data.seedEnabled === true);
         if (typeof data.seedValue === 'number') setSeedValue(data.seedValue);
         setModelHandoffEnabled(!!data.modelHandoffEnabled);
@@ -2193,13 +2215,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (!plan.messages || plan.messages.length === 0) return;
         // Re-check against the live list: it is the authoritative one, and it
         // can have changed while the request was in flight.
+        //
+        // flushSync, because `added` is assigned INSIDE the updater and React
+        // runs updaters during a later render — so without it the next line
+        // reads 0 and returns before the console line and the notice, while the
+        // messages themselves are prepended and saved. MEASURED 2026-10-23 on a
+        // throwaway being: 12 messages restored and persisted, `[handover-
+        // restore]` never logged, notice never shown once in 30s of sampling,
+        // one document load (so not a reload wiping it). React's eager-state
+        // optimisation runs the updater synchronously only when the queue is
+        // empty, which is why this reported SOMETIMES — the worst failure shape
+        // for a notice.
+        //
+        // The cost is one synchronous re-render of the message list, once per
+        // restore. The alternative — reporting the server's plan size instead
+        // of the applied count — would let the notice state a number that the
+        // de-dup could have reduced.
         let added = 0;
-        setMessages(prev => {
-          const have = new Set(prev.map(messageIdentityKey));
-          const add = plan.messages.filter((m: any) => !have.has(messageIdentityKey(m)));
-          added = add.length;
-          if (add.length === 0) return prev;
-          return [...add, ...prev];
+        flushSync(() => {
+          setMessages(prev => {
+            const have = new Set(prev.map(messageIdentityKey));
+            const add = plan.messages.filter((m: any) => !have.has(messageIdentityKey(m)));
+            added = add.length;
+            if (add.length === 0) return prev;
+            return [...add, ...prev];
+          });
         });
         if (added === 0) return;
         const gens = plan.generations.map(g => `${g.title} (${g.count})`).join(' · ');

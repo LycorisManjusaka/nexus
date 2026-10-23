@@ -234,8 +234,22 @@ export interface RestorePlanReply {
   nextNeeded: number | null;
   /** True when MAX_GENERATIONS_SCANNED stopped the walk early. */
   truncated: boolean;
-  /** Why nothing could be restored, when that's a structural answer and not
-   *  just "no room": 'not-numbered' (hand-picked title has no predecessor),
-   *  'no-older' (this is generation 1), 'not-found'. */
-  reason?: 'not-numbered' | 'no-older' | 'not-found';
+  /**
+   * Why nothing could be restored, when that's a structural answer and not
+   * just "no room":
+   *   'not-numbered' — hand-picked / imported title, so it is not generation N
+   *                    of anything and has no predecessor to walk back to
+   *   'no-older'     — this is generation 1
+   *   'not-head'     — a NEWER generation of this being exists, so what is on
+   *                    screen is history (the same condition the past-log band
+   *                    warns about). Restoring into it would grow a log nobody
+   *                    is going to speak in, on open.
+   *   'not-found'    — no such conversation
+   *
+   * Diagnostic only: no caller branches on it today. The client decides from
+   * `messages` / `nextNeeded` alone, so a new value here cannot change its
+   * behaviour — it exists so a server log or a probe can say WHY the answer was
+   * empty, which "no messages" on its own cannot.
+   */
+  reason?: 'not-numbered' | 'no-older' | 'not-head' | 'not-found';
 }

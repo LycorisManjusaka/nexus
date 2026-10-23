@@ -376,6 +376,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'The Layer-4 writer sends the WHOLE conversation, so one oversized log fails as a single request.\n' +
     'In a foreign export the human side becomes "{user}" and the assistant side becomes "{entity}".\n\n' +
     'Proceed?',
+  // Shown only when the import will actually split, because it is about the
+  // part names. A split archive is history, so the parts are named OUTSIDE the
+  // generation chain on purpose — they cannot take over "latest conversation".
+  // The price is stated here rather than discovered: handover restore walks the
+  // `<name>_<n>` chain, so it does not reach across "-1" / "-2".
+  'sidebar.import.planSplit':
+    'Split parts are named "-1", "-2", … which sits OUTSIDE the <being>_<n> generation chain, ' +
+    'so an imported archive can never take over "latest conversation". The cost: automatic ' +
+    'handover restore follows that chain, so it will not pull one part back into the next. ' +
+    'Rename the parts to <being>_1, <being>_2, … if you want them to behave as generations.\n\n',
   'sidebar.loading': 'Loading conversations…',
   'sidebar.noHistory': 'No history in {folder}.',
   'sidebar.thisFolder': 'this being',
@@ -2053,6 +2063,11 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'Layer 4 の要約は会話ログを丸ごと送るため、大きすぎる1本はリクエストごと失敗します。\n' +
     '外部エクスポートでは、人間側が「{user}」、アシスタント側が「{entity}」になります。\n\n' +
     '実行しますか？',
+  'sidebar.import.planSplit':
+    '分割された部分は「-1」「-2」…という名前になります。これは <存在名>_<番号> の世代連鎖の' +
+    '「外」で、取り込んだアーカイブが「最新の会話」を乗っ取れないようにするためです。' +
+    '代償：自動の引き継ぎ復元はその連鎖を辿るので、ある部分を次の部分へ引き戻すことはしません。' +
+    '世代として扱いたい場合は、部分を <存在名>_1、<存在名>_2 … に改名してください。\n\n',
   'sidebar.loading': '会話を読み込んでいます…',
   'sidebar.noHistory': '{folder} には会話がありません。',
   'sidebar.thisFolder': 'この存在',

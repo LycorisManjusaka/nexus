@@ -623,11 +623,17 @@ export default function Sidebar({
             ? `\n    → ${p.parts.length} × ${splitPartTitle(p.title, 0, p.parts.length)} … ${splitPartTitle(p.title, p.parts.length - 1, p.parts.length)}`
             : `\n    → ${p.title}`)
         ).join('\n');
+        // The split note rides inside {plan} so it sits next to the part names
+        // it is about, and only when the import will actually split — saying it
+        // on a one-part foreign import would be a true sentence about something
+        // that is not happening. `trimEnd` so the template's own blank line is
+        // the only spacing.
+        const planBody = lines + (willSplit ? '\n\n' + t('sidebar.import.planSplit').trimEnd() : '');
         const msg = t('sidebar.import.plan')
           .replace('{cap}', logCap.toLocaleString())
           .replace('{user}', importUserName)
           .replace('{entity}', activeFolder.name)
-          .replace('{plan}', lines);
+          .replace('{plan}', planBody);
         if (!window.confirm(msg)) {
           console.warn('[md-import] cancelled by user at the plan dialog.');
           return;
@@ -676,6 +682,15 @@ export default function Sidebar({
                   title: splitPartTitle(p.title, i, p.parts.length),
                   messages: slice,
                   aiName: activeFolder.name,
+                  // Every imported message is ORIGINAL: nothing here was carried
+                  // over from a previous generation of this installation. The
+                  // marker on the first message says exactly that, and it is
+                  // what lets handover restore run (its gate asks for a marker,
+                  // and an absence is not an answer). Nothing else changes —
+                  // with the marker at index 0 the auto-trimmer returns early
+                  // (`markerIdx <= 0`) and the token buckets read copied = 0,
+                  // which is what an unmarked log already defaulted to.
+                  firstOriginalMessageId: slice[0]?.id || null,
                   updatedAt: Date.now(),
                 },
               }),
