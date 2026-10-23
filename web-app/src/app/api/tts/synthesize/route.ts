@@ -318,13 +318,24 @@ async function synthesizeSegment(text: string, engine: number | string, char_idx
           styleName: style?.name ?? '?', charName: char?.name ?? '?',
         });
       }
-      // vosk-tts has no pitch parameter (its synth() takes speech_rate,
-      // noise_level, duration_noise_level, scale — measured by introspection).
-      // The service says so in a header rather than accepting the value and
-      // discarding it, so a voicePitch set for this being is reported instead
-      // of looking like it worked.
-      if (synthRes.headers.get('X-Ru-Pitch-Ignored') === '1') {
-        console.warn(`[tts] vosk-tts has no pitch control; voicePitch=${pitch} was ignored for this segment.`);
+      // vosk-tts has no pitch parameter of its own — its synth() takes
+      // speech_rate, noise_level, duration_noise_level and scale, and `scale`
+      // is a plain output gain (measured by introspection, and again from the
+      // ONNX input list: scales = [noise_level, 1/speech_rate,
+      // duration_noise_level]). Since 2026-10-23 the lab service produces
+      // pitch from the finished waveform instead (WSOLA time-stretch by k,
+      // then resample by k — ru_tts_lab/pitchshift.py).
+      //
+      // This reads the RESPONSE rather than deciding from a version number,
+      // so neither side has to know which version the other is. An old
+      // service answers Ignored=1 and gets the old warning; a new one answers
+      // Ignored=0 with the multiplier it actually applied.
+      if (Math.abs(pitch) > 1e-9) {
+        if (synthRes.headers.get('X-Ru-Pitch-Ignored') === '1') {
+          console.warn(`[tts] this vosk-tts service discards pitch; voicePitch=${pitch} had no effect. Restart the Russian TTS service to pick up pitch support.`);
+        } else if (synthRes.headers.get('X-Ru-Pitch-Clamped') === '1') {
+          console.warn(`[tts] voicePitch=${pitch} is past this engine's range; applied ×${synthRes.headers.get('X-Ru-Pitch-Applied')} (${synthRes.headers.get('X-Ru-Pitch-Semitones')} semitones). Moving the slider further will not change it.`);
+        }
       }
 
       return await synthRes.arrayBuffer();

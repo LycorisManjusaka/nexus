@@ -176,9 +176,12 @@ export default function VoiceSelector({ value, onChange }: VoiceSelectorProps) {
           <p className="text-[10px] text-muted-foreground mt-1">{startMsg}</p>
         )}
         {/* vosk-tts takes speech_rate but has no pitch parameter at all
-            (measured by introspecting its Synth class). The Pitch control for
-            this being lives in folder settings, not here, so without this line
-            it would look like a working control that does nothing. */}
+            (measured by introspecting its Synth class, and again from the
+            ONNX input list). The service shifts the finished waveform
+            instead, so Pitch does work here as of 2026-10-23 — but not the
+            same way VOICEVOX does it, and it saturates at one octave. The
+            Pitch control itself lives in folder settings, not here, so
+            without this line those two differences have nowhere to be said. */}
         {engineMeta?.key === 'vosk_ra' && (
           <p className="text-[10px] text-muted-foreground mt-1">{t('voice.engine.voskra.note')}</p>
         )}

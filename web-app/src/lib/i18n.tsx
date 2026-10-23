@@ -563,7 +563,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'voice.engine.aivis': 'AivisSpeech (context-aware)',
   'voice.engine.voskra': 'vosk-tts + RUAccent (Russian)',
   'voice.engine.voskra.note':
-    'Russian. Style = accent frontend: RUAccent resolves homographs (замок lock vs castle), "Dictionary only" is bare vosk and does not. Speed works; this engine has no pitch control, so Pitch is ignored. First line after a cold start takes about a minute while the models load.',
+    'Russian. Style = accent frontend: RUAccent resolves homographs (замок lock vs castle), "Dictionary only" is bare vosk and does not. Speed and Pitch both work. vosk has no pitch parameter, so the service shifts the finished audio instead — which moves the timbre along with the pitch, unlike VOICEVOX. Pitch reaches one octave at about ±0.23 on the slider and stops there. First line after a cold start takes about a minute while the models load.',
   'voice.notRunning': '{engine} is not running — no voices to list.',
   'voice.noVoicevox':
     'No Voicevox voices found. Voicevox voices are read from a catalog the voice changer writes to local_data/voicechanger/speakers.json — install and run Voicevox, or pick another engine.',
@@ -2233,7 +2233,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'voice.engine.aivis': 'AivisSpeech（文脈対応）',
   'voice.engine.voskra': 'vosk-tts + RUAccent（ロシア語）',
   'voice.engine.voskra.note':
-    'ロシア語。スタイルはアクセント処理の選択です — RUAccent は同形異義語を判別し（замок は錠か城か）、「Dictionary only」は素の vosk で判別しません。速度は効きますが、このエンジンにはピッチの指定が無いためピッチは無視されます。起動直後の1行目はモデル読み込みで約1分かかります。',
+    'ロシア語。スタイルはアクセント処理の選択です — RUAccent は同形異義語を判別し（замок は錠か城か）、「Dictionary only」は素の vosk で判別しません。速度もピッチも効きます。vosk にはピッチの指定が無いため、合成し終えた音声をサービス側でずらしています — そのため VOICEVOX と違って、音色も音高と一緒に動きます。ピッチはスライダー ±0.23 あたりで上下1オクターブに達し、そこで止まります。起動直後の1行目はモデル読み込みで約1分かかります。',
   'voice.notRunning': '{engine} が起動していません — 一覧を取得できません。',
   'voice.noVoicevox':
     'Voicevox の音声が見つかりません。Voicevox の音声一覧は、ボイスチェンジャーが local_data/voicechanger/speakers.json に書き出すカタログから読み込まれます。Voicevox をインストールして起動するか、別のエンジンを選んでください。',
