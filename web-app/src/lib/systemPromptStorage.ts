@@ -1,6 +1,26 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { DATA_DIR, sanitizeBeingName, beingSoulDir, beingSoulBackupsDir } from './beingPaths';
+import { GENERATION_LABEL_RE } from './soulGeneration';
+
+// ── Generation labels ───────────────────────────────────────────────────────
+// A soul file is `<being>_<label>.md`, and until 2026-10-24 `label` was a
+// `number` on every path from the client down to `path.join` — which made a
+// traversal unrepresentable for free. It is a STRING now (a split archive
+// numbers its generations `1-1`, `1-2`, … — see soulGeneration.ts), so the one
+// guarantee the type used to give has to be stated.
+//
+// Throwing rather than sanitizing, on purpose: a sanitized label would write a
+// real file under a name nobody asked for, which is the "operation succeeded,
+// artifact was wrong" shape this house keeps getting bitten by. A 500 with the
+// offending value in it points at the caller.
+function assertGenerationLabel(label: unknown): string {
+  const s = String(label ?? '').trim();
+  if (!GENERATION_LABEL_RE.test(s)) {
+    throw new Error(`invalid soul generation label: ${JSON.stringify(label)}`);
+  }
+  return s;
+}
 
 // AGENTS_DIR is operator-owned (not per-being) — stays at local_data root.
 const AGENTS_DIR = path.join(DATA_DIR, 'system_prompt_agents');  // operator-owned overrides (preferred)
@@ -98,17 +118,17 @@ function entityDir(folderName: string): string {
   return beingSoulDir(folderName);
 }
 
-function entityFilePath(folderName: string, index: number): string {
+function entityFilePath(folderName: string, label: string): string {
   const safe = sanitizeFolderName(folderName);
-  return path.join(entityDir(folderName), `${safe}_${index}.md`);
+  return path.join(entityDir(folderName), `${safe}_${assertGenerationLabel(label)}.md`);
 }
 
 export async function readSystemPromptFile(
   folderName: string,
-  index: number
+  label: string
 ): Promise<string | null> {
   try {
-    const p = entityFilePath(folderName, index);
+    const p = entityFilePath(folderName, label);
     return await fs.readFile(p, 'utf-8');
   } catch (e: any) {
     if (e?.code === 'ENOENT') return null;
@@ -118,12 +138,11 @@ export async function readSystemPromptFile(
 
 export async function writeSystemPromptFile(
   folderName: string,
-  index: number,
+  label: string,
   contents: string
 ): Promise<string> {
-  const dir = entityDir(folderName);
-  await fs.mkdir(dir, { recursive: true });
-  const p = entityFilePath(folderName, index);
+  const p = entityFilePath(folderName, label);   // validates the label FIRST
+  await fs.mkdir(entityDir(folderName), { recursive: true });
   await fs.writeFile(p, contents, 'utf-8');
   return p;
 }
@@ -156,20 +175,20 @@ function spuWorkDir(folderName: string): string {
   return path.join(entityDir(folderName), 'spu_work');
 }
 
-function spuWorkFilePath(folderName: string, index: number): string {
+function spuWorkFilePath(folderName: string, label: string): string {
   const safe = sanitizeFolderName(folderName);
-  return path.join(spuWorkDir(folderName), `${safe}_${index}_left.md`);
+  return path.join(spuWorkDir(folderName), `${safe}_${assertGenerationLabel(label)}_left.md`);
 }
 
-// `null` means "no working copy exists for this index" — the caller seeds from
+// `null` means "no working copy exists for this generation" — the caller seeds from
 // the real soul. An EMPTY working copy is NOT null: emptying the left pane on
 // purpose has to survive a reopen, otherwise the pane would silently refill.
 export async function readSpuWorkFile(
   folderName: string,
-  index: number
+  label: string
 ): Promise<string | null> {
   try {
-    return await fs.readFile(spuWorkFilePath(folderName, index), 'utf-8');
+    return await fs.readFile(spuWorkFilePath(folderName, label), 'utf-8');
   } catch (e: any) {
     if (e?.code === 'ENOENT') return null;
     throw e;
@@ -178,11 +197,11 @@ export async function readSpuWorkFile(
 
 export async function writeSpuWorkFile(
   folderName: string,
-  index: number,
+  label: string,
   contents: string
 ): Promise<string> {
+  const p = spuWorkFilePath(folderName, label);   // validates the label FIRST
   await fs.mkdir(spuWorkDir(folderName), { recursive: true });
-  const p = spuWorkFilePath(folderName, index);
   await fs.writeFile(p, contents, 'utf-8');
   return p;
 }
@@ -222,34 +241,37 @@ export interface SoulBackupInfo {
   filename: string;
   fromTitle: string;   // e.g. "Cairn_24"
   toTitle: string;     // e.g. "Cairn_25"
-  fromIndex: number;
-  toIndex: number;
+  // Generation LABELS, not numbers: `"24"`, or `"1-5"` for a split archive.
+  fromLabel: string;
+  toLabel: string;
   phase: SoulBackupPhase;
   stamp: string;       // sortable YYYY-MM-DD_HH-MM-SS-mmm
 }
 
 export function soulBackupFilename(
   folderName: string,
-  fromIndex: number,
-  toIndex: number,
+  fromLabel: string,
+  toLabel: string,
   phase: SoulBackupPhase,
   stamp: string
 ): string {
   const safe = sanitizeFolderName(folderName);
-  return `${safe}_${fromIndex}__${safe}_${toIndex}__${phase}__${stamp}.md`;
+  const from = assertGenerationLabel(fromLabel);
+  const to = assertGenerationLabel(toLabel);
+  return `${safe}_${from}__${safe}_${to}__${phase}__${stamp}.md`;
 }
 
 export async function backupSoulSnapshot(
   folderName: string,
-  fromIndex: number,
-  toIndex: number,
+  fromLabel: string,
+  toLabel: string,
   phase: SoulBackupPhase,
   contents: string
 ): Promise<string | null> {
   try {
     const bdir = beingSoulBackupsDir(folderName);
     await fs.mkdir(bdir, { recursive: true });
-    const filename = soulBackupFilename(folderName, fromIndex, toIndex, phase, soulBackupStamp());
+    const filename = soulBackupFilename(folderName, fromLabel, toLabel, phase, soulBackupStamp());
     await fs.writeFile(path.join(bdir, filename), contents, 'utf-8');
     return filename;
   } catch {
@@ -257,16 +279,22 @@ export async function backupSoulSnapshot(
   }
 }
 
-// Extract the trailing conversation index from a title of the form
-// "<name>_<n>" or "<name>#<n>" / "<name>＃<n>" (half- or full-width digits).
-function soulIndexFromTitle(title: string): number | null {
-  const m = title.match(/[_#＃]([0-9０-９]+)\s*$/);
+// Extract the trailing generation LABEL from a title of the form "<name>_<n>",
+// "<name>#<n>" / "<name>＃<n>" (half- or full-width digits), or the
+// hyphen-segmented form a split archive uses ("<name>_1-5").
+//
+// Returns the label as a STRING. It used to parse to a number, which meant
+// `parseSoulBackupFilename` rejected every backup of a hyphenated generation —
+// and since that parser doubles as the read guard, those snapshots were both
+// invisible in the list AND unreadable. Nothing wrote them before today, so
+// there is nothing to migrate; this is what keeps them writable now.
+function soulLabelFromTitle(title: string): string | null {
+  const m = title.match(/[_#＃]([0-9０-９]+(?:-[0-9０-９]+)*)\s*$/);
   if (!m) return null;
-  const n = parseInt(
-    m[1].replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)),
-    10
+  const label = m[1].replace(/[０-９]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) - 0xfee0)
   );
-  return isNaN(n) ? null : n;
+  return GENERATION_LABEL_RE.test(label) ? label : null;
 }
 
 export function parseSoulBackupFilename(filename: string): SoulBackupInfo | null {
@@ -277,10 +305,10 @@ export function parseSoulBackupFilename(filename: string): SoulBackupInfo | null
   if (parts.length !== 4) return null;
   const [fromTitle, toTitle, phase, stamp] = parts;
   if (phase !== 'BEFORE' && phase !== 'AFTER') return null;
-  const fromIndex = soulIndexFromTitle(fromTitle);
-  const toIndex = soulIndexFromTitle(toTitle);
-  if (fromIndex === null || toIndex === null) return null;
-  return { filename, fromTitle, toTitle, fromIndex, toIndex, phase, stamp };
+  const fromLabel = soulLabelFromTitle(fromTitle);
+  const toLabel = soulLabelFromTitle(toTitle);
+  if (fromLabel === null || toLabel === null) return null;
+  return { filename, fromTitle, toTitle, fromLabel, toLabel, phase, stamp };
 }
 
 export async function listSoulBackups(folderName: string): Promise<SoulBackupInfo[]> {
@@ -318,7 +346,13 @@ export async function readSoulBackup(folderName: string, filename: string): Prom
 
 export async function shiftRightToLeft(
   folderName: string,
-  currentIndex: number,
+  currentLabel: string,
+  // The next generation's label is PASSED IN, not derived. It used to be
+  // `currentIndex + 1`, and arithmetic stopped answering the question when a
+  // generation could be labelled `1-5` (its successor is `2-1`, decided by the
+  // folder's order — see soulGeneration.ts). Deriving it here would give this
+  // function a second, dumber opinion about the chain.
+  nextLabel: string,
   previousLeftContents: string,
   newLeftContents: string
 ): Promise<{ ok: boolean; error?: string }> {
@@ -327,16 +361,16 @@ export async function shiftRightToLeft(
     // "BEFORE" snapshot of this session's stage (N → N+1). A backup hiccup
     // must not block the shift.
     if (previousLeftContents.trim()) {
-      await backupSoulSnapshot(folderName, currentIndex, currentIndex + 1, 'BEFORE', previousLeftContents);
+      await backupSoulSnapshot(folderName, currentLabel, nextLabel, 'BEFORE', previousLeftContents);
     }
     // The promoted draft becomes the left pane's WORKING COPY, not the finished
     // soul of conversation N. This is the write that used to clobber a closed
     // generation; the shift's intent was always "this draft is now the basis
     // for the next pass", which is a working-copy operation by definition.
-    await writeSpuWorkFile(folderName, currentIndex, newLeftContents);
+    await writeSpuWorkFile(folderName, currentLabel, newLeftContents);
     // The right pane IS the real `<N+1>.md` draft, so clearing it stays a real
     // write — the new run starts from a blank next-generation file.
-    await writeSystemPromptFile(folderName, currentIndex + 1, '');
+    await writeSystemPromptFile(folderName, nextLabel, '');
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e?.message || 'could not shift right pane to left' };

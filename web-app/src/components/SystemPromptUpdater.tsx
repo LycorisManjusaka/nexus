@@ -10,17 +10,13 @@ import { useDevice } from './DeviceProvider';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 import { copyText } from '@/lib/clipboard';
+import { resolveSoulGeneration, type SoulGeneration } from '@/lib/soulGeneration';
 
-// ── Title <-> index helpers (client-side mirror of the lib) ─────────────────
-const fwToHw = (s: string) =>
-  s.replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
-const parseTitleIndex = (title: string): { base: string; index: number } | null => {
-  const m = title.match(/^(.*?)\s*[_#＃]([0-9０-９]+)\s*$/);
-  if (!m) return null;
-  const n = parseInt(fwToHw(m[2]), 10);
-  if (isNaN(n)) return null;
-  return { base: m[1].replace(/\s+$/, ''), index: n };
-};
+// The title→generation parser used to live here as a "client-side mirror of
+// the lib". It is now `@/lib/soulGeneration` (imported above) — one copy, and
+// it answers the hyphenated labels a split archive brings in. A mirror is how
+// the two drifted: the lib's reader for the handover chain gained an order rule
+// on 2026-10-24 while this copy still required digits at the end of the title.
 
 // ── Layer parsing (only used to extract Layers 1-3 as identity context for the
 // summary writer — the main updater now works on the RAW combined text). ─────
@@ -373,7 +369,14 @@ interface Props {
   globalSettings: any;
   folders: any[];
   saveFolderSettings: (folderName: string, patch: any) => Promise<void>;
-  onFinalize: (args: { newSystemPrompt: string; newIndex: number }) => Promise<void>;
+  onFinalize: (args: { newSystemPrompt: string; newLabel: string }) => Promise<void>;
+  /**
+   * Which soul file this conversation runs and which one an update writes.
+   * Resolved by NexusApp because the non-numbered case is answered by the row
+   * above this one in the folder's own order, and that component owns the list.
+   * Absent → resolved locally from the title alone (see `soulGen` below).
+   */
+  soulGeneration?: SoulGeneration;
   /**
    * Developer override state (NEXUS_BINDING_OPTIONAL). Needed here for one
    * reason only: to say the truth in the status line after a first summary.
@@ -386,7 +389,7 @@ interface Props {
 export default function SystemPromptUpdater({
   open, onClose, folderName, convoId, title, originalMessages,
   aiName, specificModel, modelParams,
-  folders, saveFolderSettings, onFinalize, bindingOptional,
+  folders, saveFolderSettings, onFinalize, bindingOptional, soulGeneration,
 }: Props) {
   const t = useT();
   const { isMobile } = useDevice();
@@ -414,7 +417,7 @@ export default function SystemPromptUpdater({
   // contents (all layers verbatim — no parsing/recognition).
   const [leftText, setLeftText] = useState('');
   const [rightText, setRightText] = useState('');
-  // The FINISHED soul of this conversation, `<baseName>_<currentIndex>.md`, as
+  // The FINISHED soul of this conversation, `<being>_<currentLabel>.md`, as
   // it is on disk. The left pane is a working copy of it (see writeSpuWorkFile
   // in systemPromptStorage.ts), so this is kept separately for two jobs the
   // pane itself can no longer do: say truthfully whether the pane has diverged
@@ -686,30 +689,40 @@ export default function SystemPromptUpdater({
   // When the summary inherits the updater's model it must inherit its auth path too.
   const summaryAuthMode = forceMimoForSummary ? undefined : effectiveAuthMode;
 
-  const titleParsed = useMemo(() => parseTitleIndex(title), [title]);
-  const currentIndex = titleParsed?.index ?? 1;
-  const baseName = titleParsed?.base ?? title;
-  // Who the agents are told they are working on — NOT `baseName`.
+  // ── Which soul this conversation runs, and which one it writes ───────────
   //
-  // `baseName` is the conversation TITLE with its trailing `_<n>` removed, and
-  // for every `<being>_<n>` conversation that equals the being's name, which is
-  // why it read correctly for years. It stops being a name the moment a title
-  // does not end in a number: `Genesis_01_Claude_Web` does not parse, so
-  // `baseName` becomes the whole title and the agents were told
-  // `Subject: Genesis_01_Claude_Web`. Genesis is exactly the mode you point at
-  // such a conversation, so that is where it bites.
+  // `soulGeneration` is resolved by the component that owns the conversation
+  // LIST (NexusApp), because the answer for a title outside the plain
+  // `<being>_<n>` convention is "the row above this one" — see
+  // soulGeneration.ts. The local `resolveSoulGeneration` is the fallback for
+  // when the prop is absent (an older caller, or a conversation whose folder
+  // has no sibling list yet); it gives the same answer for every numbered
+  // title, and treats a hyphenated one as the head.
+  const soulGen: SoulGeneration = useMemo(
+    () => soulGeneration ?? resolveSoulGeneration({ title, identityName: folderName }),
+    [soulGeneration, title, folderName],
+  );
+  const currentLabel = soulGen.currentLabel;
+  const nextLabel = soulGen.nextLabel;
+
+  // THE on-disk key for everything soul-shaped: the BEING, not a parsed title.
   //
-  // `folderName` IS the being — it is what the footer, summaries, changelogs
-  // and settings panes all key on. Same fallback shape the diff-viewer file
-  // naming already uses below (`parsed?.base ?? folderName`). In the normal
-  // case the two are identical, so this changes nothing; it only changes the
-  // case that was wrong.
+  // This used to be `baseName` — the title with its trailing `_<n>` stripped —
+  // which equals the being's name for every `<being>_<n>` conversation, and so
+  // read correctly for years. It stops being a name the moment the title does
+  // not end in a number, and then it is still used to build a PATH:
+  // `Аналитик_1-1` produced `beings/Аналитик_1-1/soul/Аналитик_1-1_2.md`, a
+  // whole second being folder (2026-10-24, measured on disk).
   //
-  // Deliberately NOT used for file paths: soul files stay keyed by `baseName`,
-  // because that is where the existing ones already live. (That the two keys
-  // can disagree at all is a real inconsistency, but renaming files is not a
-  // fix that belongs in a patch about subject lines.)
-  const subjectName = folderName.trim() || baseName;
+  // MEASURED before switching, over all 20 folders that carry a `soul/`: every
+  // existing soul filename already begins with `<folder>_`, so the two keys
+  // agree everywhere they are both defined and nothing on disk is orphaned.
+  const soulKey = folderName;
+
+  // Who the agents are told they are working on. Same source as the path key
+  // now; kept as its own name because it answers a different question (a
+  // subject line, not a directory) and `folderName` can in principle be blank.
+  const subjectName = folderName.trim() || title;
   const summaryKey = title;
 
   const folder = useMemo(
@@ -726,9 +739,9 @@ export default function SystemPromptUpdater({
       setStatusMessage(t('spu.st.loading'));
       try {
         const [curRes, nextRes, workRes] = await Promise.all([
-          fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`).then((r) => r.json()),
-          fetch(`/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex + 1}`).then((r) => r.json()),
-          fetch(`/api/system-prompts/work?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`).then((r) => r.json()),
+          fetch(`/api/system-prompts?folder=${encodeURIComponent(soulKey)}&label=${encodeURIComponent(currentLabel)}`).then((r) => r.json()),
+          fetch(`/api/system-prompts?folder=${encodeURIComponent(soulKey)}&label=${encodeURIComponent(nextLabel)}`).then((r) => r.json()),
+          fetch(`/api/system-prompts/work?folder=${encodeURIComponent(soulKey)}&label=${encodeURIComponent(currentLabel)}`).then((r) => r.json()),
         ]);
         const realRaw = (curRes?.contents || '').replace(/\s+$/, '');
         const nextRaw = (nextRes?.contents || '').replace(/\s+$/, '');
@@ -751,7 +764,7 @@ export default function SystemPromptUpdater({
         // next file, the right side stays EMPTY (we do NOT copy the left over —
         // that previously made it look like a draft already existed). Because
         // lastSavedRightRef matches the empty rightText, the right auto-save
-        // effect won't write a spurious empty <baseName>_<index+1>.md on open.
+        // effect won't write a spurious empty <being>_<nextLabel>.md on open.
         setLeftText(leftRaw);
         setRightText(nextRaw);
         setUpdateStatus({ state: 'idle' });
@@ -821,7 +834,7 @@ export default function SystemPromptUpdater({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, baseName, currentIndex, agentFolder]);
+  }, [open, soulKey, currentLabel, nextLabel, agentFolder]);
 
   // ── Load agents + deletion patterns for the current language folder ──────
   useEffect(() => {
@@ -894,9 +907,7 @@ export default function SystemPromptUpdater({
   const openCompare = useCallback(async () => {
     const viewerPath = diffViewerPath;
     if (!viewerPath) return;
-    const parsed = parseTitleIndex(title);
-    const base = (parsed?.base ?? folderName).replace(/[^\w.\-]+/g, '_');
-    const n = parsed?.index ?? 1;
+    const base = soulKey.replace(/[^\w.\-]+/g, '_');
     try {
       const res = await fetch('/api/diff-viewer', {
         method: 'POST',
@@ -906,8 +917,8 @@ export default function SystemPromptUpdater({
           viewerPath,
           leftText,
           rightText,
-          leftName: `${base}_${n}_left.md`,
-          rightName: `${base}_${n + 1}.md`,
+          leftName: `${base}_${currentLabel}_left.md`,
+          rightName: `${base}_${nextLabel}.md`,
         }),
       });
       const data = await res.json();
@@ -919,7 +930,7 @@ export default function SystemPromptUpdater({
     } catch (err: any) {
       setStatusMessage(`Diff viewer failed: ${err?.message ?? err}`);
     }
-  }, [diffViewerPath, title, folderName, leftText, rightText]);
+  }, [diffViewerPath, soulKey, currentLabel, nextLabel, leftText, rightText]);
 
   // Poll the temp files while a session is open. Only apply a side when the
   // file no longer matches what we last wrote — that means the user saved an
@@ -1041,14 +1052,14 @@ export default function SystemPromptUpdater({
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/system-prompts/backups?folder=${encodeURIComponent(baseName)}`);
+        const r = await fetch(`/api/system-prompts/backups?folder=${encodeURIComponent(soulKey)}`);
         if (!r.ok) return;
         const d = await r.json();
         if (!cancelled) setSoulBackups(Array.isArray(d?.backups) ? d.backups : []);
       } catch { /* no backups yet */ }
     })();
     return () => { cancelled = true; };
-  }, [open, baseName]);
+  }, [open, soulKey]);
 
   const beforeBackups = useMemo(() => soulBackups.filter((b) => b.phase === 'BEFORE'), [soulBackups]);
   const afterBackups = useMemo(() => soulBackups.filter((b) => b.phase === 'AFTER'), [soulBackups]);
@@ -1057,26 +1068,26 @@ export default function SystemPromptUpdater({
   // never block the transition it is protecting.
   const writeSoulBackup = useCallback(async (
     phase: 'BEFORE' | 'AFTER',
-    fromIndex: number,
-    toIndex: number,
+    fromLabel: string,
+    toLabel: string,
     contents: string
   ) => {
     try {
       await fetch('/api/system-prompts/backups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: baseName, fromIndex, toIndex, phase, contents }),
+        body: JSON.stringify({ folder: soulKey, fromLabel, toLabel, phase, contents }),
       });
     } catch { /* best-effort */ }
-  }, [baseName]);
+  }, [soulKey]);
 
   // Load a chosen snapshot into the matching pane; the existing auto-save then
-  // persists it to the current index files. BEFORE → left (current soul),
+  // persists it to this generation's files. BEFORE → left (current soul),
   // AFTER → right (next draft).
   const restoreBackup = useCallback(async (phase: 'BEFORE' | 'AFTER', filename: string) => {
     if (!filename) return;
     try {
-      const r = await fetch(`/api/system-prompts/backups?folder=${encodeURIComponent(baseName)}&file=${encodeURIComponent(filename)}`);
+      const r = await fetch(`/api/system-prompts/backups?folder=${encodeURIComponent(soulKey)}&file=${encodeURIComponent(filename)}`);
       const d = await r.json();
       if (!r.ok || typeof d?.contents !== 'string') {
         setStatusMessage(t('spu.backupRestoreFailed'));
@@ -1092,7 +1103,7 @@ export default function SystemPromptUpdater({
     } catch {
       setStatusMessage(t('spu.backupRestoreFailed'));
     }
-  }, [baseName, t]);
+  }, [soulKey, t]);
 
   // ── Auto-save summary ────────────────────────────────────────────────────
   useEffect(() => {
@@ -1115,8 +1126,8 @@ export default function SystemPromptUpdater({
     return () => clearTimeout(h);
   }, [open, summaryKey, folderName, summaryText]);
 
-  // ── Auto-save LEFT → working copy for <currentIndex> ─────────────────────
-  // NOT `<baseName>_<currentIndex>.md`. That file is the finished soul of a
+  // ── Auto-save LEFT → working copy for <currentLabel> ─────────────────────
+  // NOT `<being>_<currentLabel>.md`. That file is the finished soul of a
   // closed generation; a debounced 800ms effect is the last thing that should
   // be allowed to touch it.
   useEffect(() => {
@@ -1129,7 +1140,7 @@ export default function SystemPromptUpdater({
         const r = await fetch('/api/system-prompts/work', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folder: baseName, index: currentIndex, contents: leftText }),
+          body: JSON.stringify({ folder: soulKey, label: currentLabel, contents: leftText }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         lastSavedLeftRef.current = leftText;
@@ -1137,9 +1148,9 @@ export default function SystemPromptUpdater({
       } catch { setAutoSaveState('error'); }
     }, 800);
     return () => clearTimeout(h);
-  }, [open, leftText, baseName, currentIndex]);
+  }, [open, leftText, soulKey, currentLabel]);
 
-  // ── Auto-save RIGHT → <baseName>_<currentIndex+1>.md ─────────────────────
+  // ── Auto-save RIGHT → <being>_<nextLabel>.md ─────────────────────────────
   useEffect(() => {
     // Suppress auto-save during live streaming (don't persist the raw partial
     // with the sentinel). When streaming ends this re-runs and saves the final.
@@ -1152,7 +1163,7 @@ export default function SystemPromptUpdater({
         const r = await fetch('/api/system-prompts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folder: baseName, index: currentIndex + 1, contents: rightText }),
+          body: JSON.stringify({ folder: soulKey, label: nextLabel, contents: rightText }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         lastSavedRightRef.current = rightText;
@@ -1160,7 +1171,7 @@ export default function SystemPromptUpdater({
       } catch { setAutoSaveState('error'); }
     }, 800);
     return () => clearTimeout(h);
-  }, [open, rightText, baseName, currentIndex, streamingUpdate]);
+  }, [open, rightText, soulKey, nextLabel, streamingUpdate]);
 
   // ── Auto-save header / focus / summary settings ──────────────────────────
   useEffect(() => {
@@ -1203,11 +1214,11 @@ export default function SystemPromptUpdater({
   const conversationLogText = useMemo(() => {
     return originalMessages
       .map((m) => {
-        const speaker = m.role === 'user' ? (m.name || 'User') : (m.name || baseName);
+        const speaker = m.role === 'user' ? (m.name || 'User') : (m.name || subjectName);
         return `[${speaker}]\n${m.content || ''}`;
       })
       .join('\n\n');
-  }, [originalMessages, baseName]);
+  }, [originalMessages, subjectName]);
 
   // ── One streaming /api/chat call. Returns the accumulated visible text for
   // THIS call, reporting live progress through `onProgress`. Throws on error.
@@ -1357,7 +1368,7 @@ export default function SystemPromptUpdater({
   const reloadLeftFromRealSoul = useCallback(async () => {
     try {
       const r = await fetch(
-        `/api/system-prompts?folder=${encodeURIComponent(baseName)}&index=${currentIndex}`
+        `/api/system-prompts?folder=${encodeURIComponent(soulKey)}&label=${encodeURIComponent(currentLabel)}`
       );
       const d = await r.json();
       if (d?.error) throw new Error(d.error);
@@ -1371,15 +1382,15 @@ export default function SystemPromptUpdater({
     } catch (e: any) {
       setStatusMessage(t('spu.work.reloadFailed').replace('{e}', e?.message || String(e)));
     }
-  }, [baseName, currentIndex, t]);
+  }, [soulKey, currentLabel, t]);
 
-  // The ONLY path from the pane back onto `<baseName>_<currentIndex>.md`, and
+  // The ONLY path from the pane back onto `<being>_<currentLabel>.md`, and
   // the reason it is safe is that it cannot happen by itself: a confirm the
   // operator has to read, and a dated BEFORE snapshot of the file it is about
   // to replace. Needed, not decorative — hand-writing Layers 1-3 for a brand
   // new being is how a first-generation soul file comes into existence at all.
   const writeLeftIntoRealSoul = useCallback(async () => {
-    const fileName = `${baseName}_${currentIndex}.md`;
+    const fileName = `${soulKey}_${currentLabel}.md`;
     // split/join, NOT `.replace('{file}', …)`: a string pattern substitutes the
     // FIRST match only, and this text names the file twice — the second one
     // would reach the operator as the literal characters `{file}`. Same shape
@@ -1389,12 +1400,12 @@ export default function SystemPromptUpdater({
     if (!confirmed) return;
     try {
       if (realSoulText.trim()) {
-        await writeSoulBackup('BEFORE', currentIndex, currentIndex + 1, realSoulText);
+        await writeSoulBackup('BEFORE', currentLabel, nextLabel, realSoulText);
       }
       const r = await fetch('/api/system-prompts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: baseName, index: currentIndex, contents: leftText }),
+        body: JSON.stringify({ folder: soulKey, label: currentLabel, contents: leftText }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setRealSoulText(leftText);
@@ -1402,7 +1413,7 @@ export default function SystemPromptUpdater({
     } catch (e: any) {
       setStatusMessage(t('spu.work.writeFailed').replace('{e}', e?.message || String(e)));
     }
-  }, [baseName, currentIndex, leftText, realSoulText, writeSoulBackup, t]);
+  }, [soulKey, currentLabel, nextLabel, leftText, realSoulText, writeSoulBackup, t]);
 
   // ── Shift right pane -> left pane before a run starts ────────────────────
   // Matches how Lizard-kun already used the two panes by hand: when the right
@@ -1430,8 +1441,9 @@ export default function SystemPromptUpdater({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          folder: baseName,
-          index: currentIndex,
+          folder: soulKey,
+          currentLabel,
+          nextLabel,
           previousLeftContents,
           newLeftContents,
         }),
@@ -1452,7 +1464,7 @@ export default function SystemPromptUpdater({
     setLeftText(newLeftContents);
     setRightText('');
     return newLeftContents;
-  }, [resumeFromRight, rightText, leftText, baseName, currentIndex, aiName, t]);
+  }, [resumeFromRight, rightText, leftText, soulKey, currentLabel, nextLabel, aiName, t]);
 
   // ── Run the single identity (Layers 1-3) update ──────────────────────────
   // ONE agent, ONE logical pass over the whole identity. Supports continuation:
@@ -1638,7 +1650,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter, maybeShiftRightToLeft]);
+  }, [getAgentFile, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter, maybeShiftRightToLeft]);
 
   // ── Run the Layers 1-4 redistribution ────────────────────────────────────
   // A third mode, separate from both update paths above. The agent sees the
@@ -1847,7 +1859,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title, maybeShiftRightToLeft]);
+  }, [getAgentFile, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title, maybeShiftRightToLeft]);
 
   // ── Run the externalization & indexing pass (式神ζ) ───────────────────────
   // Structurally the closest analog is runRedistribute(): no conversation
@@ -2025,7 +2037,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, resumeFromRight, rightText, agentFolder, streamChat, title, maybeShiftRightToLeft]);
+  }, [getAgentFile, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, resumeFromRight, rightText, agentFolder, streamChat, title, maybeShiftRightToLeft]);
 
   // ── Run the genesis (first-time) construction ────────────────────────────
   // A fourth mode, distinct from all three above: it assumes NO prior Layers
@@ -2162,7 +2174,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, baseName, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, folderName, title, resumeFromRight, rightText, maybeShiftRightToLeft]);
+  }, [getAgentFile, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, folderName, title, resumeFromRight, rightText, maybeShiftRightToLeft]);
 
 
   // First-message timestamp for summary baking
@@ -2313,11 +2325,13 @@ export default function SystemPromptUpdater({
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
     }
-    // `subjectName` listed explicitly: the other four runners already depend on
-    // both `baseName` and `folderName` (which together determine it), this one
-    // depends on `baseName` alone and would hold a stale subject if the being
-    // were renamed mid-session.
-  }, [agents, baseName, subjectName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
+    // `subjectName` listed explicitly rather than relying on `folderName`
+    // appearing in the list — it is what this runner actually reads, and the
+    // derivation (`folderName.trim() || title`) is one indirection away. It
+    // would otherwise hold a stale subject if the being were renamed
+    // mid-session. (Both halves of the old reason — a `baseName` that was a
+    // parsed title — are gone: there is one key now, the being.)
+  }, [agents, subjectName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the
@@ -2450,7 +2464,7 @@ export default function SystemPromptUpdater({
       const ok = window.confirm(
         t('spu.commitTruncatedConfirm')
           .replace('{n}', String(rightText.trim().length))
-          .replace('{file}', `${baseName}_${currentIndex + 1}.md`)
+          .replace('{file}', `${soulKey}_${nextLabel}.md`)
       );
       if (!ok) {
         setStatusMessage(t('spu.commitTruncatedCancelled'));
@@ -2460,20 +2474,18 @@ export default function SystemPromptUpdater({
     setLoading(true);
     setStatusMessage('Saving current + next prompt files…');
     try {
-      const nextIndex = currentIndex + 1;
-
       // Snapshot the stage before committing it: the soul at N (left) and the
       // result at N+1 (right). Best-effort — a backup failure must not block
       // the transition. Empty panes are skipped.
       if (leftText.trim()) {
-        await writeSoulBackup('BEFORE', currentIndex, nextIndex, leftText);
+        await writeSoulBackup('BEFORE', currentLabel, nextLabel, leftText);
       }
       if (rightText.trim()) {
-        await writeSoulBackup('AFTER', currentIndex, nextIndex, rightText);
+        await writeSoulBackup('AFTER', currentLabel, nextLabel, rightText);
       }
 
       // The LEFT pane is deliberately NOT persisted here. It used to be
-      // written to `<baseName>_<currentIndex>.md`, which meant committing a
+      // written to `<being>_<currentLabel>.md`, which meant committing a
       // new generation also rewrote the previous one's finished soul with
       // whatever the pane happened to hold. `<N>.md` is written exactly once —
       // as the RIGHT pane of generation N-1, by the step below — and that is
@@ -2485,7 +2497,7 @@ export default function SystemPromptUpdater({
       const saveRes = await fetch('/api/system-prompts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: baseName, index: nextIndex, contents: rightText }),
+        body: JSON.stringify({ folder: soulKey, label: nextLabel, contents: rightText }),
       });
       if (!saveRes.ok) throw new Error('Failed to save next prompt file');
 
@@ -2506,14 +2518,14 @@ export default function SystemPromptUpdater({
 
       setStatusMessage('Finalizing — cloning conversation…');
       await persistHeaderFooter();
-      await onFinalize({ newSystemPrompt: fullPrompt, newIndex: nextIndex });
+      await onFinalize({ newSystemPrompt: fullPrompt, newLabel: nextLabel });
       onClose();
     } catch (e: any) {
       setStatusMessage(`Finalize failed: ${e.message}`);
     } finally {
       setLoading(false);
     }
-  }, [baseName, currentIndex, deletionPatterns, header, leftText, rightText, truncatedPane, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
+  }, [soulKey, currentLabel, nextLabel, deletionPatterns, header, leftText, rightText, truncatedPane, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
 
   if (!open) return null;
 
@@ -2565,9 +2577,9 @@ export default function SystemPromptUpdater({
                       it stopped. A header that names a file the pane cannot
                       write is the exact failure the working copy exists to
                       prevent, one level up. */}
-                  <span className="text-blue-500">Left:</span> {baseName}/spu_work/{baseName}_{currentIndex}_left.md
+                  <span className="text-blue-500">Left:</span> {soulKey}/spu_work/{soulKey}_{currentLabel}_left.md
                   {' · '}
-                  <span className="text-blue-500">Right:</span> {baseName}/{baseName}_{currentIndex + 1}.md
+                  <span className="text-blue-500">Right:</span> {soulKey}/{soulKey}_{nextLabel}.md
                 </div>
                 {/* Dropped on mobile, where it wrapped to three rows — the
                     widest single thing in the header. Everything an operator
@@ -2584,7 +2596,7 @@ export default function SystemPromptUpdater({
                     {forceUpdaterModel
                       ? <span className="text-indigo-500">{effectiveAiName} / {effectiveSpecificModel}{effectiveAuthMode === 'oauth' ? ' (OAuth)' : ''} <span className="opacity-70">(overriding {aiName}/{specificModel})</span></span>
                       : <span>{aiName} / {specificModel}</span>}
-                    {' '}· {baseName}_{currentIndex} → _{currentIndex + 1} · Folder: {folderName}
+                    {' '}· {soulKey}_{currentLabel} → _{nextLabel} · Folder: {folderName}
                   </div>
                 )}
               </div>
@@ -2967,13 +2979,13 @@ export default function SystemPromptUpdater({
                   <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px]">
                     <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400">
                       {(realSoulExists ? t('spu.work.badge') : t('spu.work.noFile'))
-                        .replace('{file}', `${baseName}_${currentIndex}.md`)}
+                        .replace('{file}', `${soulKey}_${currentLabel}.md`)}
                     </span>
                     {realSoulExists && (
                       <button
                         onClick={reloadLeftFromRealSoul}
                         disabled={busy}
-                        title={t('spu.work.reloadTitle').replace('{file}', `${baseName}_${currentIndex}.md`)}
+                        title={t('spu.work.reloadTitle').replace('{file}', `${soulKey}_${currentLabel}.md`)}
                         className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed"
                       >
                         {t('spu.work.reload')}
@@ -2982,7 +2994,7 @@ export default function SystemPromptUpdater({
                     <button
                       onClick={writeLeftIntoRealSoul}
                       disabled={busy}
-                      title={t('spu.work.writeTitle').replace('{file}', `${baseName}_${currentIndex}.md`)}
+                      title={t('spu.work.writeTitle').replace('{file}', `${soulKey}_${currentLabel}.md`)}
                       className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-700 dark:text-rose-400 hover:bg-rose-500/25 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {t('spu.work.write')}

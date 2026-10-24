@@ -20,41 +20,42 @@ import {
  * the real soul" button.
  */
 
-// GET /api/system-prompts/work?folder=<name>&index=<n>
+// GET /api/system-prompts/work?folder=<being>&label=<generation>
 // Returns { contents: string | null }. `null` means no working copy exists for
-// this index yet — the caller seeds the pane from the real soul. An EMPTY
+// this generation yet — the caller seeds the pane from the real soul. An EMPTY
 // string is a real answer (the pane was deliberately emptied) and is NOT the
 // same as null.
+//
+// `label` was an integer `index` until 2026-10-24 (soulGeneration.ts).
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const folder = url.searchParams.get('folder') || '';
-    const indexStr = url.searchParams.get('index') || '';
-    const index = parseInt(indexStr, 10);
-    if (!folder || isNaN(index)) {
+    const label = (url.searchParams.get('label') || '').trim();
+    if (!folder || !label) {
       return NextResponse.json(
-        { error: 'folder and integer index are required' },
+        { error: 'folder and label are required' },
         { status: 400 }
       );
     }
-    const contents = await readSpuWorkFile(folder, index);
+    const contents = await readSpuWorkFile(folder, label);
     return NextResponse.json({ contents });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
 
-// POST /api/system-prompts/work  body={ folder, index, contents }
+// POST /api/system-prompts/work  body={ folder, label, contents }
 export async function POST(req: Request) {
   try {
-    const { folder, index, contents } = await req.json();
-    if (typeof folder !== 'string' || typeof index !== 'number' || typeof contents !== 'string') {
+    const { folder, label, contents } = await req.json();
+    if (typeof folder !== 'string' || typeof label !== 'string' || typeof contents !== 'string') {
       return NextResponse.json(
-        { error: 'folder (string), index (number), contents (string) required' },
+        { error: 'folder (string), label (string), contents (string) required' },
         { status: 400 }
       );
     }
-    const path = await writeSpuWorkFile(folder, index, contents);
+    const path = await writeSpuWorkFile(folder, label, contents);
     return NextResponse.json({ ok: true, path });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

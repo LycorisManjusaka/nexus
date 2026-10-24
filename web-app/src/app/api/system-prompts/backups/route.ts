@@ -33,26 +33,29 @@ export async function GET(req: Request) {
 }
 
 // POST /api/system-prompts/backups
-// body = { folder, fromIndex, toIndex, phase: 'BEFORE'|'AFTER', contents }
+// body = { folder, fromLabel, toLabel, phase: 'BEFORE'|'AFTER', contents }
+//
+// `fromLabel`/`toLabel` are generation LABELS (`"24"`, or `"1-5"` for a split
+// archive) — integers until 2026-10-24. See soulGeneration.ts.
 export async function POST(req: Request) {
   try {
-    const { folder, fromIndex, toIndex, phase, contents } = await req.json();
+    const { folder, fromLabel, toLabel, phase, contents } = await req.json();
     if (
       typeof folder !== 'string' ||
-      typeof fromIndex !== 'number' ||
-      typeof toIndex !== 'number' ||
+      typeof fromLabel !== 'string' ||
+      typeof toLabel !== 'string' ||
       (phase !== 'BEFORE' && phase !== 'AFTER') ||
       typeof contents !== 'string'
     ) {
       return NextResponse.json(
-        { error: 'folder, fromIndex, toIndex, phase (BEFORE|AFTER), contents required' },
+        { error: 'folder, fromLabel, toLabel, phase (BEFORE|AFTER), contents required' },
         { status: 400 }
       );
     }
     const filename = await backupSoulSnapshot(
       folder,
-      fromIndex,
-      toIndex,
+      fromLabel,
+      toLabel,
       phase as SoulBackupPhase,
       contents
     );

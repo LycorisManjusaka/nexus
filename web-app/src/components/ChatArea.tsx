@@ -445,7 +445,7 @@ function modelOnFamilySwitch(
   return defaultModelForFamily(newAiName);
 }
 
-export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, newerLogTitle }: any) {
+export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, newerLogTitle, soulGeneration }: any) {
   const t = useT();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
@@ -7607,14 +7607,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           });
           if (fetchFolders) fetchFolders();
         }}
-        onFinalize={async ({ newSystemPrompt, newIndex }) => {
+        // Which soul file this conversation runs and which one an update
+        // writes. Resolved by NexusApp (it owns the conversation list, and the
+        // non-numbered case is answered by the row above) and passed straight
+        // through — ChatArea has no opinion about it. See soulGeneration.ts.
+        soulGeneration={soulGeneration}
+        onFinalize={async ({ newSystemPrompt, newLabel }) => {
           // Hand off to page.tsx which owns the conversations list (clone +
           // mark first-original + switch).
           if (onCloneWithSystemPrompt) {
             await onCloneWithSystemPrompt({
               sourceId: convoId,
               newSystemPrompt,
-              newIndex,
+              newLabel,
             });
           }
         }}

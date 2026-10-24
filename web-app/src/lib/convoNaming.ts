@@ -9,8 +9,12 @@
  */
 
 /** Escape a name so it can sit inside a RegExp literally. Identity names are
- *  user-chosen and frequently CJK; a stray `(` or `+` must not become syntax. */
-function escapeForRegExp(s: string): string {
+ *  user-chosen and frequently CJK; a stray `(` or `+` must not become syntax.
+ *
+ *  Exported for `soulGeneration.ts`, which builds the same `^<identity>_…`
+ *  shape for hyphenated generation labels. A second copy of this is exactly how
+ *  two "identical" predicates in this codebase drifted apart once already. */
+export function escapeForRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
@@ -149,8 +153,19 @@ export function pickLatestConversation<T extends { title?: string | null; update
  * Rename half of the same convention: if `title` belongs to `oldName`, hand
  * back the same number under `newName`. Anything else comes back untouched —
  * a hand-picked title survives an identity rename unchanged.
+ *
+ * Accepts hyphen-segmented labels (`<name>_21-1`) as well as plain integers,
+ * because `renameFolder` drives FOUR stores through this one predicate — log
+ * titles, soul filenames, summaries and changelogs. A split archive
+ * (`soulGeneration.ts` explains where those come from) left the narrow shape
+ * behind: the files moved with the directory but kept the old stem, so the soul
+ * lookup missed and the pane silently re-seeded from `<new>_1`.
+ *
+ * MEASURED 2026-10-24 over this installation's 490 titles: the wider shape
+ * matches 22 that the narrow one did not — 12 of 先輩's split archive, 10 of
+ * Аналитик's — and ZERO that it did. Nothing already working is reclassified.
  */
 export function retitleForRenamedIdentity(title: string, oldName: string, newName: string): string {
-  const m = new RegExp(`^${escapeForRegExp(oldName)}_(\\d+)$`).exec((title || '').trim());
+  const m = new RegExp(`^${escapeForRegExp(oldName)}_(\\d+(?:-\\d+)*)$`).exec((title || '').trim());
   return m ? `${newName}_${m[1]}` : title;
 }

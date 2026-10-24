@@ -8,6 +8,7 @@ import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { DeepLink, orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import { nextConversationTitle, newerNumberedSibling, pickLatestConversation } from '@/lib/convoNaming';
+import { resolveSoulGeneration, newerSiblingTitleInOrder, titleForGeneration } from '@/lib/soulGeneration';
 import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
 import { resolveUiFontScale } from '@/lib/uiFontScale';
@@ -546,8 +547,8 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   // matches the layers file we just wrote at <folder>/<folder>_<N>.md).
   // Used by the System Prompt Updater modal — see SystemPromptUpdater.tsx.
   const cloneChatWithSystemPrompt = async ({
-    sourceId, newSystemPrompt, newIndex,
-  }: { sourceId: string; newSystemPrompt: string; newIndex: number }) => {
+    sourceId, newSystemPrompt, newLabel,
+  }: { sourceId: string; newSystemPrompt: string; newLabel: string }) => {
     // Only fires when something ELSE is busy: the Soul Updater's own 'spu' key
     // is held by `running`, and its finalize path uses `loading` instead, so
     // the run that calls this is not itself in the registry. What this catches
@@ -561,12 +562,26 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     data.id = newId;
     data.systemPrompt = newSystemPrompt;
 
-    // Force the title to "<base>_<newIndex>" (half-width), matching the layer
-    // file naming "<base>_<newIndex>.md". We strip any existing trailing index
-    // suffix (legacy "＃<full-width>" or "#"/"_" + digits) first, then append.
+    // Force the title to "<being>_<newLabel>" (half-width), matching the soul
+    // file this commit just wrote, `<being>_<newLabel>.md`.
+    //
+    // Built from the BEING and the label, not edited out of the old title. The
+    // old way stripped a trailing `[_#＃]<digits>` and appended — which on
+    // `Аналитик_3-2` stripped nothing, because the digits are not at the end,
+    // and produced `Аналитик_3-2_4` beside a soul named `Аналитик_4.md`. The
+    // label already carries the whole answer (soulGeneration.ts decides it,
+    // including the owner's rule that the HEAD drops the hyphen: `3-2` → `4`,
+    // so the conversation that goes back out to the web app is `Аналитик_4`
+    // and its own future archive can be `_4-1`, `_4-2`, … without colliding).
+    //
+    // `folderName` is the being everywhere else in this file; falling back to
+    // the old stripping keeps a log whose `folderName` is somehow blank from
+    // getting a title that starts with "_".
     const oldTitle: string = data.title || 'Untitled';
-    const base = oldTitle.replace(/\s*[_#＃][0-9０-９]+\s*$/, '');
-    data.title = `${base}_${newIndex}`;
+    const being: string = (data.folderName || '').trim();
+    data.title = being
+      ? titleForGeneration(being, newLabel)
+      : `${oldTitle.replace(/\s*[_#＃][0-9０-９]+\s*$/, '')}_${newLabel}`;
 
     // Treat the entire cloned history as carry-over context. The new
     // "firstOriginalIsNext" flag is consumed by ChatArea.handleSend when
@@ -847,6 +862,25 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
               activeFolder.name,
               conversations.filter(c => c.folderName === activeFolder.name).map(c => c.title),
             )}
+            // Which soul file the open conversation RUNS, and which one the
+            // Soul Updater writes. Computed here for the same reason as the
+            // band above: for a title outside the `<being>_<n>` convention the
+            // next generation is "the row above this one", and this component
+            // owns the list the rows come from.
+            //
+            // A split archive is exactly that case — Аналитик_1-1 … _3-2 — and
+            // the Updater used to answer it with two fallbacks at once, writing
+            // `beings/Аналитик_1-1/soul/Аналитик_1-1_2.md`. See
+            // soulGeneration.ts; the rules are the owner's.
+            soulGeneration={resolveSoulGeneration({
+              title: conversations.find(c => c.id === currentConvoId)?.title,
+              identityName: activeFolder.name,
+              newerTitle: newerSiblingTitleInOrder(
+                String(currentConvoId),
+                conversations.filter(c => c.folderName === activeFolder.name),
+                activeFolder.settings?.convoOrder || [],
+              ),
+            })}
             fetchFolders={fetchFolders}
             onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
           />
