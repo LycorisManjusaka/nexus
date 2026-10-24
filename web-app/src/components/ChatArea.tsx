@@ -2212,7 +2212,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         }
         const plan: RestorePlanReply = await res.json();
         restoreFloorRef.current = { convoId, floor: plan.nextNeeded };
-        if (!plan.messages || plan.messages.length === 0) return;
+        if (!plan.messages || plan.messages.length === 0) {
+          // Say WHY, in the console. Three different refusals used to produce
+          // the same silence — "nothing older exists", "this is a past
+          // generation so I won't grow it", and (before 2026-10-23) "the gate
+          // never ran because there was no marker". From outside they were
+          // indistinguishable, and the one person who hit it spent half an hour
+          // guessing. No UI notice: every generation-1 conversation would raise
+          // one on open, and a banner that always appears stops being read.
+          // Printed once per conversation — the `restoreFloorRef` memo above
+          // returns early on the next pass (`floor === null` for an empty
+          // reply).
+          if (plan.reason) console.log(`[handover-restore] nothing restored (${plan.reason}) for "${title}".`);
+          return;
+        }
         // Re-check against the live list: it is the authoritative one, and it
         // can have changed while the request was in flight.
         //

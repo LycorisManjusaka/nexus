@@ -367,8 +367,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.identity.select': 'Select…',
   'sidebar.newFolder': 'New Being',
   'sidebar.newChat': 'New Chat',
-  'sidebar.import.json': 'Import JSON log(s)',
-  'sidebar.import.md': 'Import log(s) — .md / .txt',
+  'sidebar.import.json': 'Import NEXUS log(s) — .json',
+  'sidebar.import.md': 'Import log(s) — .md / .txt / .json',
+  // Both items accept ".json", so the picker cannot keep them apart. Each one
+  // names the OTHER when it recognises the file — a dead end that only says
+  // what the file is not would send the reader looking for a missing feature.
+  'sidebar.import.useNexusJson':
+    'This is a NEXUS log, not a DeepSeek conversation. Import it with "Import NEXUS log(s) — .json".',
+  'sidebar.import.useMdItem':
+    'This looks like a DeepSeek conversation. Import it with "Import log(s) — .md / .txt / .json", ' +
+    'which converts it, names it from the conversation\'s own title, and splits it at the log cap.',
   'sidebar.import.plan':
     'Import plan — nothing has been written yet.\n\n' +
     '{plan}\n\n' +
@@ -379,13 +387,17 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // Shown only when the import will actually split, because it is about the
   // part names. A split archive is history, so the parts are named OUTSIDE the
   // generation chain on purpose — they cannot take over "latest conversation".
-  // The price is stated here rather than discovered: handover restore walks the
-  // `<name>_<n>` chain, so it does not reach across "-1" / "-2".
+  // Says which row to open, because that is the part the reader has to act on.
+  // Rewritten 2026-10-24: this used to warn that restore cannot reach across
+  // "-1" / "-2", which stopped being true when the walk gained the
+  // sidebar-order rule (see resolveHandoverChain).
   'sidebar.import.planSplit':
     'Split parts are named "-1", "-2", … which sits OUTSIDE the <being>_<n> generation chain, ' +
-    'so an imported archive can never take over "latest conversation". The cost: automatic ' +
-    'handover restore follows that chain, so it will not pull one part back into the next. ' +
-    'Rename the parts to <being>_1, <being>_2, … if you want them to behave as generations.\n\n',
+    'so an imported archive can never take over "latest conversation". Handover restore still ' +
+    'reaches across them: for a title with no generation number it follows the SIDEBAR ORDER, so ' +
+    'opening the TOP part pulls the parts below it back in as carried-over history, as far as the ' +
+    'conversation-log cap allows. Only the top row does that — the ones below it are history and ' +
+    'are left untouched.\n\n',
   'sidebar.loading': 'Loading conversations…',
   'sidebar.noHistory': 'No history in {folder}.',
   'sidebar.thisFolder': 'this being',
@@ -2054,8 +2066,13 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.identity.select': '選択…',
   'sidebar.newFolder': '新しい存在',
   'sidebar.newChat': '新しい会話',
-  'sidebar.import.json': 'JSONログを読み込む',
-  'sidebar.import.md': 'ログを読み込む（.md / .txt）',
+  'sidebar.import.json': 'NEXUS のログを読み込む（.json）',
+  'sidebar.import.md': 'ログを読み込む（.md / .txt / .json）',
+  'sidebar.import.useNexusJson':
+    'これは NEXUS のログで、DeepSeek の会話ではありません。「NEXUS のログを読み込む（.json）」から取り込んでください。',
+  'sidebar.import.useMdItem':
+    'これは DeepSeek の会話のようです。「ログを読み込む（.md / .txt / .json）」から取り込んでください。' +
+    '変換し、会話自身の題名から名前を付け、ログ上限で分割します。',
   'sidebar.import.plan':
     '読み込みの計画です。まだ何も書き込んでいません。\n\n' +
     '{plan}\n\n' +
@@ -2066,8 +2083,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.import.planSplit':
     '分割された部分は「-1」「-2」…という名前になります。これは <存在名>_<番号> の世代連鎖の' +
     '「外」で、取り込んだアーカイブが「最新の会話」を乗っ取れないようにするためです。' +
-    '代償：自動の引き継ぎ復元はその連鎖を辿るので、ある部分を次の部分へ引き戻すことはしません。' +
-    '世代として扱いたい場合は、部分を <存在名>_1、<存在名>_2 … に改名してください。\n\n',
+    '引き継ぎ復元はそれでも届きます：番号を持たない題名では「サイドバーの並び順」を辿るので、' +
+    '一番上の部分を開くと、その下の部分が引き継ぎの文脈として（会話ログ上限まで）戻ります。' +
+    '戻すのは一番上の行だけで、その下の部分は履歴として触りません。\n\n',
   'sidebar.loading': '会話を読み込んでいます…',
   'sidebar.noHistory': '{folder} には会話がありません。',
   'sidebar.thisFolder': 'この存在',

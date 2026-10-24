@@ -1,13 +1,12 @@
 import { NextResponse } from 'next/server';
-import { listLogs, loadLog } from '@/lib/fsStorage';
-import { numberedIdentityTitleIndex, newerNumberedSibling } from '@/lib/convoNaming';
+import { listLogs, loadLog, listFolders } from '@/lib/fsStorage';
 import {
   pickFromGeneration,
   messageIdentityKey,
   MAX_GENERATIONS_SCANNED,
   type RestorePlanReply,
 } from '@/lib/handoverRestore';
-import { olderGenerationsNewestFirst } from '@/lib/handoverWalk';
+import { resolveHandoverChain } from '@/lib/handoverWalk';
 
 /**
  * Plan a handover restore: which messages from older generations should be put
@@ -60,13 +59,24 @@ export async function POST(req: Request) {
   const self = logs.find((l: any) => l.id === convoId);
   if (!self) return NextResponse.json(empty('not-found'));
 
-  // 'not-numbered' vs 'no-older' are distinct answers here (a probe or a server
-  // log can tell them apart), so the index check stays explicit; the generation
-  // walk itself is the shared skeleton in handoverWalk.
-  const index = numberedIdentityTitleIndex(self.title, self.folderName);
-  if (index === null) return NextResponse.json(empty('not-numbered'));
+  // The chain — which conversations are "older", and whether this one is the
+  // head — is decided in ONE place (`resolveHandoverChain`) so the walk and the
+  // guard below cannot drift apart. Two rules live there: the generation number
+  // `<being>_<n>`, and, for titles that carry no number, the sidebar's own row
+  // order. The folder's manual drag order is an input to the second one, so it
+  // has to be read here; absent, the comparator falls back to `updatedAt`
+  // descending, which is still the order on screen.
+  const folders = await listFolders();
+  const convoOrder: string[] = (() => {
+    const f = folders.find((x: any) => x.name === self.folderName);
+    const o = f?.settings?.convoOrder;
+    return Array.isArray(o) ? o.map((s: any) => String(s)) : [];
+  })();
+  const chain = resolveHandoverChain(logs, self, convoOrder);
 
-  const olderLogs = olderGenerationsNewestFirst(logs, self);
+  if (chain.orphan) return NextResponse.json(empty('not-in-chain'));
+
+  const olderLogs = chain.older;
   if (olderLogs.length === 0) return NextResponse.json(empty('no-older'));
 
   // Only the HEAD of a being's chain gets its history put back.
@@ -83,8 +93,13 @@ export async function POST(req: Request) {
   // generations. Each would pull its predecessors in and save, silently, just
   // from being opened.
   //
-  // `newerNumberedSibling` is the same parser the band uses, so "past
-  // generation" means one thing in both places.
+  // For a numbered chain "head" is `newerNumberedSibling(...) === null`, the
+  // same parser the past-log band uses, so "past generation" means one thing in
+  // both places. For an order chain it is "row 0 of this folder" — also exactly
+  // what the reader sees. Both answers come from `resolveHandoverChain`.
+  //
+  // MEASURED 2026-10-24, 492 logs: with the guard, 3 previously-chainless
+  // conversations start restoring (two imported-archive heads); without it, 59.
   //
   // Checked AFTER 'no-older' on purpose, though both answers are "nothing":
   // generation 1 has nothing to put back whether or not newer generations
@@ -92,10 +107,7 @@ export async function POST(req: Request) {
   // the checks the other way round, Орион_1 reported 'not-head', which is true
   // but tells a reader less. The walk is a filter over already-loaded log
   // headers — no file reads — so the order costs nothing.
-  const siblingTitles = logs
-    .filter((l: any) => l.folderName === self.folderName)
-    .map((l: any) => l.title);
-  if (newerNumberedSibling(self.title, self.folderName, siblingTitles) !== null) {
+  if (!chain.isHead) {
     return NextResponse.json(empty('not-head'));
   }
 

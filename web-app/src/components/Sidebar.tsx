@@ -12,6 +12,7 @@ import {
   splitPartTitle,
   type DialectInfo,
 } from '@/lib/markdownLogic';
+import { deepSeekJsonToMarkdown, isDeepSeekJson } from '@/lib/deepseekJson';
 import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
@@ -393,9 +394,14 @@ export default function Sidebar({
           text = await file.text();
           const data = JSON.parse(text);
           if (!data || !Array.isArray(data.messages)) {
-            console.warn(`[json-import] "${file.name}" is not a NEXUS log. Head:\n${fileHead(text)}`);
+            // A DeepSeek conversation JSON is importable — through the other
+            // menu item, which carries the dialect, the split planner and the
+            // first-original marker. Say which one, rather than only saying
+            // what this file is not.
+            const hint = isDeepSeekJson(data) ? `\n\n${t('sidebar.import.useMdItem')}` : '';
+            console.warn(`[json-import] "${file.name}" is not a NEXUS log${isDeepSeekJson(data) ? ' (it is a DeepSeek conversation — use "Import log(s) — .md / .txt / .json")' : ''}. Head:\n${fileHead(text)}`);
             alert(withBuildTag(
-              `"${file.name}" ${t('sidebar.import.notNexusJson')}\n\n` +
+              `"${file.name}" ${t('sidebar.import.notNexusJson')}${hint}\n\n` +
               `${t('sidebar.import.head')}\n${fileHead(text)}`
             ));
             continue;
@@ -541,13 +547,41 @@ export default function Sidebar({
         parts: any[][];
         messages: number;
         tokens: number;
+        /** Things the converter had to decide — shown, never swallowed. */
+        notes: string[];
       };
       const plans: ImportPlan[] = [];
 
       for (const file of filesArray) {
         try {
-          const text = await file.text();
-          const title = file.name.replace(/\.[^/.]+$/, "");
+          let text = await file.text();
+          let title = file.name.replace(/\.[^/.]+$/, "");
+          const extraNotes: string[] = [];
+          // A DeepSeek conversation JSON is rendered to the dialect this
+          // importer already reads, then follows the identical path. It does
+          // NOT build messages of its own: the `[username]` tag rule, the
+          // timestamp rule, `[thinking]`, splitting, the first-original marker
+          // and the sidebar order then have exactly one implementation — the
+          // tested one. Byte-equality with ds_to_md.py (round-trip verified
+          // 44/44) is what holds the renderer to that verification.
+          //
+          // The TITLE comes from the JSON, not from the download's file name,
+          // which is `deepseek_history_<uuid>.json` and says nothing. That is
+          // also what makes `<being>_<n>` naming possible without renaming a
+          // file by hand.
+          if (/\.json$/i.test(file.name)) {
+            const data = JSON.parse(text);
+            // Name the other menu item instead of failing with "not a DeepSeek
+            // conversation", which is true and useless: a NEXUS log IS
+            // importable, just not here.
+            if (!isDeepSeekJson(data) && Array.isArray(data?.messages)) {
+              throw new Error(t('sidebar.import.useNexusJson'));
+            }
+            const conv = deepSeekJsonToMarkdown(data);
+            text = conv.markdown;
+            if (conv.title) title = conv.title;
+            extraNotes.push(...conv.notes);
+          }
           const dialect = detectDialect(text, activeFolder.name, validUserNames);
           // 4th arg picks the tokenizer profile for thinking-token estimates
           // only; it is the folder's aiName, not its display name (which the
@@ -596,6 +630,7 @@ export default function Sidebar({
             parts,
             messages: parsed.length,
             tokens: parsed.reduce((a, m) => a + messageTextTokens(m, tokenModel), 0),
+            notes: extraNotes,
           });
         } catch (err: any) {
           console.error(`[md-import] "${file.name}" threw while parsing:`, err);
@@ -603,6 +638,16 @@ export default function Sidebar({
           alert(withBuildTag(`${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}`));
         }
       }
+
+      // Order by the TITLE, not the file name. For .md the two are the same
+      // string, so this changes nothing there. For a DeepSeek JSON the file is
+      // called `deepseek_history_<uuid>.json` and the number in it is random —
+      // which the pre-sort above would read as the generation, scrambling the
+      // chain. Order is what handover restore follows for split parts
+      // (`resolveHandoverChain`), so a wrong order here is not cosmetic: it
+      // decides which conversation is the newest and what gets restored into
+      // it. Descending, matching the file pre-sort and "newest at top".
+      plans.sort((a, b) => extractNum(b.title) - extractNum(a.title));
 
       // ── State the plan, but only when it is not the plain case ───────────
       // A one-file, one-part, native import behaves exactly as it always has,
@@ -621,7 +666,11 @@ export default function Sidebar({
           `• ${p.fileName}  [${dialectName(p.dialect)}]  ${p.messages} msg / ~${p.tokens.toLocaleString()} tok` +
           (p.parts.length > 1
             ? `\n    → ${p.parts.length} × ${splitPartTitle(p.title, 0, p.parts.length)} … ${splitPartTitle(p.title, p.parts.length - 1, p.parts.length)}`
-            : `\n    → ${p.title}`)
+            : `\n    → ${p.title}`) +
+          // A decision the converter had to make (a renamed speaker label, an
+          // abandoned regeneration branch left out) belongs next to the file it
+          // was made about. Silent truncation reads as "covered everything".
+          p.notes.map(n => `\n    ⚠ ${n}`).join('')
         ).join('\n');
         // The split note rides inside {plan} so it sits next to the part names
         // it is about, and only when the import will actually split — saying it
@@ -1070,7 +1119,13 @@ export default function Sidebar({
           {t('sidebar.newChat')}
         </motion.button>
         <input type="file" multiple accept=".json" className="hidden" ref={importJsonRef} onChange={handleImportJson} />
-        <input type="file" multiple accept=".md,.markdown,.txt" className="hidden" ref={importMdRef} onChange={handleImportMd} />
+        {/* `.json` is here as well as on the NEXUS-log input: a DeepSeek
+            conversation JSON goes through THIS path, because it needs the
+            dialect, the split planner and the first-original marker. The other
+            input takes a NEXUS log, which is already a conversation. Picking
+            the wrong one is not punished with a silent failure — each says
+            which item the file belongs to. */}
+        <input type="file" multiple accept=".md,.markdown,.txt,.json" className="hidden" ref={importMdRef} onChange={handleImportMd} />
       </div>
 
       {orphanSummaries.length > 0 && (

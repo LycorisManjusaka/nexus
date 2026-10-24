@@ -237,19 +237,31 @@ export interface RestorePlanReply {
   /**
    * Why nothing could be restored, when that's a structural answer and not
    * just "no room":
-   *   'not-numbered' — hand-picked / imported title, so it is not generation N
-   *                    of anything and has no predecessor to walk back to
-   *   'no-older'     — this is generation 1
-   *   'not-head'     — a NEWER generation of this being exists, so what is on
-   *                    screen is history (the same condition the past-log band
-   *                    warns about). Restoring into it would grow a log nobody
-   *                    is going to speak in, on open.
+   *   'no-older'     — nothing older under either chain rule: this is
+   *                    generation 1, or the bottom row of its folder
+   *   'not-head'     — something NEWER sits above this conversation, so what is
+   *                    on screen is history (the same condition the past-log
+   *                    band warns about). Restoring into it would grow a log
+   *                    nobody is going to speak in, on open.
+   *   'not-in-chain' — the conversation is not in its own folder's list at all
+   *                    (marked corrupted, or a folderName that no longer
+   *                    matches). Not the same as "nothing older".
    *   'not-found'    — no such conversation
+   *
+   *   'not-numbered' — NO LONGER EMITTED (2026-10-24). It used to mean "the
+   *                    title is not <being>_<n>", which stopped being an answer
+   *                    when `resolveHandoverChain` gained the sidebar-order
+   *                    fallback: an unnumbered title now has a chain. Kept in
+   *                    the union so an older probe that matches on the string
+   *                    still type-checks.
    *
    * Diagnostic only: no caller branches on it today. The client decides from
    * `messages` / `nextNeeded` alone, so a new value here cannot change its
    * behaviour — it exists so a server log or a probe can say WHY the answer was
-   * empty, which "no messages" on its own cannot.
+   * empty, which "no messages" on its own cannot. The client DOES print it to
+   * the console (2026-10-24): three different silences used to look identical
+   * from the outside, and the one person who hit it spent half an hour unable
+   * to tell "nothing to restore" from "refused to restore".
    */
-  reason?: 'not-numbered' | 'no-older' | 'not-head' | 'not-found';
+  reason?: 'not-numbered' | 'no-older' | 'not-head' | 'not-in-chain' | 'not-found';
 }
