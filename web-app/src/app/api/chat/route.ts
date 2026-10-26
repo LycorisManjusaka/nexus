@@ -100,7 +100,10 @@ async function runReadAttachment(args: {
   const p = (prefix || '').trim().toLowerCase();
   if (!p) return { text: 'Error: read_attachment requires a ref prefix (the 12-character ref shown next to a hidden attachment).' };
 
-  let matches: { ref: string; name: string; size: number; mimeType: string; convoTitle?: string }[] =
+  // size is optional here for the same reason it is optional on
+  // AttachmentIndexEntry: 1,030 of this store's attachment entries never
+  // recorded one, and read_attachment stats the blob itself anyway.
+  let matches: { ref: string; name: string; size?: number; mimeType: string; convoTitle?: string }[] =
     index.filter((e) => e.ref.toLowerCase().startsWith(p));
   if (matches.length === 0) {
     try {

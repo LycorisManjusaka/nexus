@@ -37,7 +37,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { listLogs, loadLog, ensureWorkspace } from './fsStorage';
-import { formatAttachmentEntry, formatAttachmentSize } from './attachmentIndex';
+import { formatAttachmentEntry, formatAttachmentSize, fillMissingAttachmentSizes } from './attachmentIndex';
 
 /** Subdirectory of the being's workspace holding conversation mirrors. */
 export const MIRROR_SUBDIR = 'logs';
@@ -327,6 +327,15 @@ export async function readConversationByName(
   if (!full || !Array.isArray(full.messages)) {
     return { ok: false, error: `Failed to load "${hit.title}".` };
   }
+
+  // Fill in sizes the log never recorded, BEFORE rendering: buildTranscript is
+  // synchronous and a stat is not, and this is the one transcript a resident
+  // actually reads attachment sizes from. Without it, 1,030 of this store's
+  // 6,968 ref'd attachments render as "0 B" — which reads as "the file is
+  // broken", and was reported as exactly that.
+  await fillMissingAttachmentSizes(
+    full.messages.flatMap((m: any) => (Array.isArray(m?.attachments) ? m.attachments : [])),
+  );
 
   const built = buildTranscript(full.messages, folderName, opts.showPaths);
   const isCurrent = !!opts.currentConvoId && opts.currentConvoId === hit.id;

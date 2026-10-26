@@ -21,7 +21,7 @@ import path from 'path';
 import { compareConvoTitles } from './convoSort';
 import { DATA_DIR, BEINGS_DIR, beingLogsDir, beingSettingsFile } from './beingPaths';
 import { compileSafeRegex } from './safeRegex';
-import { AttachmentIndexEntry, formatAttachmentEntry } from './attachmentIndex';
+import { AttachmentIndexEntry, formatAttachmentEntry, fillMissingAttachmentSizes } from './attachmentIndex';
 
 const CHARACTER_MAP = path.join(DATA_DIR, 'character_map.json');
 const USER_SETTINGS = path.join(DATA_DIR, 'user_settings.json');
@@ -353,7 +353,11 @@ export async function searchConversations(
         const ref = att?.ref;
         if (typeof ref !== 'string' || !ref) continue;
         attachments.push({
-          ref, name: String(att.name || 'unnamed'), size: Number(att.size || 0),
+          // Absent stays absent — see AttachmentIndexEntry.size. A log entry
+          // with no recorded size is not a zero-byte file.
+          ref, name: String(att.name || 'unnamed'),
+          size: typeof att.size === 'number' && Number.isFinite(att.size)
+            ? att.size : undefined,
           mimeType: String(att.type || ''),
         });
       }
@@ -395,6 +399,10 @@ export async function searchConversations(
     });
 
     if (snippets.length === 0) return null;
+    // Only for the files that actually matched — this runs inside the scan,
+    // and a hit is already paying a full read + parse, so a stat for the few
+    // entries whose log recorded no size is not what makes a search slow.
+    await fillMissingAttachmentSizes(attachments);
     return {
       folder: folderName,
       convoId: log.id || fn.replace(/\.json$/, ''),

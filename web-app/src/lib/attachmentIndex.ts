@@ -28,14 +28,28 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { beingLogsDir } from './beingPaths';
-import { readAttachmentText, refPath } from './attachmentStore';
+import { readAttachmentText, refPath, statAttachment } from './attachmentStore';
 import { isMediaMime } from './textSniff';
 import { compileSafeRegex, grepLines } from './safeRegex';
 
 export interface AttachmentIndexEntry {
   ref: string;
   name: string;
-  size: number;
+  /**
+   * Bytes, AS RECORDED IN THE CONVERSATION LOG — not a stat of the blob.
+   *
+   * Optional, and that is the point. Measured 2026-10-26 across this store:
+   * 1,030 of 6,968 ref'd attachment entries carry no `size` key at all (they
+   * come from the paths that build an entry from a screenshot/tool result
+   * rather than from a browser File object). The old type said `size: number`
+   * and the collector wrote `Number(att.size || 0)`, so "the log does not say"
+   * became "0 B" — a false statement about a 375 KB JPEG, and the first thing
+   * a resident does on reading it is check whether the file is broken.
+   *
+   * Absent means unknown. `fillMissingAttachmentSizes` can turn unknown into
+   * a measured number; the formatter says "size unknown" when nobody did.
+   */
+  size?: number;
   mimeType: string;
 }
 
@@ -46,9 +60,16 @@ interface AttachmentOccurrence extends AttachmentIndexEntry {
 }
 
 /** Human-readable byte size, e.g. "340 KB", "1.2 MB". Used anywhere an
- * attachment index is rendered for a model (read_conversation, search_*). */
-export function formatAttachmentSize(n: number): string {
-  if (!n || n <= 0) return '0 B';
+ * attachment index is rendered for a model (read_conversation, search_*).
+ *
+ * Three states, not two. `0 B` is a real answer — this store holds exactly one
+ * genuinely empty blob — so it must not double as the answer for "the log
+ * never recorded a size". The old `!n || n <= 0` collapsed undefined, null,
+ * NaN and 0 into "0 B" and reported it with the same confidence as a measured
+ * number. Unknown now says so. */
+export function formatAttachmentSize(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return 'size unknown';
+  if (n <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
   let v = n;
   let i = 0;
@@ -83,6 +104,56 @@ export function formatAttachmentEntry(a: AttachmentIndexEntry, showPaths: boolea
     // Fall through to the ref form rather than inventing a path.
   }
   return `${a.ref.slice(0, 12)} ${tail}`;
+}
+
+/**
+ * Measure the blobs whose log entry never recorded a size, and write the
+ * measurement into the entries IN PLACE.
+ *
+ * The one place that turns "unknown" into a number, so a transcript, a search
+ * hit and read_attachment's own header cannot disagree about how big a file
+ * is. Only entries missing a size are touched — an entry that records 0 for a
+ * blob that really is empty keeps its 0, and a recorded size is never
+ * second-guessed (the log is what the conversation actually carried; disagreeing
+ * with it would be a different claim, and one no caller asked for).
+ *
+ * Cost is a stat per unknown ref, deduped, eight at a time. Returns what it
+ * managed so a caller can say "3 unknown" instead of implying it knows.
+ */
+export async function fillMissingAttachmentSizes(
+  entries: { ref?: unknown; size?: number }[],
+): Promise<{ measured: number; stillUnknown: number }> {
+  const need = new Map<string, { ref?: unknown; size?: number }[]>();
+  for (const e of entries) {
+    if (typeof e?.ref !== 'string' || !e.ref) continue;
+    if (typeof e.size === 'number' && Number.isFinite(e.size)) continue;
+    const list = need.get(e.ref);
+    if (list) list.push(e);
+    else need.set(e.ref, [e]);
+  }
+  if (need.size === 0) return { measured: 0, stillUnknown: 0 };
+
+  const refs = [...need.keys()];
+  let measured = 0;
+  let stillUnknown = 0;
+  let next = 0;
+  const worker = async () => {
+    while (next < refs.length) {
+      const ref = refs[next++];
+      const st = await statAttachment(ref);
+      if (st) {
+        for (const e of need.get(ref)!) e.size = st.size;
+        measured++;
+      } else {
+        // The blob is gone or the ref is malformed. Leave it unknown rather
+        // than writing 0: "no file" and "empty file" are different facts, and
+        // read_attachment will say which one when it is actually asked.
+        stillUnknown++;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, refs.length) }, worker));
+  return { measured, stillUnknown };
 }
 
 // Walk every conversation log of a being and collect every attachment
@@ -143,7 +214,10 @@ async function collectFolderAttachments(
           out.push({
             ref,
             name: String(att.name || 'unnamed'),
-            size: Number(att.size || 0),
+            // Absent stays absent. `Number(att.size || 0)` turned "the log
+            // never said" into a confident 0 for 1,030 entries in this store.
+            size: typeof att.size === 'number' && Number.isFinite(att.size)
+              ? att.size : undefined,
             mimeType: String(att.type || ''),
             convoTitle: log.title || 'Untitled',
             convoId: log.id || fn.replace(/\.json$/, ''),
@@ -178,13 +252,16 @@ export async function findAttachmentsByRefPrefix(
     seen.add(a.ref);
     out.push({ ref: a.ref, name: a.name, size: a.size, mimeType: a.mimeType, convoTitle: a.convoTitle });
   }
+  await fillMissingAttachmentSizes(out);
   return out;
 }
 
 export interface AttachmentSearchHit {
   ref: string;
   name: string;
-  size: number;
+  /** Optional for the same reason as AttachmentIndexEntry.size — though in
+   *  practice searchAttachments fills it from disk before returning. */
+  size?: number;
   mimeType: string;
   convoTitle: string;
   timestamp: number | null;
@@ -241,6 +318,10 @@ export async function searchAttachments(
   // duplicate work. Keeps the FIRST occurrence's title/timestamp for display.
   const byRef = new Map<string, AttachmentOccurrence>();
   for (const a of all) if (!byRef.has(a.ref)) byRef.set(a.ref, a);
+  // Hits are rendered with their size; this scan is already reading whole
+  // files, so a stat for the few entries whose log never recorded one is noise
+  // next to the work it is doing anyway.
+  await fillMissingAttachmentSizes([...byRef.values()]);
 
   let scanned = 0;
   let skippedMedia = 0;

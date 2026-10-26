@@ -799,6 +799,15 @@ export default function Sidebar({
     await fetch('/api/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      // A starting value, not a claim about the being. Some family has to be
+      // written here — four readers fall back to 'Claude' anyway, so leaving
+      // it out would only move the same guess somewhere nobody can see it.
+      // What was missing until 2026-10-27 is that NOTHING else ever wrote this
+      // field and no screen could change it, so a being on DeepSeek read
+      // `"aiName": "Claude"` in its own settings.json forever. It is now
+      // editable under the Entity tab ("this being's default model family"),
+      // which also fixes the invisible half: this value is the tokenizer
+      // profile the log importer and split planner use.
       body: JSON.stringify({ name, settings: { aiName: 'Claude' } })
     });
     // Wait for both refreshes before opening the first conversation: fetchLogs

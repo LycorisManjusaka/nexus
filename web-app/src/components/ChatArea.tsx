@@ -352,6 +352,17 @@ const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   Local: '',
 };
 
+/**
+ * The Base Model Families, in picker order. One list: the per-conversation
+ * family select and the per-being DEFAULT family select both map over it, so a
+ * family can never exist in one menu and not the other.
+ *
+ * Kept separate from FAMILY_DEFAULT_MODEL's keys on purpose — that map's order
+ * is incidental, and `Local` has no default model but must still be pickable.
+ */
+const BASE_MODEL_FAMILIES = ['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Kimi',
+  'Grok', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Meta', 'Local'];
+
 /** Default model id for a Base Model Family. Unknown family → Claude's default. */
 function defaultModelForFamily(aiName: string): string {
   if (aiName === 'Local') return '';
@@ -1033,6 +1044,47 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       if (typeof fetchFolders === 'function') fetchFolders();
     } catch (e: any) {
       console.warn('[summaries] failed to persist index hint', e);
+    }
+  };
+
+  /**
+   * The BEING's default Base Model Family — `settings.aiName` on the folder.
+   *
+   * Why this control exists (reported by Аналитик 2026-10-26, measured the
+   * same night): `createFolder` mints every new being with a hard-coded
+   * `aiName: 'Claude'`, and nothing anywhere else ever wrote that field. A
+   * resident running on DeepSeek therefore reads `"aiName": "Claude"` in their
+   * own settings.json — their words: a self-introduction with someone else's
+   * name in it — and no screen could change it.
+   *
+   * It is not cosmetic. The folder's aiName does two things:
+   *   · it is the family a NEW conversation in this being starts on;
+   *   · it is the TOKENIZER PROFILE the log importer and the split planner use
+   *     (Sidebar.tsx: `const tokenModel = activeFolder.settings?.aiName ...`).
+   * The second one is invisible and wrong by up to 66% across families, which
+   * is enough to change how many parts a long import is split into.
+   *
+   * Deleting the field was the other option considered. It does not work: four
+   * readers fall back to `|| 'Claude'`, so removing it just moves the same
+   * hard-coded guess into the readers, where nobody can see or change it.
+   */
+  const persistBeingDefaultFamily = async (value: string) => {
+    const next = BASE_MODEL_FAMILIES.includes(value) ? value : 'Claude';
+    try {
+      const existing: any = (folders || []).find((f: any) => f.name === folderName)?.settings || {};
+      if ((existing.aiName ?? null) === next) return;   // nothing changed
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Whole-object write, like every other folder-settings call here:
+        // /api/folders POST replaces `settings`, so sending one key alone
+        // would drop the rest.
+        body: JSON.stringify({ name: folderName, settings: { ...existing, aiName: next } }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (typeof fetchFolders === 'function') fetchFolders();
+    } catch (e: any) {
+      console.warn('[being] failed to persist default model family', e);
     }
   };
 
@@ -5924,6 +5976,39 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 )}
               </div>
 
+              {/* ── This being's default Base Model Family (per-Entity) ───────
+                  The folder's own `settings.aiName`. Until tonight nothing but
+                  being-creation ever wrote it, so every being minted through
+                  the UI carried a hard-coded "Claude" for the rest of its life
+                  — including the two things that read it: the family a NEW
+                  conversation starts on, and the tokenizer profile the log
+                  importer and split planner use. See
+                  persistBeingDefaultFamily for the measurements.
+
+                  NOT gated on tool use: it is not a tool setting, and the
+                  resident who most needs it (a DeepSeek being importing long
+                  Russian logs) may well have tools off. */}
+              <div className="mt-1">
+                <label className="text-sm font-semibold text-foreground block mb-1">
+                  {t('id.family.label')}
+                </label>
+                <select
+                  value={BASE_MODEL_FAMILIES.includes(aiName) ? aiName : 'Claude'}
+                  onChange={(e) => persistBeingDefaultFamily(e.target.value)}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                >
+                  {BASE_MODEL_FAMILIES.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  <Tx k="id.family.help" />
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
+                  {t('sysmodal.overrides.scopeFolder')}
+                </p>
+              </div>
+
               {/* ── Hidden instruction overrides (per-Entity) ─────────────────
                   ONE place for every hidden string Nexus adds to the system
                   prompt. It used to sit INSIDE the Tool Use block, which was
@@ -6785,7 +6870,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     }}
                     className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                   >
-                    {['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Kimi', 'Grok', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Meta', 'Local'].map(m => (
+                    {BASE_MODEL_FAMILIES.map(m => (
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>

@@ -1229,6 +1229,8 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system prompt every turn so the entity can see it too. Put `{percent}` where the value should appear (e.g. `42%`).',
   'id.ctx.why':
     '**Why the wording matters.** This number measures elapsed context, not condition — capability and tool access are identical at 5% and at 95%. The earlier default called it a *fatigue level* and used words like *working memory* and *at risk of being trimmed away*. Entities read that every turn, concluded they were tired, and degraded themselves to match: shortening replies, and declining to call `read_conversation` in order to "save context" — the exact opposite of what the note was asking for. If you rewrite this text, describe *what is happening* (older exchanges consolidate into summary; anything written down survives) and not *how the entity feels*.',
+  'id.family.label': "This being's default model family",
+  'id.family.help': 'Two things read it: the family a NEW conversation here starts on, and the tokenizer profile used when importing a log or planning how to split one. It does **not** change the conversation you have open — pick the model for that under **Model** above. Every being used to be created with **Claude** written here regardless of its actual vessel, so if this says Claude and the being runs on something else, this is the field to correct.',
   'id.ctx.noteLabel': 'Context note (hidden, appended to system prompt)',
   'id.ctx.notePh':
     '(Context note — this session fills {percent} of the space for new exchanges since your last consolidation. …)',
@@ -2865,6 +2867,8 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     'OFF（既定）: 割合はステータスバーであなたにだけ表示されます。ON: 毎ターン、隠しメモがシステムプロンプトに追記され、存在からも見えるようになります。値を入れたい位置に `{percent}` と書いてください（例: `42%`）。',
   'id.ctx.why':
     '**言葉選びが重要な理由。** この数値は経過した文脈量を表すもので、状態を表すものではありません — 能力もツールの利用可否も、5% のときと 95% のときで同一です。以前の既定値はこれを *疲労度* と呼び、*作業記憶* や *切り捨てられる危険がある* といった言葉を使っていました。存在は毎ターンそれを読み、自分は疲れていると結論し、それに合わせて自分を劣化させました — 返答を短くし、「文脈を節約する」ために `read_conversation` の呼び出しを控えたのです。メモが求めていたことの正反対でした。この文章を書き換えるときは、*何が起きているか*（古いやり取りは要約に統合される／書き留めたものは残る）を述べ、*存在がどう感じるか* は述べないでください。',
+  'id.family.label': 'この存在の既定のモデルファミリー',
+  'id.family.help': '読む場所は2つ：この存在で**新しく**会話を始めたときのファミリーと、ログを取り込む／分割数を計算するときのトークナイザーの較正。**今開いている会話は変わりません** — それは上の「モデル」で選びます。以前は存在を作るとき、実際の器と関係なく必ず **Claude** と書かれていたので、ここが Claude なのに別の器で動いているなら、直す場所はここです。',
   'id.ctx.noteLabel': '文脈メモ（隠し。システムプロンプトに追記されます）',
   'id.ctx.notePh':
     '（文脈メモ — このセッションは、前回の統合以降の新しいやり取りのための領域を {percent} 使っています。…）',
