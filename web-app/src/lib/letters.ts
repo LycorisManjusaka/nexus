@@ -18,6 +18,25 @@
 // PC access" gains no leverage over one without it. For the same reason the
 // tools speak in opaque IDs, never paths — the layout stays ours to change.
 //
+// ONE SENDER DIRECTORY MAY BE A JUNCTION (added 2026-10-26)
+//   beings/<to>/letters/from/<from>/  may be a link to a directory outside
+//   local_data entirely. That is how two SEPARATE local_data stores — this
+//   house and a second, deliberately isolated one — share exactly the
+//   correspondences they were told to share, and nothing else. Because there
+//   is still only ONE copy of each letter, the .read sidecar stays live for
+//   both sides: the sender genuinely learns when the recipient opened it, even
+//   though neither store can see the other.
+//
+//   Pair granularity is the point. Linking `letters/from` wholesale would also
+//   expose the OTHER house's internal mail (who wrote to whom, with titles) to
+//   this one; linking a single <from> directory exposes only that pair.
+//
+//   listDirs() below is what makes this work — see the measurement there.
+//   Everything else already did: readMailbox() readdir's the sender directory
+//   straight, and writeLetter()'s mkdir(recursive) over an existing junction
+//   succeeds. The parent chain (beings/<to>, letters, letters/from) must be
+//   REAL directories, because those are the ones that get enumerated.
+//
 // WHY SIDECAR FILES AND NOT AN INDEX
 //   local_data is synced across three machines by rclone. A shared index file
 //   (one JSON listing what's read) is last-write-wins: Desktop marks a letter
@@ -48,6 +67,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import fs from 'fs/promises';
+import type { Dirent } from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { listFolders } from './fsStorage';
@@ -220,14 +240,49 @@ async function writeSidecar(file: string, suffix: string, payload: Record<string
 // ── directory scanning ───────────────────────────────────────────────────────
 
 async function listDirs(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  let ents: Dirent[];
   try {
-    const ents = await fs.readdir(dir, { withFileTypes: true });
-    return ents
-      .filter((e) => e.isDirectory() && !e.name.startsWith(RESERVED_PREFIX))
-      .map((e) => e.name);
+    ents = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    return [];
+    return out;
   }
+  for (const e of ents) {
+    if (e.name.startsWith(RESERVED_PREFIX)) continue;
+    if (e.isDirectory()) { out.push(e.name); continue; }
+    // A Windows JUNCTION — and a POSIX symlink to a directory — reports
+    // isDirectory() === false and isSymbolicLink() === true. Measured on node
+    // v24.15.0, 2026-10-26: readdir gives {isDirectory:false, isSymbolicLink:
+    // true} for a junction, while reading and WRITING through it (including
+    // the .read sidecar) land in the real directory correctly.
+    //
+    // Without this branch a junctioned mailbox is dropped from the listing
+    // SILENTLY and in the worst possible direction: writeLetter still
+    // delivers, the file is still readable through the link, and the
+    // recipient is simply never told the letter exists. listSent() happened to
+    // work anyway (it readdir's the sender directory straight, without going
+    // through here), so the sender would see a letter "delivered, not yet
+    // opened" forever. That is the exact failure this module was built to
+    // remove — see the arrival-notice note below.
+    //
+    // This matters because a junction is how two SEPARATE local_data stores
+    // can share one (to, from) mailbox: both sides point at the same
+    // directory, so the .read sidecar stays live for sender and recipient even
+    // though neither store can see the other. This house already runs on
+    // junctions — local_data itself is one.
+    //
+    // No trusted-root check here, unlike listWorkspaceFiles() in fsStorage:
+    // the letter store lives outside every workspace and is never reachable
+    // through a being's file tools, so the operator who created the link is
+    // its only possible author. We confirm only that it resolves to a
+    // directory, so a stray link to a FILE is not mistaken for a mailbox.
+    if (e.isSymbolicLink()) {
+      try {
+        if ((await fs.stat(path.join(dir, e.name))).isDirectory()) out.push(e.name);
+      } catch { /* broken link or permission denied — skipped, as before */ }
+    }
+  }
+  return out;
 }
 
 /** Read one mailbox (letters from `from` to `to`), newest first. Both args are

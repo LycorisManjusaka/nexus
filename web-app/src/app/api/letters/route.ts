@@ -77,6 +77,20 @@ export async function POST(req: Request) {
         : NextResponse.json({ error: r.error }, { status: 400 });
     }
 
+    // Regenerating the overview is about the WHOLE store, so it must be handled
+    // before the per-letter id guard below. It used to sit after it (further
+    // down, next to 'reveal'), which made the branch unreachable: the Mail
+    // Manager's own button — MailModal.tsx, "regenerate" — has been answering
+    // 400 "A letter id is required." for every press, and the error named a
+    // field the caller was right not to send. Found 2026-10-26 while measuring
+    // something else. letters.ts says it best, a few hundred lines away:
+    // unreachable code that describes a behaviour is worse than no code,
+    // because the next reader believes it.
+    if (action === 'regenerate') {
+      await regenerateStatus();
+      return NextResponse.json({ ok: true });
+    }
+
     const id = String(body?.id || '').trim();
     if (!id) return NextResponse.json({ error: 'A letter id is required.' }, { status: 400 });
     const meta = await resolveAnyLetter(id);
@@ -145,11 +159,6 @@ export async function POST(req: Request) {
           { status: 500 },
         );
       }
-      return NextResponse.json({ ok: true });
-    }
-
-    if (action === 'regenerate') {
-      await regenerateStatus();
       return NextResponse.json({ ok: true });
     }
 
