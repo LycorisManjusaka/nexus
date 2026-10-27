@@ -1,0 +1,163 @@
+# tests — the safety net
+
+```
+npm test
+```
+
+154 assertions, ~0.6 s wall clock. No new dependency: `node:test`, `node:assert`
+and Node 24's own type stripping. Nothing here starts a server, opens a browser,
+reads a path outside the repo, or touches `local_data`.
+
+Built 2026-10-27 as **phase 1** of the overhaul plan, before any refactoring.
+`desk: nexus-overhaul-plan.md`
+
+---
+
+## What this net is for, and what it is not
+
+**It answers "did the behaviour change", not "is the behaviour right."**
+
+Most of these assertions were written by reading the module they test. A test
+written that way restates the implementation: it cannot find a bug that is in
+the code today, because the code today is where the expected value came from.
+What it does do — and the only reason it exists — is go red when a refactor
+moves behaviour that nobody meant to move. That is the whole job during phases
+2 and 3.
+
+The exception is worth naming: the cases marked REGRESSION reproduce a defect
+that really happened and was really fixed. Those do prove something.
+
+## Why `node:test` and no test runner dependency
+
+Measured 2026-10-27 before deciding. 44 of the 55 directly-dependency-free
+modules in `src/lib` import into Node with zero infrastructure. The 11 failures
+fell into four classes, not one:
+
+| class | count | who resolves it |
+|---|---|---|
+| extensionless relative import (`./modelVision`) | 6 | `tests/_loader.mjs` |
+| `@/` path alias | 2 | `tests/_loader.mjs` |
+| JSON import with no import attribute | 2 | `tests/_loader.mjs` |
+| constructor parameter property | 1 | `--experimental-transform-types` |
+
+With a ~25-line hook file and one Node flag: **54 of 55**. So a runner
+dependency (vitest, tsx, jest) would have bought the same thing for an install
+cost on every clean VM, and `playwright` is already a dependency for the
+browser-control tools when a browser suite is eventually wanted.
+
+**The honest cost of this choice:** `--experimental-transform-types` is an
+experimental flag. If a future Node renames it, `npm test` fails loudly rather
+than silently skipping — which is the right direction for a failure, but it is a
+real maintenance edge and it is written down here rather than discovered later.
+
+The 55th module (`charaResolver`) is a correct rejection: it reaches `fs`
+transitively, so it is not a unit-test target. Note what that exposed — the
+"pure" classification was per-file (direct imports only). **Transitive purity is
+a different measurement**, and the one that decides whether a module can be
+tested without disk.
+
+## Does the net catch anything?
+
+A detector that cannot fail proves nothing, so it was measured, not assumed:
+`workspace/plan_probe/p07_mutation.py` injects three bugs that really happened,
+one at a time, runs the suite, and restores the file (sha256 verified).
+
+```
+splitter: unconditional <think> detection   CAUGHT   (was: ate soul prose, 2026-10-21)
+handover: no head guard                     CAUGHT   (was: 245 past logs would restore)
+capArguments: stringify-then-slice          CAUGHT   (was: HTTP 500 on LM Studio/Gemma 4)
+```
+
+**The first run was 2 of 3, and the miss is the most useful thing in this
+folder.** Breaking `honoursThinkTags` outright left the suite green, because the
+guard lives in two places that are NOT redundant — one for prose-and-tag in the
+same chunk, one for the steady state after that decision, where the tag sits at
+offset 0 of a later chunk. Every case I had written decided in the first branch
+and returned. The hole was exactly where the historical bug lived, and reading
+the code is what put it there: I tested the branch I had read. Cases B5/B6 in
+`thinkTagSplitter.test.ts` close it.
+
+---
+
+## Selection — what was taken, and what was left
+
+There are **304 probe files / 29,783 lines** in this house's workspace
+(`workspace/*_probe/`, measured by `plan_probe/p03_harness.py`). They are
+material for a net, not a net: each was written for one bug on one night. A
+rejected probe is a measurement, not trash, so the reasons are recorded.
+
+### Taken — 9 modules
+
+| test file | from | kind |
+|---|---|---|
+| `markdownLogic.test.ts` | `import_probe/test_dialects.mjs` | ported |
+| `soulGeneration.test.ts` | `soul_probe/test_soulgen.mjs` | ported |
+| `thinkTagSplitter.test.ts` | `ds_cap_probe/splitter_test.mjs` | ported + 2 new cases |
+| `updateClassify.test.ts` | `import_probe/test_updateclassify.mjs` | ported |
+| `messageIds.test.ts` | `dupkey_probe/unit_dedupe.mjs` | ported |
+| `handoverWalk.test.ts` | — | **new** |
+| `toolHistory.test.ts` | — | **new** |
+| `agentCapabilities.test.ts` | — | **new** |
+| `retiredModels.test.ts` | — | **new** |
+
+Three ports changed in the move, each for a stated reason:
+
+- **markdownLogic** — one block of the original read a real DeepSeek export from
+  `C:/temp` and asserted 222 messages. Dropped: a test may not depend on a path
+  outside the repo, and that file is somebody's private conversation. The
+  synthetic edge cases cover the same code paths.
+- **thinkTagSplitter** — the original's last two cases read 400 bytes of a real
+  soul file (the artefact that exposed the bug). Replaced with synthetic CJK
+  prose of the same shape, and said so in the file.
+- **messageIds** — the original ended with a case that was SUPPOSED to fail
+  ("a detector that cannot fail proves nothing"), pass condition n−1 of n. A
+  suite cannot carry a permanently red case, so the same intent is asserted the
+  other way round: the WRONG answer must not be produced.
+
+### Left out, by reason
+
+| reason | ~count | what should happen to them |
+|---|---|---|
+| needs a running server | 107 | a second suite later (`test:server`), not part of `npm test` |
+| needs a browser (Playwright) | 47 | a third suite later; `playwright` is already a dependency |
+| measures the OUTSIDE world — provider APIs, prices, token counts, fonts | many | these are instruments, not tests. Their numbers legitimately change when a vendor changes; asserting them would make `npm test` red for news |
+| single-use: answered one question on one night | most of the rest | left in the workspace as the record of what was measured |
+| reads `local_data` or a path outside the repo | several | would not run on a fresh clone |
+
+### Not yet taken, but should be (the honest gap)
+
+**9 modules of 93 in `src/lib` is a thin net.** The next candidates, in the order
+their bugs have actually cost something:
+
+`convoNaming` (pickLatestConversation / nextConversationTitle) ·
+`deepseekJson` (needs a small synthetic fixture) · `modelPricing`
+(`effectivePrice` tiers, `isLongContext`) · `tokenEstimate` (characterization
+only — the calibration values are allowed to move) · `attachmentVisibility` ·
+`betrayalGuard` · `handoverRestore` · `inlineMedia` · `openaiEffort` ·
+`deviceClass` · `safeRegex` · `timestampStrip` · `spuScaffold`
+
+And the two giants — `route.ts` (10,163 lines) and `ChatArea.tsx` (7,715) — have
+no coverage at all. They cannot be unit-tested as they stand; pinning them means
+asserting observable behaviour (frame types on the wire, the shape of a saved
+log, the 409 path), which needs the server suite.
+
+---
+
+## Layout
+
+```
+tests/
+  _loader.mjs          module hooks: @/ alias, extensionless, JSON
+  README.md            this file
+  lib/<module>.test.ts one file per product module, named after it
+```
+
+Tests are `.ts` and inside `tsconfig.json`'s `include`, so `tsc --noEmit`
+typechecks them. **That is deliberate**, and it means the `tsc` baseline is part
+of this net: it was exactly 3 pre-existing errors before this folder existed
+(`live/start`, `tts/synthesize`, `ChatArea`) and it is exactly 3 after.
+
+`npx eslint tests/` is clean. For the record, with scopes — because a count
+without its scope is not a measurement: **`src/` 1,156 problems; whole project
+1,162**. The extra 6 are in `scripts/*.mjs` and `test_watch.js`, all predating
+this folder.
