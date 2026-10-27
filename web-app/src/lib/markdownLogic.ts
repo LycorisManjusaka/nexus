@@ -1,9 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { estimateTokensForModel } from './tokenEstimate';
-
-function escapeRegExp(string: string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeForRegExp } from './convoNaming';
 
 // Format a numeric (ms) timestamp as the app's "[YYYY-MM-DD HH:MM:SS]" tag in
 // LOCAL time — identical to the dateTimeVisibility formatter used elsewhere, so
@@ -48,7 +45,7 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
         md += `[${header}]:\n\n${tsLine}${content}\n\n`;
       } else if (uniqueTags.length === 1) {
         header = uniqueTags[0];
-        let singleTagPattern = new RegExp(`\\[${escapeRegExp(header)}\\]\\s*`, 'g');
+        let singleTagPattern = new RegExp(`\\[${escapeForRegExp(header)}\\]\\s*`, 'g');
         let newContent = content.replace(singleTagPattern, '').trim();
         md += `[${header}]:\n\n${tsLine}${newContent}\n\n`;
       } else {

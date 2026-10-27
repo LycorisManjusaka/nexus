@@ -8,6 +8,7 @@ import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
+import { makeIsOriginalId } from '@/lib/firstOriginal';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -4008,24 +4009,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   // Decide whether a message counts as "original" (preserve / confirm before
-  // delete) or "copied" (silent delete OK, eligible for auto-trim).
-  //
-  //   - `firstOriginalIsNext=true` and no marker yet → the marker is PENDING
-  //     on the next message added. Everything currently in the log is carry-
-  //     over context and therefore copied. This is the post-clone state.
-  //   - No marker and no pending flag → all messages are original (safest
-  //     default for hand-built conversations that never went through the
-  //     clone / Go-to-Next workflow).
-  //   - Marker set → messages BEFORE the marker are copied, messages AT and
-  //     AFTER it are original.
-  const isMessageOriginal = (id: string) => {
-    if (firstOriginalIsNext && !firstOriginalMessageId) return false;
-    if (!firstOriginalMessageId) return true;
-    const markerIdx = messages.findIndex(m => m.id === firstOriginalMessageId);
-    if (markerIdx < 0) return true;
-    const thisIdx = messages.findIndex(m => m.id === id);
-    return thisIdx >= markerIdx;
-  };
+  // delete) or "copied" (silent delete OK, eligible for auto-trim). The rule
+  // itself lives in lib/firstOriginal.ts — this used to be an inline copy of
+  // it, one of four. A fresh predicate per render, exactly as that copy was;
+  // the only difference is that the marker index is now resolved once when the
+  // predicate is built instead of once per message asked about.
+  const isMessageOriginal = makeIsOriginalId(
+    { firstOriginalMessageId, firstOriginalIsNext },
+    messages,
+  );
 
   const handleDelete = (id: string) => {
     if (isMessageOriginal(id)) {

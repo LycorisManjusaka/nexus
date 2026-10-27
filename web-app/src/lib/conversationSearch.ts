@@ -21,6 +21,7 @@ import path from 'path';
 import { compareConvoTitles } from './convoSort';
 import { DATA_DIR, BEINGS_DIR, beingLogsDir, beingSettingsFile } from './beingPaths';
 import { compileSafeRegex } from './safeRegex';
+import { makeIsOriginalIndex } from './firstOriginal';
 import { formatAttachmentEntry, fillMissingAttachmentSizes } from './attachmentIndex';
 import type { AttachmentIndexEntry } from './attachmentIndex';
 
@@ -170,23 +171,12 @@ function governingSpeaker(tags: { index: number; name: string }[], pos: number, 
   return found;
 }
 
-// Copied-message gate (mirrors ChatArea.isMessageOriginal / the billing stats).
-// The clone workflow carries earlier messages into a new conversation as
-// "copied" context; those live under a "first original" marker. Searching them
-// would surface the SAME text once per conversation that carries it — the
-// duplicates the entity reported. We only search ORIGINAL messages:
-//   - firstOriginalIsNext && no marker → everything is copied (all skipped)
-//   - no marker                        → everything is original
-//   - marker set                       → original at/after the marker index
-function makeIsOriginal(log: any, messages: any[]): (idx: number) => boolean {
-  const markerId = log.firstOriginalMessageId || null;
-  const isNext = log.firstOriginalIsNext === true;
-  if (isNext && !markerId) return () => false;
-  if (!markerId) return () => true;
-  const markerIdx = messages.findIndex((m) => m.id === markerId);
-  if (markerIdx < 0) return () => true;
-  return (idx: number) => idx >= markerIdx;
-}
+// WHY search skips copied messages: the clone workflow carries earlier
+// messages into a new conversation as "copied" context, under a "first
+// original" marker. Searching them would surface the SAME text once per
+// conversation that carries it — the duplicates the entity reported. So we
+// only search ORIGINAL messages. The rule for deciding that is shared:
+// lib/firstOriginal.ts (this file used to hold its own copy of it).
 
 function snippetsForMessage(content: string, lowerContent: string, needle: string): { text: string; matchIdx: number }[] {
   const out: { text: string; matchIdx: number }[] = [];
@@ -339,7 +329,7 @@ export async function searchConversations(
     raw = ''; // release the (possibly huge) raw string before per-message work
 
     const messages: any[] = Array.isArray(log.messages) ? log.messages : [];
-    const isOriginal = makeIsOriginal(log, messages);
+    const isOriginal = makeIsOriginalIndex(log, messages);
     const snippets: SearchSnippet[] = [];
     const attachments: AttachmentIndexEntry[] = [];
     messages.forEach((m, idx) => {

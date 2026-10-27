@@ -7,6 +7,7 @@ import { compareConvoTitles } from '@/lib/convoSort';
 import { buildDeepLink, absoluteDeepLink } from '@/lib/deepLink';
 import { useT } from '@/lib/i18n';
 import { copyText } from '@/lib/clipboard';
+import { escapeForRegExp } from '@/lib/convoNaming';
 
 // Full-text search across all conversations of the current entity. Opens from
 // the 🔍 header button, matches message bodies via /api/search, groups hits by
@@ -35,15 +36,11 @@ function dayEnd(isoDate: string): number | null {
   return isNaN(d.getTime()) ? null : d.getTime();
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 // Split `text` on case-insensitive occurrences of `query` and wrap matches in
 // <mark>. Returns an array of React nodes.
 function highlight(text: string, query: string): React.ReactNode[] {
   if (!query) return [text];
-  const re = new RegExp(`(${escapeRegExp(query)})`, 'gi');
+  const re = new RegExp(`(${escapeForRegExp(query)})`, 'gi');
   const parts = text.split(re);
   return parts.map((part, i) =>
     i % 2 === 1

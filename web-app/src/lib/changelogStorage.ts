@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
+import { atomicWriteFile } from './atomicWrite';
 import { beingChangelogsDir } from './beingPaths';
 import { summaryKey } from './summaryStorage';
 
@@ -25,19 +26,6 @@ function changelogDir(folderName: string): string {
 }
 function changelogFilePath(folderName: string, title: string): string {
   return path.join(changelogDir(folderName), `${changelogKey(title)}.md`);
-}
-
-async function atomicWriteFile(filePath: string, data: string) {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmp = path.join(dir, `.${base}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  try {
-    await fs.writeFile(tmp, data);
-    await fs.rename(tmp, filePath);
-  } catch (e) {
-    try { await fs.unlink(tmp); } catch {}
-    throw e;
-  }
 }
 
 export async function readChangelog(folderName: string, title: string): Promise<string | null> {

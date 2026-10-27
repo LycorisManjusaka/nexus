@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import { createReadStream } from 'fs';
 import { createHash } from 'crypto';
 import path from 'path';
+import { atomicWriteFile } from './atomicWrite';
 import { putDataUrl } from './attachmentStore';
 import { retitleForRenamedIdentity } from './convoNaming';
 import { summaryKey } from './summaryStorage';
@@ -865,26 +866,6 @@ async function withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   finally {
     release();
     if (writeLocks.get(key) === next) writeLocks.delete(key);
-  }
-}
-
-// Atomic write — write to a unique temp file in the SAME directory (so the
-// rename is a same-volume atomic operation), then rename onto the target.
-// fs.rename on the same filesystem is atomic on Windows (via MoveFileEx
-// replace semantics) and POSIX (atomic by spec). If the write is interrupted
-// or crashes mid-way, the destination file either retains its old contents
-// or contains the full new contents — never a half-overwritten frankenfile.
-async function atomicWriteFile(filePath: string, data: string) {
-  const dir = path.dirname(filePath);
-  const base = path.basename(filePath);
-  const tmp = path.join(dir, `.${base}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
-  try {
-    await fs.writeFile(tmp, data);
-    await fs.rename(tmp, filePath);
-  } catch (e) {
-    // Clean up tmp on failure so we don't leak .tmp-* files
-    try { await fs.unlink(tmp); } catch {}
-    throw e;
   }
 }
 

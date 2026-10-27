@@ -10,6 +10,7 @@ import { useDevice } from './DeviceProvider';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 import { copyText } from '@/lib/clipboard';
+import { escapeForRegExp } from '@/lib/convoNaming';
 import { resolveSoulGeneration, type SoulGeneration } from '@/lib/soulGeneration';
 
 // The title→generation parser used to live here as a "client-side mirror of
@@ -1550,7 +1551,7 @@ export default function SystemPromptUpdater({
       }
 
       // Strip the sentinel (and any trailing whitespace around it).
-      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+      const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
         .split(END_SENTINEL).join('')
         .trim();
 
@@ -1743,7 +1744,7 @@ export default function SystemPromptUpdater({
       }
 
       const sawSentinel = accum.includes(END_SENTINEL);
-      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+      const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
         .split(END_SENTINEL).join('')
         .trim();
 
@@ -1932,7 +1933,7 @@ export default function SystemPromptUpdater({
       }
 
       const sawSentinel = accum.includes(END_SENTINEL);
-      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+      const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
         .split(END_SENTINEL).join('')
         .trim();
 
@@ -2107,7 +2108,7 @@ export default function SystemPromptUpdater({
         }
       }
 
-      const cleaned = accum.replace(new RegExp(END_SENTINEL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '')
+      const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
         .split(END_SENTINEL).join('')
         .trim();
 

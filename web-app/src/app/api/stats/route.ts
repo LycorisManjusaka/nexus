@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { resolvePrice, messageCost, effectivePrice } from '@/lib/modelPricing';
 import { BEINGS_DIR, beingLogsDir, beingSettingsFile } from '@/lib/beingPaths';
+import { makeIsOriginalIndex } from '@/lib/firstOriginal';
 
 // Full-scan billing statistics. Unlike the header-only listLogs() path, this
 // reads every active conversation in full, walks its messages in order, and
@@ -108,20 +109,6 @@ function msgTokens(m: any): number {
   return estTokens(m?.content);
 }
 
-// Replicates ChatArea.isMessageOriginal over a static log:
-//   - firstOriginalIsNext && no marker  → everything is copied
-//   - no marker                          → everything is original
-//   - marker set                         → original at/after the marker index
-function makeIsOriginal(log: any, messages: any[]): (idx: number) => boolean {
-  const markerId = log.firstOriginalMessageId || null;
-  const isNext = log.firstOriginalIsNext === true;
-  if (isNext && !markerId) return () => false;
-  if (!markerId) return () => true;
-  const markerIdx = messages.findIndex((m) => m.id === markerId);
-  if (markerIdx < 0) return () => true;
-  return (idx: number) => idx >= markerIdx;
-}
-
 async function readEntityDefaults(): Promise<Record<string, { model: string; authMode: string }>> {
   const out: Record<string, { model: string; authMode: string }> = {};
   let dirs: any[] = [];
@@ -194,7 +181,7 @@ export async function GET() {
       // across Claude (API)/(OAuth) purely by stale header values.
       const taggedAuth: string = log.claudeAuthMode || def.authMode || 'api-key';
       const untaggedAuth: string = def.authMode || 'api-key';
-      const isOriginal = makeIsOriginal(log, messages);
+      const isOriginal = makeIsOriginalIndex(log, messages);
 
       // Running prompt size = system prompt + all messages seen so far.
       let running = estTokens(log.systemPrompt);

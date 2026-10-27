@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { escapeForRegExp } from './convoNaming';
 
 const DICT_PATH = path.resolve(process.cwd(), '..', 'local_data', 'en_katakana_dict.json');
 
@@ -32,7 +33,7 @@ function loadDict(): void {
   // Sort longest-first so multi-word phrases ("thank you") are tried before
   // their component words ("thank", "you") in the alternation.
   keys.sort((a, b) => b.length - a.length);
-  const escaped = keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const escaped = keys.map(k => escapeForRegExp(k));
 
   // \b word-boundaries work correctly next to Japanese characters: Japanese
   // code-points are non-\w, which creates a boundary with any ASCII letter.
