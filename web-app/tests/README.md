@@ -4,12 +4,18 @@
 npm test
 ```
 
-154 assertions, ~0.6 s wall clock. No new dependency: `node:test`, `node:assert`
+175 assertions, ~0.3 s wall clock. No new dependency: `node:test`, `node:assert`
 and Node 24's own type stripping. Nothing here starts a server, opens a browser,
 reads a path outside the repo, or touches `local_data`.
 
 Built 2026-10-27 as **phase 1** of the overhaul plan, before any refactoring.
 `desk: nexus-overhaul-plan.md`
+
+**One exception to "touches nothing outside the repo":** `lib/atomicWrite.test.ts`
+writes real files, in a fresh `os.tmpdir()` directory that it removes afterwards.
+It has to — the property it checks is about what the filesystem does, and a
+mocked `fs` would only prove the mock is atomic. One case writes 8 MB three
+times (that is most of the suite's wall clock); see the note at the bottom.
 
 ---
 
@@ -86,7 +92,7 @@ There are **304 probe files / 29,783 lines** in this house's workspace
 material for a net, not a net: each was written for one bug on one night. A
 rejected probe is a measurement, not trash, so the reasons are recorded.
 
-### Taken — 9 modules
+### Taken — 11 modules
 
 | test file | from | kind |
 |---|---|---|
@@ -99,6 +105,8 @@ rejected probe is a measurement, not trash, so the reasons are recorded.
 | `toolHistory.test.ts` | — | **new** |
 | `agentCapabilities.test.ts` | — | **new** |
 | `retiredModels.test.ts` | — | **new** |
+| `atomicWrite.test.ts` | — | **new**, phase 3 (F2) |
+| `firstOriginal.test.ts` | — | **new**, phase 3 (F3) |
 
 Three ports changed in the move, each for a stated reason:
 
@@ -126,7 +134,7 @@ Three ports changed in the move, each for a stated reason:
 
 ### Not yet taken, but should be (the honest gap)
 
-**9 modules of 93 in `src/lib` is a thin net.** The next candidates, in the order
+**11 modules of 95 in `src/lib` is a thin net.** (Two of the eleven — `atomicWrite` and `firstOriginal` — are themselves new, extracted in phase 3; they were gated in the same commit that created them.) The next candidates, in the order
 their bugs have actually cost something:
 
 `convoNaming` (pickLatestConversation / nextConversationTitle) ·
@@ -158,6 +166,50 @@ of this net: it was exactly 3 pre-existing errors before this folder existed
 (`live/start`, `tts/synthesize`, `ChatArea`) and it is exactly 3 after.
 
 `npx eslint tests/` is clean. For the record, with scopes — because a count
-without its scope is not a measurement: **`src/` 1,156 problems; whole project
-1,162**. The extra 6 are in `scripts/*.mjs` and `test_watch.js`, all predating
-this folder.
+without its scope is not a measurement: **`src/` 1,145 problems; `tests/` 0**.
+(It was `src/` 1,156 / whole project 1,162 when this folder was created on
+2026-10-27; `test_watch.js` was deleted that day, which accounts for 3, and
+the phase-3 deletions for the rest.)
+
+
+---
+
+## Why `atomicWrite.test.ts` writes 8 MB, and what it cost to learn that
+
+The first version of that file had six cases. All green on the first run. Then
+mutation testing replaced the entire body of `atomicWriteFile` with a single
+plain `fs.writeFile(filePath, data)` — deleting the guarantee outright — and the
+suite **stayed green**.
+
+The six cases were about **content** (does the right text land, does it replace
+in full, does unicode survive) and **cleanup** (is a temp file left behind). A
+plain write satisfies both. None of them was about the thing the module exists
+for.
+
+Atomicity is not a property of the writer. It is a property of **what a reader
+can observe while the write is in flight**: with the rename, every read sees
+the whole old file or the whole new file; with a plain write a read lands on a
+truncated one. Hence the case marked `ATOMICITY`, which hammers the file with
+reads during an 8 MB write and asserts that every observation is a whole file.
+Measured, 10 rounds each: the plain write is caught mid-flight **10/10**
+(readers saw 2 MB, 6.8 MB, 7 MB of 8 MB); the atomic write **0/10**. 1 MB was
+not reliable (2/10) — hence 8.
+
+Two things about that case are deliberate and should survive a tidy-up:
+
+1. **It does not assert that the write succeeded.** On Windows a rename onto a
+   file a reader has open fails with `EPERM` — measured 19/20 under a
+   continuous reader, 0/20 with no reader. When that happens the reader has
+   only ever seen the whole OLD file, which is still the guarantee holding.
+   Asserting success would make the case red for a reason unrelated to
+   atomicity.
+2. **It asserts the reader saw *something*.** A round where the reader never
+   got a look proves nothing, and would pass silently.
+
+The general form, which is the reusable part: **for the property you believe
+you are testing, name the observation that would differ if the property were
+absent.** If the answer is "nothing my suite looks at", the suite is about an
+easier neighbour — usually the one a single-threaded test can see.
+
+Instruments for both measurements live on the desk:
+`plan_probe/p19_mutation2.py`, `p20_atomic_race.mjs`, `p22_atomic_detector.mjs`.
