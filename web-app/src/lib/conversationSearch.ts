@@ -21,7 +21,8 @@ import path from 'path';
 import { compareConvoTitles } from './convoSort';
 import { DATA_DIR, BEINGS_DIR, beingLogsDir, beingSettingsFile } from './beingPaths';
 import { compileSafeRegex } from './safeRegex';
-import { AttachmentIndexEntry, formatAttachmentEntry, fillMissingAttachmentSizes } from './attachmentIndex';
+import { formatAttachmentEntry, fillMissingAttachmentSizes } from './attachmentIndex';
+import type { AttachmentIndexEntry } from './attachmentIndex';
 
 const CHARACTER_MAP = path.join(DATA_DIR, 'character_map.json');
 const USER_SETTINGS = path.join(DATA_DIR, 'user_settings.json');

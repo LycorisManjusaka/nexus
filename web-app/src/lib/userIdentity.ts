@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { readCharacterMap, findIdentity, CharacterMap, IdentityRule, DEFAULT_OTHERS_LABEL } from './characterMap';
+import { readCharacterMap, findIdentity, DEFAULT_OTHERS_LABEL } from './characterMap';
+// `CharacterMap` and `IdentityRule` are interfaces. They were in the value
+// import list above until 2026-10-27: Next's bundler elides type-only named
+// imports, so nothing ever caught it, but under standard isolated-module
+// semantics the named import survives and fails at runtime. `verbatimModuleSyntax`
+// is not set in tsconfig, which is why tsc stayed silent too.
+import type { CharacterMap, IdentityRule } from './characterMap';
 
 /**
  * local_data/user_identity.json — the single layer of truth for "who is

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
-import { CHAR_MAP_PATH, DEFAULT_COMMENT, DEFAULT_OTHERS_LABEL, IdentityRule, CharacterMap, readCharacterMap } from '@/lib/characterMap';
+import { CHAR_MAP_PATH, DEFAULT_COMMENT, DEFAULT_OTHERS_LABEL, readCharacterMap } from '@/lib/characterMap';
+import type { CharacterMap, IdentityRule } from '@/lib/characterMap';
 
 /**
  * The identity map editor's backing store (Preferences → User Identity).
