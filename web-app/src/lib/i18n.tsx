@@ -671,7 +671,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'stats.unpriced':
     '{n} model(s) in this report have no price row and count as $0 — add them to `src/lib/modelPricing.json` to include: ',
   'stats.footnote':
-    "Figures are the best-estimate hybrid: real usage where recorded, otherwise input reconstructed from the system prompt + preceding messages and priced at each model's rate (estimates lean high — they ignore historical prompt-cache discounts and context-trimming). Only original (non-copied) assistant replies count. Local models are free and excluded. OAuth Claude is priced like the Claude API (notional subscription value). Prices come from `src/lib/modelPricing.json`.",
+    "Figures are the best-estimate hybrid: real usage where recorded, otherwise input reconstructed from the system prompt + preceding messages and priced at each model's rate (estimates lean high — they ignore historical prompt-cache discounts and context-trimming). Only original (non-copied) replies count. Local models are free and excluded. OAuth Claude is priced like the Claude API (notional subscription value). Prices come from `src/lib/modelPricing.json`.",
   'stats.note.familyEntity':
     "Columns are model families; a Claude row is split into OAuth vs API by each conversation's billing mode.",
   // Table headers — these end up in the copied TSV / Markdown, which the user
