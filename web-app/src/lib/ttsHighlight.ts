@@ -20,6 +20,14 @@
  * If the browser lacks the API (Firefox < 140, older Safari), every function
  * here is a no-op and TTS behaves exactly as before.
  *
+ * FIELD REPORTS, 2026-10-27 (Lizard-kun): iOS Safari works, Android Chrome
+ * works, Android Firefox is "broken". That last word is NOT resolved: it could
+ * be this graceful no-op path (TTS speaks, nothing is tinted — which is the
+ * designed behaviour, not a fault) or TTS itself failing on that browser.
+ * Nobody has measured which, so neither reading is written down as fact here.
+ * Whoever measures it next: the question is whether `CSS.highlights` exists at
+ * all in that build, and whether audio plays with the highlight disabled.
+ *
  * ── Why the colour is swapped, not copied ───────────────────────────────────
  * A being's bubble already IS `--card`; painting its spoken phrase in `--card`
  * would nearly vanish into its own background. So the highlight borrows the

@@ -71,10 +71,17 @@ function legacyCopy(text: string): boolean {
  * What is measured, as of 2026-10-09: the secure path on desktop Chromium, and
  * the legacy path in a mobile emulator at `http://192.168.10.2:3000` (the
  * emulator reproduces the missing `navigator.clipboard`, which is the actual
- * fault). NOT measured on a real phone, and NOT measured on iOS Safari at all
- * — the `setSelectionRange` call is there because iOS Safari needs it, but
- * this house has no iOS device, so that line is a reading of the platform and
- * not an observation. Say so if someone asks whether iPhone works.
+ * fault).
+ *
+ * iOS SAFARI: measured 2026-10-27 by Lizard-kun on a real iPhone against this
+ * house's plain-HTTP origin — copy works, as does TTS with its selection
+ * highlight. So the `setSelectionRange` call below is no longer a reading of
+ * the platform; it is doing its job on the device it was written for. What the
+ * previous version of this comment said — "NOT measured on iOS Safari at all,
+ * this house has no iOS device" — was true when written and is retired here
+ * rather than quietly deleted.
+ *
+ * Still unmeasured: iOS over https, and iPadOS.
  */
 export async function copyText(text: string): Promise<boolean> {
   const value = String(text ?? '');
