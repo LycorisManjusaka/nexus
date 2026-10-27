@@ -4,7 +4,7 @@
 npm test
 ```
 
-175 assertions, ~0.3 s wall clock. No new dependency: `node:test`, `node:assert`
+211 assertions, ~0.6 s wall clock. No new dependency: `node:test`, `node:assert`
 and Node 24's own type stripping. Nothing here starts a server, opens a browser,
 reads a path outside the repo, or touches `local_data`.
 
@@ -213,3 +213,48 @@ easier neighbour — usually the one a single-threaded test can see.
 
 Instruments for both measurements live on the desk:
 `plan_probe/p19_mutation2.py`, `p20_atomic_race.mjs`, `p22_atomic_detector.mjs`.
+
+## Phase 4a-2 additions (2026-10-27 late) — 208 → 211
+
+### `lib/turnQueue.test.ts` — `composeBatch` (9 cases)
+
+Three were written from the REQUIREMENT and the failure mode, before reading
+the body:
+
+- **one item is byte-identical to a direct send.** If this ever gains a header
+  or a label, the stock becomes a second log format for the commonest path in
+  the product, and no reader of a log can tell which one produced any message.
+- **nothing vanishes.** Every input is in the text or in `skipped`. A message
+  lost between the stock and the log is the failure the module exists to make
+  impossible, and the formatter is inside that path.
+- **a label is never doubled.** The `[name]` prefix has an owner upstream
+  (InputArea), so emitting it again is the obvious way to get `[A]\n[A]\n…`.
+
+One case carries a **CORRECTED EXPECTATION** block rather than being quietly
+rewritten. It first asserted that a skipped item's attachments still ride
+along; the code disagreed and the code was right — a skipped item is not
+consumed, so taking its bytes now would deliver them again later, and the
+report would say "skipped" while its attachments went through.
+
+### `source/i18nKeyParity.test.ts` — both UI dictionaries, same keys
+
+A SOURCE-TREE property, like `typeOnlyImports`. It began as a one-off script
+while 12 keys were being added, and found that `useridentity.err.emptyName`
+existed in Japanese only. `t()` falls back JA → EN → **the key itself**, so an
+English user saving an identity with an empty name was shown the literal string
+`useridentity.err.emptyName`.
+
+Nothing in the toolchain could see it: the dictionaries are string-indexed
+object literals (so `tsc` is silent), eslint has nothing to say, and the
+Japanese UI — the one this house runs in — was correct. **A check that runs
+once protects only the day it ran**, which is why it is here and not on the
+desk.
+
+Three assertions: no key in only one language (names every offender and says
+which direction is the bad one), no duplicate literal key inside either
+dictionary (legal TypeScript — the later one silently wins), and a floor of
+1,000 parsed keys on both sides so a parse change cannot make the whole suite
+pass by vacuity.
+
+Mutation-checked 2/2: removing the new key and duplicating a key each turn it
+red, and each names the key. Source restored byte-identical.
