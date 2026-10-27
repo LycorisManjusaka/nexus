@@ -335,7 +335,6 @@ export default function Sidebar({
   };
 
   const importMdRef = useRef<HTMLInputElement>(null);
-  const importJsonRef = useRef<HTMLInputElement>(null);
 
   // ── Unrecognized-format diagnostics ───────────────────────────────────────
   // When a file cannot be read as a format NEXUS knows, the only thing that
@@ -346,93 +345,6 @@ export default function Sidebar({
   const IMPORT_HEAD_CHARS = 200;
   const fileHead = (text: string) =>
     text.slice(0, IMPORT_HEAD_CHARS) + (text.length > IMPORT_HEAD_CHARS ? ' …' : '');
-
-  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0 || !activeFolder) return;
-    // An import opens the first file it imported. Ask before any POST lands, so
-    // declining leaves the folder exactly as it was.
-    if (!confirmActionIfBusy()) { if (importJsonRef.current) importJsonRef.current.value = ''; return; }
-    const filesArray = Array.from(files);
-
-    // Process sequentially so the convoOrder update at the end sees all new
-    // IDs at once, and so the "open the first imported file" UX is
-    // deterministic regardless of how slow each POST is.
-    (async () => {
-      const newIds: string[] = [];
-      for (const file of filesArray) {
-        // Hoisted out of the try so the catch below can still show the head
-        // when JSON.parse is what threw — that is precisely the case where
-        // the bytes matter most.
-        let text = '';
-        try {
-          text = await file.text();
-          const data = JSON.parse(text);
-          if (!data || !Array.isArray(data.messages)) {
-            // A DeepSeek conversation JSON is importable — through the other
-            // menu item, which carries the dialect, the split planner and the
-            // first-original marker. Say which one, rather than only saying
-            // what this file is not.
-            const hint = isDeepSeekJson(data) ? `\n\n${t('sidebar.import.useMdItem')}` : '';
-            console.warn(`[json-import] "${file.name}" is not a NEXUS log${isDeepSeekJson(data) ? ' (it is a DeepSeek conversation — use "Import log(s) — .md / .txt / .json")' : ''}. Head:\n${fileHead(text)}`);
-            alert(withBuildTag(
-              `"${file.name}" ${t('sidebar.import.notNexusJson')}${hint}\n\n` +
-              `${t('sidebar.import.head')}\n${fileHead(text)}`
-            ));
-            continue;
-          }
-          const convoId = uuidv4();
-          const logData = {
-            ...data,
-            id: convoId,
-            folderName: activeFolder.name,
-            aiName: data.aiName || activeFolder.name,
-            title: data.title || file.name.replace(/\.json$/i, ''),
-            updatedAt: Date.now(),
-          };
-          await fetch('/api/logs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: convoId, logData }),
-          });
-          newIds.push(convoId);
-        } catch (err: any) {
-          console.error(`[json-import] "${file.name}" threw:`, err, `\nHead:\n${fileHead(text)}`);
-          alert(withBuildTag(
-            `${t('sidebar.import.failed')} "${file.name}": ${err?.message || err}` +
-            (text ? `\n\n${t('sidebar.import.head')}\n${fileHead(text)}` : '')
-          ));
-        }
-      }
-      if (newIds.length === 0) return;
-
-      // Pin the new conversations to the TOP of the folder's convoOrder.
-      // Without this, the sidebar's sort puts un-ordered convos AFTER any
-      // ordered ones — which made fresh imports appear at the bottom.
-      const existingOrder: string[] = activeFolder.settings?.convoOrder ||
-        conversations.filter(c => c.folderName === activeFolder.name).map(c => c.id);
-      const newOrder = [
-        ...newIds,
-        ...existingOrder.filter(id => !newIds.includes(id)),
-      ];
-      await fetch('/api/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: activeFolder.name,
-          settings: { ...activeFolder.settings, convoOrder: newOrder },
-        }),
-      });
-
-      fetchLogs();
-      fetchFolders();
-      // Auto-open the FIRST imported file (= the topmost after prepend).
-      markBusyConfirmAnswered();
-      selectConvo(newIds[0]);
-    })();
-
-    if (importJsonRef.current) importJsonRef.current.value = '';
-  };
 
   const handleImportMd = (e: React.ChangeEvent<HTMLInputElement>) => {
     handleAutoImport(e);
@@ -447,7 +359,7 @@ export default function Sidebar({
       alert(t('sidebar.import.noFolder'));
       return;
     }
-    // Same as handleImportJson: this ends on onSelectConvo, so ask up front.
+    // This ends on onSelectConvo, so ask up front.
     // Clear the input on the way out too — leaving the old value in place means
     // picking the same file again fires no change event, and the reader would
     // read that silence as the import being broken rather than declined.
@@ -469,8 +381,8 @@ export default function Sidebar({
     // number is the "current" conversation to open).
     const filesArray = Array.from(files).sort((a, b) => extractNum(b.name) - extractNum(a.name));
 
-    // Same sequential pattern as handleImportJson — race-free convoOrder
-    // update and deterministic "open the first imported file" UX.
+    // Sequential on purpose: a race-free convoOrder update and a
+    // deterministic "open the first imported file" UX.
     (async () => {
       const newIds: string[] = [];
       const importErrors: string[] = [];
@@ -546,11 +458,14 @@ export default function Sidebar({
           // file by hand.
           if (/\.json$/i.test(file.name)) {
             const data = JSON.parse(text);
-            // Name the other menu item instead of failing with "not a DeepSeek
-            // conversation", which is true and useless: a NEXUS log IS
-            // importable, just not here.
+            // The guard stays after the NEXUS-log importer was removed
+            // (2026-10-27): without it, a NEXUS log falls into
+            // deepSeekJsonToMarkdown, yields zero messages and surfaces as "no
+            // speaker headers found" — true of the rendered text, and wrong
+            // about the file. Only the WORDING changed: it no longer names a
+            // menu item that no longer exists.
             if (!isDeepSeekJson(data) && Array.isArray(data?.messages)) {
-              throw new Error(t('sidebar.import.useNexusJson'));
+              throw new Error(t('sidebar.import.isNexusLog'));
             }
             const conv = deepSeekJsonToMarkdown(data);
             text = conv.markdown;
@@ -999,20 +914,14 @@ export default function Sidebar({
                       and only differed in accepting ".md,.txt" instead of
                       ".md,.markdown,.txt". Two entries, one behaviour, and the
                       narrower one on top: removed 2026-10-23. */}
-                  {/* Moved here from the row under "New conversation", where
-                      they were two always-visible buttons eating sidebar
-                      width. Same refs, same handlers — only the entry point
-                      changed. */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFolderMenuOpen(false);
-                      importJsonRef.current?.click();
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Upload size={14} /> {t('sidebar.import.json')}
-                  </button>
+                  {/* "Import NEXUS log(s) — .json" used to sit above the item
+                      below. It read NEXUS's OWN log format, which existed to
+                      carry conversations between the original JSX artifact and
+                      NEXUS; OAuth removed that round-trip. Removed 2026-10-27
+                      together with "Export as JSON", its other half. */}
+                  {/* Moved here from the row under "New conversation", where it
+                      was an always-visible button eating sidebar width. Same
+                      ref, same handler — only the entry point changed. */}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -1084,13 +993,10 @@ export default function Sidebar({
           <PlusCircle size={18} />
           {t('sidebar.newChat')}
         </motion.button>
-        <input type="file" multiple accept=".json" className="hidden" ref={importJsonRef} onChange={handleImportJson} />
-        {/* `.json` is here as well as on the NEXUS-log input: a DeepSeek
-            conversation JSON goes through THIS path, because it needs the
-            dialect, the split planner and the first-original marker. The other
-            input takes a NEXUS log, which is already a conversation. Picking
-            the wrong one is not punished with a silent failure — each says
-            which item the file belongs to. */}
+        {/* `.json` is accepted here for DeepSeek conversations, which need the
+            dialect, the split planner and the first-original marker. A NEXUS
+            log is refused by name rather than by a silent failure — see the
+            guard in handleAutoImport. */}
         <input type="file" multiple accept=".md,.markdown,.txt,.json" className="hidden" ref={importMdRef} onChange={handleImportMd} />
       </div>
 

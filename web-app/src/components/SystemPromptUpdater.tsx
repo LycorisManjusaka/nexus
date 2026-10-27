@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
-import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, buildContinuationUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
@@ -593,7 +592,6 @@ export default function SystemPromptUpdater({
   const [entityFooterStatus, setEntityFooterStatus] = useState<string | null>(null);
   const [focusPoint, setFocusPoint] = useState('');
   const [summaryInstructions, setSummaryInstructions] = useState('');
-  const [summaryIndexHint, setSummaryIndexHint] = useState('');
 
   const lastSavedLeftRef = useRef<string | null>(null);
   const lastSavedRightRef = useRef<string | null>(null);
@@ -778,7 +776,6 @@ export default function SystemPromptUpdater({
         const hydratedHeader = folder?.settings?.systemPromptHeader ?? '';
         const hydratedFocus = folder?.settings?.systemPromptFocusPoint ?? '';
         const hydratedSummaryInstr = folder?.settings?.summaryInstructions ?? '';
-        const hydratedSummaryHint = folder?.settings?.summaryIndexHint ?? defaultSummaryHintForLang(agentFolder);
         // `=== true` rather than `!== false`: a folder that has NEVER saved the
         // setting now defaults to OFF (see the useState above). A folder that
         // saved either value keeps exactly what it saved — this changes the
@@ -800,7 +797,6 @@ export default function SystemPromptUpdater({
         setHeader(hydratedHeader);
         setFocusPoint(hydratedFocus);
         setSummaryInstructions(hydratedSummaryInstr);
-        setSummaryIndexHint(hydratedSummaryHint);
         setForceUpdaterModel(hydratedForceUpdater);
         setUpdaterModelKey(hydratedUpdaterKey);
         setForceMimoForSummary(hydratedForceMimo);
@@ -818,8 +814,7 @@ export default function SystemPromptUpdater({
         } catch { /* leave it blank */ }
         // Shape must match the auto-save effect's snapshot EXACTLY (same keys,
         // same order) or the first comparison differs and the window saves
-        // itself the moment it opens. summaryIndexHint left out of both — it is
-        // read-only here now.
+        // itself the moment it opens.
         lastSavedFolderRef.current = JSON.stringify({
           header: hydratedHeader, focusPoint: hydratedFocus,
           summaryInstructions: hydratedSummaryInstr,
@@ -1178,12 +1173,11 @@ export default function SystemPromptUpdater({
   useEffect(() => {
     if (!open || !folder) return;
     if (lastSavedFolderRef.current === null) return;
-    // summaryIndexHint is DELIBERATELY absent from this snapshot and from the
-    // patch below. It is now edited in one place only — the hidden-instruction
-    // overrides panel (System Instructions → Entity) — and this window shows it
-    // read-only. Leaving it in the payload would make editing an unrelated
-    // field here write this window's copy of the hint back over whatever was
-    // typed there: two writers, last one wins, no error. One writer.
+    // summaryIndexHint is not here, and must not be added: this window does
+    // not read or show it at all. It belongs to the hidden-instruction
+    // overrides panel (System Instructions → Entity), which is its only
+    // writer. Putting it in this payload would make editing an unrelated field
+    // here write a stale copy back over whatever was typed there.
     const snapshot = JSON.stringify({
       header, focusPoint, summaryInstructions,
       forceUpdaterModel, updaterModelKey, forceMimoForSummary,
@@ -1208,7 +1202,7 @@ export default function SystemPromptUpdater({
       } catch { setAutoSaveState('error'); }
     }, 800);
     return () => clearTimeout(h);
-  }, [open, folder, folderName, header, focusPoint, summaryInstructions, summaryIndexHint,
+  }, [open, folder, folderName, header, focusPoint, summaryInstructions,
       forceUpdaterModel, updaterModelKey, forceMimoForSummary, saveFolderSettings]);
 
   // ── Conversation log formatting ──────────────────────────────────────────
@@ -2415,7 +2409,8 @@ export default function SystemPromptUpdater({
   const persistHeaderFooter = useCallback(async () => {
     if (!folder) return;
     try {
-      // summaryIndexHint omitted on purpose — see the auto-save effect above.
+      // summaryIndexHint omitted on purpose — see the auto-save effect above:
+      // this window is not its writer.
       await saveFolderSettings(folderName, {
         systemPromptHeader: header,
         systemPromptFocusPoint: focusPoint,
@@ -2423,8 +2418,6 @@ export default function SystemPromptUpdater({
       });
       lastSavedFolderRef.current = JSON.stringify({ header, focusPoint, summaryInstructions });
     } catch {}
-    // summaryIndexHint dropped from the deps with the write: a dependency on a
-    // value the callback no longer reads only rebuilds the callback for nothing.
   }, [folder, folderName, header, focusPoint, summaryInstructions, saveFolderSettings]);
 
   // FOOTER.md is a FILE, not a folder setting, so it saves through its own
@@ -3219,33 +3212,12 @@ export default function SystemPromptUpdater({
               </label>
             </div>
 
-            {/* Index hint — READ-ONLY here.
-                It is one of the hidden strings Nexus adds to the system prompt,
-                so it is edited with the others, in System Instructions →
-                Entity → hidden-instruction overrides. This window keeps showing
-                it because the summaries it labels are configured right above —
-                but a second editable copy is a second writer, and two writers
-                of one folder setting lose each other's work with no error.
-                The Reset button went with the editing: a button that cannot
-                persist what it changes is worse than no button. */}
-            <div className="mt-3 pt-3 border-t border-emerald-500/20">
-              <label className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1 block">
-                {t('spu.indexHintLabel')}
-              </label>
-              <textarea
-                value={summaryIndexHint}
-                readOnly
-                rows={4}
-                placeholder={t('spu.indexHintPh')}
-                className="w-full px-2 py-1.5 bg-muted/40 border border-border rounded text-[12px] font-mono outline-none resize-y text-muted-foreground cursor-default"
-              />
-              <p className="text-[10px] text-emerald-500/90 mt-1 leading-relaxed">
-                {t('spu.indexHintMoved')}
-              </p>
-              <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                {t('spu.indexHintNote')}
-              </p>
-            </div>
+            {/* A read-only copy of the index hint used to sit here, with a
+                note pointing at System Instructions → Entity →
+                "Hidden instruction overrides", where it is edited. Removed
+                2026-10-27: a field nobody can type in, whose only content is
+                the address of the real field, is a signpost standing next to
+                nothing. The setting is unchanged and still editable there. */}
           </div>
 
           {/* Layer 5 — the entity's own FOOTER.md.

@@ -4144,133 +4144,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     URL.revokeObjectURL(url);
   };
 
-  // Pull externalized attachment payloads back inline, so an exported file stays
-  // SELF-CONTAINED. Conversations store media as content-addressed refs, but an
-  // export exists to be portable — a JSON full of refs is useless on another
-  // machine, or after a GC pass reclaims the payloads. Re-inlining as base64
-  // reproduces exactly the shape the importer already understands.
-  //
-  // Sequential on purpose. A media-heavy conversation holds hundreds of MB, and
-  // fetching every payload in parallel would spike memory for no benefit.
-  const inlineAttachmentsForExport = async (
-    src: any[]
-  ): Promise<{ messages: any[]; failed: string[] }> => {
-    const failed: string[] = [];
-    const out: any[] = [];
-    for (const m of src) {
-      if (!m.attachments?.length) { out.push(m); continue; }
-      const atts: any[] = [];
-      for (const a of m.attachments) {
-        // Already inline (or text-only) — nothing to resolve.
-        if (!a.ref || a.dataUrl) { atts.push(a); continue; }
-        try {
-          const res = await fetch(`/api/attachments/${a.ref}`);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const blob = await res.blob();
-          const dataUrl: string = await new Promise((resolve, reject) => {
-            const fr = new FileReader();
-            fr.onload = () => resolve(fr.result as string);
-            fr.onerror = () => reject(fr.error);
-            fr.readAsDataURL(blob);
-          });
-          const { ref, ...rest } = a;
-          atts.push({ ...rest, dataUrl });
-        } catch (e) {
-          // Keep the ref rather than dropping the attachment: a pointer that
-          // can still be resolved on this machine beats silently erasing the
-          // fact that the attachment ever existed.
-          // eslint-disable-next-line no-console
-          console.error(`[export] could not inline "${a.name}" (${a.ref})`, e);
-          failed.push(a.name || a.ref);
-          atts.push(a);
-        }
-      }
-      out.push({ ...m, attachments: atts });
-    }
-    return { messages: out, failed };
-  };
-
-  const handleExportJson = async () => {
-    if (isExportingJson) return;
-    setIsExportingJson(true);
-    try {
-    const { messages: exportMessages, failed } = await inlineAttachmentsForExport(messages);
-    const safeName = (title || 'conversation').replace(/[\\/:*?"<>|]+/g, '_');
-    const logData = {
-      id: convoId,
-      folderName,
-      aiName: localAiName,
-      title,
-      messages: exportMessages,
-      systemPrompt,
-      toolUseEnabled,
-      agentFullSystemAccess,
-      agentDangerousTools,
-      askUserEnabled,
-      askUserTimeoutMs,
-      subagentEnabled,
-      subagentModel,
-      subagentFamily,
-      lettersEnabled,
-      browserEnabled,
-      browserAllowedHosts,
-      browserAllowAnyHost,
-      computerControlEnabled,
-      appControlEnabled,
-      cameraEnabled,
-      instructionOverrides,
-      toolInstruction,
-      toolImageInstruction,
-      modelParams,
-      specificModel,
-      dateTimeVisibility,
-      claudeThinking,
-      saveThinkingToLog,
-      showFatigueToEntity,
-      fatigueInstruction,
-      vrchatMode,
-      vrchatRule,
-      firstOriginalMessageId,
-      seedEnabled,
-      seedValue,
-      updatedAt: Date.now(),
-    };
-    // Re-inlining restores the very size problem that externalizing solved, so
-    // this stringify can hit V8's max string length on a large conversation.
-    // It's a one-off, user-initiated action — fail with an explanation rather
-    // than throwing into a click handler and silently downloading nothing,
-    // which is what happened before.
-    let json: string;
-    try {
-      json = JSON.stringify(logData, null, 2);
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('[export] serialization failed:', e);
-      alert(t('chat.dialog.exportTooLarge'));
-      return;
-    }
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${safeName}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    if (failed.length) {
-      alert(
-        t('chat.dialog.exportPartial')
-          .replace('{n}', String(failed.length))
-          .replace('{list}', failed.slice(0, 10).join('\n')) +
-        (failed.length > 10
-          ? t('chat.dialog.andMore').replace('{n}', String(failed.length - 10))
-          : '')
-      );
-    }
-    } finally {
-      setIsExportingJson(false);
-    }
-  };
-
   // Send the user's AskUserQuestion selection back to the paused server
   // handler. Optimistically dismiss the card; the authoritative dismiss also
   // happens on the `ask_user_resolved` SSE event.
@@ -4447,9 +4320,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const { isMobile, setSidebarOpen, cameraSlot } = useDevice();
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
-  // JSON export is async now (it re-fetches externalized attachment payloads to
-  // keep the exported file self-contained), so it needs a busy state.
-  const [isExportingJson, setIsExportingJson] = useState(false);
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -5051,15 +4921,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           {/* One export control. The format is picked in the menu instead of
               costing a second permanent icon for what is the same action. */}
           <div className="relative">
+            {/* No busy state. The spinner here belonged to "Export as JSON",
+                which re-fetched EVERY externalized attachment before
+                serializing — hundreds of MB on a media-heavy conversation,
+                removed 2026-10-27. Of what is left, Markdown export is
+                synchronous and the soul export awaits exactly one small
+                `/api/footer` read (measured, not assumed): neither is long
+                enough to need a disabled button. */}
             <button
               onClick={() => setExportOpen(v => !v)}
-              disabled={isExportingJson}
-              className="p-1.5 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
               title={t('chat.export.title')}
               aria-haspopup="menu"
               aria-expanded={exportOpen}
             >
-              {isExportingJson ? <span className="text-[10px] font-bold">…</span> : <Download size={16} />}
+              <Download size={16} />
             </button>
             {exportOpen && (
               <>
@@ -5076,15 +4952,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <Download size={14} />
                     {t('chat.exportMd.title')}
                   </button>
-                  <button
-                    role="menuitem"
-                    onClick={() => { setExportOpen(false); handleExportJson(); }}
-                    disabled={isExportingJson}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-foreground border-t border-border disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <span className="text-[10px] font-bold tracking-wider w-[14px] text-center">{'{}'}</span>
-                    {t('chat.exportJson.title')}
-                  </button>
+                  {/* "Export as JSON" sat here. It wrote NEXUS's own log
+                      format with attachments re-inlined as base64, so a
+                      conversation could travel to the original JSX artifact and
+                      back; OAuth removed that round-trip. Removed 2026-10-27
+                      together with the matching importer. */}
                   {/* The identity, not the messages. Sits in the same menu
                       because it is the same gesture ("take something out of
                       here as a file"), and the menu item names which of the two

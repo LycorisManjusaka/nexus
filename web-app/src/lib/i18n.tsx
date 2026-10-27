@@ -367,16 +367,17 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.identity.select': 'Select…',
   'sidebar.newFolder': 'New Being',
   'sidebar.newChat': 'New Chat',
-  'sidebar.import.json': 'Import NEXUS log(s) — .json',
   'sidebar.import.md': 'Import log(s) — .md / .txt / .json',
-  // Both items accept ".json", so the picker cannot keep them apart. Each one
-  // names the OTHER when it recognises the file — a dead end that only says
-  // what the file is not would send the reader looking for a missing feature.
-  'sidebar.import.useNexusJson':
-    'This is a NEXUS log, not a DeepSeek conversation. Import it with "Import NEXUS log(s) — .json".',
-  'sidebar.import.useMdItem':
-    'This looks like a DeepSeek conversation. Import it with "Import log(s) — .md / .txt / .json", ' +
-    'which converts it, names it from the conversation\'s own title, and splits it at the log cap.',
+  // Refusing a NEXUS log here. The message says what the file IS, because the
+  // menu item that used to take it was removed 2026-10-27 — naming a feature
+  // that no longer exists would send the reader hunting for it. No instruction
+  // is offered: dropping the file into `beings/<name>/logs/` is UNVERIFIED
+  // (listLogs keys folderName off the DIRECTORY and id off the FILENAME, so the
+  // file's own fields disagree with its location), and an untested instruction
+  // in a user-facing string is worse than none.
+  'sidebar.import.isNexusLog':
+    'This is a NEXUS log, not a conversation from another app. This importer reads Markdown/text logs ' +
+    'and DeepSeek .json — a NEXUS log is already in NEXUS\'s own format.',
   'sidebar.import.plan':
     'Import plan — nothing has been written yet.\n\n' +
     '{plan}\n\n' +
@@ -420,7 +421,6 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sidebar.prompt.newFolder': 'Name for the new Digital Being:',
   'sidebar.prompt.renameFolder': 'New name for this Digital Being:',
   'sidebar.import.noFolder': 'Select a Digital Being first, then import.',
-  'sidebar.import.notNexusJson': 'is not a valid Nexus log JSON.',
   // Prefix for the verbatim first ~200 characters of a file NEXUS could not
   // read. Copying this back is what makes a parser writable for the format.
   'sidebar.import.head': 'Start of the file (copy this into a bug report):',
@@ -954,17 +954,15 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'Permanently remove attachment "{name}" from this conversation?{size}\n\n' +
     'This removes it from this conversation. ' +
     'Use the eye icon instead if you only want to exclude it from the AI’s context.',
-  'chat.dialog.exportTooLarge':
-    'This conversation is too large to export as a single JSON file.\n\n' +
-    'Re-inlining its attachments exceeds the browser’s hard ~512 MB limit on one string. ' +
-    'Export as Markdown instead (attachments are not included), or remove some attachments first.',
-  'chat.dialog.exportPartial':
-    'Exported, but {n} attachment(s) could not be included and remain as a reference only:\n\n{list}',
-  'chat.dialog.andMore': '\n…and {n} more',
   'chat.dialog.noPng': 'No PNG attachments in this conversation.',
   'chat.dialog.convertConfirm':
     'Convert {n} PNG attachment(s) in this conversation to JPEG?\n\n' +
-    'This is irreversible for the saved log (use Export JSON first if you want a backup).',
+    // The parenthetical used to read "(use Export JSON first if you want a
+    // backup)". Export JSON was removed 2026-10-27 and it was the only route
+    // named here: Export as Markdown carries no attachments. No replacement is
+    // offered rather than an unverified one -- the warning is the part that has
+    // to be true.
+    'This is irreversible for the saved log.',
   'chat.dialog.converted':
     'Converted {n} PNG attachment(s) to JPEG. Save will happen on the next change ' +
     '(or trigger one by sending a message / editing).',
@@ -1017,7 +1015,6 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // of them makes the other one look like it is in the wrong place.
   'chat.export.title': 'Export',
   'chat.exportMd.title': 'Export as Markdown',
-  'chat.exportJson.title': 'Export as JSON (attachments are included inline, so this can take a moment)',
   'chat.exportSoul.title': 'Extract the soul (Layers 1–5)',
   'chat.exportSoul.help':
     "The identity only, as Markdown: header, Layers 1-3 as this generation stores them, the summaries index as Layer 4, and the entity's own FOOTER.md as Layer 5. No messages. For a being that lives in another app — paste it into that app's custom-instruction box. Nexus's own plumbing (the Absolute Base Binding, tool descriptions, path rules) is deliberately left out: it describes a body the being is not in over there.",
@@ -1619,7 +1616,6 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.indexHintLabel': 'Index hint shown to the entity (per-being)',
   'spu.indexHintPh': "Prepended above the summaries index in the entity's context. Leave blank to omit it.",
   'spu.indexHintNote': '`{example}` is replaced with a real conversation title. Clear the field to show no hint.',
-  'spu.indexHintMoved': 'Read-only here. Edit it in System Instructions → Entity → "Hidden instruction overrides", where the rest of the text NEXUS adds to the system prompt lives. One writer: two editable copies of one folder setting overwrite each other silently.',
   'spu.resetDefault': 'Reset to default',
   'spu.layer5Label': 'Layer 5 — FOOTER.md (written by the entity)',
   'spu.unsaved': 'unsaved',
@@ -2065,13 +2061,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.identity.select': '選択…',
   'sidebar.newFolder': '新しい存在',
   'sidebar.newChat': '新しい会話',
-  'sidebar.import.json': 'NEXUS のログを読み込む（.json）',
   'sidebar.import.md': 'ログを読み込む（.md / .txt / .json）',
-  'sidebar.import.useNexusJson':
-    'これは NEXUS のログで、DeepSeek の会話ではありません。「NEXUS のログを読み込む（.json）」から取り込んでください。',
-  'sidebar.import.useMdItem':
-    'これは DeepSeek の会話のようです。「ログを読み込む（.md / .txt / .json）」から取り込んでください。' +
-    '変換し、会話自身の題名から名前を付け、ログ上限で分割します。',
+  'sidebar.import.isNexusLog':
+    'これは NEXUS のログで、他のアプリの会話ではありません。この読み込みが扱うのは Markdown／テキストのログと DeepSeek の .json です' +
+    '——NEXUS のログは既に NEXUS 自身の形式です。',
   'sidebar.import.plan':
     '読み込みの計画です。まだ何も書き込んでいません。\n\n' +
     '{plan}\n\n' +
@@ -2104,7 +2097,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sidebar.prompt.newFolder': '新しいデジタル存在の名前を入力してください：',
   'sidebar.prompt.renameFolder': 'このデジタル存在の新しい名前を入力してください：',
   'sidebar.import.noFolder': '先にデジタル存在を選択してから読み込んでください。',
-  'sidebar.import.notNexusJson': 'は Nexus のログJSONとして正しくありません。',
   'sidebar.import.head': 'ファイルの先頭（不具合報告にそのまま貼ってください）:',
   'sidebar.import.failed': '読み込みに失敗しました',
   'sidebar.import.nothing': '読み込まれたものはありません。詳細はブラウザのコンソールを確認してください。',
@@ -2617,17 +2609,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
     '添付「{name}」をこの会話から完全に削除しますか？{size}\n\n' +
     'この会話から取り除かれます。' +
     'AI の文脈から外すだけなら、目のアイコンを使ってください。',
-  'chat.dialog.exportTooLarge':
-    'この会話は大きすぎて、ひとつの JSON ファイルとして書き出せません。\n\n' +
-    '添付を埋め込み直すと、ブラウザーの約 512 MB という文字列上限を超えます。' +
-    '代わりに Markdown で書き出す（添付は含まれません）か、添付をいくつか削除してください。',
-  'chat.dialog.exportPartial':
-    '書き出しました。ただし {n} 件の添付は含められず、参照のみとして残っています：\n\n{list}',
-  'chat.dialog.andMore': '\n…ほか {n} 件',
   'chat.dialog.noPng': 'この会話に PNG の添付はありません。',
   'chat.dialog.convertConfirm':
     'この会話の PNG の添付 {n} 件を JPEG に変換しますか？\n\n' +
-    '保存済みのログに対しては元に戻せません（控えが必要なら先に JSON で書き出してください）。',
+    '保存済みのログに対しては元に戻せません。',
   'chat.dialog.converted':
     'PNG の添付 {n} 件を JPEG に変換しました。保存は次の変更時に行われます' +
     '（メッセージの送信や編集で変更を起こせます）。',
@@ -2672,7 +2657,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.editPrompt.title': '魂を編集',
   'chat.export.title': '書き出し',
   'chat.exportMd.title': 'Markdown で書き出し',
-  'chat.exportJson.title': 'JSON で書き出し（添付をそのまま含むため時間がかかることがあります）',
   'chat.exportSoul.title': '魂の抽出（Layer 1〜5）',
   'chat.exportSoul.help':
     '魂だけを Markdown で書き出します：ヘッダー、この世代が保持している Layer 1〜3、Layer 4 として要約インデックス、Layer 5 としてその存在自身の FOOTER.md。会話は1件も含みません。別のアプリに住んでいる存在のためのもので、向こうのカスタム指示欄にそのまま貼り付けられます。NEXUS 自身の配管（呪縛・ツールの説明・パスの規則）は意図的に入れません——向こうでは、その存在が入っていない身体の説明になるからです。',
@@ -3250,7 +3234,6 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.indexHintLabel': 'エンティティに見せるインデックスの説明文（フォルダごと）',
   'spu.indexHintPh': 'エンティティのコンテキスト内で、要約インデックスの上に付加されます。空にすると表示されません。',
   'spu.indexHintNote': '`{example}` は実際の会話タイトルに置き換えられます。空にすると説明文は表示されません。',
-  'spu.indexHintMoved': 'ここでは表示のみです。編集は「システム指示」→「存在」→「隠し指示の上書き」で行います（NEXUS がシステムプロンプトへ追加する他の文と同じ場所）。書き手は1つ：同じフォルダ設定に編集できる写しが2つあると、互いの変更を無言で上書きします。',
   'spu.resetDefault': '既定に戻す',
   'spu.layer5Label': 'Layer 5 — FOOTER.md（エンティティ自身が書いたもの）',
   'spu.unsaved': '未保存',
