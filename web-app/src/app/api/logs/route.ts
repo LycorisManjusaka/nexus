@@ -10,6 +10,12 @@ export async function POST(req: Request) {
   const body = await req.json();
   const { id, logData, baseUpdatedAt, preserveUpdatedAt } = body;
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+  // Same class of hole as the unwrapped `saveLog` below: without this, a body
+  // with no `logData` throws a TypeError on the very next line and leaves the
+  // handler as a bare 500 — a client-side mistake reported as a server fault.
+  if (!logData || typeof logData !== 'object') {
+    return NextResponse.json({ error: 'Missing or non-object logData' }, { status: 400 });
+  }
 
   // ensure updatedAt is tracked
   //
@@ -34,9 +40,31 @@ export async function POST(req: Request) {
   // failure). Absent means "unguarded", which is correct for the callers that
   // write a brand-new conversation id (duplicate, import, backup restore):
   // there is no base to compare against.
-  const result = await saveLog(id, logData, {
-    expectedUpdatedAt: typeof baseUpdatedAt === 'number' ? baseUpdatedAt : undefined,
-  });
+  // `saveLog` CAN throw, and the reason is the useful part. Measured causes:
+  // EPERM on the atomic rename when a concurrent reader holds the target open
+  // (10/10 with a reader present, 0/10 without — see p20/p22), ENOSPC on a
+  // full disk, EACCES after a permission change. Unwrapped, the throw leaves
+  // this handler and Next turns it into a bare 500: the client then shows an
+  // honest banner ("nothing on screen is lost, but this turn is not on disk")
+  // with no reason in it. The 409 branch below already returns a structured
+  // reason — the same route knew how to do this, in the branch next door.
+  let result: Awaited<ReturnType<typeof saveLog>>;
+  try {
+    result = await saveLog(id, logData, {
+      expectedUpdatedAt: typeof baseUpdatedAt === 'number' ? baseUpdatedAt : undefined,
+    });
+  } catch (e: unknown) {
+    const err = e as { code?: unknown; message?: unknown };
+    console.error(`[api/logs] saveLog threw for id=${id}:`, e);
+    return NextResponse.json({
+      error: 'write-failed',
+      // The errno is what makes the banner actionable: EPERM reads as "try
+      // again", ENOSPC as "free some space". Null when the thrown value has
+      // none, rather than inventing one.
+      code: typeof err?.code === 'string' ? err.code : null,
+      message: String(err?.message ?? e),
+    }, { status: 500 });
+  }
 
   if (result && result.ok === false && result.conflict) {
     // 409, not 200-with-a-flag: a refused save must be impossible to mistake

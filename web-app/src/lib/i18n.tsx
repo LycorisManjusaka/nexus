@@ -1034,6 +1034,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.save.dismissTitle': 'Hide this notice (the underlying problem is not fixed)',
   'chat.save.conflictBody': 'This conversation was changed somewhere else — another tab, browser, or device — after this tab opened it{disk}. This save was refused, so that change is intact and nothing on screen has been lost. Reopen the conversation to see their version (anything unsaved here is dropped), or overwrite with this tab if what you have here is the copy to keep.',
   'chat.save.conflictDiskCount': ' (the copy on disk has {n} message(s))',
+  // The two banners a reader sees on exactly the day something goes wrong.
+  // They were English template literals in ChatArea until 2026-10-27, so a
+  // Japanese UI showed them in English — the worst two strings to lose a
+  // translation on, because nothing else explains what just happened.
+  'chat.save.rejected':
+    'The server rejected this save (HTTP {status}). Nothing on screen has been lost, but this turn is not on disk yet.{reason}',
+  'chat.save.rejectedReason': '\n\nReason: {code} — {message}',
+  'chat.save.reasonUnknown': 'no error code',
+  'chat.save.unreachable':
+    'Could not reach the local server to save this conversation. Nothing on screen has been lost, but this turn is not on disk yet.',
   'chat.save.conflictOverwrite': 'Overwrite with this tab',
   'chat.save.conflictOverwriteTitle': 'Save this tab over the other version. The other change is lost — choose this only if what you see here is the copy to keep.',
   'chat.crossTab.unknownModel': 'model unknown',
@@ -2676,6 +2686,12 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.save.dismissTitle': 'この通知を隠す（原因は解消されていません）',
   'chat.save.conflictBody': 'この会話は、このタブが開いた後に別の場所（別タブ・別ブラウザー・別端末）で変更されました{disk}。この保存は拒否したので、その変更はそのまま残っており、画面の内容も失われていません。相手の版を見るには会話を開き直してください（このタブの未保存分は失われます）。残すべきがこのタブの内容なら、「このタブで上書き」を押してください。',
   'chat.save.conflictDiskCount': '（ディスク上の版はメッセージ {n} 件）',
+  'chat.save.rejected':
+    'サーバーがこの保存を拒否しました（HTTP {status}）。画面の内容は失われていませんが、このターンはまだディスクに在りません。{reason}',
+  'chat.save.rejectedReason': '\n\n理由: {code} — {message}',
+  'chat.save.reasonUnknown': 'エラーコードなし',
+  'chat.save.unreachable':
+    'このPCのサーバーに届かず、この会話を保存できませんでした。画面の内容は失われていませんが、このターンはまだディスクに在りません。',
   'chat.save.conflictOverwrite': 'このタブで上書き',
   'chat.save.conflictOverwriteTitle': 'このタブの内容で相手の版に上書きします。相手の変更は失われます——残すべきがこの画面の内容である場合にだけ選んでください。',
   'chat.crossTab.unknownModel': 'モデル不明',

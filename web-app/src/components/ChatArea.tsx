@@ -1845,9 +1845,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             return;
           }
           if (!res.ok) {
+            // Read the structured reason the route now returns (errno +
+            // message). Best-effort: a 500 from somewhere that is not this
+            // route has no such body, and an unreadable body must not turn a
+            // save failure into a thrown error on top of it.
+            let reason = '';
+            try {
+              const j = await res.json();
+              if (j?.error === 'write-failed') {
+                reason = t('chat.save.rejectedReason')
+                  .replace('{code}', j.code || t('chat.save.reasonUnknown'))
+                  .replace('{message}', String(j.message || '').slice(0, 300));
+              }
+            } catch { /* no body, or not JSON — the HTTP status still speaks */ }
             setSaveError({
               level: 'error',
-              text: `The server rejected this save (HTTP ${res.status}). Nothing on screen has been lost, but this turn is not on disk yet.`
+              text: t('chat.save.rejected')
+                .replace('{status}', String(res.status))
+                .replace('{reason}', reason),
             });
             return;
           }
@@ -1875,7 +1890,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           console.error('[auto-save] POST failed:', err);
           setSaveError({
             level: 'error',
-            text: 'Could not reach the local server to save this conversation. Nothing on screen has been lost, but this turn is not on disk yet.'
+            text: t('chat.save.unreachable'),
           });
         })
         .finally(() => {
