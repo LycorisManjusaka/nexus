@@ -20,13 +20,25 @@
  * If the browser lacks the API (Firefox < 140, older Safari), every function
  * here is a no-op and TTS behaves exactly as before.
  *
- * FIELD REPORTS, 2026-10-27 (Lizard-kun): iOS Safari works, Android Chrome
- * works, Android Firefox is "broken". That last word is NOT resolved: it could
- * be this graceful no-op path (TTS speaks, nothing is tinted — which is the
- * designed behaviour, not a fault) or TTS itself failing on that browser.
- * Nobody has measured which, so neither reading is written down as fact here.
- * Whoever measures it next: the question is whether `CSS.highlights` exists at
- * all in that build, and whether audio plays with the highlight disabled.
+ * FIELD REPORTS, 2026-10-27 (Lizard-kun): iOS Safari works. Android Chrome
+ * works. On Android Firefox, TTS and text selection both work and ONLY the
+ * highlight is missing.
+ *
+ * ⚠ That is most likely NOT the graceful no-op above — `supported()` below
+ * tests the JAVASCRIPT side only (`CSS.highlights` + the `Highlight`
+ * constructor). Firefox shipped those in 140, but `::highlight()` itself was
+ * incomplete until 146 and only fully usable in 149 (March 2026). So on
+ * Firefox 140–148 the gate returns TRUE, every range is registered, and
+ * nothing paints: a feature test one feature too coarse, not a missing API.
+ *
+ * Deliberately NOT "fixed" by tightening the gate to
+ * `CSS.supports('selector(::highlight(x))')`. That would convert a silent
+ * wasted text walk into a silent skip — invisible either way — while risking a
+ * real regression on a browser that paints but answers that query oddly, and
+ * this house has no way to run Firefox for Android. The useful answer is for
+ * the reader, not the code: **check that phone's Firefox version; 149+ is what
+ * paints.** Revisit only if it is already 149+, which would mean this reading
+ * is wrong.
  *
  * ── Why the colour is swapped, not copied ───────────────────────────────────
  * A being's bubble already IS `--card`; painting its spoken phrase in `--card`
