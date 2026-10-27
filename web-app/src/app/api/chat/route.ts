@@ -309,6 +309,7 @@ import { resolveAgentInstructions } from '@/lib/agentInstructions';
 import { createAskId, waitForAsk, recommendedDefaults, formatAnswerForModel, normalizeQuestions } from '@/lib/askUser';
 import { drainInjections, drainSystemNotes, pushSystemNote, clearInjections, frameInjection, type DrainedInjection } from '@/lib/injectMessage';
 import { markTurnActive, endTurn } from '@/lib/turnRegistry';
+import { onStop, forgetStop } from '@/lib/turnStop';
 import {
   loadInjectedMedia, injectableKinds, splitDeliverable, handoffNote, undeliverableSummary,
   anthropicInjectBlocks, geminiInjectParts, openaiInjectParts,
@@ -4320,6 +4321,25 @@ export async function POST(req: Request) {
         markTurnActive(convoId, injectTurnId, clientId, specificModel || aiName || undefined);
         req.signal.addEventListener('abort', () => { try { endTurn(convoId, injectTurnId); } catch {} });
       } catch { /* visibility is a courtesy; never block the turn on it */ }
+
+      // ── Explicit stop, named by turn ──────────────────────────────────────
+      // The second way into `abortTurn`, and the only one a turn with no
+      // browser attached can use. Today it is redundant for a tab-driven turn
+      // (Stop also aborts the fetch, which fires req.signal above) — it is
+      // here now because the runner in 4b has no fetch to abort, and because
+      // `registerActiveTurnStop` is a single global callback that cannot say
+      // WHICH turn it means. See lib/turnStop.ts.
+      //
+      // Unlike the registry above, this one can act on a turn — so it is
+      // narrow on purpose: it only ever fires for a request naming this exact
+      // turnId, and it can never prevent a turn from starting.
+      try {
+        const offStop = onStop(convoId, injectTurnId, abortTurn);
+        turnAbort.signal.addEventListener('abort', () => {
+          try { offStop(); } catch { /* already gone */ }
+          try { forgetStop(convoId, injectTurnId); } catch { /* already gone */ }
+        });
+      } catch { /* the turn must run even if the stop channel cannot be wired */ }
     }
 
     if (agentReadOnlyTools) {

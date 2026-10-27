@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getActiveTurn, touchTurn, endTurn, HEARTBEAT_MS } from '@/lib/turnRegistry';
+import { requestStop, forgetStop } from '@/lib/turnStop';
 
 // Read/refresh "is a turn running for this conversation, and is it mine".
 //
 // GET  ?convoId=&clientId=   → { active, mine, label?, startedAt?, ageMs? }
-// POST { convoId, turnId, event: 'beat' | 'end' } → { ok }
+// POST { convoId, turnId, event: 'beat' | 'end' | 'stop' } → { ok, outcome? }
 //
 // There is deliberately NO way for a client to CLAIM a turn here. The only
 // writer of "a turn started" is the chat route itself, at the point it actually
@@ -50,8 +51,31 @@ export async function POST(req: Request) {
     if (!turnId || typeof turnId !== 'string') {
       return NextResponse.json({ error: 'turnId is required' }, { status: 400 });
     }
+    // ── Stop THIS turn, named explicitly ────────────────────────────────────
+    // Separate from the browser Stop button's abort, which the chat route
+    // cannot tell apart from a tab dying (see lib/turnStop.ts). A turn started
+    // by the server-side runner has no browser fetch at all, so this is the
+    // ONLY way to stop one. Shipped before the runner because it is its
+    // prerequisite, not a convenience.
+    //
+    // `ok` means the request was accepted. `outcome` is what actually
+    // happened, and the caller must read that rather than trusting `ok`:
+    //   fired    — a running turn was told
+    //   recorded — nobody was listening yet; a turn registering now gets it
+    //   already  — this exact turn had been asked before
+    // Saying ok:true while nothing happened is the failure this house has
+    // paid for twice (the dead "add timestamps" button returned ok:true,
+    // updated:0 for 55 days).
+    if (event === 'stop') {
+      const outcome = requestStop(convoId, turnId);
+      return NextResponse.json({ ok: true, outcome });
+    }
     if (event === 'end') {
       endTurn(convoId, turnId);
+      // A finished turn can no longer be stopped, so nothing about it should
+      // stay reachable. This is one of the two cleanups turnStop's TTL exists
+      // to back up — see LISTENER_TTL_MS.
+      forgetStop(convoId, turnId);
       return NextResponse.json({ ok: true });
     }
     // Anything else is a heartbeat. ok:false means there was nothing to keep

@@ -3031,6 +3031,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleStop = () => {
+    // ── Say "stop THIS turn" out loud, then abort ─────────────────────────
+    // The abort below is what stops the turn today, and this POST changes
+    // nothing a person can see. It is here because the two are not the same
+    // statement: an abort is indistinguishable, on the wire, from this tab
+    // dying — the chat route receives one `req.signal` for both (measured;
+    // see lib/turnStop.ts). Phase 4b needs turns that survive a closed tab,
+    // and that is only possible once Stop has its own channel.
+    //
+    // Read the key BEFORE retireTurnRegistration() below clears it, and do
+    // not await: Stop must stay a one-click, no-latency action, so the abort
+    // runs immediately and this request catches up on its own.
+    const activeKey = activeTurnKeyRef.current;
+    if (activeKey) {
+      fetch('/api/chat/active', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ convoId: activeKey.convoId, turnId: activeKey.turnId, event: 'stop' }),
+      }).catch(() => { /* the abort below is still the thing that stops it today */ });
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
