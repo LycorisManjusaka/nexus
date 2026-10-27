@@ -287,6 +287,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'useridentity.others.help':
     "During a Live Session, speech heard through the OTHER input (not the active voice-changer character — e.g. a second microphone or virtual audio cable carrying someone else's voice) is tagged with this label instead of an identity name.",
   'useridentity.saved': 'Saved.',
+  'useridentity.err.emptyName': 'Every identity needs a name.',
   'useridentity.err.duplicate': 'Duplicate identity name: "{name}"',
   'useridentity.err.saveFailed': 'Save failed.',
 
