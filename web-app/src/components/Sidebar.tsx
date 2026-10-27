@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, Clock, HelpCircle, X } from 'lucide-react';
+import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, HelpCircle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
 import {
@@ -306,31 +306,6 @@ export default function Sidebar({
     return () => document.removeEventListener('click', closeMenu);
   }, [menuOpenId]);
 
-
-  const handleAddTimestamps = async () => {
-    if (!activeFolder) return;
-    try {
-      const res = await fetch('/api/summaries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'addTimestamps', folder: activeFolder.name }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        alert(t('sidebar.menu.addTimestampsDone').replace('{n}', data.updated).replace('{total}', data.total));
-        // Refresh summaries so hover previews pick up the new timestamps
-        const name = activeFolder.name;
-        fetch('/api/summaries?folder=' + encodeURIComponent(name) + '&mode=all')
-          .then(r => r.json())
-          .then(d => { if (d?.summaries) setFolderSummaries(d.summaries); })
-          .catch(() => {});
-      } else {
-        alert(t('sidebar.menu.addTimestampsError').replace('{e}', data.error || 'unknown'));
-      }
-    } catch (e: any) {
-      alert(t('sidebar.menu.addTimestampsError').replace('{e}', e?.message || ''));
-    }
-  };
 
   const handleSort = async (order: 'asc' | 'desc') => {
     if (!activeFolder) return;
@@ -1065,24 +1040,6 @@ export default function Sidebar({
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <ArrowUp size={14} /> {t('sidebar.menu.sortAsc')}
-                  </button>
-                  {/* There were TWO entries here with the identical label and
-                      the identical action (POST /api/summaries addTimestamps) —
-                      one inline, one through handleAddTimestamps(). The inline
-                      copy is gone: it refreshed the CONVERSATION list
-                      afterwards, which holds no summaries, so the hover
-                      previews kept showing the pre-timestamp text until a
-                      reload. handleAddTimestamps() re-fetches the summaries
-                      themselves, which is what this action changed. */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleAddTimestamps();
-                      setFolderMenuOpen(false);
-                    }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Clock size={14} /> {t('sidebar.menu.addTimestamps')}
                   </button>
                   <button
                     onClick={(e) => {
