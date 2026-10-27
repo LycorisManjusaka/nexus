@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from 'react';
-import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square } from 'lucide-react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square, MessageSquare, ChevronDown } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { SNIFF_BYTES, TEXT_MAX_BYTES, MEDIA_EXT, looksLikeText } from '@/lib/textSniff';
@@ -651,6 +651,32 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     setAttachments(attachments.filter(a => a.id !== id));
   };
 
+  /**
+   * What the send button does WHILE a turn is running.
+   *
+   *   'interject' — delivered into the running turn at its next tool step, and
+   *                 never appended to the log. This is the default, and it is
+   *                 the emergency brake: トカゲくん stopped a 35-minute
+   *                 decoding loop with it on 2026-10-26 (the `court` incident).
+   *                 Making it anything but one keystroke away would cost that.
+   *   'send'      — added to the STOCK, to be run as the next turn.
+   *
+   * Idle, there is no choice to make: the stock and a direct send are the same
+   * thing, so the button is always the paper plane.
+   *
+   * Deliberately NOT remembered (his requirement): it resets to 'interject'
+   * every time the generating state flips and after every send. A sticky
+   * override would mean an urgent "stop doing that" silently landing in the
+   * stock, to be read after the thing you wanted stopped had finished.
+   */
+  const [sendMode, setSendMode] = useState<'interject' | 'send'>('interject');
+  const [modeMenuAt, setModeMenuAt] = useState<{ left: number; bottom: number } | null>(null);
+  useEffect(() => {
+    setSendMode('interject');
+    setModeMenuAt(null);
+  }, [isGenerating]);
+  const effectiveMode: 'interject' | 'send' = isGenerating ? sendMode : 'send';
+
   const handleSend = () => {
     if (!text.trim() && attachments.length === 0) return;
     let finalText = text;
@@ -662,7 +688,11 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     if (!vrchatMode && trimmedName !== '' && trimmedName !== 'User' && trimmedName !== 'Anonymous') {
       finalText = `[${trimmedName}]\n${text}`.trim();
     }
-    onSend(finalText, attachments);
+    // The third argument is additive: the only other caller (ChatArea's VRChat
+    // auto-send) passes two and gets today's behaviour unchanged.
+    onSend(finalText, attachments, { mode: effectiveMode, from: trimmedName });
+    setSendMode('interject');
+    setModeMenuAt(null);
     setText('');
     setAttachments([]);
     // Sent — drop the saved draft so a reload doesn't restore an already-sent message.
@@ -715,7 +745,8 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   };
 
   return (
-    <div 
+    <>
+    <div
       className={`bg-card border shadow-xl rounded-2xl overflow-hidden transition-all ${
         isDragging ? 'border-indigo-500 bg-indigo-500/5 ring-4 ring-indigo-500/20 scale-[1.02]' : 'border-border focus-within:ring-2 focus-within:ring-indigo-500/50'
       }`}
@@ -847,15 +878,80 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             <Square size={18} className="fill-current" />
           </button>
         )}
-        <button 
-          onClick={handleSend}
-          disabled={disabled || (!text.trim() && attachments.length === 0)}
-          className="p-3 bg-primary text-primary-foreground rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shadow-sm"
-        >
-          <Send size={18} />
-        </button>
+        <div className="flex flex-col items-center gap-1">
+          {/* The mode picker exists only while a turn runs — idle, the stock and
+              a direct send are the same thing and there is nothing to choose. */}
+          {isGenerating && (
+            <button
+              onClick={(e) => {
+                if (modeMenuAt) { setModeMenuAt(null); return; }
+                const r = e.currentTarget.getBoundingClientRect();
+                setModeMenuAt({
+                  left: r.left + r.width / 2,
+                  bottom: window.innerHeight - r.top + 6,
+                });
+              }}
+              className="px-2 py-0.5 text-muted-foreground hover:text-foreground hover:bg-muted rounded-lg transition-colors leading-none"
+              title={t('input.mode.pick')}
+            >
+              <ChevronDown size={14} />
+            </button>
+          )}
+          <button
+            onClick={handleSend}
+            disabled={disabled || (!text.trim() && attachments.length === 0)}
+            title={effectiveMode === 'interject' ? t('input.mode.interject') : t('input.mode.send')}
+            className={`p-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shadow-sm ${
+              effectiveMode === 'interject'
+                ? 'bg-amber-500 text-white'
+                : 'bg-primary text-primary-foreground'
+            }`}
+          >
+            {/* MessageSquare is already this house's mark for an interjection
+                (MessageBubble renders the mid-turn event with it, in amber), so
+                the button and the log entry it produces look like each other. */}
+            {effectiveMode === 'interject' ? <MessageSquare size={18} /> : <Send size={18} />}
+          </button>
+        </div>
       </div>
-    </div>
+      </div>
+      {/* Rendered OUTSIDE the bordered box on purpose: that box is
+          `overflow-hidden` (and gains a transform while dragging), either of
+          which would clip or re-anchor a popup placed inside it. */}
+      {modeMenuAt && (
+        <>
+          <div className="fixed inset-0 z-[90]" onClick={() => setModeMenuAt(null)} />
+          <div
+            className="fixed z-[91] -translate-x-1/2 bg-card border border-border rounded-xl shadow-xl overflow-hidden text-sm"
+            style={{ left: modeMenuAt.left, bottom: modeMenuAt.bottom }}
+          >
+            {(['interject', 'send'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => { setSendMode(m); setModeMenuAt(null); textareaRef.current?.focus(); }}
+                className={`w-full text-left px-3 py-2 flex items-start gap-2 hover:bg-muted transition-colors ${
+                  sendMode === m ? 'bg-muted/60' : ''
+                }`}
+              >
+                <span className="mt-0.5 shrink-0">
+                  {m === 'interject'
+                    ? <MessageSquare size={14} className="text-amber-500" />
+                    : <Send size={14} className="text-indigo-500" />}
+                </span>
+                <span className="flex flex-col">
+                  <span className="font-medium whitespace-nowrap">
+                    {t(m === 'interject' ? 'input.mode.interject' : 'input.mode.send')}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                    {t(m === 'interject' ? 'input.mode.interjectHint' : 'input.mode.sendHint')}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </>
   );
 });
 

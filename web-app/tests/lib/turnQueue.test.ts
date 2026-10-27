@@ -35,7 +35,9 @@ import {
   breakLease,
   queueDir,
   queuedConversations,
+  composeBatch,
 } from '../../src/lib/turnQueue';
+import type { QueueItem } from '../../src/lib/turnQueue';
 
 let root = '';
 let opts: { beingsDir: string };
@@ -365,5 +367,112 @@ describe('turnQueue: what a poller iterates', () => {
 
   it('is empty, and not an error, for a being that has never been queued', async () => {
     assert.deepEqual(await queuedConversations(being, opts), []);
+  });
+});
+
+/**
+ * composeBatch — requirement A/B rendering. Pure; no disk.
+ *
+ * The first three cases were written from the REQUIREMENT and the failure mode,
+ * before reading the body:
+ *
+ *   "one item is byte-identical to a direct send" — if this ever gains a header
+ *       or a label, the stock becomes a second log format for the commonest
+ *       path in the product, and no reader of a log can tell which produced it.
+ *   "nothing vanishes" — every input is in the text or in `skipped`. A message
+ *       lost between the stock and the log is the failure this module exists
+ *       to make impossible, and the formatter is inside that path.
+ *   "a label is never doubled" — the `[name]` prefix has an owner upstream
+ *       (InputArea). Emitting it again is the obvious way to get `[A]\n[A]\n…`.
+ */
+describe('turnQueue.composeBatch', () => {
+  const item = (over: Partial<QueueItem> & { payload: unknown }): QueueItem => ({
+    id: over.id || 'id-' + Math.random().toString(36).slice(2),
+    at: over.at ?? 1,
+    kind: over.kind || 'user_message',
+    from: over.from ?? '',
+    payload: over.payload,
+  });
+
+  it('one item is byte-identical to a direct send — nothing added at all', () => {
+    const text = '[トカゲくん]\nhello\n\nsecond paragraph';
+    const b = composeBatch([item({ from: 'トカゲくん', payload: { text } })]);
+    assert.equal(b.text, text);
+    assert.deepEqual(b.attachments, []);
+    assert.deepEqual(b.skipped, []);
+  });
+
+  it('one item with no identity is still verbatim (no "[]" label appears)', () => {
+    const b = composeBatch([item({ from: '', payload: { text: 'bare text' } })]);
+    assert.equal(b.text, 'bare text');
+    assert.ok(!b.text.includes('['));
+  });
+
+  it('nothing vanishes: every input is either rendered or reported', () => {
+    const items = [
+      item({ id: 'a', from: 'A', payload: { text: 'one' } }),
+      item({ id: 'b', kind: 'letter', payload: { subject: 'no text field' } }),
+      item({ id: 'c', from: 'C', payload: { text: 'three' } }),
+      item({ id: 'd', payload: null }),
+    ];
+    const b = composeBatch(items);
+    const textOf = (i: QueueItem) => (i.payload as { text?: unknown } | null)?.text;
+    const rendered = items.filter((i) => typeof textOf(i) === 'string' && b.text.includes(String(textOf(i))));
+    const reported = b.skipped.map((s) => s.id).sort();
+    assert.deepEqual(reported, ['b', 'd']);
+    assert.equal(rendered.length + b.skipped.length, items.length);
+    for (const s of b.skipped) assert.ok(s.reason.length > 0, 'a skip must say why');
+  });
+
+  it('two items carry sender labels and keep FIFO order', () => {
+    const b = composeBatch([
+      item({ from: 'A', payload: { text: 'first' } }),
+      item({ from: 'B', payload: { text: 'second' } }),
+    ]);
+    assert.equal(b.text, '[A]\nfirst\n\n[B]\nsecond');
+  });
+
+  it('a label is never doubled when the text already carries it', () => {
+    const b = composeBatch([
+      item({ from: 'トカゲくん', payload: { text: '[トカゲくん]\nfirst' } }),
+      item({ from: 'トカゲくん', payload: { text: '[トカゲくん]\nsecond' } }),
+    ]);
+    assert.equal(b.text, '[トカゲくん]\nfirst\n\n[トカゲくん]\nsecond');
+    assert.equal(b.text.match(/\[トカゲくん\]/g)?.length, 2);
+  });
+
+  it('an unlabelled item among labelled ones gets its label from `from`', () => {
+    const b = composeBatch([
+      item({ from: 'トカゲくん', payload: { text: '[トカゲくん]\nfrom the box' } }),
+      item({ from: '睡', kind: 'letter', payload: { text: 'a letter body' } }),
+    ]);
+    assert.equal(b.text, '[トカゲくん]\nfrom the box\n\n[睡]\na letter body');
+  });
+
+  it('attachments are concatenated in item order', () => {
+    const b = composeBatch([
+      item({ from: 'A', payload: { text: 'x', attachments: [{ id: 1 }, { id: 2 }] } }),
+      item({ from: 'B', payload: { text: 'y', attachments: [{ id: 3 }] } }),
+    ]);
+    assert.deepEqual(b.attachments, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+  });
+
+  /**
+   * CORRECTED EXPECTATION (2026-10-27). This case first asserted that a skipped
+   * item's attachments still ride along. The code disagreed, and the code was
+   * right: a skipped item is NOT consumed by the caller (it stays in the stock
+   * for a kind-aware renderer later), so delivering its bytes now means
+   * delivering them AGAIN then. And the report would lie — "1 skipped" while
+   * its attachments went through. A skipped item contributes nothing.
+   */
+  it('a skipped item contributes nothing — not even its attachments', () => {
+    const b = composeBatch([item({ kind: 'system', payload: { attachments: [{ id: 9 }] } })]);
+    assert.equal(b.text, '');
+    assert.deepEqual(b.attachments, []);
+    assert.equal(b.skipped.length, 1);
+  });
+
+  it('an empty batch is empty, not an error', () => {
+    assert.deepEqual(composeBatch([]), { text: '', attachments: [], skipped: [] });
   });
 });

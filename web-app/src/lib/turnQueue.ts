@@ -440,3 +440,87 @@ export async function queuedConversations(
   }
   return out;
 }
+
+/** `user_message` payload shape. The only kind produced today. */
+export interface UserMessagePayload {
+  /** The text EXACTLY as it would have been sent directly, label included. */
+  text: string;
+  attachments?: unknown[];
+}
+
+export interface Batch {
+  text: string;
+  attachments: unknown[];
+  /**
+   * Items this function refused to render, with why. Never silently dropped:
+   * a message that vanishes between the stock and the log is the failure this
+   * whole module is built to make impossible, and that includes vanishing
+   * inside the formatter.
+   *
+   * A skipped item contributes NOTHING — not its text, not its attachments.
+   * The caller must not list it in `release`'s consumedIds: it stays in the
+   * stock for a kind-aware renderer later. Taking its bytes now would deliver
+   * them a second time then, and would make "skipped" a false report.
+   */
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+/**
+ * Render a claimed batch as ONE user message — his requirement B ("several
+ * messages shown together, each with a sender label").
+ *
+ * ── One item is byte-identical to a direct send ─────────────────────────────
+ * The single-item case returns the text verbatim: no label line, no separator,
+ * nothing added. That is deliberate. Requirement A (one message in the stock)
+ * must produce exactly the log a plain send produces today, or the stock
+ * becomes a second format for the commonest path in the product and every
+ * reader of a log has to know which one produced it.
+ *
+ * ── Why the label is conditional, and why that is not a heuristic ───────────
+ * The `[name]` prefix has an owner today: InputArea applies it on send when the
+ * user identity is a real name (empty / "User" / "Anonymous" are skipped on
+ * purpose — a meaningless tag burning tokens). So a queued user_message USUALLY
+ * already carries its label inside the text. The future kinds do not: a letter
+ * or a schedule tick has no InputArea between it and here. Emitting `[from]`
+ * unconditionally would double the label on the common case; emitting it never
+ * would leave the future kinds anonymous. So it is emitted only when the text
+ * does not already start with that exact label — a test, not a guess, and one
+ * place owns it.
+ */
+export function composeBatch(items: QueueItem[]): Batch {
+  const skipped: Array<{ id: string; reason: string }> = [];
+  const usable: QueueItem[] = [];
+  for (const it of items) {
+    const p = it.payload as UserMessagePayload | null;
+    if (!p || typeof p.text !== 'string') {
+      skipped.push({ id: it.id, reason: `kind=${it.kind} has no string payload.text` });
+      continue;
+    }
+    usable.push(it);
+  }
+
+  const attachments: unknown[] = [];
+  for (const it of usable) {
+    const p = it.payload as UserMessagePayload;
+    if (Array.isArray(p.attachments)) attachments.push(...p.attachments);
+  }
+
+  if (usable.length === 0) return { text: '', attachments, skipped };
+
+  const textOf = (it: QueueItem) => (it.payload as UserMessagePayload).text;
+
+  if (usable.length === 1) {
+    return { text: textOf(usable[0]), attachments, skipped };
+  }
+
+  const blocks = usable.map((it) => {
+    const body = textOf(it);
+    const label = (it.from || '').trim();
+    if (!label || body.startsWith(`[${label}]`)) return body;
+    return `[${label}]\n${body}`;
+  });
+  // A blank line between blocks — the same separation a human reading two
+  // consecutive messages sees, and the shape the `[Name]` transcript
+  // convention already uses elsewhere in this house. No new convention.
+  return { text: blocks.join('\n\n'), attachments, skipped };
+}

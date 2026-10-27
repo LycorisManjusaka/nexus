@@ -2491,14 +2491,164 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     };
   }, [scrollToMessageId, messages.length, onScrolledToMessage]);
 
-  const handleSend = async (text: string, attachments: any[]) => {
+  // ── The stock (phase 4a-2, 2026-10-27) ───────────────────────────────────
+  // A durable, server-side queue of things that should cause a turn. Today the
+  // only producer is "send (not interject) while a turn runs" and the only
+  // consumer is the button below — a human click. The POLLING RUNNER THAT
+  // STARTS TURNS BY ITSELF IS PHASE 4b AND IS NOT HERE: auto-draining from a
+  // client would re-fire on a turn that fails instantly, and the loop would be
+  // driven by the same code that reports it. Nothing about the on-disk shape
+  // changes when 4b lands; `kind` already carries 'letter' | 'schedule'.
+  /** What GET /api/turn-queue reports per item — labels only, never bodies. */
+  type StockItem = { id: string; at: number; from: string; kind: string };
+  const [stock, setStock] = useState<{ count: number; items: StockItem[] } | null>(null);
+  const [stockBusy, setStockBusy] = useState(false);
+  const [stockNote, setStockNote] = useState<string | null>(null);
+
+  const refreshStock = useCallback(async () => {
+    if (!folderName || !convoId) return;
+    try {
+      const res = await fetch(
+        `/api/turn-queue?being=${encodeURIComponent(folderName)}&convoId=${encodeURIComponent(convoId)}`
+      );
+      if (!res.ok) return;
+      const d = await res.json();
+      setStock({ count: d?.count || 0, items: Array.isArray(d?.items) ? d.items : [] });
+    } catch {
+      // Offline or the route is down: keep the last known value rather than
+      // showing 0, which would read as "your messages are gone".
+    }
+  }, [folderName, convoId]);
+
+  // Read once per conversation, and keep reading while a turn runs — that is
+  // the only window in which another tab can add to this conversation's stock.
+  // The first read is deferred one tick deliberately. `refreshStock` only
+  // setStates after an await, but a linter cannot see past the `async`, so
+  // calling it inline reads as a synchronous setState inside an effect — and
+  // deferring also keeps the fetch out of the commit phase.
+  useEffect(() => {
+    const kick = setTimeout(refreshStock, 0);
+    if (!injectTurnId) return () => clearTimeout(kick);
+    const h = setInterval(refreshStock, 5000);
+    return () => { clearTimeout(kick); clearInterval(h); };
+  }, [refreshStock, injectTurnId]);
+
+  const enqueueToStock = async (text: string, attachments: unknown[], from: string) => {
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'enqueue', being: folderName, convoId, from, text, attachments,
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setStockNote(t('chat.stock.failed'));
+        return;
+      }
+      setStockNote(t('chat.stock.added').replace('{n}', String(d.position)));
+    } catch {
+      setStockNote(t('chat.stock.failed'));
+    } finally {
+      refreshStock();
+    }
+  };
+
+  /**
+   * Run the stock as one turn. Claim → send the composed batch through the
+   * normal send path → release the ids the server said are consumable.
+   *
+   * Released AFTER the turn resolves, and `abandon`ed if it throws. So a tab
+   * killed mid-turn leaves the batch in the stock and the button offers it
+   * again — a visible duplicate a human decides about, never a silent loss.
+   * (turnQueue.release prefers the opposite order for an automatic runner,
+   * where re-running costs money with nobody watching. Here someone is.)
+   */
+  const drainStock = async () => {
+    if (stockBusy || loading || !folderName || !convoId) return;
+    setStockBusy(true);
+    setStockNote(null);
+    let token = '';
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'claim', being: folderName, convoId,
+          holder: `tab:${TAB_CLIENT_ID.slice(0, 8)}`,
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setStockNote(
+          d?.reason === 'busy' ? t('chat.stock.busy')
+          : d?.reason === 'empty' ? null
+          : t('chat.stock.failed')
+        );
+        return;
+      }
+      token = d.token;
+      const composed = d.composed || { text: '', attachments: [], skipped: [] };
+      if (Array.isArray(composed.skipped) && composed.skipped.length > 0) {
+        // Not silently dropped: they stay in the stock and are reported.
+        console.warn('[stock] items left unrendered:', composed.skipped);
+        setStockNote(t('chat.stock.skipped').replace('{n}', String(composed.skipped.length)));
+      }
+      if (!String(composed.text || '').trim() && (composed.attachments || []).length === 0) {
+        await fetch('/api/turn-queue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'abandon', being: folderName, convoId, token }),
+        }).catch(() => {});
+        token = '';
+        return;
+      }
+      await handleSendRef.current?.(composed.text, composed.attachments || []);
+      await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'release', being: folderName, convoId, token,
+          consumedIds: Array.isArray(d.consumable) ? d.consumable : [],
+        }),
+      });
+      token = '';
+    } catch {
+      if (token) {
+        await fetch('/api/turn-queue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'abandon', being: folderName, convoId, token }),
+        }).catch(() => {});
+      }
+      setStockNote(t('chat.stock.failed'));
+    } finally {
+      setStockBusy(false);
+      refreshStock();
+    }
+  };
+
+  const handleSend = async (
+    text: string,
+    attachments: any[],
+    opts?: { mode?: 'interject' | 'send'; from?: string }
+  ) => {
     if (!text.trim() && attachments.length === 0) return;
 
     // A turn is in flight → this message is a mid-turn INTERJECTION, not a new
     // message. It's delivered to the running turn at its next tool-loop step
     // and never appended to the conversation log. (The old dedicated interject
     // input box is gone — sending normally while they work IS the interjection.)
+    //
+    // Unless the sender explicitly picked 'send' in the mode menu, in which
+    // case it goes to the stock to be run as the NEXT turn. The default stays
+    // the interjection: it is the emergency brake (see InputArea).
     if (injectTurnId) {
+      if (opts?.mode === 'send') {
+        await enqueueToStock(text, attachments, opts.from || '');
+        return;
+      }
       await sendInterjection(text, attachments);
       return;
     }
@@ -5467,6 +5617,36 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
               </div>
             )}
+            {/* The stock. Visible whenever it is non-empty, so a message added
+                with the "send" mode is never invisible between the moment it is
+                stored and the moment it runs. The button is the only consumer
+                today — the polling runner is phase 4b. */}
+            {(stock && stock.count > 0) || stockNote ? (
+              <div className="mb-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-sm">
+                <span>⏳</span>
+                {stock && stock.count > 0 ? (
+                  <>
+                    <span className="font-medium">
+                      {t('chat.stock.waiting').replace('{n}', String(stock.count))}
+                    </span>
+                    <span className="text-xs text-muted-foreground truncate max-w-[40%]">
+                      {stock.items.map((i) => i.from).filter(Boolean).join(', ')}
+                    </span>
+                    <button
+                      onClick={drainStock}
+                      disabled={stockBusy || loading}
+                      title={loading ? t('chat.stock.waitTurn') : ''}
+                      className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
+                    >
+                      {stockBusy ? '…' : t('chat.stock.run')}
+                    </button>
+                  </>
+                ) : null}
+                {stockNote ? (
+                  <span className="text-xs text-muted-foreground w-full">{stockNote}</span>
+                ) : null}
+              </div>
+            ) : null}
             <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={false} aiName={localAiName} vrchatMode={vrchatMode} globalSettings={globalSettings} convoId={convoId} />
           </div>
         </div>
