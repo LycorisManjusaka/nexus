@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server';
-import { enqueue, pending, claim, release, abandon, composeBatch, readLease } from '@/lib/turnQueue';
+import {
+  enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
+} from '@/lib/turnQueue';
 
 // The stock a being's turns are fed from (phase 4a, 2026-10-27).
 //
-// GET  ?being=&convoId=            → { count, items: [{id, at, from, kind}], lease }
+// GET  ?being=&convoId=            → { count, waiting, claimed, claimedUnknown,
+//                                      items: [{id, at, from, kind, claimed}], lease }
 // POST { action: 'enqueue', being, convoId, from, text, attachments?, kind? }
 //                                  → { ok, id, position }
 // POST { action: 'claim',   being, convoId, holder }
@@ -46,9 +49,19 @@ export async function GET(req: Request) {
     }
     const items = await pending(being, convoId);
     const lease = await readLease(being, convoId);
+    const split = splitByLease(items, lease);
+    const claimedSet = new Set(split.claimed.map((i) => i.id));
     return NextResponse.json({
+      // `count` is every file on disk and is kept for callers that only want a
+      // "is there anything at all" answer. It is deliberately NOT the number to
+      // show a human: see waiting/claimed.
       count: items.length,
-      items: items.map((i) => ({ id: i.id, at: i.at, from: i.from, kind: i.kind })),
+      waiting: split.waiting.length,
+      claimed: split.claimed.length,
+      claimedUnknown: split.claimedUnknown,
+      items: items.map((i) => ({
+        id: i.id, at: i.at, from: i.from, kind: i.kind, claimed: claimedSet.has(i.id),
+      })),
       lease: lease ? { holder: lease.holder, startedAt: lease.startedAt } : null,
     });
   } catch (e) {

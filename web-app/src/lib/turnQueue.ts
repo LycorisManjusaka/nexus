@@ -75,6 +75,23 @@ export interface Lease {
   startedAt: number;
   lastSeen: number;
   convoId: string;
+  /**
+   * The ids this lease took, written a moment AFTER the lease file appears
+   * (the lease must exist before the items are read — see `claim`).
+   *
+   * Exists so a reader can tell "this item is being worked on right now" from
+   * "this item arrived after the batch started". Without it, a count of files
+   * on disk is all anyone has, and the two mean opposite things: one is
+   * progress, the other is a message still waiting for its turn. Measured
+   * symptom that caused this field (つよ, 2026-10-27): the banner kept saying
+   * 「ストックに 1 通」 for the whole drained turn, which reads as "your
+   * message was ignored" when it actually means "it is in flight".
+   *
+   * Optional, and absent on any lease written before this field existed. A
+   * reader that finds it missing knows only that SOME items are claimed, which
+   * is strictly more than it knew before and never less.
+   */
+  claimedIds?: string[];
 }
 
 export interface Claim {
@@ -97,7 +114,13 @@ interface Opts {
   beingsDir?: string;
 }
 
-const LEASE_NAME = '.lease';
+/**
+ * Exported for the same reason `queueDir` is: anything that needs to point at
+ * the lease file should get the one answer rather than spell it again. A test
+ * that hardcoded '.lease' would keep passing while silently testing nothing
+ * the day this changes.
+ */
+export const LEASE_NAME = '.lease';
 /** Item files are `<padded at>-<id>.json`; 15 digits keeps ms epoch sortable. */
 const AT_PAD = 15;
 
@@ -288,6 +311,19 @@ export async function claim(
     return { ok: false, reason: 'empty' };
   }
 
+  // Record WHICH items this lease took, so a reader can separate "in flight"
+  // from "arrived since". Plain write, like `heartbeat` and for the same
+  // reason: a temp+rename would momentarily REMOVE the lease file, and that
+  // is the one thing that must not happen while a turn holds it. If this
+  // write fails the claim still stands — the ids are for display, and losing
+  // them costs precision, not correctness.
+  lease.claimedIds = items.map((i) => i.id);
+  try {
+    await fs.writeFile(leasePath, JSON.stringify(lease));
+  } catch {
+    /* precision only; the batch below is authoritative either way */
+  }
+
   return { ok: true, claim: { being, convoId, token: lease.token, items } };
 }
 
@@ -463,6 +499,43 @@ export interface Batch {
    * them a second time then, and would make "skipped" a false report.
    */
   skipped: Array<{ id: string; reason: string }>;
+}
+
+/**
+ * Split what is on disk into "a turn is working on these" and "these are
+ * still waiting", given the lease (or null when nobody holds one).
+ *
+ * WHY THIS IS NOT THE ROUTE'S JOB: the route file states it holds no rules,
+ * because `next/server` cannot be imported outside Next's runtime and anything
+ * decided there is untestable. This is a rule — specifically the rule that a
+ * count of files means two different things depending on the lease — so it
+ * lives here with the rest of them and has tests.
+ *
+ * THE THREE CASES, named because they used to all print the same number:
+ *   no lease          → everything is waiting. Nothing is running.
+ *   lease + claimedIds → exact split.
+ *   lease, no ids      → a lease written before `claimedIds` existed, or whose
+ *                        id write failed. We know SOME items are claimed but
+ *                        not which, so we report `claimedUnknown` rather than
+ *                        guessing. A caller that renders a guess here would be
+ *                        telling someone their message is in flight when it
+ *                        may be the one still waiting.
+ */
+export function splitByLease(
+  items: QueueItem[],
+  lease: Lease | null
+): { claimed: QueueItem[]; waiting: QueueItem[]; claimedUnknown: boolean } {
+  if (!lease) return { claimed: [], waiting: items, claimedUnknown: false };
+  const ids = lease.claimedIds;
+  if (!Array.isArray(ids)) {
+    return { claimed: [], waiting: items, claimedUnknown: true };
+  }
+  const set = new Set(ids);
+  return {
+    claimed: items.filter((i) => set.has(i.id)),
+    waiting: items.filter((i) => !set.has(i.id)),
+    claimedUnknown: false,
+  };
 }
 
 /**

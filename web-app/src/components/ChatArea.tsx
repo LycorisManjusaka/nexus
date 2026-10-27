@@ -2493,15 +2493,41 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
   // ── The stock (phase 4a-2, 2026-10-27) ───────────────────────────────────
   // A durable, server-side queue of things that should cause a turn. Today the
-  // only producer is "send (not interject) while a turn runs" and the only
-  // consumer is the button below — a human click. The POLLING RUNNER THAT
-  // STARTS TURNS BY ITSELF IS PHASE 4b AND IS NOT HERE: auto-draining from a
-  // client would re-fire on a turn that fails instantly, and the loop would be
-  // driven by the same code that reports it. Nothing about the on-disk shape
-  // changes when 4b lands; `kind` already carries 'letter' | 'schedule'.
+  // only producer is "send (not interject) while a turn runs".
+  //
+  // CORRECTED 2026-10-27 (つよ): the first version made draining a button a
+  // human presses, and I wrote here that auto-draining "would re-fire on a
+  // turn that fails instantly, and the loop would be driven by the same code
+  // that reports it". Her report: 「ストックがたまったって、何も起きないじゃん。
+  // 「今すぐ動かす」なんかいらないっしょ？」 — and she is right that a stock
+  // nothing consumes is not a stock.
+  //
+  // The loop I feared is REAL, and it has a precise shape: drain → send
+  // throws → `abandon` puts the items back → the stock looks exactly as it did
+  // → fire again → forever. What I had wrong was the remedy. The fix is not
+  // "make a human press it"; it is to make each DISTINCT STATE of the stock
+  // attemptable at most once. `autoTriedRef` below is that: a failed attempt
+  // leaves the signature unchanged, so nothing re-fires, and the button
+  // reappears as the recovery path. A new message changes the signature and
+  // earns exactly one more attempt — bounded by human action, not by a timer.
+  //
+  // This is still NOT phase 4b. A client drains; nothing happens with every
+  // tab closed. 4b is a server-side poller where the lease, the host flag and
+  // the backoff are the subject. Nothing about the on-disk shape changes when
+  // it lands; `kind` already carries 'letter' | 'schedule'.
   /** What GET /api/turn-queue reports per item — labels only, never bodies. */
-  type StockItem = { id: string; at: number; from: string; kind: string };
-  const [stock, setStock] = useState<{ count: number; items: StockItem[] } | null>(null);
+  type StockItem = { id: string; at: number; from: string; kind: string; claimed?: boolean };
+  type StockView = {
+    count: number;
+    /** Not yet taken by any turn. THIS is the number a human should read. */
+    waiting: number;
+    /** Taken by the lease and in flight right now. */
+    claimed: number;
+    /** A lease with no id list: some are claimed, we cannot say which. */
+    claimedUnknown: boolean;
+    items: StockItem[];
+  };
+  const [stock, setStock] = useState<StockView | null>(null);
   const [stockBusy, setStockBusy] = useState(false);
   const [stockNote, setStockNote] = useState<string | null>(null);
 
@@ -2513,7 +2539,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       );
       if (!res.ok) return;
       const d = await res.json();
-      setStock({ count: d?.count || 0, items: Array.isArray(d?.items) ? d.items : [] });
+      const items: StockItem[] = Array.isArray(d?.items) ? d.items : [];
+      setStock({
+        count: d?.count || 0,
+        // Fall back to `count` for `waiting` so an older server (no split)
+        // keeps today's meaning instead of silently reporting zero waiting.
+        waiting: typeof d?.waiting === 'number' ? d.waiting : (d?.count || 0),
+        claimed: typeof d?.claimed === 'number' ? d.claimed : 0,
+        claimedUnknown: !!d?.claimedUnknown,
+        items,
+      });
     } catch {
       // Offline or the route is down: keep the last known value rather than
       // showing 0, which would read as "your messages are gone".
@@ -2565,7 +2600,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * (turnQueue.release prefers the opposite order for an automatic runner,
    * where re-running costs money with nobody watching. Here someone is.)
    */
-  const drainStock = async () => {
+  const drainStock = useCallback(async () => {
     if (stockBusy || loading || !folderName || !convoId) return;
     setStockBusy(true);
     setStockNote(null);
@@ -2627,7 +2662,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       setStockBusy(false);
       refreshStock();
     }
-  };
+  }, [stockBusy, loading, folderName, convoId, refreshStock, t]);
+
+  /**
+   * Run the stock by itself when no turn is in flight.
+   *
+   * The condition is a STATE, not a transition: "nothing running and the stock
+   * is non-empty". That covers turn-end (the case つよ asked for) and also a
+   * message that arrives from another tab while this one sits idle — a
+   * transition handler would have needed a second copy of the rule for that.
+   *
+   * `autoTriedRef` is the whole safety argument. Each distinct stock state is
+   * attempted at most once: a failed drain `abandon`s the items (MEASURED to
+   * restore the same ids — see turnQueue.test.ts), leaving the signature
+   * identical, so the effect does not re-enter. Without it this is a busy loop
+   * driven by its own failure. With it the worst case is one wasted attempt
+   * per message someone actually sent.
+   *
+   * A ref and not state: the latch must not cause a render, and nothing in the
+   * render tree reads it. The "it did not start by itself" button keys off
+   * `stockNote` instead — the failure REPORT, which is the honest signal for
+   * offering a retry, and which is already state.
+   *
+   * Deliberately NOT a timer. A poller that fires on a schedule is phase 4b,
+   * and it belongs on the server where it keeps working with every tab closed.
+   */
+  const autoTriedRef = useRef<string | null>(null);
+  const stockSig = stock && stock.waiting > 0
+    ? `${stock.waiting}:${stock.items.filter((i) => !i.claimed).map((i) => i.id).join(',')}`
+    : null;
+  useEffect(() => {
+    if (!stockSig) return;
+    if (loading || stockBusy || injectTurnId) return;
+    if (autoTriedRef.current === stockSig) return;
+    autoTriedRef.current = stockSig;
+    void drainStock();
+  }, [stockSig, loading, stockBusy, injectTurnId, drainStock]);
 
   const handleSend = async (
     text: string,
@@ -5617,29 +5687,51 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
               </div>
             )}
-            {/* The stock. Visible whenever it is non-empty, so a message added
-                with the "send" mode is never invisible between the moment it is
-                stored and the moment it runs. The button is the only consumer
-                today — the polling runner is phase 4b. */}
+            {/* The stock.
+                CORRECTED 2026-10-27 (つよ): this used to print `stock.count` —
+                every file on disk — under the label 「ストックに N 通」. During
+                a drained turn the items are still on disk (release happens
+                after the turn resolves, on purpose), so the banner said "1
+                waiting" for the whole turn and read as "it ignored me". Count
+                and meaning are different: the lease decides which items are in
+                flight, and waiting/claimed are now reported separately.
+
+                The "Run now" button survives as the RECOVERY path only. It
+                appears when something is waiting, nothing is running, AND a
+                note is present — i.e. an attempt reported a problem. In the
+                normal path it is never seen, which is what she asked for.
+                Keyed off the note rather than off the auto-drain's latch,
+                because the note IS the failure report; a latch would make the
+                button appear during the milliseconds before the first
+                attempt, which reads as "it isn't going to run". */}
             {(stock && stock.count > 0) || stockNote ? (
               <div className="mb-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-sm">
                 <span>⏳</span>
-                {stock && stock.count > 0 ? (
+                {stock && (stock.claimed > 0 || stock.claimedUnknown) ? (
+                  <span className="font-medium">
+                    {stock.claimedUnknown
+                      ? t('chat.stock.running')
+                      : t('chat.stock.runningN').replace('{n}', String(stock.claimed))}
+                  </span>
+                ) : null}
+                {stock && stock.waiting > 0 ? (
                   <>
                     <span className="font-medium">
-                      {t('chat.stock.waiting').replace('{n}', String(stock.count))}
+                      {t('chat.stock.waiting').replace('{n}', String(stock.waiting))}
                     </span>
                     <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                      {stock.items.map((i) => i.from).filter(Boolean).join(', ')}
+                      {stock.items.filter((i) => !i.claimed).map((i) => i.from).filter(Boolean).join(', ')}
                     </span>
-                    <button
-                      onClick={drainStock}
-                      disabled={stockBusy || loading}
-                      title={loading ? t('chat.stock.waitTurn') : ''}
-                      className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
-                    >
-                      {stockBusy ? '…' : t('chat.stock.run')}
-                    </button>
+                    {stockNote && !loading && !injectTurnId ? (
+                      <button
+                        onClick={drainStock}
+                        disabled={stockBusy}
+                        title={t('chat.stock.retryWhy')}
+                        className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
+                      >
+                        {stockBusy ? '…' : t('chat.stock.run')}
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
                 {stockNote ? (

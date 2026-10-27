@@ -36,6 +36,8 @@ import {
   queueDir,
   queuedConversations,
   composeBatch,
+  splitByLease,
+  LEASE_NAME,
 } from '../../src/lib/turnQueue';
 import type { QueueItem } from '../../src/lib/turnQueue';
 
@@ -474,5 +476,105 @@ describe('turnQueue.composeBatch', () => {
 
   it('an empty batch is empty, not an error', () => {
     assert.deepEqual(composeBatch([]), { text: '', attachments: [], skipped: [] });
+  });
+});
+
+/**
+ * WRITTEN FROM THE FAILURE MODE, not from the implementation.
+ *
+ * The measured symptom (つよ, 2026-10-27): the banner said 「ストックに 1 通」
+ * for the whole turn that was running that very item, because the only number
+ * anyone had was "files on disk" and release happens after the turn resolves.
+ * "In flight" and "still waiting" are opposite facts and printed the same.
+ *
+ * What would be different if claimedIds / splitByLease were absent: a reader
+ * could not answer "is my message being worked on?" at all. So the cases that
+ * matter are the ones where the two populations COEXIST — a claim holding one
+ * item while another arrives behind it — and the one where the information is
+ * missing, where the answer must be "I don't know" rather than a guess.
+ */
+describe('turnQueue: telling in-flight from waiting', () => {
+  it('records which ids the claim took', async () => {
+    await put('one');
+    await put('two');
+    const r = await claim(being, CONVO, 'nexus:3000', opts);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    const lease = await readLease(being, CONVO, opts);
+    assert.deepEqual(lease?.claimedIds, r.claim.items.map((i) => i.id));
+  });
+
+  it('a message arriving mid-turn is WAITING, not in flight', async () => {
+    await put('before');
+    const r = await claim(being, CONVO, 'nexus:3000', opts);
+    assert.equal(r.ok, true);
+    await put('after');
+
+    const items = await pending(being, CONVO, opts);
+    const lease = await readLease(being, CONVO, opts);
+    const split = splitByLease(items, lease);
+
+    assert.equal(split.claimedUnknown, false);
+    assert.deepEqual(texts(split.claimed), ['before']);
+    assert.deepEqual(texts(split.waiting), ['after']);
+  });
+
+  it('with no lease, everything is waiting and nothing is running', async () => {
+    await put('one');
+    const items = await pending(being, CONVO, opts);
+    const split = splitByLease(items, await readLease(being, CONVO, opts));
+    assert.equal(split.claimed.length, 0);
+    assert.equal(split.claimedUnknown, false);
+    assert.deepEqual(texts(split.waiting), ['one']);
+  });
+
+  it('a lease with no id list says "unknown" instead of guessing', async () => {
+    // A lease written before claimedIds existed, or whose id write failed.
+    await put('one');
+    const r = await claim(being, CONVO, 'nexus:3000', opts);
+    assert.equal(r.ok, true);
+    const leasePath = path.join(queueDir(being, CONVO, opts), LEASE_NAME);
+    const raw = JSON.parse(await fs.readFile(leasePath, 'utf-8'));
+    delete raw.claimedIds;
+    await fs.writeFile(leasePath, JSON.stringify(raw));
+
+    const items = await pending(being, CONVO, opts);
+    const split = splitByLease(items, await readLease(being, CONVO, opts));
+    assert.equal(split.claimedUnknown, true);
+    assert.equal(split.claimed.length, 0, 'must not guess which item is in flight');
+    assert.equal(split.waiting.length, 1);
+  });
+
+  /**
+   * The auto-drain in ChatArea refuses to re-enter while the stock's SIGNATURE
+   * is unchanged, and that signature is built from the waiting items' IDS. So
+   * "a failed drain cannot start a loop" rests on abandon putting the items
+   * back with the same ids — not merely the same text. The existing abandon
+   * case asserts the texts; this asserts the thing the loop guard reads.
+   *
+   * Half of that argument lives in a React component and is not reachable from
+   * this harness. This is the half that is.
+   */
+  it('abandon restores the same IDS, which is what the loop guard compares', async () => {
+    await put('one');
+    await put('two');
+    const before = (await pending(being, CONVO, opts)).map((i) => i.id);
+    const r = await claim(being, CONVO, 'a', opts);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    await abandon(being, CONVO, r.claim.token, opts);
+    const after = (await pending(being, CONVO, opts)).map((i) => i.id);
+    assert.deepEqual(after, before, 'a changed id would earn a second attempt, and loop');
+  });
+
+  it('after release there is no lease, so nothing reads as in flight', async () => {
+    await put('one');
+    const r = await claim(being, CONVO, 'nexus:3000', opts);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    await release(being, CONVO, r.claim.token, r.claim.items.map((i) => i.id), opts);
+    const items = await pending(being, CONVO, opts);
+    const split = splitByLease(items, await readLease(being, CONVO, opts));
+    assert.deepEqual(split, { claimed: [], waiting: [], claimedUnknown: false });
   });
 });

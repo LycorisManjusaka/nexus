@@ -664,10 +664,24 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
    * Idle, there is no choice to make: the stock and a direct send are the same
    * thing, so the button is always the paper plane.
    *
-   * Deliberately NOT remembered (his requirement): it resets to 'interject'
-   * every time the generating state flips and after every send. A sticky
-   * override would mean an urgent "stop doing that" silently landing in the
-   * stock, to be read after the thing you wanted stopped had finished.
+   * Scope of the override: ONE TURN. It resets to 'interject' whenever the
+   * generating state flips, and not otherwise.
+   *
+   * SUPERSEDED 2026-10-27 (つよ, testing, as トカゲくん's proxy). The first
+   * version also reset after EVERY send, per his wording 「その状態を覚えない。
+   * 毎回手動で送信に直す」. Her report from actually using it: 「まだ妖怪が考えて
+   * る最中にさぁ、モードを固定にしてほしいの。つまり、一回「送信」を選んだら
+   * さぁ、ずーっと送信のまま。回るのは、ターンが終わったときね」 — stocking two
+   * messages into one running turn meant reaching for the chevron twice.
+   *
+   * My argument for the per-send reset was that a sticky override lets an
+   * urgent "stop doing that" land in the stock instead of interrupting. That
+   * cost is real but it is NOT SILENT: the button itself carries the mode —
+   * amber MessageSquare for interject, paper plane for send (see the render
+   * below) — so the state that decides where the next message goes is the
+   * thing you are about to click. A one-turn scope keeps the dangerous
+   * direction out of the *next* turn, which is where a forgotten mode would
+   * actually surprise someone.
    */
   const [sendMode, setSendMode] = useState<'interject' | 'send'>('interject');
   const [modeMenuAt, setModeMenuAt] = useState<{ left: number; bottom: number } | null>(null);
@@ -691,7 +705,7 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
     // The third argument is additive: the only other caller (ChatArea's VRChat
     // auto-send) passes two and gets today's behaviour unchanged.
     onSend(finalText, attachments, { mode: effectiveMode, from: trimmedName });
-    setSendMode('interject');
+    // The mode is NOT reset here — it lives for the turn (see sendMode above).
     setModeMenuAt(null);
     setText('');
     setAttachments([]);
