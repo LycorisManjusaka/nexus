@@ -110,6 +110,14 @@ export function sameVessel(
  * Messages with NO recorded family are allowed through: every conversation
  * written before handoff existed is single-vessel, and withholding their
  * thinking would be a silent regression in those conversations.
+ *
+ * This answers 望月希子's point 2 and Lizard-kun's question about returning to
+ * a previous vessel: coming back, your own thinking comes back with you; it
+ * never travels to someone else. (Moved here 2026-10-28 from the call site in
+ * ChatArea, which became lib/slimHistory.ts. A fidelity check on that move
+ * found this paragraph in NEITHER file — the rest of the comment was already
+ * duplicated here, so shortening the call site looked safe, and the only part
+ * that was not duplicated was the part naming whose question it answers.)
  */
 export function thinkingBelongsToVessel(
   messageFamily: string | undefined | null,

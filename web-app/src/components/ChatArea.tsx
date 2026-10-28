@@ -51,24 +51,14 @@ import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
 import { createTurnAccState } from '@/lib/turnAccState';
 import { type TurnEventFlags, type TurnEventSink, type TurnEventDeps, type DescribedAttachmentEvent } from '@/lib/turnEventReducer';
-import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
-import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
+import { parseHandoffModels } from '@/lib/modelHandoff';
+import { buildSlimHistory } from '@/lib/slimHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
 import { AUTO_TRIGGER_KEYS, autoTriggerEnabled, parseAutoTriggers, setAutoTrigger } from '@/lib/autoTriggers';
 import type { AutoTriggers } from '@/lib/autoTriggers';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
-
-// Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
-// are baked into the body of every affected message already on disk. This
-// removes them from the copy sent upstream. Anchored on the "]_" closing pair
-// rather than a bare "]" because the notice quotes file paths, which can
-// themselves contain brackets.
-const TURN_NOTICE_RE = /\n*⚠️\s*_\[Turn stopped:[\s\S]*?\]_[ \t]*/g;
-function stripTurnNotices(s: string): string {
-  return s.includes('[Turn stopped:') ? s.replace(TURN_NOTICE_RE, '').trimEnd() : s;
-}
 
 // V8 refuses to materialize a single string longer than 2^29-24 characters
 // (536,870,888 ≈ 512 MiB). Because a conversation is persisted as ONE
@@ -3441,85 +3431,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // would do the right thing with a list that never arrived. (Only the
       // metadata travels; the base64 payload is stripped just below.)
       const attachmentPathsVisible = effectiveFullAccess(agentFullSystemAccess, agentDangerousTools);
-      // Which past turns may carry their own tool calls onto the wire. The
-      // window is applied HERE because this is the only side holding the whole
-      // conversation — so the POST body grows by at most one turn's calls, and
-      // the server receives exactly what it is allowed to replay. When the
-      // toggle is off this is empty and the body is byte-for-byte the old one.
-      const toolHistoryIds = toolHistoryEnabled ? selectToolHistoryIds(history) : new Set<string>();
-      const slimHistory = history.map((m: any) => {
-        const slim: any = {
-          // id forwarded so the backend can match `attachment_described` SSE
-          // events back to the originating message. Frontend updates the
-          // attachment in-place when the event arrives, so subsequent turns
-          // re-use the persisted description instead of re-calling the
-          // bridge model.
-          id: m.id,
-          // Turns that stopped BEFORE this became a separate event still carry
-          // the "⚠️ _[Turn stopped: …]_" text inside their body. Strip it on the
-          // way out so those old turns stop replaying a failure explanation to
-          // the model every single turn. Non-destructive: only this outgoing
-          // copy is cleaned, the stored log is untouched.
-          content: stripTurnNotices(m.content || ''),
-          role: m.role,
-          timestamp: m.timestamp,
-        };
-        if (m.attachments?.length) {
-          const kept = m.attachments
-            .filter((a: any) => !a.excluded || ((hiddenAttachmentsAccessible || attachmentPathsVisible) && a.ref))
-            .map((a: any) => {
-              const { fileObj, ...rest } = a;
-              if (rest.excluded) return { ...rest, textData: null, dataUrl: null };
-              return rest;
-            });
-          if (kept.length) slim.attachments = kept;
-        }
-        // The entity's own tool calls from a past turn. slimHistory is an
-        // allowlist, so for every version of NEXUS before this one the field
-        // simply never travelled — the server could have been written to
-        // replay it and nothing would have arrived. Only the windowed ids get
-        // it, and only with the toggle on.
-        if (m.id && toolHistoryIds.has(m.id)) {
-          const calls = replayableCalls(m);
-          if (calls.length) slim.toolCalls = calls.map((c: any) => ({ name: c.name, input: c.input }));
-        }
-        // Only feed Claude its own past reasoning when the user opts in via the
-        // "Save & reuse thinking process" toggle, and only for blocks the user
-        // hasn't manually excluded. When off (or excluded), thinking is withheld
-        // from the wire entirely — the API-key path won't resend it and the OAuth
-        // transcript reconstruction won't include the "(thinking)" lines. (This
-        // mirrors the .md export, which is gated by the same toggle.)
-        //
-        // Two sources of reusable thinking:
-        //   1. claudeThinkingBlocks — signed blocks from the token-paid API-key
-        //      path (carry real signatures, replayable natively).
-        //   2. thoughtProcess — the OAuth/Agent-SDK path emits thinking as text
-        //      only (no signatures), so it is NEVER stored as claudeThinkingBlocks.
-        //      Without this fallback, OAuth Claude never receives its own past
-        //      reasoning at all (the transcript builder reads claudeThinkingBlocks,
-        //      which is empty). We forward it as a signature-less block: the OAuth
-        //      transcript builder folds `tb.thinking` regardless of signature, and
-        //      the API-key native-replay path safely skips signature-less blocks.
-        //
-        // THIRD gate, added with vessel handoff: only replay reasoning the
-        // CURRENT vessel produced. Feeding one provider's raw chain-of-thought
-        // to another is exactly what distillation guards look for
-        // (Anthropic's `reasoning_extraction`, measured as deterministic in
-        // conversation size) — so without this, the first handoff would
-        // manufacture a refusal out of nothing. Messages with no recorded
-        // family pass through: every conversation written before handoff
-        // existed is single-vessel, and withholding their thinking would be a
-        // silent regression there. Answers 望月希子's point 2 and Lizard-kun's
-        // question about returning to a previous vessel: coming back, your own
-        // thinking comes back with you; it never travels to someone else.
-        if (saveThinkingToLog && !m.thinkingExcluded && thinkingBelongsToVessel(m.modelFamily, turnAiName)) {
-          if (m.claudeThinkingBlocks?.length) {
-            slim.claudeThinkingBlocks = m.claudeThinkingBlocks;
-          } else if (m.thoughtProcess) {
-            slim.claudeThinkingBlocks = [{ thinking: m.thoughtProcess, signature: '' }];
-          }
-        }
-        return slim;
+      // The wire copy of the conversation: an allowlist, plus four rules
+      // about what a stored message may NOT carry upstream. They live in
+      // lib/slimHistory.ts because the server-side runner is a second
+      // caller that has to produce the identical body -- the third thinking
+      // gate in particular, whose failure mode is a refusal manufactured
+      // out of nothing on a turn nobody is watching.
+      const slimHistory = buildSlimHistory(history, {
+        hiddenAttachmentsAccessible,
+        attachmentPathsVisible,
+        toolHistoryEnabled,
+        saveThinkingToLog,
+        turnAiName,
       });
 
       // convoId is forwarded so the backend can set the `x-grok-conv-id`
@@ -3601,7 +3524,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // label, which arrives at the very start of every stream), the
       // prompt-cache usage, the web-search citations, the tool calls, the
       // AskUserQuestion records and the subagent runs. Every one of those is
-      // display-only metadata: slimHistory above is an allowlist that names
+      // display-only metadata: the wire copy is an allowlist -- the
+      // SlimHistoryMessage interface in lib/slimHistory.ts -- which names
       // none of them, so none leaks back into the AI context window.
       //
       // Files produced by tools this turn. Aliased, not moved: these reach
