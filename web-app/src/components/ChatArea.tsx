@@ -25,6 +25,7 @@ import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure } from '@/lib/layer4';
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
+import { TURN_INPUT_DEFAULTS } from '@/lib/turnInputDefaults';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
@@ -510,48 +511,48 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // local_data/workspaces/<folderName>/. Default off.
   // Tool names are unified across both API-key and OAuth modes — same five
   // verbs in both, so the same prompt instruction works either way.
-  const [toolUseEnabled, setToolUseEnabled] = useState(false);
+  const [toolUseEnabled, setToolUseEnabled] = useState(TURN_INPUT_DEFAULTS.toolUseEnabled);
   // Per-Entity agent capability toggles (apply to every provider/model).
   //   agentFullSystemAccess: file tools reach the whole PC (vs workspace-only).
   //   agentDangerousTools:    enables Delete (all paths) + shell (OAuth path).
-  const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(false);
-  const [agentDangerousTools, setAgentDangerousTools] = useState(false);
+  const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(TURN_INPUT_DEFAULTS.agentFullSystemAccess);
+  const [agentDangerousTools, setAgentDangerousTools] = useState(TURN_INPUT_DEFAULTS.agentDangerousTools);
   // Hidden-attachment access (read_attachment). When ON, an attachment the user
   // hid with the eye icon is surfaced to the entity as a 12-char ref prefix
   // (instead of being silently dropped) and the read_attachment tool is exposed
   // so the entity can read it back. OFF (default) = current behaviour.
-  const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(false);
+  const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(TURN_INPUT_DEFAULTS.hiddenAttachmentsAccessible);
   // Replay the entity's OWN past tool calls back to it across turn boundaries.
   // `toolCalls` has always been display-only, so across turns a vessel read a
   // past self that merely *talked* about calling tools — and a weak-handed
   // vessel imitates what it reads. OFF (default) = the old wire, byte for byte.
   // OpenAI-compatible route only. See lib/toolHistory.ts for the measurements.
-  const [toolHistoryEnabled, setToolHistoryEnabled] = useState(false);
+  const [toolHistoryEnabled, setToolHistoryEnabled] = useState(TURN_INPUT_DEFAULTS.toolHistoryEnabled);
   // Optional interactive "ask the user a multiple-choice question" tool. When
   // ON, the model can pause a turn to ask and wait for the user's selection.
-  const [askUserEnabled, setAskUserEnabled] = useState(false);
+  const [askUserEnabled, setAskUserEnabled] = useState(TURN_INPUT_DEFAULTS.askUserEnabled);
   // How long a turn waits for the user's answer to an AskUserQuestion, in ms.
   // 0 = wait indefinitely (default). Per-conversation, edited in the Identity
   // tab's question panel.
-  const [askUserTimeoutMs, setAskUserTimeoutMs] = useState(0);
+  const [askUserTimeoutMs, setAskUserTimeoutMs] = useState(TURN_INPUT_DEFAULTS.askUserTimeoutMs);
   // Transient: the question currently awaiting an answer (drives the card).
   // { askId, questions } while pending; null otherwise.
   const [pendingAsk, setPendingAsk] = useState<{ askId: string; questions: any[] } | null>(null);
   // Optional subagent (context-firewall helper) tool — OAuth path for now.
-  const [subagentEnabled, setSubagentEnabled] = useState(false);
-  const [lettersEnabled, setLettersEnabled] = useState(false);
+  const [subagentEnabled, setSubagentEnabled] = useState(TURN_INPUT_DEFAULTS.subagentEnabled);
+  const [lettersEnabled, setLettersEnabled] = useState(TURN_INPUT_DEFAULTS.lettersEnabled);
   // Browser control. OFF unless deliberately turned on, like every other
   // capability here. A throwaway test window must start with nothing enabled —
   // an entity that can browse before anyone asked it to is a surprise, and a
   // Chromium process is a visible, resource-owning one. Two boundaries, not
   // one: this flag decides whether the tools exist at all, the host allowlist
   // decides where they may go.
-  const [browserEnabled, setBrowserEnabled] = useState(false);
+  const [browserEnabled, setBrowserEnabled] = useState(TURN_INPUT_DEFAULTS.browserEnabled);
   // Stored and edited as text (one host per line or comma-separated); split into
   // an array only on the wire. Keeping one representation in state and on disk
   // means the textarea can never disagree with what was saved.
-  const [browserAllowedHosts, setBrowserAllowedHosts] = useState('');
-  const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(false);
+  const [browserAllowedHosts, setBrowserAllowedHosts] = useState(TURN_INPUT_DEFAULTS.browserAllowedHosts);
+  const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(TURN_INPUT_DEFAULTS.browserAllowAnyHost);
   // Result line for the "sign this identity in" button. Not persisted — it
   // describes one launch, not a setting.
   const [browserProfileMsg, setBrowserProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -559,12 +560,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // OS-level mouse/keyboard/screen control (Windows only). OFF by default,
   // same boundary discipline as browserEnabled — a wider reach than the
   // browser sandbox, so it gets its own separate flag rather than piggybacking.
-  const [computerControlEnabled, setComputerControlEnabled] = useState(false);
+  const [computerControlEnabled, setComputerControlEnabled] = useState(TURN_INPUT_DEFAULTS.computerControlEnabled);
   // App control via UI Automation (Windows only). OFF by default, and its own
   // flag rather than a rider on computerControlEnabled: it reaches a different
   // surface (an application's published control tree, not the screen) and it is
   // usable by a vessel with no vision, so the two are granted independently.
-  const [appControlEnabled, setAppControlEnabled] = useState(false);
+  const [appControlEnabled, setAppControlEnabled] = useState(TURN_INPUT_DEFAULTS.appControlEnabled);
   // Being-camera / OBS push (see CameraPanel.tsx). OFF by default. Gates BOTH
   // the OBS push AND the in-app mirror panel — one checkbox, not two, per spec.
   const [cameraEnabled, setCameraEnabled] = useState(false);
@@ -592,9 +593,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
   };
   // Model the child subagent runs on ('' = cheap default, e.g. Haiku).
-  const [subagentModel, setSubagentModel] = useState('');
+  const [subagentModel, setSubagentModel] = useState(TURN_INPUT_DEFAULTS.subagentModel);
   // Provider family of the subagent model (routes it to the right endpoint).
-  const [subagentFamily, setSubagentFamily] = useState('');
+  const [subagentFamily, setSubagentFamily] = useState(TURN_INPUT_DEFAULTS.subagentFamily);
   // Transient: a subagent currently running (drives the inline activity chip).
   const [activeSubagent, setActiveSubagent] = useState<{ task: string } | null>(null);
   // OAuth-path live status for the loading indicator. `liveToolActivity` is
@@ -658,7 +659,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
-  const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>({});
+  const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>(TURN_INPUT_DEFAULTS.instructionOverrides);
   // Language-aware defaults for the client-composed blocks below (Working
   // Discipline / Absolute Base Binding are prepended here, client-side, not
   // by the server — see the send path further down). JA is a PARTIAL dict
@@ -685,16 +686,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // (sandbox vs full-PC) and never drift out of sync. This block is still the
   // sole NEXUS-authored workspace framing on the OAuth/Claude-Code path, whose
   // built-in tool descriptions can't be overridden.
-  const [toolInstruction, setToolInstruction] = useState(
-    "Your file workspace is your persistent memory. Use the Read / Write / Edit / Glob / Grep tools — each is described in its own tool definition — to store and recall information across turns. Prefer reading a file only when you need it; if its content is already visible in a prior turn, you don't need to Read it again."
-  );
+  const [toolInstruction, setToolInstruction] = useState(TURN_INPUT_DEFAULTS.toolInstruction);
   // Hint appended after an image read result so Gemini doesn't fall into
   // spatial-understanding mode (returning {point:[x,y]} coordinates) or
   // produce an empty answer. {filename} is substituted server-side.
   // Leave blank to disable the hint entirely.
-  const [toolImageInstruction, setToolImageInstruction] = useState(
-    "(The image above is the content of Read(\"{filename}\"). Please answer your partner's question about it conversationally — do not return coordinates or JSON.)"
-  );
+  const [toolImageInstruction, setToolImageInstruction] = useState(TURN_INPUT_DEFAULTS.toolImageInstruction);
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
   const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
   // family name → model id that family was last on in this conversation.
@@ -708,7 +705,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // with reasoning off, which is a quiet accuracy tax on the first turns of
   // every new conversation. Existing conversations are NOT touched — the
   // load-from-log path below still honours whatever they stored.
-  const [claudeThinking, setClaudeThinking] = useState(true);
+  const [claudeThinking, setClaudeThinking] = useState(TURN_INPUT_DEFAULTS.claudeThinking);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
   // When ON, a hidden note is appended to the system prompt each turn telling
   // the entity its own context-elapsed % (the same value on the status bar).
@@ -753,7 +750,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // written before then still carry the field; nothing reads it now, and it is
   // left in place rather than migrated out, since an unread field costs nothing
   // and rewriting stored data to drop it would cost a pass over local_data.
-  const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on'>('on');
+  const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on'>(TURN_INPUT_DEFAULTS.baseBindingMode);
   // Initialize OFF (not the folder default). The real value is always set by
   // the conversation-load effect below — data.vrchatMode for an existing convo,
   // or the folder default for a new one. Seeding this with `defaultVrchatMode`
@@ -794,10 +791,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // comparison still resets correctly, where a boolean would silently carry one
   // conversation's dismissal into the next.
   const [pastLogDismissedFor, setPastLogDismissedFor] = useState<string | null>(null);
-  const [seedEnabled, setSeedEnabled] = useState(false);
-  const [seedValue, setSeedValue] = useState(42);
+  const [seedEnabled, setSeedEnabled] = useState(TURN_INPUT_DEFAULTS.seedEnabled);
+  const [seedValue, setSeedValue] = useState(TURN_INPUT_DEFAULTS.seedValue);
   // ── Vessel handoff (change_model) — per-being ─────────────────────────────
-  const [modelHandoffEnabled, setModelHandoffEnabled] = useState(false);
+  const [modelHandoffEnabled, setModelHandoffEnabled] = useState(TURN_INPUT_DEFAULTS.modelHandoffEnabled);
   // One model per line: `family | specificModel | on/off | optional label`
   // (comments and blank lines ignored). Rows are copied by hand out of the
   // model-list window. EMPTY by default and never auto-filled: this list is
@@ -805,7 +802,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // BECOME, and filling it wholesale would hand over every vessel NEXUS knows
   // — including metered ones and the Meta "-contributor" ids that opt into
   // training. Curation stays a decision, not a click.
-  const [modelHandoffAllowedModels, setModelHandoffAllowedModels] = useState('');
+  const [modelHandoffAllowedModels, setModelHandoffAllowedModels] = useState(TURN_INPUT_DEFAULTS.modelHandoffAllowedModels);
   // Live vessel after a handoff. Deliberately NOT written into
   // localAiName / specificModel: those are the values that get SAVED, and a
   // metered vessel persisted into the conversation would still be there
@@ -836,7 +833,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // into a system prompt. Invalidated whenever the user edits/deletes/reruns
   // from a message before the latest one — at which point a fresh session is
   // started.
-  const [claudeAgentSessionId, setClaudeAgentSessionId] = useState<string | null>(null);
+  const [claudeAgentSessionId, setClaudeAgentSessionId] = useState<string | null>(TURN_INPUT_DEFAULTS.claudeAgentSessionId);
   // Mirror of the OAuth session id in a ref so request-building reads the
   // CURRENT value synchronously. setState is async: handleRerun/handleEdit/
   // handleDelete null the session and then (same tick) trigger a generation;
@@ -889,29 +886,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // For vision-capable primary models (Claude, Gemini, GLM-V, etc.) all three
   // fields are ignored — images pass through unchanged. So the toggle can stay
   // ON globally without any cost when not needed.
-  const [eyesEnabled, setEyesEnabled] = useState<boolean>(false);
-  const [eyesPrompt, setEyesPrompt] = useState<string>(
-    "Describe this image in detail for an AI that cannot see images. Be specific about people, objects, text, colors, composition, and context. Output only the description, no preamble."
-  );
-  const [eyesModel, setEyesModel] = useState<string>('glm-5v-turbo');
+  const [eyesEnabled, setEyesEnabled] = useState<boolean>(TURN_INPUT_DEFAULTS.eyesEnabled);
+  const [eyesPrompt, setEyesPrompt] = useState<string>(TURN_INPUT_DEFAULTS.eyesPrompt);
+  const [eyesModel, setEyesModel] = useState<string>(TURN_INPUT_DEFAULTS.eyesModel);
 
   // ── "Ears" — audio bridge for non-audio-capable primary models ───────────
   // Activates when the primary model can't accept audio directly. Bridge
   // models: Qwen Omni Flash (default — cheapest) or Gemini Flash variants.
-  const [earsEnabled, setEarsEnabled] = useState<boolean>(false);
-  const [earsPrompt, setEarsPrompt] = useState<string>(
-    "Listen to this audio carefully. Provide a transcript of any speech (preserving the speaker's original language), then describe non-speech elements: tone of voice, background sounds, music, ambient noise, and overall context. Output only the transcript+description, no preamble."
-  );
-  const [earsModel, setEarsModel] = useState<string>('qwen3.5-omni-flash');
+  const [earsEnabled, setEarsEnabled] = useState<boolean>(TURN_INPUT_DEFAULTS.earsEnabled);
+  const [earsPrompt, setEarsPrompt] = useState<string>(TURN_INPUT_DEFAULTS.earsPrompt);
+  const [earsModel, setEarsModel] = useState<string>(TURN_INPUT_DEFAULTS.earsModel);
 
   // ── "Video Watcher" — video bridge for non-video-capable primary models ──
   // Same architecture as eyes/ears. Default to Gemini 3.5 Flash for video
   // understanding quality; Qwen Omni Flash is the cheaper alternative.
-  const [watcherEnabled, setWatcherEnabled] = useState<boolean>(false);
-  const [watcherPrompt, setWatcherPrompt] = useState<string>(
-    "Watch this video carefully. Describe what happens chronologically: actions, people, objects, setting changes, on-screen text, and audio (speech transcript + non-speech sounds). Be thorough but concise. Output only the description, no preamble."
-  );
-  const [watcherModel, setWatcherModel] = useState<string>('gemini-3.5-flash');
+  const [watcherEnabled, setWatcherEnabled] = useState<boolean>(TURN_INPUT_DEFAULTS.watcherEnabled);
+  const [watcherPrompt, setWatcherPrompt] = useState<string>(TURN_INPUT_DEFAULTS.watcherPrompt);
+  const [watcherModel, setWatcherModel] = useState<string>(TURN_INPUT_DEFAULTS.watcherModel);
 
   // Settings-modal active tab. The modal now groups its many sections into
   // four tabs so the user doesn't have to scroll past unrelated controls to
