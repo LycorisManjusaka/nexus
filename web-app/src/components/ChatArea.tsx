@@ -53,6 +53,7 @@ import { createTurnAccState } from '@/lib/turnAccState';
 import { type TurnEventFlags, type TurnEventSink, type TurnEventDeps, type DescribedAttachmentEvent } from '@/lib/turnEventReducer';
 import { parseHandoffModels } from '@/lib/modelHandoff';
 import { buildSlimHistory } from '@/lib/slimHistory';
+import { buildTurnRequestBody } from '@/lib/turnRequestBody';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
 import { AUTO_TRIGGER_KEYS, autoTriggerEnabled, parseAutoTriggers, setAutoTrigger } from '@/lib/autoTriggers';
@@ -3445,44 +3446,45 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         turnAiName,
       });
 
-      // convoId is forwarded so the backend can set the `x-grok-conv-id`
-      // header on xAI requests (boosts Grok prompt-cache hit rate). For other
-      // providers it's accepted but ignored.
-      //
-      // claudeAgentSessionId is only consumed by the Claude OAuth path. When
-      // null, backend starts a fresh Anthropic-side session. When set, backend
-      // resumes that session (so role semantics are preserved without flatten).
-      // aiName/specificModel are the EFFECTIVE pair: after a change_model
-      // handoff the override decides who answers, while localAiName /
-      // specificModel stay the being's saved default (see handoffOverride).
-      const bodyObj = { messages: slimHistory, aiName: turnAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
-        browserEnabled,
-        // Text in the UI, array on the wire. Split on newlines and commas so the
-        // box accepts whichever way the host list was typed.
-        browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
-        browserAllowAnyHost,
-        computerControlEnabled,
-        appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking: turnVessel ? turnVessel.thinking : claudeThinking }, specificModel: turnSpecificModel, dateTimeVisibility, seedEnabled, seedValue,
+      // The request body: one place, because a runner (phase 4b) has to
+      // produce the identical body from the saved log instead of component
+      // state, and seven of these fields are rules rather than copies
+      // (lib/turnRequestBody.ts names which four fail silently).
+      const bodyObj = buildTurnRequestBody({
+        messages: slimHistory,
+        // The EFFECTIVE pair: after a change_model handoff the override
+        // decides who answers, while localAiName / specificModel stay the
+        // being's saved default (see handoffOverride).
+        aiName: turnAiName,
+        specificModel: turnSpecificModel,
+        turnVessel,
+        claudeThinking,
+        folderName,
+        convoId,
+        systemPrompt: effectiveSystemPrompt,
+        toolUseEnabled, agentFullSystemAccess, agentDangerousTools,
+        hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled,
+        askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily,
+        lettersEnabled, browserEnabled, browserAllowedHosts,
+        browserAllowAnyHost, computerControlEnabled, appControlEnabled,
+        instructionOverrides, toolInstruction, toolImageInstruction,
+        modelParams, dateTimeVisibility, seedEnabled, seedValue,
         modelHandoffEnabled, modelHandoffAllowedModels,
-        // Only set on the FIRST request after a switch: the note the previous
-        // vessel wrote. The server injects it as a user turn (it is not the
-        // partner's voice, and it says so).
-        ...(opts?.handoffFrom ? { handoffFrom: opts.handoffFrom } : {}),
-        // Only set on a request that reports a failed switch. Mutually
-        // exclusive with handoffFrom server-side (`else if`).
-        ...(opts?.handoffFailed ? { handoffFailed: opts.handoffFailed } : {}),
-        convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId, clientId: TAB_CLIENT_ID,
-        // Absolute Base Binding — HINTS, not controls. The route injects the
-        // Binding whatever these say (lib/baseBinding.ts); `baseBindingMode` is
-        // honoured only when the server process carries the developer
-        // override, and `bindingLayered` only chooses WHICH of the two texts.
-        // Computed on the STORED prompt, before the Layer 4 index was appended.
-        baseBindingMode, bindingLayered, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300,
-        // Model-betrayal defence (Preferences → global). `!== false` and not
-        // `?? true`: an explicit false is the only thing that turns it off, so
-        // a missing or malformed value still protects the partner.
-        betrayalDefense: globalSettings?.betrayalDefense !== false };
+        claudeAgentSessionId: claudeAgentSessionIdRef.current,
+        claudeAuthMode,
+        eyesEnabled, eyesPrompt, eyesModel,
+        earsEnabled, earsPrompt, earsModel,
+        watcherEnabled, watcherPrompt, watcherModel,
+        enableReadConversation: enableConversationTools,
+        injectTurnId: turnId,
+        clientId: TAB_CLIENT_ID,
+        baseBindingMode, bindingLayered,
+        globalSettings,
+      }, {
+        handoffFrom: opts?.handoffFrom,
+        handoffFailed: opts?.handoffFailed,
+        continueFromMessageId: continueMsgId,
+      });
       const bodyText = JSON.stringify(bodyObj);
       // eslint-disable-next-line no-console
       console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
