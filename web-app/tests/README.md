@@ -4,7 +4,7 @@
 npm test
 ```
 
-**473 assertions as of 2026-10-28**, ~0.7 s wall clock. No new dependency:
+**492 assertions as of 2026-10-28**, ~0.7 s wall clock. No new dependency:
 `node:test`, `node:assert` and Node 24's own type stripping. Nothing here
 starts a server, opens a browser, reads a path outside the repo, or touches
 `local_data`.
