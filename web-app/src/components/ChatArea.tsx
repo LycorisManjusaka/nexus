@@ -62,6 +62,7 @@ import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireC
 import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
+import { createTurnAccState } from '@/lib/turnAccState';
 import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
 import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
@@ -3556,20 +3557,34 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const reader = chatRes.body.getReader();
       const decoder = new TextDecoder('utf-8');
 
-      // Seeded with what the message already says when continuing, so streamed
-      // chunks append to it rather than replacing it. Joined with no separator:
-      // the model was told its text is attached directly onto the previous part,
-      // so it may legitimately resume mid-word or mid-code-block.
-      let currentText = continuedSeed;
-      let currentThought = continuedThought;
-      let claudeThinkingBlocks: { thinking: string; signature: string }[] = [...continuedBlocks];
-      let continuationCount = 0;
+      // Everything this turn accumulates, in ONE object. lib/turnAccState.ts
+      // says why it is one object and not fourteen locals, carries the seeding
+      // rule (a continuation starts from what the message already says, joined
+      // with no separator), and documents the two array fields whose
+      // copy-vs-share decision is load-bearing.
+      const acc = createTurnAccState({
+        continuedSeed,
+        continuedThought,
+        continuedBlocks,
+        notices,
+      });
+      // Aliases for the fields that are only ever MUTATED, never reassigned.
+      // These ARE the arrays `acc` holds, so every push lands in the state;
+      // aliasing them keeps this change to the reassigned fields only. `const`
+      // refuses a reassignment here, which is the guard: a field that starts
+      // being reassigned has to move to `acc.` explicitly.
+      const claudeThinkingBlocks = acc.claudeThinkingBlocks;
+      const toolCalls = acc.toolCalls;
+      const askedQuestions = acc.askedQuestions;
+      const subagentRuns = acc.subagentRuns;
       const sse = createSseReader();
-      // The model_selected event arrives at the very start of every stream,
-      // so every AI message gets a precise
-      // family/specific/thinking/label tag for the meta bar. These fields are
-      // display-only metadata — slimHistory above explicitly omits them so
-      // they never leak back into the AI context window.
+      // `acc` also holds the model_selected tag (family/specific/thinking/
+      // label, which arrives at the very start of every stream), the
+      // prompt-cache usage, the web-search citations, the tool calls, the
+      // AskUserQuestion records and the subagent runs. Every one of those is
+      // display-only metadata: slimHistory above is an allowlist that names
+      // none of them, so none leaks back into the AI context window.
+      //
       // Set when the vessel calls change_model and the switch is accepted.
       // Acted on AFTER the stream closes and this message is finalized, so the
       // text this vessel produced is committed and billed to IT before the
@@ -3578,46 +3593,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         family: string; specificModel: string; label: string; thinking: boolean; note: string;
         fromFamily: string; fromSpecificModel: string; fromLabel: string;
       } = null;
-      let chosenModelFamily = '';
-      let chosenModelSpecific = '';
-      let chosenModelThinking = false;
-      let chosenModelLabel = '';
-      // Prompt-cache usage from the backend's `cache_usage` SSE event.
-      // Always populated when the provider returns usage; null for legacy
-      // logs. Stored as display-only metadata (NOT in slimHistory).
-      let cacheUsage: {
-        cachedInputTokens: number;
-        uncachedInputTokens: number;
-        totalInputTokens: number;
-        outputTokens: number;
-        cacheCreationTokens: number;
-        providerHint: string;
-        // Only xAI's Responses API sends these: its own total for the request,
-        // and the count of billed server-side search calls (which no token
-        // table can express). Absent everywhere else.
-        reportedUsd?: number;
-        serverToolCalls?: number;
-      } | null = null;
-      // Web-search citations from the backend's `web_sources` SSE event. These
-      // are the clickable proof that the model actually consulted live pages
-      // (vs. hallucinating "news"). Display-only — NOT in slimHistory.
-      let webSources: { url: string; title?: string }[] | null = null;
-      // Every tool the model actually dispatched this turn, with its arguments.
-      // This is the evidence behind the 🔧 report button: a reply that claims
-      // "I saved the file" can be checked against whether a Write really ran.
-      // Display-only — slimHistory is an allowlist and never names this field,
-      // so it is never sent to any model and costs no tokens.
-      const toolCalls: any[] = [];
-      // Attachments collected from tool calls during this turn, to be
-      // attached to the assistant message.
+      // Attachments collected from tool calls during this turn, to be attached
+      // to the assistant message. NOT in `acc`, and not an oversight: these
+      // reach the message through flushStreamingMessage, never through the
+      // finalizer. See TOOL_ATTACHMENTS_ARE_NOT_HERE in lib/turnAccState.ts
+      // for what that costs a runner, which has no flush.
       const toolAttachments: any[] = [];
-      // Interactive AskUserQuestion records for this turn (question + the
-      // answer the user picked). Persisted onto the assistant message so the
-      // exchange is visible again when the conversation is reloaded.
-      const askedQuestions: any[] = [];
-      // Subagent runs for this turn (task + distilled result). Persisted onto
-      // the assistant message and shown as a collapsed group on reload.
-      const subagentRuns: any[] = [];
 
       // Finalizes the assistant message by committing everything the streaming
       // loop accumulated: the (possibly partial) text, thinking-token count,
@@ -3625,28 +3606,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Defined here — before the read loop — so the catch below can invoke it
       // when the partner stops the turn mid-stream.
       //
-      // The SHAPE lives in lib/finalizeTurnMessage.ts, not here, because a
-      // third caller (the server-side runner) is coming and must not build
-      // its own — that module's header carries the measured handoff bug that
-      // proves why. The object literal below IS the accumulator contract made
-      // visible in one place: everything the loop accumulates that reaches
-      // disk is named here, and nothing that does not.
-      const buildFinalizedMessage = (base: any) => finalizeTurnMessage(base, {
-        currentText,
-        currentThought,
-        claudeThinkingBlocks,
-        continuationCount,
-        chosenModelFamily,
-        chosenModelSpecific,
-        chosenModelThinking,
-        chosenModelLabel,
-        cacheUsage,
-        webSources,
-        notices,
-        toolCalls,
-        askedQuestions,
-        subagentRuns,
-      }, {
+      // The SHAPE lives in lib/finalizeTurnMessage.ts and the STATE in
+      // lib/turnAccState.ts, neither of them here, because a third caller (the
+      // server-side runner) is coming and must not build its own. That
+      // module's header carries the measured handoff bug that proves why.
+      //
+      // `acc` is passed whole rather than spread into a field list: a field
+      // list has to be kept in step with what the loop accumulates by hand,
+      // and the failure when it is not is silent (accumulate a fifteenth
+      // thing, forget the list, it never reaches disk).
+      const buildFinalizedMessage = (base: any) => finalizeTurnMessage(base, acc, {
         genStartTime,
         // Read here, in the argument list, so the value is the same one the
         // closure used to read inside itself.
@@ -3666,7 +3635,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // wasn't enough at this granularity). Coalescing to ~1 render/frame
       // decouples render rate from chunk rate and fixes it for any provider.
       // flushStreamingMessage() reads the latest accumulated values (closure
-      // over currentText/currentThought/toolAttachments/etc.).
+      // over `acc` and toolAttachments).
       let rafId: number | null = null;
       // WHICH kind of handle rafId holds. The two are not interchangeable:
       // cancelAnimationFrame(timeoutId) silently does nothing, and the cancel
@@ -3680,20 +3649,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           m.id === msgId
             ? {
                 ...m,
-                content: currentText,
-                thoughtProcess: currentThought || undefined,
-                continuationCount: continuationCount || undefined,
+                content: acc.currentText,
+                thoughtProcess: acc.currentThought || undefined,
+                continuationCount: acc.continuationCount || undefined,
                 attachments: toolAttachments.length ? [...toolAttachments] : (m.attachments || []),
                 // Surface tool calls DURING streaming (not just at finalize) so
                 // the thinking panel can show them inline in realtime. Copied
                 // (not the live ref) so React sees a new array each frame. Still
                 // display-only — never added to slimHistory.
                 ...(toolCalls.length ? { toolCalls: [...toolCalls] } : {}),
-                ...(chosenModelFamily ? {
-                  modelFamily: chosenModelFamily,
-                  modelSpecific: chosenModelSpecific,
-                  modelThinking: chosenModelThinking,
-                  modelLabel: chosenModelLabel,
+                ...(acc.chosenModelFamily ? {
+                  modelFamily: acc.chosenModelFamily,
+                  modelSpecific: acc.chosenModelSpecific,
+                  modelThinking: acc.chosenModelThinking,
+                  modelLabel: acc.chosenModelLabel,
                 } : {}),
               }
             : m
@@ -3748,11 +3717,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               if (data.error && !betrayalRedacted) throw new Error(data.error);
 
               if (data.type === 'model_selected') {
-                chosenModelFamily = data.family || '';
-                chosenModelSpecific = data.specificModel || '';
-                setLiveModel(chosenModelSpecific);
-                chosenModelThinking = !!data.thinking;
-                chosenModelLabel = data.label || '';
+                acc.chosenModelFamily = data.family || '';
+                acc.chosenModelSpecific = data.specificModel || '';
+                setLiveModel(acc.chosenModelSpecific);
+                acc.chosenModelThinking = !!data.thinking;
+                acc.chosenModelLabel = data.label || '';
               } else if (data.type === 'model_handoff') {
                 // The vessel handed this conversation to another one. The
                 // switch is already committed server-side (that turn ended);
@@ -3760,14 +3729,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // request as the new vessel.
                 pendingHandoff = normaliseHandoff(data);
               } else if (data.type === 'cache_usage') {
-                cacheUsage = normaliseCacheUsage(data);
+                acc.cacheUsage = normaliseCacheUsage(data);
               } else if (data.type === 'web_sources') {
                 // null when the frame carried nothing, so an empty frame
                 // cannot erase a real earlier list.
                 const sources = normaliseWebSources(data);
-                if (sources) webSources = sources;
+                if (sources) acc.webSources = sources;
               } else if (data.type === 'notice') {
-                // Turn-stopped diagnostics. Collected separately from `currentText`
+                // Turn-stopped diagnostics. Collected separately from `acc.currentText`
                 // so they stay out of the message body — and therefore out of the
                 // log, out of the context sent on later turns, and out of the
                 // token count.
@@ -3795,13 +3764,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 );
                 if (data.redacted) {
                   betrayalRedacted = true;
-                  // Discard everything this turn produced. currentText and
-                  // currentThought are what finalizeMessage commits, and
+                  // Discard everything this turn produced. acc.currentText and
+                  // acc.currentThought are what finalizeMessage commits, and
                   // claudeThinkingBlocks is what would be REPLAYED to the model
                   // on the next turn — leaving that one behind would preserve
                   // exactly the contamination this feature exists to prevent.
-                  currentText = '';
-                  currentThought = '';
+                  acc.currentText = '';
+                  acc.currentThought = '';
                   claudeThinkingBlocks.length = 0;
                   scheduleStreamingFlush();
                 }
@@ -3816,7 +3785,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // two; nothing else reads this list.
                 // Display-only: slimHistory is an allowlist that never names
                 // toolCalls, so this never reaches any model.
-                const toolCall = normaliseToolCall(data, currentThought.length);
+                const toolCall = normaliseToolCall(data, acc.currentThought.length);
                 if (toolCall) toolCalls.push(toolCall);
               } else if (data.type === 'session_id') {
                 // Claude OAuth path emits this so we can resume the
@@ -3825,13 +3794,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   setAgentSession(data.sessionId);
                 }
               } else if (data.type === 'thought') {
-                currentThought += data.content;
+                acc.currentThought += data.content;
                 // Only set 'thinking' if the reply hasn't started yet — once
                 // text has begun, the camera signal should not fall back to
                 // thinking even if the model interleaves more thought chunks.
                 setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking'));
               } else if (data.type === 'text') {
-                currentText += data.content;
+                acc.currentText += data.content;
                 // Read by the handoff-failure branch after the teardown: text on
                 // screen means this vessel answered, however briefly.
                 if (data.content) sawOutput = true;
@@ -3852,16 +3821,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // never carries a timestamp into TTS, the saved log, or the
                 // context replayed to the model.
                 if (globalSettings?.removeTimestamps !== false) {
-                  currentText = stripAllTimestamps(currentText);
+                  acc.currentText = stripAllTimestamps(acc.currentText);
                 }
                 // User-configurable regex filter (Settings → Custom regex
                 // filter). Applied continuously like the timestamp strip so the
                 // stored message — and therefore TTS — never contains matches.
-                currentText = applyOutputFilter(currentText, globalSettings);
+                acc.currentText = applyOutputFilter(acc.currentText, globalSettings);
               } else if (data.type === 'thinking_signature') {
                 claudeThinkingBlocks.push({ thinking: data.thinking, signature: data.signature });
               } else if (data.type === 'continued') {
-                continuationCount = data.count || 0;
+                acc.continuationCount = data.count || 0;
               } else if (data.type === 'file_attachment' && data.attachment) {
                 toolAttachments.push(normaliseToolAttachment(data, uuidv4));
               } else if (data.type === 'ask_user' && data.askId && Array.isArray(data.questions)) {
@@ -4007,7 +3976,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // streaming:false). finalizeMessage was defined just after the streaming
       // declarations and reads the accumulated values at call time — the catch
       // below reuses it when the partner stops the turn.
-      const finalText = currentText;
+      const finalText = acc.currentText;
       finalizeMessage();
 
       // Vessel handoff: build the plan while the accumulated values are still
@@ -4040,7 +4009,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // Carried so the NEXT request can tell whose reasoning this was —
             // the thinking filter drops it for the new vessel and restores it
             // if the conversation ever comes back to this one.
-            ...(currentThought ? { thoughtProcess: currentThought } : {}),
+            ...(acc.currentThought ? { thoughtProcess: acc.currentThought } : {}),
           }),
         };
       }
