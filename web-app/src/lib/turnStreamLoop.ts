@@ -70,7 +70,16 @@ export interface TurnStreamHooks {
  * runner answer that differently (React state vs. a write to disk).
  */
 export async function runTurnStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  // `Uint8Array | string` is not defensive breadth — both really arrive.
+  // MEASURED 2026-10-29: all 19 `controller.enqueue` sites in the chat route
+  // pass a STRING and the route has no TextEncoder. Going out over HTTP, the
+  // server encodes it, so `fetch`'s Response yields Uint8Array (ChatArea).
+  // Called as a module, nothing encodes it, so the Response yields the string
+  // that was enqueued (the runner). TypeScript's lib types say Uint8Array for
+  // both, because `Response.body` is typed for the HTTP path; that type was a
+  // claim about the transport, not about this stream. The runner's first real
+  // turn died here: `decode()` throws TypeError on a string.
+  reader: ReadableStreamDefaultReader<Uint8Array | string>,
   acc: TurnAccState,
   flags: TurnEventFlags,
   sink: TurnEventSink,
@@ -84,11 +93,18 @@ export async function runTurnStream(
     const { done, value } = await reader.read();
     if (done) break;
 
+    // A string chunk must NOT go through the decoder: it is already decoded,
+    // and `{ stream: true }`'s job (carrying a multi-byte character split
+    // across a boundary) cannot arise for text that was never bytes.
+    const text = typeof value === 'string'
+      ? value
+      : decoder.decode(value, { stream: true });
+
     // `[DONE]` falls through rather than breaking. MEASURED 2026-10-28: all
-    // six enqueue sites in the chat route send it immediately before
-    // controller.close(), so it is always the last frame and there is nothing
-    // after it to skip.
-    for (const dataStr of sse.push(decoder.decode(value, { stream: true }))) {
+    // six `data: [DONE]` enqueue sites in the chat route send it immediately
+    // before controller.close(), so it is always the last frame and there is
+    // nothing after it to skip.
+    for (const dataStr of sse.push(text)) {
       if (!isSseDone(dataStr)) {
         try {
           const data = JSON.parse(dataStr);

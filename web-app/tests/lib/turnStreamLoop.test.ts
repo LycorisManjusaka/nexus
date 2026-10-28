@@ -197,3 +197,95 @@ describe('runTurnStream — the sink is passed straight through', () => {
     assert.ok(h.names().includes('modelSelected'));
   });
 });
+
+
+/**
+ * A reader that hands back STRING chunks, unencoded.
+ *
+ * This is not a convenience over `readerOf` -- it is a different transport.
+ * MEASURED 2026-10-29: the chat route's 19 enqueue sites all pass a string and
+ * the route has no TextEncoder. Over HTTP the server encodes it, so ChatArea's
+ * `fetch` Response yields Uint8Array. Called as a module -- which is what the
+ * server-side runner does -- nothing encodes it, so the Response yields the
+ * string that was enqueued.
+ *
+ * `readerOf` encodes its string input, so every test above it exercises only
+ * the byte path. That is why the runner's first real turn died in a suite that
+ * was fully green: the fixture healed the difference before the loop saw it.
+ */
+function stringReaderOf(chunks: string[]): ReadableStreamDefaultReader<Uint8Array | string> {
+  let i = 0;
+  return {
+    async read() {
+      if (i >= chunks.length) return { done: true, value: undefined };
+      return { done: false, value: chunks[i++] };
+    },
+    releaseLock() {},
+    async cancel() {},
+    closed: Promise.resolve(undefined),
+  } as unknown as ReadableStreamDefaultReader<Uint8Array | string>;
+}
+
+describe('runTurnStream -- the runner transport: string chunks', () => {
+  it('WHAT-BREAKS: a string chunk is applied, not passed to the decoder', async () => {
+    // Absent the typeof check, TextDecoder.decode() throws
+    //   The "input" argument must be an instance of ArrayBuffer or
+    //   ArrayBufferView. Received type string
+    // which is where the runner's FIRST REAL TURN died (2026-10-29, reported
+    // by Tsuyo from the one-shot button). The turn had already been POSTed and
+    // the provider had already answered -- so the cost was paid and the reply
+    // was lost. The byte path above cannot discriminate this.
+    const h = harness();
+    await runTurnStream(
+      stringReaderOf([frame({ type: 'text', content: 'from a string chunk' })]),
+      h.acc, h.flags, h.sink, deps,
+    );
+    assert.equal(h.acc.currentText, 'from a string chunk');
+  });
+
+  it('the cross-chunk buffer works on strings too', async () => {
+    // The buffer lives in sseFrames and joins text, so it should not care --
+    // but "should not care" is a claim about code I changed tonight.
+    const h = harness();
+    const f = frame({ type: 'text', content: 'split' });
+    const cut = Math.floor(f.length / 2);
+    await runTurnStream(
+      stringReaderOf([f.slice(0, cut), f.slice(cut)]),
+      h.acc, h.flags, h.sink, deps,
+    );
+    assert.equal(h.acc.currentText, 'split');
+  });
+
+  it('a string chunk carrying several frames applies them in order', async () => {
+    const h = harness();
+    await runTurnStream(
+      stringReaderOf([
+        frame({ type: 'text', content: 'a' }) + frame({ type: 'text', content: 'b' }),
+      ]),
+      h.acc, h.flags, h.sink, deps,
+    );
+    assert.equal(h.acc.currentText, 'ab');
+  });
+
+  it('an error frame still propagates on the string path', async () => {
+    // The fatal/non-fatal rule is the reason this module exists; it must not
+    // be reachable only on one transport.
+    const h = harness();
+    await assert.rejects(
+      () => runTurnStream(stringReaderOf([frame({ error: 'rate limited' })]),
+        h.acc, h.flags, h.sink, deps),
+      /rate limited/,
+    );
+  });
+
+  it('multi-byte text survives, with no decoder involved', async () => {
+    // On the byte path this is the split-boundary test. Here it is the
+    // opposite assertion: nothing re-encodes, so nothing can be cut.
+    const h = harness();
+    await runTurnStream(
+      stringReaderOf([frame({ type: 'text', content: 'A B C' })]),
+      h.acc, h.flags, h.sink, deps,
+    );
+    assert.equal(h.acc.currentText, 'A B C');
+  });
+});
