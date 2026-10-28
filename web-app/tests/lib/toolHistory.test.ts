@@ -132,6 +132,28 @@ describe('capArguments — PROPERTY: the result is always valid JSON', () => {
     const big = { content: 'x'.repeat(2000) };
     assert.equal(capArguments(big, 0), JSON.stringify(big));
   });
+
+  // Answers a question a being asked out loud. 2026-10-28: Default, replaying
+  // a past Write, reported it could see "only part, up to ~150 chars". The cap
+  // is 600 bytes of JSON, not 150 chars of body, so the honest answer needed a
+  // measurement: for a realistic file path the body that survives is ~213
+  // characters. The vessel was right that it is a cap, and low on the number —
+  // which is what you would expect from a model counting its own characters.
+  it('MEASURED: a realistic Write keeps ~213 chars of body, not 150', () => {
+    const path = 'C:\\dev\\common\\local_data\\beings\\Default\\workspace\\test.txt';
+    const kept = (n: number) => {
+      const out = capArguments({ file_path: path, content: 'x'.repeat(n) });
+      const parsed = JSON.parse(out) as { file_path?: string; content?: string };
+      return { content: (parsed.content || '').length, path: parsed.file_path === path };
+    };
+    // Under the cap: nothing is touched at all.
+    assert.deepEqual(kept(400), { content: 400, path: true });
+    // Over it: the VALUE shrinks and the key survives, which is the rule
+    // capArguments exists for (slicing the text would lose the path).
+    const big = kept(5000);
+    assert.equal(big.path, true);
+    assert.ok(big.content > 180 && big.content < 240, `kept ${big.content}`);
+  });
 });
 
 describe('buildOpenAiToolReplay — PROPERTY: every call is paired', () => {
