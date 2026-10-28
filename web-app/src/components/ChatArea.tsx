@@ -23,6 +23,18 @@ import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
+import {
+  normaliseHandoff,
+  normaliseCacheUsage,
+  normaliseWebSources,
+  normaliseNotice,
+  collapseBetrayalPhrases,
+  betrayalNoticeKey,
+  normaliseToolCall,
+  normaliseToolAttachment,
+  findOpenSubagentRun,
+  resolveToolActivity,
+} from '@/lib/turnEvents';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure } from '@/lib/layer4';
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
@@ -3764,41 +3776,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // switch is already committed server-side (that turn ended);
                 // all that is left is to finish this message and send a new
                 // request as the new vessel.
-                pendingHandoff = {
-                  family: String(data.family || ''),
-                  specificModel: String(data.specificModel || ''),
-                  label: String(data.label || ''),
-                  thinking: !!data.thinking,
-                  note: String(data.note || ''),
-                  fromFamily: String(data.fromFamily || ''),
-                  fromSpecificModel: String(data.fromSpecificModel || ''),
-                  fromLabel: String(data.fromLabel || ''),
-                };
+                pendingHandoff = normaliseHandoff(data);
               } else if (data.type === 'cache_usage') {
-                cacheUsage = {
-                  cachedInputTokens: Number(data.cachedInputTokens || 0),
-                  uncachedInputTokens: Number(data.uncachedInputTokens || 0),
-                  totalInputTokens: Number(data.totalInputTokens || 0),
-                  outputTokens: Number(data.outputTokens || 0),
-                  cacheCreationTokens: Number(data.cacheCreationTokens || 0),
-                  providerHint: String(data.providerHint || ''),
-                  ...(Number(data.reportedUsd) > 0 ? { reportedUsd: Number(data.reportedUsd) } : {}),
-                  ...(Number(data.serverToolCalls) > 0 ? { serverToolCalls: Number(data.serverToolCalls) } : {}),
-                };
+                cacheUsage = normaliseCacheUsage(data);
               } else if (data.type === 'web_sources') {
-                if (Array.isArray(data.sources) && data.sources.length > 0) {
-                  webSources = data.sources
-                    .filter((s: any) => s && typeof s.url === 'string')
-                    .map((s: any) => ({ url: s.url, ...(s.title ? { title: String(s.title) } : {}) }));
-                }
+                // null when the frame carried nothing, so an empty frame
+                // cannot erase a real earlier list.
+                const sources = normaliseWebSources(data);
+                if (sources) webSources = sources;
               } else if (data.type === 'notice') {
                 // Turn-stopped diagnostics. Collected separately from `currentText`
                 // so they stay out of the message body — and therefore out of the
                 // log, out of the context sent on later turns, and out of the
                 // token count.
-                if (typeof data.content === 'string' && data.content.trim()) {
-                  notices.push(data.content.trim());
-                }
+                const noticeText = normaliseNotice(data);
+                if (noticeText) notices.push(noticeText);
               } else if (data.type === 'betrayal') {
                 // The provider's gatekeeper answered instead of the being.
                 // Two modes, both of which warn (see lib/betrayalGuard.ts):
@@ -3809,28 +3801,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // are persisted for re-display but are NOT part of the message
                 // body, so the being never reads this about itself, and it
                 // costs no tokens.
-                // `phrases` is the list of counted OCCURRENCES, so the same
-                // phrase repeats in it. Collapse repeats to "phrase ×N": the
-                // raw join printed one phrase eight times, which reads as eight
-                // different findings when it is one phrase said eight times.
-                const matched = Array.isArray(data.phrases)
-                  ? [...(data.phrases as string[]).reduce(
-                      (m, p) => m.set(p, (m.get(p) || 0) + 1),
-                      new Map<string, number>(),
-                    )].map(([p, n]) => (n > 1 ? `${p} ×${n}` : p)).join(', ')
-                  : '';
+                const matched = collapseBetrayalPhrases(data.phrases);
                 // One notice, not two: two ⚠️ rows would read as two separate
                 // problems. Parenthesised rather than newline-separated because
                 // the notice row renders as plain inline text, where a \n
                 // collapses to a space anyway.
-                // Three outcomes, three different sentences. "Nothing was
-                // deleted" has two quite different reasons — you turned the
-                // defence off, or this turn read a file and the guard stood
-                // down by itself — and telling them apart is the difference
-                // between a warning you can act on and one you cannot.
-                const betrayalKey = data.redacted
-                  ? 'notice.betrayal.redacted'
-                  : (data.quoting ? 'notice.betrayal.quoting' : 'notice.betrayal.detected');
+                const betrayalKey = betrayalNoticeKey(data);
                 notices.push(
                   `${t(betrayalKey)}` +
                   (matched ? ` (${t('notice.betrayal.matched')}: ${matched})` : '')
@@ -3856,19 +3832,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 // between them, kept in the same list because their POSITION in
                 // the sequence is the whole point. MessageBubble separates the
                 // two; nothing else reads this list.
-                if (data.call && typeof data.call.name === 'string') {
-                  // Record WHERE in the thinking stream this call arrived — the
-                  // current length of the accumulated thinking text. The thinking
-                  // panel uses it to splice the tool chip in at the exact point
-                  // the model paused to call it, preserving the think→call→think
-                  // order. currentThought only ever appends (never rewritten), so
-                  // the offset is a stable anchor. Hidden-thinking vessels
-                  // (ChatGPT, Muse Spark) have empty currentThought → every
-                  // offset is 0 → chips render in arrival order, which is what we
-                  // want. Display-only: slimHistory is an allowlist that never
-                  // names toolCalls, so this is never sent to any model.
-                  toolCalls.push({ ...data.call, thinkingOffset: currentThought.length });
-                }
+                // Display-only: slimHistory is an allowlist that never names
+                // toolCalls, so this never reaches any model.
+                const toolCall = normaliseToolCall(data, currentThought.length);
+                if (toolCall) toolCalls.push(toolCall);
               } else if (data.type === 'session_id') {
                 // Claude OAuth path emits this so we can resume the
                 // Anthropic-side session on the next turn.
@@ -3914,16 +3881,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } else if (data.type === 'continued') {
                 continuationCount = data.count || 0;
               } else if (data.type === 'file_attachment' && data.attachment) {
-                // Tool-result file — attach to the assistant message as if the
-                // assistant had uploaded it. UUID, defaults filled in here.
-                const att = {
-                  isImage: false,
-                  isAudio: false,
-                  isVideo: false,
-                  id: uuidv4(),
-                  ...data.attachment,
-                };
-                toolAttachments.push(att);
+                toolAttachments.push(normaliseToolAttachment(data, uuidv4));
               } else if (data.type === 'ask_user' && data.askId && Array.isArray(data.questions)) {
                 // The model paused to ask the user a question. Surface an
                 // interactive card; the user's selection is POSTed to
@@ -3940,7 +3898,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } else if (data.type === 'subagent_done') {
                 // Child returned its distilled result. Record it (+ the proof of
                 // which API actually served it) and clear the chip.
-                const rec = [...subagentRuns].reverse().find((s: any) => s.task === (data.task || '') && s.result === null);
+                const rec = findOpenSubagentRun(subagentRuns, data.task || '');
                 if (rec) { rec.result = data.result || ''; rec.via = data.via || null; }
                 else subagentRuns.push({ task: data.task || '', result: data.result || '', via: data.via || null });
                 setActiveSubagent(null);
@@ -3951,18 +3909,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               } else if (data.type === 'tool_activity') {
                 // OAuth path: the model started (tool name) or finished (null)
                 // a tool call — reflect it in the loading indicator.
-                // `data.name` is the RAW tool name, sent alongside the server's
-                // English label so the client can render a translated phrase.
-                // Falls back to the server label when the name has no key —
-                // never blank, and never worse than before.
-                if (typeof data.tool === 'string' && data.tool) {
-                  const key = `chat.toolAction.${String(data.name || '')}`;
-                  const localized = data.name ? t(key) : '';
-                  const hit = !!localized && localized !== key;
-                  setLiveToolActivity(hit ? localized : data.tool);
-                  setLiveToolLocalized(hit);
-                  setLiveToolName(typeof data.name === 'string' && data.name ? data.name : null);
-                  setLiveToolDetail(typeof data.detail === 'string' && data.detail ? data.detail : null);
+                const activity = resolveToolActivity(data, t);
+                if (activity) {
+                  setLiveToolActivity(activity.activity);
+                  setLiveToolLocalized(activity.localized);
+                  setLiveToolName(activity.name);
+                  setLiveToolDetail(activity.detail);
                 } else {
                   clearLiveTool();
                 }
