@@ -29,55 +29,12 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createTurnAccState, type TurnAccState } from '@/lib/turnAccState';
-import {
-  applyTurnEvent,
-  type TurnEventFlags,
-  type TurnEventSink,
-  type TurnEventDeps,
-} from '@/lib/turnEventReducer';
+import { applyTurnEvent, type TurnEventDeps } from '@/lib/turnEventReducer';
+// Sink/flags/acc/deps moved to tests/_helpers/turnHarness.ts when
+// turnStreamLoop got a test and needed the same thirteen-method sink.
+// This file is now the second caller of them, not the owner.
+import { recordingSink, freshFlags, freshAcc, deps } from '../_helpers/turnHarness';
 
-/** Records every sink call in order, so "was this notified" is checkable. */
-function recordingSink() {
-  const calls: { m: string; a: unknown }[] = [];
-  const log = (m: string) => (a?: unknown) => { calls.push({ m, a }); };
-  const sink: TurnEventSink = {
-    modelSelected: log('modelSelected'),
-    sessionId: log('sessionId'),
-    phaseThinkingUnlessReplying: log('phaseThinkingUnlessReplying'),
-    phaseReplying: log('phaseReplying'),
-    requestFlush: log('requestFlush'),
-    askOpened: log('askOpened'),
-    askResolved: log('askResolved'),
-    subagentStarted: log('subagentStarted'),
-    subagentFinished: log('subagentFinished'),
-    injectionDelivered: log('injectionDelivered'),
-    toolActivity: log('toolActivity'),
-    stallIdleSeconds: log('stallIdleSeconds'),
-    attachmentDescribed: log('attachmentDescribed'),
-  };
-  return { sink, calls, names: () => calls.map(c => c.m) };
-}
-
-function freshFlags(): TurnEventFlags {
-  return { pendingHandoff: null, betrayalRedacted: false, sawOutput: false, toolAttachments: [] };
-}
-
-function freshAcc(seed?: Partial<{ text: string; thought: string }>): TurnAccState {
-  return createTurnAccState({
-    continuedSeed: seed?.text ?? '',
-    continuedThought: seed?.thought ?? '',
-    continuedBlocks: [],
-    notices: [],
-  });
-}
-
-/** `t` returns the key unchanged, so a key appearing in output is visible. */
-const deps: TurnEventDeps = {
-  t: (k) => k,
-  settings: null,
-  newAttachmentId: () => 'fixed-id',
-};
 
 function run(events: Record<string, unknown>[], d: TurnEventDeps = deps) {
   const acc = freshAcc();

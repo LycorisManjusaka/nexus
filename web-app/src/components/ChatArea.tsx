@@ -9,7 +9,7 @@ import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId } from '@/lib/firstOriginal';
-import { createSseReader, isSseDone } from '@/lib/sseFrames';
+import { runTurnStream } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -50,7 +50,7 @@ import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
 import { createTurnAccState } from '@/lib/turnAccState';
-import { applyTurnEvent, type TurnEventFlags, type TurnEventSink, type TurnEventDeps, type DescribedAttachmentEvent } from '@/lib/turnEventReducer';
+import { type TurnEventFlags, type TurnEventSink, type TurnEventDeps, type DescribedAttachmentEvent } from '@/lib/turnEventReducer';
 import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
 import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
@@ -3578,7 +3578,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }
 
       const reader = chatRes.body.getReader();
-      const decoder = new TextDecoder('utf-8');
 
       // Everything this turn accumulates, in ONE object. lib/turnAccState.ts
       // says why it is one object and not fourteen locals, carries the seeding
@@ -3598,7 +3597,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // The other three aliases went away with the event chain, which now
       // reaches them through `acc.` in lib/turnEventReducer.ts.
       const toolCalls = acc.toolCalls;
-      const sse = createSseReader();
       // `acc` also holds the model_selected tag (family/specific/thinking/
       // label, which arrives at the very start of every stream), the
       // prompt-cache usage, the web-search citations, the tool calls, the
@@ -3814,44 +3812,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         newAttachmentId: uuidv4,
       };
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        // ONE definition of this parse: lib/sseFrames.ts. It was derived in six
-        // places with four behaviours before 2026-10-28, and the server-side
-        // runner (Phase 4b) needs the same one. The reader holds the cross-chunk
-        // buffer, so a call site cannot forget to keep it -- the fault that loses
-        // one frame per boundary and reads as a provider that sent less text.
-        //
-        // [DONE] used to `break` here and now falls through. Measured 2026-10-28:
-        // all six enqueue sites in the chat route send it immediately before
-        // controller.close(), so it is always the last frame and there is nothing
-        // after it to skip.
-        for (const dataStr of sse.push(decoder.decode(value, { stream: true }))) {
-          if (!isSseDone(dataStr)) {
-
-            try {
-              const data = JSON.parse(dataStr);
-              // ONE definition of what an event does to this turn:
-              // lib/turnEventReducer.ts. It mutates `acc` and `flags` and
-              // sends everything that is NOT state through the sink, so the
-              // server-side runner reaches the same 22 branches instead of
-              // writing a second chain -- which would make the saved log
-              // depend on who ran the turn.
-              applyTurnEvent(data, acc, flags, turnSink, turnDeps);
-            } catch (e: any) {
-              // Re-throw API errors so the outer catch can display them
-              if (e.message && !e.message.startsWith('JSON')) throw e;
-            }
-          }
-        }
-
+      // ONE definition of reading a turn stream: lib/turnStreamLoop.ts.
+      // The framing (sseFrames), the 22 branches (turnEventReducer) and the
+      // cross-chunk buffer all live behind it -- and so does the rule about
+      // WHICH stream errors are fatal (malformed frame: swallow; anything
+      // else, including an API error the route forwarded: re-throw). A second
+      // loop written for the server-side runner would almost certainly write
+      // `catch {}` and lose that half, on the one path where no tab is open
+      // to notice.
+      await runTurnStream(reader, acc, flags, turnSink, turnDeps, {
         // Render at most once per animation frame (see scheduleStreamingFlush).
-        // Accumulated text/thought/attachments are already updated above; this
-        // just asks for a coalesced repaint.
-        scheduleStreamingFlush();
-      }
+        // Accumulated text/thought/attachments are already updated by the
+        // reducer; this just asks for a coalesced repaint.
+        onChunk: scheduleStreamingFlush,
+      });
 
       // Stream loop finished — cancel any queued frame so it can't fire AFTER
       // the authoritative finalize update below (which carries streaming:false
