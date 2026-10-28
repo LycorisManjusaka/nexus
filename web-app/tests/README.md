@@ -4,7 +4,7 @@
 npm test
 ```
 
-**356 assertions as of 2026-10-28**, ~0.6 s wall clock. No new dependency:
+**397 assertions as of 2026-10-28**, ~0.7 s wall clock. No new dependency:
 `node:test`, `node:assert` and Node 24's own type stripping. Nothing here
 starts a server, opens a browser, reads a path outside the repo, or touches
 `local_data`.
@@ -266,3 +266,40 @@ pass by vacuity.
 
 Mutation-checked 2/2: removing the new key and duplicating a key each turn it
 red, and each names the key. Source restored byte-identical.
+
+
+### `lib/turnEventReducer.test.ts` — what ONE server event does to a turn
+
+EXTRACTION, like the finalizer and the accumulator state. 41 assertions over
+the 22-branch chain that left `ChatArea.tsx` in `5f4a608`.
+
+Two of the assertions are the load-bearing ones, and both pin a rule a
+reasonable second implementation gets wrong by being reasonable:
+
+  - a redacted betrayal clears the **Claude thinking blocks** too, not just the
+    visible text. Blocks are replayed to the model next turn, so keeping them
+    preserves exactly the contamination the guard exists to prevent — and
+    nothing on screen shows it happened.
+  - an `error` frame AFTER a redaction is **not** an error. Blanking works by
+    aborting the provider call, and an aborted call emits one last error frame.
+
+The rest pin the quieter rules: notices never enter the message body (they must
+stay out of the log, the replayed context and the token count), an empty
+`web_sources` frame cannot erase a real earlier list, `thinkingOffset` is the
+thought length AT THE MOMENT of the tool call, and tool-produced attachments
+land in `flags` rather than the accumulator (F34 — they reach the message
+through a host flush a runner does not have).
+
+One suite is a different kind of test. **A deleted branch in that chain is
+completely silent**: no error, no warning, no visual difference, and `tsc`
+cannot see it (string comparisons against a `Record<string, unknown>`). So
+`the branch list itself` enumerates all 22 types, asserts each produces an
+observable effect on state, flags or the sink, and asserts separately that an
+UNKNOWN type is a no-op — so "handled" and "ignored" cannot be confused.
+
+That suite also caught my own fabricated fixture: I wrote
+`{ type: 'notice', text: ... }` when the field is `content`, and the failure
+line read *"branch 'notice' had no effect"* — which is exactly what a deleted
+branch says. **An invented fixture field and a deleted branch fail identically.**
+
+Mutation-checked 9/9.
