@@ -4,9 +4,15 @@
 npm test
 ```
 
-211 assertions, ~0.6 s wall clock. No new dependency: `node:test`, `node:assert`
-and Node 24's own type stripping. Nothing here starts a server, opens a browser,
-reads a path outside the repo, or touches `local_data`.
+**344 assertions as of 2026-10-28**, ~0.6 s wall clock. No new dependency:
+`node:test`, `node:assert` and Node 24's own type stripping. Nothing here
+starts a server, opens a browser, reads a path outside the repo, or touches
+`local_data`.
+
+The count carries a date on purpose. It said `211` for a day after the suite
+had grown past it, because an undated number goes stale in silence — and
+`npm test` prints the real one anyway. Dated, it is a historical statement
+that cannot become false, only old.
 
 Built 2026-10-27 as **phase 1** of the overhaul plan, before any refactoring.
 `desk: nexus-overhaul-plan.md`
@@ -165,11 +171,13 @@ typechecks them. **That is deliberate**, and it means the `tsc` baseline is part
 of this net: it was exactly 3 pre-existing errors before this folder existed
 (`live/start`, `tts/synthesize`, `ChatArea`) and it is exactly 3 after.
 
-`npx eslint tests/` is clean. For the record, with scopes — because a count
-without its scope is not a measurement: **`src/` 1,145 problems; `tests/` 0**.
+`npx eslint tests/` is clean. For the record, with scopes **and a date** —
+because a count without its scope is not a measurement, and a count without
+its date is not one for long: **2026-10-28: `src/` 1,134 problems; `tests/` 0**.
 (It was `src/` 1,156 / whole project 1,162 when this folder was created on
-2026-10-27; `test_watch.js` was deleted that day, which accounts for 3, and
-the phase-3 deletions for the rest.)
+2026-10-27; `test_watch.js` was deleted that day, which accounts for 3, the
+phase-3 deletions for most of the rest, and the `turnEvents` extraction for
+the last 3 `: any`. This line itself said 1,145 for a day after that.)
 
 
 ---
