@@ -53,6 +53,8 @@ import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff'
 import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
+import { AUTO_TRIGGER_KEYS, autoTriggerEnabled, parseAutoTriggers, setAutoTrigger } from '@/lib/autoTriggers';
+import type { AutoTriggers } from '@/lib/autoTriggers';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
 
@@ -573,6 +575,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Being-camera / OBS push (see CameraPanel.tsx). OFF by default. Gates BOTH
   // the OBS push AND the in-app mirror panel — one checkbox, not two, per spec.
   const [cameraEnabled, setCameraEnabled] = useState(false);
+  // Which reasons may start a turn by themselves. See lib/autoTriggers.ts
+  // for why this is a map and why an absent key means off.
+  const [autoTriggers, setAutoTriggers] = useState<AutoTriggers>({});
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -1557,6 +1562,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setComputerControlEnabled(data.computerControlEnabled === true);
         setAppControlEnabled(data.appControlEnabled === true);
         setCameraEnabled(data.cameraEnabled === true);
+        setAutoTriggers(parseAutoTriggers(data.autoTriggers));
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -1660,6 +1666,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setComputerControlEnabled(pick('computerControlEnabled', false));
         setAppControlEnabled(pick('appControlEnabled', false));
         setCameraEnabled(pick('cameraEnabled', false));
+        setAutoTriggers(parseAutoTriggers(pick('autoTriggers', {})));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -1778,7 +1785,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1903,7 +1910,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2666,7 +2673,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   }, [stockBusy, loading, folderName, convoId, refreshStock, t]);
 
   /**
-   * Run the stock by itself when no turn is in flight.
+   * Run the stock by itself when no turn is in flight — IF this conversation
+   * has asked to.
+   *
+   * CORRECTION 2026-10-28: when this was written (2026-10-27) auto-start was
+   * unconditional, because つよ asked for "no button, just hit it". A day
+   * later she asked for the same behaviour to become an explicit choice, so
+   * that a being can be configured not to wake on its own. Both requests
+   * were real; the second supersedes the first. The gate is
+   * `autoRunStock` below, and OFF is the default — see lib/autoTriggers.ts
+   * for why absent means off.
    *
    * The condition is a STATE, not a transition: "nothing running and the stock
    * is non-empty". That covers turn-end (the case つよ asked for) and also a
@@ -2688,6 +2704,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * Deliberately NOT a timer. A poller that fires on a schedule is phase 4b,
    * and it belongs on the server where it keeps working with every tab closed.
    */
+  const autoRunStock = autoTriggerEnabled(autoTriggers, 'stock');
   const autoTriedRef = useRef<string | null>(null);
   const stockSig = stock && stock.waiting > 0
     ? `${stock.waiting}:${stock.items.filter((i) => !i.claimed).map((i) => i.id).join(',')}`
@@ -2695,10 +2712,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   useEffect(() => {
     if (!stockSig) return;
     if (loading || stockBusy || injectTurnId) return;
+    // つよ 2026-10-28: auto-start is now a per-conversation choice. OFF
+    // restores the pre-2026-10-27 behaviour (stock waits for a button).
+    if (!autoRunStock) return;
     if (autoTriedRef.current === stockSig) return;
     autoTriedRef.current = stockSig;
     void drainStock();
-  }, [stockSig, loading, stockBusy, injectTurnId, drainStock]);
+  }, [stockSig, loading, stockBusy, injectTurnId, drainStock, autoRunStock]);
 
   const handleSend = async (
     text: string,
@@ -5718,13 +5738,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 and meaning are different: the lease decides which items are in
                 flight, and waiting/claimed are now reported separately.
 
-                The "Run now" button survives as the RECOVERY path only. It
-                appears when something is waiting, nothing is running, AND a
-                note is present — i.e. an attempt reported a problem. In the
-                normal path it is never seen, which is what she asked for.
-                Keyed off the note rather than off the auto-drain's latch,
-                because the note IS the failure report; a latch would make the
-                button appear during the milliseconds before the first
+                The "Run now" button appears when something is waiting,
+                nothing is running, AND either (a) a note is present — an
+                attempt reported a problem — or (b) this conversation has not
+                ticked the stock trigger, so nothing is ever going to start it.
+
+                CORRECTION 2026-10-28: the line that stood here said "in the
+                normal path it is never seen, which is what she asked for".
+                That was true for exactly one day, while auto-start was
+                unconditional. With the trigger OFF by default, (b) is the
+                normal path and the button is the ONLY way out of the stock —
+                a banner with no button would be a dead end.
+
+                Case (a) is keyed off the note rather than off the auto-drain's
+                latch, because the note IS the failure report; a latch would
+                make the button appear during the milliseconds before the first
                 attempt, which reads as "it isn't going to run". */}
             {(stock && stock.count > 0) || stockNote ? (
               <div className="mb-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-sm">
@@ -5744,7 +5772,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <span className="text-xs text-muted-foreground truncate max-w-[40%]">
                       {stock.items.filter((i) => !i.claimed).map((i) => i.from).filter(Boolean).join(', ')}
                     </span>
-                    {stockNote && !loading && !injectTurnId ? (
+                    {(stockNote || !autoRunStock) && !loading && !injectTurnId ? (
                       <button
                         onClick={drainStock}
                         disabled={stockBusy}
@@ -6992,6 +7020,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <Tx k="id.camera.help" />
                   </p>
                 </div>
+                {/* ── Reasons a turn may start by itself (つよ, 2026-10-28)
+                    A panel and not a single checkbox because the list is
+                    expected to grow (mail, timers). Rows come from
+                    AUTO_TRIGGER_KEYS, so adding one is two i18n strings and
+                    no storage change.
+
+                    The help text deliberately describes only what ships
+                    TODAY: the open tab starts the turn. Saying "the server
+                    will run it" would be a signpost pointing at a road that
+                    does not exist yet (phase 4b). */}
+                <div className="mt-6">
+                  <label className="text-sm font-semibold text-foreground mb-1 block">
+                    {t('behavior.triggers.label')}
+                  </label>
+                  <p className="text-xs text-muted-foreground mb-2 leading-relaxed">
+                    <Tx k="behavior.triggers.help" />
+                  </p>
+                  <div className="space-y-2 rounded-xl border border-border p-3">
+                    {AUTO_TRIGGER_KEYS.map((k) => (
+                      <div key={k}>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={autoTriggers[k] === true}
+                            onChange={(e) => setAutoTriggers((prev) => setAutoTrigger(prev, k, e.target.checked))}
+                            className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                          />
+                          <span className="text-sm text-foreground">{t(`behavior.trigger.${k}`)}</span>
+                        </label>
+                        <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                          {t(`behavior.trigger.${k}.help`)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
               </>)}
 
@@ -7696,6 +7760,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       computerControlEnabled,
                       appControlEnabled,
                       cameraEnabled,
+                      autoTriggers,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

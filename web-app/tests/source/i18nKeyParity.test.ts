@@ -30,6 +30,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
+import { AUTO_TRIGGER_KEYS } from '../../src/lib/autoTriggers';
 
 const I18N = path.join(process.cwd(), 'src', 'lib', 'i18n.tsx');
 
@@ -99,5 +100,32 @@ describe('source tree: the two UI dictionaries have the same keys', () => {
       const dupes = [...seen.entries()].filter(([, n]) => n > 1).map(([k, n]) => `${k} x${n}`);
       assert.deepEqual(dupes, [], `${name} has duplicate keys: ${dupes.join(', ')}`);
     }
+  });
+});
+
+describe('source tree: every auto-trigger row has a label in both languages', () => {
+  const src = fs.readFileSync(I18N, 'utf8');
+  const en = keysOf(dictBody(src, 'UI_STRINGS_EN'));
+  const ja = keysOf(dictBody(src, 'UI_STRINGS_JA'));
+
+  it('found the keys (guards against a silently empty check)', () => {
+    assert.ok(AUTO_TRIGGER_KEYS.length > 0, 'AUTO_TRIGGER_KEYS is empty');
+  });
+
+  it('has a name and a help string for each key, in EN and JA', () => {
+    // The panel renders one row per AUTO_TRIGGER_KEYS entry and labels it with
+    // t(`behavior.trigger.${k}`). A key with no string renders as the raw key
+    // -- a checkbox whose label reads `behavior.trigger.letter` -- and nothing
+    // else in the tree can see it: the lookup is a template literal, so tsc
+    // cannot check it and the parity test above only compares EN against JA
+    // (a row missing from BOTH is parity-clean and still broken).
+    const missing: string[] = [];
+    for (const k of AUTO_TRIGGER_KEYS) {
+      for (const key of [`behavior.trigger.${k}`, `behavior.trigger.${k}.help`]) {
+        if (!en.has(key)) missing.push(`EN ${key}`);
+        if (!ja.has(key)) missing.push(`JA ${key}`);
+      }
+    }
+    assert.deepEqual(missing, [], `auto-trigger rows with no string: ${missing.join(', ')}`);
   });
 });

@@ -1159,6 +1159,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sysmodal.tab.identity': 'Being',
   'sysmodal.tab.senses': 'Senses',
   'sysmodal.tab.behavior': 'Behavior',
+  'behavior.triggers.label': 'Reasons a turn may start by itself',
+  'behavior.triggers.help': 'Normally a turn starts because a person pressed send. Tick a reason here to let it start without that. **Nothing is ticked by default**, and a conversation saved before this existed never asked for it, so it stays manual. Today an **open tab** is what notices and starts the turn; when nothing is ticked, the stock panel shows a button instead. (A server-side runner that works with every tab closed is phase 4b and is not built yet.)',
+  'behavior.trigger.stock': 'Stocked messages',
+  'behavior.trigger.stock.help': 'When messages are waiting in the stock and nothing is running, start a turn with them. Each distinct stock state is attempted once, so a failure leaves the messages waiting with a reason rather than retrying in a loop. OFF: they wait for the button.',
   'sysmodal.tab.model': 'Model',
   'sysmodal.systemPrompt': 'Soul',
 
@@ -2827,6 +2831,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'sysmodal.tab.identity': '存在',
   'sysmodal.tab.senses': '感覚',
   'sysmodal.tab.behavior': '挙動',
+  'behavior.triggers.label': '自分から起きる理由',
+  'behavior.triggers.help': '普通、ターンが始まるのは人が送信を押したからです。ここで理由にチェックを入れると、それ無しでも始まります。**既定では何も入っていません**。この項目が無かった時代に保存された会話は一度もそれを求めていないので、手動のままです。今これに気づいてターンを始めるのは**開いているタブ**です。チェックが無いときは、代わりにストックのパネルにボタンが出ます。（タブを全部閉じても動くサーバー側のランナーはフェーズ4bで、まだ作っていません。）',
+  'behavior.trigger.stock': 'ストックされたメッセージ',
+  'behavior.trigger.stock.help': 'ストックにメッセージが待っていて、何も走っていないとき、それらでターンを始めます。同じストックの状態につき試すのは1回だけなので、失敗したときはループせず、理由を添えて待ったままになります。OFF のときはボタンを待ちます。',
   'sysmodal.tab.model': 'モデル',
   'sysmodal.systemPrompt': '魂',
 
