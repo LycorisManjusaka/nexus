@@ -11,6 +11,7 @@ import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 import { copyText } from '@/lib/clipboard';
 import { escapeForRegExp } from '@/lib/convoNaming';
 import { resolveSoulGeneration, type SoulGeneration } from '@/lib/soulGeneration';
+import { createSseReader, isSseDone } from '@/lib/sseFrames';
 
 // The title→generation parser used to live here as a "client-side mirror of
 // the lib". It is now `@/lib/soulGeneration` (imported above) — one copy, and
@@ -1280,18 +1281,14 @@ export default function SystemPromptUpdater({
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
-    let buf = '';
+    const sse = createSseReader();
     let accum = '';
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const events = buf.split('\n\n');
-      buf = events.pop() || '';
-      for (const ev of events) {
-        if (!ev.startsWith('data: ')) continue;
-        const s = ev.slice(6);
-        if (s === '[DONE]') continue;
+      // lib/sseFrames.ts -- see the note at the ChatArea loop for why.
+      for (const s of sse.push(decoder.decode(value, { stream: true }))) {
+        if (isSseDone(s)) continue;
         try {
           const d = JSON.parse(s);
           // ANY parsed frame counts as a sign of life — this is what the

@@ -9,6 +9,7 @@ import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId } from '@/lib/firstOriginal';
+import { createSseReader, isSseDone } from '@/lib/sseFrames';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -3530,7 +3531,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       let currentThought = continuedThought;
       let claudeThinkingBlocks: { thinking: string; signature: string }[] = [...continuedBlocks];
       let continuationCount = 0;
-      let buffer = '';
+      const sse = createSseReader();
       // The model_selected event arrives at the very start of every stream,
       // so every AI message gets a precise
       // family/specific/thinking/label tag for the meta bar. These fields are
@@ -3715,15 +3716,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6);
-            if (dataStr === '[DONE]') break;
+        // ONE definition of this parse: lib/sseFrames.ts. It was derived in six
+        // places with four behaviours before 2026-10-28, and the server-side
+        // runner (Phase 4b) needs the same one. The reader holds the cross-chunk
+        // buffer, so a call site cannot forget to keep it -- the fault that loses
+        // one frame per boundary and reads as a provider that sent less text.
+        //
+        // [DONE] used to `break` here and now falls through. Measured 2026-10-28:
+        // all six enqueue sites in the chat route send it immediately before
+        // controller.close(), so it is always the last frame and there is nothing
+        // after it to skip.
+        for (const dataStr of sse.push(decoder.decode(value, { stream: true }))) {
+          if (!isSseDone(dataStr)) {
 
             try {
               const data = JSON.parse(dataStr);

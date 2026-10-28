@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { copyText } from '@/lib/clipboard';
+import { splitSseFrames, sseDataPayload, isSseDone } from '@/lib/sseFrames';
 
 /**
  * /stream-test — run a Nexus-shaped stream forever and record who stopped it.
@@ -299,13 +300,21 @@ export default function StreamTestPage() {
         setChunks(c => c + 1);
         setBytes(b => b + (value?.byteLength ?? 0));
 
+        // ONE definition of this parse: lib/sseFrames.ts (six derivations with
+        // four behaviours before 2026-10-28). The LOW-LEVEL pair here, not
+        // createSseReader: that returns payloads and drops frames with no data
+        // field, and this page MEASURES the transport -- the `:keep-alive`
+        // comments it counts below have no data field.
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const payload = line.slice(6);
-            if (payload === '[DONE]') { pushEvent('done', '[DONE]'); continue; }
+        // Named `complete`, not `frames`: this component already has a state
+        // variable called `frames` holding the COUNT, and a local array of the
+        // same name would shadow a number with an array inside this block.
+        const { frames: complete, rest } = splitSseFrames(buffer);
+        buffer = rest;
+        for (const line of complete) {
+          const payload = sseDataPayload(line);
+          if (payload !== null) {
+            if (isSseDone(payload)) { pushEvent('done', '[DONE]'); continue; }
             setFrames(f => f + 1);
             try {
               const d = JSON.parse(payload);
