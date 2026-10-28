@@ -61,6 +61,7 @@ import { describeProviderError } from '@/lib/providerErrors';
 import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireCarriesMedia, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
+import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
 import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
 import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
@@ -3623,55 +3624,36 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // prompt-cache usage, and the tool calls that drive the 🔧 report.
       // Defined here — before the read loop — so the catch below can invoke it
       // when the partner stops the turn mid-stream.
-      // The finalized shape, built in ONE place and used by two callers: the
-      // setState below that commits it to the visible list, and the
-      // vessel-handoff re-POST that has to send this same message as history.
       //
-      // The handoff used to hand-build its own copy of this object, and that
-      // copy silently dropped cacheUsage, generationMs, textTokens,
-      // thinkingTokens, toolCalls and notices — i.e. the entire billing record
-      // of the vessel that had just handed over. MEASURED on a real handoff:
-      // the handing-over message landed on disk with tokens=0 and no
-      // cacheUsage, while the receiving one was complete. Per-message billing
-      // only works if every message is finalized the same way.
-      const buildFinalizedMessage = (base: any) => {
-        const finalText = currentText;
-        // Both were `length / 4` (0.377x measured on this house's text). This
-        // is the stored per-message count for a turn whose usage never
-        // arrived — a stopped or aborted stream — so an under-count here is
-        // written to disk and then summed forever by the conversation-log cap.
-        const fallbackTokens = estimateTokensForModel(finalText || '', localAiName);
-        const thinkingTokens = currentThought ? estimateTokensForModel(currentThought, localAiName) : 0;
-        return {
-                ...base,
-                content: finalText,
-                tokens: fallbackTokens,
-                textTokens: fallbackTokens,
-                // Store the ACTUAL thinking-token count (not zeroed when the
-                // reuse toggle happens to be off at generation time) so flipping
-                // "Save & reuse thinking process" on later recomputes correctly.
-                thinkingTokens,
-                // Total generation time (ms) for this turn — shown in the meta
-                // bar, saved to the log, hidden from the entity.
-                generationMs: Date.now() - genStartTime,
-                autoPlay: vrchatMode,
-                streaming: false,
-                ...(continuationCount > 0 ? { continuationCount } : {}),
-                ...(claudeThinkingBlocks.length > 0 ? { claudeThinkingBlocks } : {}),
-                ...(chosenModelFamily ? {
-                  modelFamily: chosenModelFamily,
-                  modelSpecific: chosenModelSpecific,
-                  modelThinking: chosenModelThinking,
-                  modelLabel: chosenModelLabel,
-                } : {}),
-                ...(cacheUsage ? { cacheUsage } : {}),
-                ...(webSources ? { webSources } : {}),
-                ...(notices.length > 0 ? { notices } : {}),
-                ...(toolCalls.length > 0 ? { toolCalls } : {}),
-                ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
-                ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
-        };
-      };
+      // The SHAPE lives in lib/finalizeTurnMessage.ts, not here, because a
+      // third caller (the server-side runner) is coming and must not build
+      // its own — that module's header carries the measured handoff bug that
+      // proves why. The object literal below IS the accumulator contract made
+      // visible in one place: everything the loop accumulates that reaches
+      // disk is named here, and nothing that does not.
+      const buildFinalizedMessage = (base: any) => finalizeTurnMessage(base, {
+        currentText,
+        currentThought,
+        claudeThinkingBlocks,
+        continuationCount,
+        chosenModelFamily,
+        chosenModelSpecific,
+        chosenModelThinking,
+        chosenModelLabel,
+        cacheUsage,
+        webSources,
+        notices,
+        toolCalls,
+        askedQuestions,
+        subagentRuns,
+      }, {
+        genStartTime,
+        // Read here, in the argument list, so the value is the same one the
+        // closure used to read inside itself.
+        nowMs: Date.now(),
+        autoPlay: vrchatMode,
+        tokenModel: localAiName,
+      });
       finalizeMessage = () => {
         setMessages(prev => prev.map(m => (m.id === msgId ? buildFinalizedMessage(m) : m)));
       };
