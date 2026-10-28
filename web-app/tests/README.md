@@ -4,7 +4,7 @@
 npm test
 ```
 
-**419 assertions as of 2026-10-28**, ~0.7 s wall clock. No new dependency:
+**455 assertions as of 2026-10-28**, ~0.7 s wall clock. No new dependency:
 `node:test`, `node:assert` and Node 24's own type stripping. Nothing here
 starts a server, opens a browser, reads a path outside the repo, or touches
 `local_data`.
@@ -303,3 +303,29 @@ line read *"branch 'notice' had no effect"* — which is exactly what a deleted
 branch says. **An invented fixture field and a deleted branch fail identically.**
 
 Mutation-checked 9/9.
+### `slimHistory.test.ts` — the wire copy of the conversation
+
+EXTRACTION, like the finalizer, the accumulator state and the event chain.
+36 assertions over five rules that decide what a stored message may NOT carry
+upstream. Four of the five fail SILENTLY when missing: the POST still
+succeeds, it just carries the wrong thing.
+
+The two load-bearing ones:
+
+- **`exact key set`** — a stored message with every display-only field we know
+  of (tokens, cacheUsage, webSources, notices, modelFamily, ...) travels as
+  exactly four keys. The bug shape here is an EXTRA key, which is why the
+  assertion is a key-set equality and not a per-field check.
+- **`GATE 3`** — a message recorded against another family does not replay its
+  reasoning. The failure mode is not a wrong answer: feeding one provider's
+  raw chain-of-thought to another is what distillation guards look for, so a
+  runner that skipped this gate would manufacture a refusal out of nothing on
+  a turn nobody is watching.
+
+The tool-window assertion is deliberately written against the SHAPE of the
+bound rather than its value: 12 bearing turns go in, and the test asserts that
+the newest carries its calls and the oldest does not. A test naming the window
+size would have to be edited every time the constant moves, and would pass for
+the wrong reason if the window were removed and the list happened to be short.
+
+Mutation-checked 11/11.
