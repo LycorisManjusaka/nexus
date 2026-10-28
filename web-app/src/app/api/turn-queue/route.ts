@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
+  breakLease,
 } from '@/lib/turnQueue';
 
 // The stock a being's turns are fed from (phase 4a, 2026-10-27).
@@ -13,6 +14,8 @@ import {
 //                                  → { ok, token, items, composed } | { ok:false, reason }
 // POST { action: 'release', being, convoId, token, consumedIds }  → { ok, removed, remaining }
 // POST { action: 'abandon', being, convoId, token }               → { ok }
+// POST { action: 'break',   being, convoId, expectedHolder, expectedStartedAt }
+//                                  → { ok } | { ok:false, reason }
 //
 // This file holds NO rules. Ordering, exclusivity and rendering all live in
 // lib/turnQueue.ts, because `next/server` cannot be imported outside Next's own
@@ -142,6 +145,34 @@ export async function POST(req: Request) {
       const token = typeof body.token === 'string' ? body.token : '';
       if (!token) return NextResponse.json({ error: 'token is required' }, { status: 400 });
       return NextResponse.json({ ok: await abandon(being, convoId, token) });
+    }
+
+    // Force a lease open when its holder is gone.
+    //
+    // WHY THIS EXISTS (MEASURED 2026-10-29): a tab auto-drained the stock and
+    // was then CLOSED mid-turn. Its `catch`/`finally` never ran -- the process
+    // was gone -- so neither `release` nor `abandon` fired. The lease stayed,
+    // the panel read "running 1" forever, and the runner's tick answered
+    // skipped:"busy". Three readings agreeing about a holder that no longer
+    // existed, and NO HTTP path to clear it: breakLease sat in lib with the
+    // comment "Never called by anything in this module", which was true of
+    // the whole tree.
+    //
+    // The caller echoes back the holder and startedAt that GET showed it.
+    // Those are not secrets and not authorisation -- they are a WITNESS that
+    // the human was looking at THIS lease and not at one that replaced it
+    // since. The token stays server-side on purpose: handing it out would also
+    // hand out `release`, which can delete the items of a LIVE turn.
+    if (action === 'break') {
+      const lease = await readLease(being, convoId);
+      if (!lease) return NextResponse.json({ ok: false, reason: 'no-lease' });
+      const holder = typeof body.expectedHolder === 'string' ? body.expectedHolder : '';
+      const startedAt = Number(body.expectedStartedAt);
+      if (holder !== lease.holder || startedAt !== lease.startedAt) {
+        // Re-read rather than retry: what is on disk is not what was shown.
+        return NextResponse.json({ ok: false, reason: 'stale' });
+      }
+      return NextResponse.json({ ok: await breakLease(being, convoId, lease.token) });
     }
 
     return NextResponse.json({ error: `unknown action: ${action || '(none)'}` }, { status: 400 });

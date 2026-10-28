@@ -82,6 +82,13 @@ const SAVE_SIZE_WARN_THRESHOLD = Math.floor(MAX_JS_STRING_LENGTH * 0.9);
 // would make the same tab look like a different one after switching away and
 // back. Never rendered, so there is no hydration mismatch to worry about.
 const TAB_CLIENT_ID = `tab_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
+// The holder string this tab writes when it claims a stock. Two places compare
+// against it: `drainStock` (which claims) and the lease row in the panel, which
+// decides whether the lease on screen is this tab's OWN -- for your own live
+// turn the right control is Stop, not breaking the lease. Module scope for the
+// same reason as the id above, and because a per-render copy would be listed as
+// a hook dependency that cannot actually change.
+const MY_STOCK_HOLDER = `tab:${TAB_CLIENT_ID.slice(0, 8)}`;
 // How often to tell the server "still running". Mirrors HEARTBEAT_MS in
 // turnRegistry.ts; the TTL there is ~3x this, so one dropped beat is harmless.
 const TURN_HEARTBEAT_MS = 8_000;
@@ -2533,6 +2540,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     /** A lease with no id list: some are claimed, we cannot say which. */
     claimedUnknown: boolean;
     items: StockItem[];
+    /**
+     * Who holds the lease and since when, exactly as GET reports it.
+     *
+     * Read NOT to show progress -- `claimed` already does that -- but to let a
+     * person judge whether the holder is still alive. MEASURED 2026-10-29: a
+     * tab that auto-drained and was then CLOSED leaves this field completely
+     * unchanged, because the lease is only rewritten by a heartbeat and
+     * nothing in this tree sends one.
+     */
+    lease: {
+      holder: string;
+      startedAt: number;
+      /**
+       * How old the lease was WHEN IT WAS READ, not when it is rendered.
+       *
+       * Computed here rather than in JSX for two reasons. eslint names the
+       * first: `Date.now()` in render is an impure call. The second is the
+       * house rule for mtime-style reports -- a staleness number has to say
+       * when it was measured, and the read is the only moment that can. It
+       * refreshes on the 5s poll that already exists.
+       */
+      ageMs: number;
+    } | null;
   };
   const [stock, setStock] = useState<StockView | null>(null);
   const [stockBusy, setStockBusy] = useState(false);
@@ -2555,6 +2585,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         claimed: typeof d?.claimed === 'number' ? d.claimed : 0,
         claimedUnknown: !!d?.claimedUnknown,
         items,
+        // An older server that does not report a lease yields null, which the
+        // panel renders as "no holder info" rather than as "nobody holds it".
+        lease: d?.lease && typeof d.lease.holder === 'string'
+          ? {
+              holder: d.lease.holder,
+              startedAt: Number(d.lease.startedAt) || 0,
+              ageMs: Math.max(0, Date.now() - (Number(d.lease.startedAt) || 0)),
+            }
+          : null,
       });
     } catch {
       // Offline or the route is down: keep the last known value rather than
@@ -2618,7 +2657,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'claim', being: folderName, convoId,
-          holder: `tab:${TAB_CLIENT_ID.slice(0, 8)}`,
+          holder: MY_STOCK_HOLDER,
         }),
       });
       const d = await res.json().catch(() => null);
@@ -2670,6 +2709,56 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       refreshStock();
     }
   }, [stockBusy, loading, folderName, convoId, refreshStock, t]);
+
+  /**
+   * Clear a lease whose holder is gone.
+   *
+   * Deliberately NOT automatic. A TTL short enough to free a dead holder would
+   * cut a LIVE turn in half -- turns here run for tens of minutes -- which is
+   * why lib/turnQueue has no TTL at all. The judgement stays with a person;
+   * what was missing was the hand.
+   *
+   * MEASURED 2026-10-29 (つよ): a closed tab left a lease nothing could clear.
+   * The panel that displayed it rendered no buttons at all, because every
+   * button was nested under `waiting > 0` and a fully-claimed stock has
+   * waiting = 0. So the one state that needs a human hand was the one state
+   * with no controls.
+   *
+   * Echoes back the holder and startedAt that were ON SCREEN, so the break
+   * acts on the lease the person read and not on one that replaced it since.
+   * The token is never sent here: handing it out would also hand out
+   * `release`, which can delete the items of a live turn.
+   */
+  const breakStock = useCallback(async () => {
+    const lease = stock?.lease;
+    if (!lease || stockBusy || !folderName || !convoId) return;
+    if (!window.confirm(t('chat.stock.breakConfirm').replace('{holder}', lease.holder))) return;
+    setStockBusy(true);
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'break', being: folderName, convoId,
+          expectedHolder: lease.holder, expectedStartedAt: lease.startedAt,
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      // Name which answer came back. "stale" means the lease changed while the
+      // panel sat open, and the honest next move is to look again, not retry.
+      setStockNote(
+        d?.ok ? t('chat.stock.broke')
+        : d?.reason === 'stale' ? t('chat.stock.breakStale')
+        : d?.reason === 'no-lease' ? t('chat.stock.breakGone')
+        : t('chat.stock.failed')
+      );
+    } catch {
+      setStockNote(t('chat.stock.failed'));
+    } finally {
+      setStockBusy(false);
+      refreshStock();
+    }
+  }, [stock, stockBusy, folderName, convoId, refreshStock, t]);
 
   /**
    * Run the stock by itself when no turn is in flight — IF this conversation
@@ -5453,6 +5542,41 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       ? t('chat.stock.running')
                       : t('chat.stock.runningN').replace('{n}', String(stock.claimed))}
                   </span>
+                ) : null}
+                {/* The lease, and the hand to clear it. Outside the
+                    `waiting > 0` branch below ON PURPOSE: a stock that is
+                    fully claimed has waiting = 0, and that is exactly the
+                    state a dead holder leaves behind. */}
+                {stock?.lease ? (
+                  <>
+                    <span className="text-xs text-muted-foreground truncate max-w-[45%]">
+                      {/* Under a minute, say so in words: "0 min ago" reads as a
+                          measurement and is not one, and this row's only job is
+                          to let someone judge whether the holder is still there. */}
+                      {stock.lease.ageMs < 60_000
+                        ? t('chat.stock.heldByNow').replace('{holder}', stock.lease.holder)
+                        : t('chat.stock.heldBy')
+                            .replace('{holder}', stock.lease.holder)
+                            .replace('{min}', String(Math.round(stock.lease.ageMs / 60000)))}
+                    </span>
+                    {stock.lease.holder !== MY_STOCK_HOLDER ? (
+                      <button
+                        onClick={breakStock}
+                        disabled={stockBusy}
+                        title={t('chat.stock.breakWhy')}
+                        /* ml-1, not ml-auto: when the stock is both claimed AND
+                           has a waiting item, the "Run now" button below also
+                           carries ml-auto, and two of them in one flex row make
+                           the second one's position mean nothing. Run now keeps
+                           the right edge; this sits next to the sentence it is
+                           about. (NOT MEASURED visually — that combined state
+                           was never on screen tonight.) */
+                        className="ml-1 px-2 py-1 text-xs font-medium rounded-lg border border-amber-500/50 text-amber-600 dark:text-amber-400 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-amber-500/10"
+                      >
+                        {stockBusy ? '…' : t('chat.stock.break')}
+                      </button>
+                    ) : null}
+                  </>
                 ) : null}
                 {stock && stock.waiting > 0 ? (
                   <>
