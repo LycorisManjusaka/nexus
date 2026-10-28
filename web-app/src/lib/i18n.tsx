@@ -77,6 +77,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.runner.none': '(none)',
   'settings.runner.setSelf': 'Make this install the host',
   'settings.runner.clear': 'Clear (nobody hosts)',
+  'settings.runner.tick': 'Run once',
+  'settings.runner.tickHelp':
+    'Run one pass of the queued turns on this server. The result is written by the server, so the turn finishes and is saved even if you close the tab after pressing this. Nothing happens if nothing is queued.',
   'settings.update.button': 'Update',
   'settings.update.running': 'Updating…',
   'settings.update.title': 'Pull the newest NEXUS code into this install (git pull --ff-only). Does NOT restart anything.',
@@ -1821,6 +1824,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.runner.none': '（未設定）',
   'settings.runner.setSelf': 'この環境をホストにする',
   'settings.runner.clear': '解除（どこもホストにしない）',
+  'settings.runner.tick': '1回動かす',
+  'settings.runner.tickHelp':
+    'ストックに積まれているターンを、このサーバーで1回だけ走らせます。結果はサーバーが書き込むので、押したあとにタブを閉じてもターンは完走して保存されます。積まれているものが無ければ何も起きません。',
   'settings.update.button': '更新',
   'settings.update.running': '更新中…',
   'settings.update.title': 'この環境に最新の NEXUS を取り込みます（git pull --ff-only）。再起動は行いません。',

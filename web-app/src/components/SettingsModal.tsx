@@ -96,6 +96,29 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     }
   }, []);
   React.useEffect(() => { void loadRunnerHost(); }, [loadRunnerHost]);
+  // One pass of the server-side runner. The POST returns after the turn has
+  // been written to disk, so this button is also the measurement for "the
+  // turn survives the tab": close it mid-request and the turn still lands.
+  const [tickResult, setTickResult] = React.useState<string>('');
+  const runTick = async () => {
+    setRunnerBusy(true);
+    setTickResult('');
+    try {
+      const r = await fetch('/api/runner/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const d = await r.json();
+      // The whole answer, not a tidy summary: every outcome names why nothing
+      // ran when nothing ran, and that is the only thing worth reading here.
+      setTickResult(JSON.stringify(d, null, 1));
+    } catch (e: unknown) {
+      setTickResult(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunnerBusy(false);
+    }
+  };
   const applyRunnerHost = async (body: Record<string, unknown>) => {
     setRunnerBusy(true);
     try {
@@ -585,8 +608,21 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               >
                 {t('settings.runner.clear')}
               </button>
+              <button
+                onClick={() => void runTick()}
+                disabled={runnerBusy || runnerHost?.status !== 'host'}
+                className="px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground
+                           hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={t('settings.runner.tickHelp')}
+              >
+                {t('settings.runner.tick')}
+              </button>
               {runnerBusy && <Loader2 size={12} className="animate-spin" />}
             </div>
+            {tickResult && (
+              <pre className="whitespace-pre-wrap text-[11px] max-h-48 overflow-auto
+                              border border-border rounded p-2">{tickResult}</pre>
+            )}
           </div>
         )}
 
