@@ -1075,8 +1075,19 @@ export async function saveLog(
         // 52 refusals in this log I had to infer that split from base/disk
         // timestamps instead of reading it. A diagnostic that does not reach
         // the place it is read from is the same as not having it.
+        // BOTH ids, because one of them answers nothing on its own. `by` is
+        // who wrote the version ON DISK; `from` is who is being refused right
+        // now. MEASURED 2026-10-28, hours after shipping `by` alone: two
+        // refusals carried `by tab_…` and I still could not classify the
+        // second one, because a racing save of OUR OWN and a real second tab
+        // both show the same `by`. The pair is the test:
+        //   from X, by X  -> our own two saves raced (absorbed, not a conflict)
+        //   from X, by Y  -> a genuinely different writer holds the disk
+        // It also survives the runner: a runner's id in either slot says
+        // which side of the house the write came from.
         const writtenBy = whoWrote(convoId, head.updatedAt);
-        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}, by ${writtenBy ?? 'unknown'}`);
+        const refusedFrom = typeof opts.clientId === 'string' && opts.clientId ? opts.clientId : 'unknown';
+        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}, from ${refusedFrom}, by ${writtenBy ?? 'unknown'}`);
         return {
           ok: false,
           conflict: {
