@@ -6,6 +6,7 @@ import { atomicWriteFile } from './atomicWrite';
 import { putDataUrl } from './attachmentStore';
 import { retitleForRenamedIdentity } from './convoNaming';
 import { summaryKey } from './summaryStorage';
+import { recordWrite, whoWrote } from './lastWriter';
 import {
   DATA_DIR,
   BEINGS_DIR,
@@ -969,7 +970,18 @@ async function externalizeInlineAttachments(logData: any): Promise<number> {
 export interface SaveLogResult {
   ok: boolean;
   /** Present only when the save was REFUSED because disk moved underneath. */
-  conflict?: { diskUpdatedAt: number; title?: string; messageCount?: number };
+  conflict?: {
+    diskUpdatedAt: number;
+    title?: string;
+    messageCount?: number;
+    /**
+     * Who wrote the version on disk, when we can prove it (lastWriter.ts).
+     * null means UNKNOWN, which the client must treat exactly as it treated
+     * every refusal before this field existed. A wrong id here would make a
+     * client adopt somebody else's version and overwrite their work.
+     */
+    diskWrittenBy?: string | null;
+  };
   /**
    * The `updatedAt` actually written. The client needs this as the base for its
    * NEXT save — without it, the first successful guarded save would make every
@@ -1009,7 +1021,18 @@ async function readHeaderWindow(filePath: string): Promise<{ updatedAt: number |
   return out;
 }
 
-export async function saveLog(convoId: string, logData: any, opts?: { expectedUpdatedAt?: number }): Promise<SaveLogResult> {
+export async function saveLog(
+  convoId: string,
+  logData: any,
+  /**
+   * `clientId` identifies the writer so a REFUSED save can be told whether
+   * the version on disk was its own (see lastWriter.ts). Optional: the
+   * callers that write a brand-new id (backup restore, import, duplicate)
+   * have no tab to name, and a write with no id is deliberately not
+   * recorded rather than recorded as null.
+   */
+  opts?: { expectedUpdatedAt?: number; clientId?: unknown },
+): Promise<SaveLogResult> {
   await ensureDirs();
   const folderName = logData.folderName || 'Default';
 
@@ -1046,7 +1069,15 @@ export async function saveLog(convoId: string, logData: any, opts?: { expectedUp
           // not turn a clean refusal into an error.
         }
         console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}`);
-        return { ok: false, conflict: { diskUpdatedAt: head.updatedAt, title: head.title ?? undefined, messageCount } };
+        return {
+          ok: false,
+          conflict: {
+            diskUpdatedAt: head.updatedAt,
+            title: head.title ?? undefined,
+            messageCount,
+            diskWrittenBy: whoWrote(convoId, head.updatedAt),
+          },
+        };
       }
       // head.updatedAt === null means the file is absent (new conversation) or
       // the field fell outside the header window. Both PASS: a guard that
@@ -1153,6 +1184,10 @@ export async function saveLog(convoId: string, logData: any, opts?: { expectedUp
     // Best-effort and de-duplicated — see backupFooterIfChanged.
     await backupFooterIfChanged(folderName);
 
+    // Recorded only now, with the bytes on disk. Recording the attempt would
+    // let a failed save claim a version it never wrote, and the next refusal
+    // would be adopted against a file that does not contain it.
+    recordWrite(convoId, logData.updatedAt, opts?.clientId);
     return { ok: true, writtenUpdatedAt: logData.updatedAt };
   });
 }

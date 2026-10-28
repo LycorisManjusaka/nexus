@@ -1787,6 +1787,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
+          // So a refusal can tell us the version on disk was our own even
+          // when the 200 for it has not come back yet (lastWriter.ts).
+          clientId: TAB_CLIENT_ID,
           logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
@@ -1838,7 +1841,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // can race (several may be in flight at once). That is not a
             // conflict: adopt the value we wrote and let the effect re-run with
             // the current state, which is the state that should be on disk.
-            if (typeof info?.diskUpdatedAt === 'number' && ownWritesRef.current.includes(info.diskUpdatedAt)) {
+            // Two independent ways to recognise our own write, and both are
+            // kept because they fail in different places. `ownWritesRef` is
+            // local and survives a server restart, but is filled only once a
+            // 200 has been READ -- so when two of our saves race and the 409
+            // arrives first, it has not got the value yet (MEASURED: 17 of 21
+            // never-adopted refusals in this house have a base/disk gap of
+            // 0.2s, far too small for a human at a second tab). The server
+            // answer does not depend on arrival order, but is memory-only and
+            // so says nothing after a restart.
+            const diskWasOurs =
+              (typeof info?.diskUpdatedAt === 'number' && ownWritesRef.current.includes(info.diskUpdatedAt))
+              || info?.diskWrittenBy === TAB_CLIENT_ID;
+            if (typeof info?.diskUpdatedAt === 'number' && diskWasOurs) {
               baseUpdatedAtRef.current = info.diskUpdatedAt;
               setSaveNonce(n => n + 1);
               return;

@@ -168,7 +168,7 @@ describe('applyTurnEvent — web sources', () => {
 
 describe('applyTurnEvent — text and thought', () => {
   it('text appends and marks sawOutput; empty content does not', () => {
-    const { acc, flags } = run([
+    const { flags } = run([
       { type: 'text', content: '' },
     ]);
     assert.equal(flags.sawOutput, false);
