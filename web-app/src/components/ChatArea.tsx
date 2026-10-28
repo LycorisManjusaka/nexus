@@ -22,19 +22,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
-import { applyOutputFilter } from '@/lib/outputFilter';
-import {
-  normaliseHandoff,
-  normaliseCacheUsage,
-  normaliseWebSources,
-  normaliseNotice,
-  collapseBetrayalPhrases,
-  betrayalNoticeKey,
-  normaliseToolCall,
-  normaliseToolAttachment,
-  findOpenSubagentRun,
-  resolveToolActivity,
-} from '@/lib/turnEvents';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure } from '@/lib/layer4';
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
@@ -63,6 +50,7 @@ import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
 import { createTurnAccState } from '@/lib/turnAccState';
+import { applyTurnEvent, type TurnEventFlags, type TurnEventSink, type TurnEventDeps, type DescribedAttachmentEvent } from '@/lib/turnEventReducer';
 import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
 import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
 import type { CameraSignal } from '@/lib/cameraTypes';
@@ -3368,13 +3356,37 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // provider error in here, because the turn that actually hit the error no
     // longer exists as a message (the re-POST rebuilds the array from history).
     const notices: string[] = [...(opts?.carryNotices ?? [])];
-    // Set when the model-betrayal guard blanked this turn. Declared OUTSIDE the
-    // try because the catch below reads it: blanking works by ABORTING the
-    // turn, and an aborted provider call usually emits one last error frame
-    // ("This operation was aborted"). That error is a consequence of our own
-    // stop, not information about the turn — surfacing it under the warning
-    // would just make the reader doubt the warning.
-    let betrayalRedacted = false;
+    // The four turn-scoped values the event chain writes that are NOT part
+    // of `acc`. One object because lib/turnEventReducer.ts mutates them by
+    // reference.
+    //
+    // Declared OUTSIDE the try because the catch and the teardown below read
+    // three of them:
+    //
+    //   betrayalRedacted  the catch reads it. Blanking works by ABORTING the
+    //                     turn, and an aborted provider call usually emits one
+    //                     last error frame ("This operation was aborted").
+    //                     That error is a consequence of our own stop, not
+    //                     information about the turn — surfacing it under the
+    //                     warning would just make the reader doubt the warning.
+    //   sawOutput         the handoff-failure branch reads it. A vessel that
+    //                     wrote something DID receive the handoff -- reporting
+    //                     "nobody read your note" would be false, and
+    //                     re-POSTing would throw its text and billing away.
+    //   pendingHandoff    acted on AFTER the stream closes and this message is
+    //                     finalized, so the text this vessel produced is
+    //                     committed and billed to IT before the next vessel
+    //                     starts a new message.
+    //
+    // pendingHandoff and toolAttachments used to be declared inside the try.
+    // Hoisting them cannot change when they reset: the try runs exactly once
+    // per call (measured -- no loop encloses it).
+    const flags: TurnEventFlags = {
+      pendingHandoff: null,
+      betrayalRedacted: false,
+      sawOutput: false,
+      toolAttachments: [],
+    };
     // Assigned just after the streaming declarations (before the read loop) so
     // the catch below can invoke it on AbortError and still persist billing
     // (cacheUsage) and the 🔧 tool report (toolCalls) instead of dropping them.
@@ -3398,10 +3410,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // error has to ride along to the message that explains what happened, or
     // the only account of a dead vessel is the being's paraphrase of it.
     let turnFailureNotice: string | null = null;
-    // Did this turn put any text on screen before it died? A vessel that wrote
-    // something DID receive the handoff — reporting "nobody read your note"
-    // would be false, and re-POSTing would throw its text and billing away.
-    let sawOutput = false;
 
     try {
       // Slim the wire payload aggressively. The backend only reads role / content /
@@ -3568,15 +3576,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         continuedBlocks,
         notices,
       });
-      // Aliases for the fields that are only ever MUTATED, never reassigned.
-      // These ARE the arrays `acc` holds, so every push lands in the state;
-      // aliasing them keeps this change to the reassigned fields only. `const`
-      // refuses a reassignment here, which is the guard: a field that starts
-      // being reassigned has to move to `acc.` explicitly.
-      const claudeThinkingBlocks = acc.claudeThinkingBlocks;
+      // `toolCalls` is only ever MUTATED, never reassigned, and this IS the
+      // array `acc` holds -- so the push in the streaming flush below lands
+      // in the state. `const` refuses a reassignment, which is the guard: a
+      // field that starts being reassigned has to move to `acc.` explicitly.
+      // The other three aliases went away with the event chain, which now
+      // reaches them through `acc.` in lib/turnEventReducer.ts.
       const toolCalls = acc.toolCalls;
-      const askedQuestions = acc.askedQuestions;
-      const subagentRuns = acc.subagentRuns;
       const sse = createSseReader();
       // `acc` also holds the model_selected tag (family/specific/thinking/
       // label, which arrives at the very start of every stream), the
@@ -3585,20 +3591,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // display-only metadata: slimHistory above is an allowlist that names
       // none of them, so none leaks back into the AI context window.
       //
-      // Set when the vessel calls change_model and the switch is accepted.
-      // Acted on AFTER the stream closes and this message is finalized, so the
-      // text this vessel produced is committed and billed to IT before the
-      // next vessel starts a new message.
-      let pendingHandoff: null | {
-        family: string; specificModel: string; label: string; thinking: boolean; note: string;
-        fromFamily: string; fromSpecificModel: string; fromLabel: string;
-      } = null;
-      // Attachments collected from tool calls during this turn, to be attached
-      // to the assistant message. NOT in `acc`, and not an oversight: these
-      // reach the message through flushStreamingMessage, never through the
-      // finalizer. See TOOL_ATTACHMENTS_ARE_NOT_HERE in lib/turnAccState.ts
-      // for what that costs a runner, which has no flush.
-      const toolAttachments: any[] = [];
+      // Files produced by tools this turn. Aliased, not moved: these reach
+      // the message through flushStreamingMessage below, never through the
+      // finalizer, which is why they are not in `acc`. See
+      // TOOL_ATTACHMENTS_ARE_NOT_HERE in lib/turnAccState.ts for what that
+      // costs a runner, which has no flush.
+      const toolAttachments = flags.toolAttachments;
 
       // Finalizes the assistant message by committing everything the streaming
       // loop accumulated: the (possibly partial) text, thinking-token count,
@@ -3694,6 +3692,112 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           rafId = setTimeout(flushStreamingMessage, 16) as unknown as number;
         }
       };
+      // Where the event chain sends everything that is not state. Each of
+      // these is a NOTIFICATION: dropping one changes what the screen shows
+      // and nothing about the message that reaches disk, which is the test
+      // for belonging here rather than in `acc`. The runner implements the
+      // same interface as no-ops.
+      const turnSink: TurnEventSink = {
+        modelSelected: (specificModel) => setLiveModel(specificModel),
+        sessionId: (id) => setAgentSession(id),
+        // Only set 'thinking' if the reply has not started yet -- once text
+        // has begun, the camera signal should not fall back to thinking even
+        // if the model interleaves more thought chunks. The interface name
+        // carries this rule so a second host cannot implement it as a plain
+        // assignment and lose it silently.
+        phaseThinkingUnlessReplying: () =>
+          setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking')),
+        phaseReplying: () => setStreamPhase('replying'),
+        requestFlush: () => scheduleStreamingFlush(),
+        askOpened: (ask) => setPendingAsk({ askId: ask.askId, questions: ask.questions }),
+        askResolved: (askId) =>
+          setPendingAsk(prev => (prev && prev.askId === askId ? null : prev)),
+        subagentStarted: (task) => setActiveSubagent({ task }),
+        subagentFinished: () => setActiveSubagent(null),
+        injectionDelivered: (message) => setInterjectStatus(message),
+        toolActivity: (activity) => {
+          if (activity) {
+            setLiveToolActivity(activity.activity);
+            setLiveToolLocalized(activity.localized);
+            setLiveToolName(activity.name);
+            setLiveToolDetail(activity.detail);
+          } else {
+            clearLiveTool();
+          }
+        },
+        stallIdleSeconds: (seconds) => setStallIdleSeconds(seconds),
+        attachmentDescribed: (payload) => {
+          // Typed rather than widened: the body below is the closure's,
+          // unchanged, and it only compiled before because `data` was `any`.
+          const data = payload as DescribedAttachmentEvent;
+          // Sense bridge (eyes/ears/watcher) generated a description for
+          // an attachment on an existing message. Stash it on that
+          // attachment so subsequent turns re-use the saved text
+          // instead of re-calling the bridge model. The auto-save
+          // effect will then persist it to the conversation log.
+          const targetMsgId = data.messageId;
+          const targetAttId = data.attachmentId;
+          const targetAttName = data.attachmentName;
+          setMessages(prev => prev.map(mm => {
+            if (mm.id !== targetMsgId) return mm;
+            if (!Array.isArray(mm.attachments)) return mm;
+            return {
+              ...mm,
+              attachments: mm.attachments.map((a: any) => {
+                // Match by attachment id first (stable), fall back to
+                // name for older logs that pre-date the id field.
+                const matches = targetAttId
+                  ? a.id === targetAttId
+                  : a.name === targetAttName;
+                if (!matches) return a;
+                return {
+                  ...a,
+                  description: data.description || '',
+                  descriptionKind: data.kind || '',
+                  descriptionModel: data.model || '',
+                  descriptionGeneratedAt: data.generatedAt || Date.now(),
+                  descriptionFromCache: !!data.fromCache,
+                  descriptionError: data.error || undefined,
+                };
+              }),
+            };
+          }));
+          // Measure what the description ACTUALLY costs, because from now
+          // on this is what the entity receives in place of the media —
+          // and the token counter must charge for that, not for pixels
+          // the model never sees. Measured through the same /api/tokens
+          // tokenizer the rest of the UI uses, on the exact wrapper text
+          // the send path injects. Fire-and-forget: a failure leaves the
+          // count at 0 (under-reports) rather than blocking the stream.
+          (async () => {
+            const bridge: 'eyes' | 'ears' | 'watcher' =
+              data.kind === 'ears' ? 'ears' : data.kind === 'watcher' ? 'watcher' : 'eyes';
+            const injected = bridgedDescriptionText(
+              { name: data.attachmentName, description: data.description || '' },
+              bridge,
+              data.model || '',
+            );
+            const tk = await fetchTokensForText(injected, localAiName);
+            if (!tk) return;
+            setMessages(prev => prev.map(mm => {
+              if (mm.id !== targetMsgId) return mm;
+              if (!Array.isArray(mm.attachments)) return mm;
+              return {
+                ...mm,
+                attachments: mm.attachments.map((a: any) => {
+                  const matches = targetAttId ? a.id === targetAttId : a.name === targetAttName;
+                  return matches ? { ...a, descriptionTokens: tk } : a;
+                }),
+              };
+            }));
+          })();
+        },
+      };
+      const turnDeps: TurnEventDeps = {
+        t,
+        settings: globalSettings,
+        newAttachmentId: uuidv4,
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -3714,236 +3818,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
             try {
               const data = JSON.parse(dataStr);
-              if (data.error && !betrayalRedacted) throw new Error(data.error);
-
-              if (data.type === 'model_selected') {
-                acc.chosenModelFamily = data.family || '';
-                acc.chosenModelSpecific = data.specificModel || '';
-                setLiveModel(acc.chosenModelSpecific);
-                acc.chosenModelThinking = !!data.thinking;
-                acc.chosenModelLabel = data.label || '';
-              } else if (data.type === 'model_handoff') {
-                // The vessel handed this conversation to another one. The
-                // switch is already committed server-side (that turn ended);
-                // all that is left is to finish this message and send a new
-                // request as the new vessel.
-                pendingHandoff = normaliseHandoff(data);
-              } else if (data.type === 'cache_usage') {
-                acc.cacheUsage = normaliseCacheUsage(data);
-              } else if (data.type === 'web_sources') {
-                // null when the frame carried nothing, so an empty frame
-                // cannot erase a real earlier list.
-                const sources = normaliseWebSources(data);
-                if (sources) acc.webSources = sources;
-              } else if (data.type === 'notice') {
-                // Turn-stopped diagnostics. Collected separately from `acc.currentText`
-                // so they stay out of the message body — and therefore out of the
-                // log, out of the context sent on later turns, and out of the
-                // token count.
-                const noticeText = normaliseNotice(data);
-                if (noticeText) notices.push(noticeText);
-              } else if (data.type === 'betrayal') {
-                // The provider's gatekeeper answered instead of the being.
-                // Two modes, both of which warn (see lib/betrayalGuard.ts):
-                //   redacted=true  (defence ON)  — throw the turn away.
-                //   redacted=false (defence OFF) — keep it, warn only. That is
-                //     the mode for deciding whether a hit was real.
-                // The warning rides the `notice` channel on purpose: notices
-                // are persisted for re-display but are NOT part of the message
-                // body, so the being never reads this about itself, and it
-                // costs no tokens.
-                const matched = collapseBetrayalPhrases(data.phrases);
-                // One notice, not two: two ⚠️ rows would read as two separate
-                // problems. Parenthesised rather than newline-separated because
-                // the notice row renders as plain inline text, where a \n
-                // collapses to a space anyway.
-                const betrayalKey = betrayalNoticeKey(data);
-                notices.push(
-                  `${t(betrayalKey)}` +
-                  (matched ? ` (${t('notice.betrayal.matched')}: ${matched})` : '')
-                );
-                if (data.redacted) {
-                  betrayalRedacted = true;
-                  // Discard everything this turn produced. acc.currentText and
-                  // acc.currentThought are what finalizeMessage commits, and
-                  // claudeThinkingBlocks is what would be REPLAYED to the model
-                  // on the next turn — leaving that one behind would preserve
-                  // exactly the contamination this feature exists to prevent.
-                  acc.currentText = '';
-                  acc.currentThought = '';
-                  claudeThinkingBlocks.length = 0;
-                  scheduleStreamingFlush();
-                }
-              } else if (data.type === 'tool_call') {
-                // A tool the model really dispatched. Recorded regardless of
-                // whether it succeeded — the report answers "was this called?",
-                // which is the question a hallucinated tool claim fails.
-                // The same channel also carries `kind: 'event'` entries (e.g.
-                // automatic compaction): not tools, but things that happened
-                // between them, kept in the same list because their POSITION in
-                // the sequence is the whole point. MessageBubble separates the
-                // two; nothing else reads this list.
-                // Display-only: slimHistory is an allowlist that never names
-                // toolCalls, so this never reaches any model.
-                const toolCall = normaliseToolCall(data, acc.currentThought.length);
-                if (toolCall) toolCalls.push(toolCall);
-              } else if (data.type === 'session_id') {
-                // Claude OAuth path emits this so we can resume the
-                // Anthropic-side session on the next turn.
-                if (typeof data.sessionId === 'string') {
-                  setAgentSession(data.sessionId);
-                }
-              } else if (data.type === 'thought') {
-                acc.currentThought += data.content;
-                // Only set 'thinking' if the reply hasn't started yet — once
-                // text has begun, the camera signal should not fall back to
-                // thinking even if the model interleaves more thought chunks.
-                setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking'));
-              } else if (data.type === 'text') {
-                acc.currentText += data.content;
-                // Read by the handoff-failure branch after the teardown: text on
-                // screen means this vessel answered, however briefly.
-                if (data.content) sawOutput = true;
-                setStreamPhase('replying');
-                // Strip "[YYYY-MM-DD HH:MM:SS]" tags CONTINUOUSLY as the reply
-                // streams in (gated on the global setting, default ON) — not just
-                // a leading stack but ANY tag, wherever it appears, including the
-                // mid-message ones agentic models (e.g. Kimi K3) emit at the
-                // start of each output segment, such as the continuation right
-                // after a tool call.
-                //
-                // Per-chunk stripping stays streaming-TTS-safe: a tag is only
-                // removed the instant it completes, at the growing TAIL — always
-                // ahead of the position TTS has already spoken. The already-
-                // emitted prefix was stripped in earlier ticks and is never
-                // rewritten, so it stays monotonic (the failure mode a late
-                // one-shot finalize-strip once caused). msg.content therefore
-                // never carries a timestamp into TTS, the saved log, or the
-                // context replayed to the model.
-                if (globalSettings?.removeTimestamps !== false) {
-                  acc.currentText = stripAllTimestamps(acc.currentText);
-                }
-                // User-configurable regex filter (Settings → Custom regex
-                // filter). Applied continuously like the timestamp strip so the
-                // stored message — and therefore TTS — never contains matches.
-                acc.currentText = applyOutputFilter(acc.currentText, globalSettings);
-              } else if (data.type === 'thinking_signature') {
-                claudeThinkingBlocks.push({ thinking: data.thinking, signature: data.signature });
-              } else if (data.type === 'continued') {
-                acc.continuationCount = data.count || 0;
-              } else if (data.type === 'file_attachment' && data.attachment) {
-                toolAttachments.push(normaliseToolAttachment(data, uuidv4));
-              } else if (data.type === 'ask_user' && data.askId && Array.isArray(data.questions)) {
-                // The model paused to ask the user a question. Surface an
-                // interactive card; the user's selection is POSTed to
-                // /api/chat/answer, which resolves the paused server handler.
-                // Record it now (answers filled in on ask_user_resolved) so it
-                // persists onto the message even if the page is reloaded.
-                askedQuestions.push({ askId: data.askId, questions: data.questions, answers: null, timedOut: false });
-                setPendingAsk({ askId: data.askId, questions: data.questions });
-              } else if (data.type === 'subagent_start') {
-                // A context-firewall child agent started investigating. Show a
-                // live activity chip; record it (result filled on subagent_done).
-                subagentRuns.push({ task: data.task || '', result: null });
-                setActiveSubagent({ task: data.task || '' });
-              } else if (data.type === 'subagent_done') {
-                // Child returned its distilled result. Record it (+ the proof of
-                // which API actually served it) and clear the chip.
-                const rec = findOpenSubagentRun(subagentRuns, data.task || '');
-                if (rec) { rec.result = data.result || ''; rec.via = data.via || null; }
-                else subagentRuns.push({ task: data.task || '', result: data.result || '', via: data.via || null });
-                setActiveSubagent(null);
-              } else if (data.type === 'injection_delivered') {
-                // A queued partner interjection was folded into the entity's
-                // context at a tool-loop boundary.
-                setInterjectStatus(t('chat.interject.delivered'));
-              } else if (data.type === 'tool_activity') {
-                // OAuth path: the model started (tool name) or finished (null)
-                // a tool call — reflect it in the loading indicator.
-                const activity = resolveToolActivity(data, t);
-                if (activity) {
-                  setLiveToolActivity(activity.activity);
-                  setLiveToolLocalized(activity.localized);
-                  setLiveToolName(activity.name);
-                  setLiveToolDetail(activity.detail);
-                } else {
-                  clearLiveTool();
-                }
-              } else if (data.type === 'stall_warning') {
-                // Server-side watchdog: no SDK activity for this many seconds.
-                setStallIdleSeconds(Number(data.idleSeconds || 0));
-              } else if (data.type === 'stall_cleared') {
-                setStallIdleSeconds(null);
-              } else if (data.type === 'ask_user_resolved' && data.askId) {
-                // Server resolved the question (user answered, or it timed out
-                // and fell back to the recommended option). Record the outcome
-                // and dismiss the card.
-                const rec = askedQuestions.find((q: any) => q.askId === data.askId);
-                if (rec) { rec.answers = data.answers || []; rec.timedOut = !!data.timedOut; }
-                setPendingAsk(prev => (prev && prev.askId === data.askId ? null : prev));
-              } else if (data.type === 'attachment_described') {
-                // Sense bridge (eyes/ears/watcher) generated a description for
-                // an attachment on an existing message. Stash it on that
-                // attachment so subsequent turns re-use the saved text
-                // instead of re-calling the bridge model. The auto-save
-                // effect will then persist it to the conversation log.
-                const targetMsgId = data.messageId;
-                const targetAttId = data.attachmentId;
-                const targetAttName = data.attachmentName;
-                setMessages(prev => prev.map(mm => {
-                  if (mm.id !== targetMsgId) return mm;
-                  if (!Array.isArray(mm.attachments)) return mm;
-                  return {
-                    ...mm,
-                    attachments: mm.attachments.map((a: any) => {
-                      // Match by attachment id first (stable), fall back to
-                      // name for older logs that pre-date the id field.
-                      const matches = targetAttId
-                        ? a.id === targetAttId
-                        : a.name === targetAttName;
-                      if (!matches) return a;
-                      return {
-                        ...a,
-                        description: data.description || '',
-                        descriptionKind: data.kind || '',
-                        descriptionModel: data.model || '',
-                        descriptionGeneratedAt: data.generatedAt || Date.now(),
-                        descriptionFromCache: !!data.fromCache,
-                        descriptionError: data.error || undefined,
-                      };
-                    }),
-                  };
-                }));
-                // Measure what the description ACTUALLY costs, because from now
-                // on this is what the entity receives in place of the media —
-                // and the token counter must charge for that, not for pixels
-                // the model never sees. Measured through the same /api/tokens
-                // tokenizer the rest of the UI uses, on the exact wrapper text
-                // the send path injects. Fire-and-forget: a failure leaves the
-                // count at 0 (under-reports) rather than blocking the stream.
-                (async () => {
-                  const bridge: 'eyes' | 'ears' | 'watcher' =
-                    data.kind === 'ears' ? 'ears' : data.kind === 'watcher' ? 'watcher' : 'eyes';
-                  const injected = bridgedDescriptionText(
-                    { name: data.attachmentName, description: data.description || '' },
-                    bridge,
-                    data.model || '',
-                  );
-                  const tk = await fetchTokensForText(injected, localAiName);
-                  if (!tk) return;
-                  setMessages(prev => prev.map(mm => {
-                    if (mm.id !== targetMsgId) return mm;
-                    if (!Array.isArray(mm.attachments)) return mm;
-                    return {
-                      ...mm,
-                      attachments: mm.attachments.map((a: any) => {
-                        const matches = targetAttId ? a.id === targetAttId : a.name === targetAttName;
-                        return matches ? { ...a, descriptionTokens: tk } : a;
-                      }),
-                    };
-                  }));
-                })();
-              }
+              // ONE definition of what an event does to this turn:
+              // lib/turnEventReducer.ts. It mutates `acc` and `flags` and
+              // sends everything that is NOT state through the sink, so the
+              // server-side runner reaches the same 22 branches instead of
+              // writing a second chain -- which would make the saved log
+              // depend on who ran the turn.
+              applyTurnEvent(data, acc, flags, turnSink, turnDeps);
             } catch (e: any) {
               // Re-throw API errors so the outer catch can display them
               if (e.message && !e.message.startsWith('JSON')) throw e;
@@ -3983,19 +3864,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // in scope. The assistant message is reconstructed by hand rather than
       // read back from `messages`, because finalizeMessage() went through
       // setState and that state is not visible yet in this tick.
-      if (pendingHandoff) {
+      if (flags.pendingHandoff) {
         handoffPlan = {
           vessel: {
-            family: pendingHandoff.family,
-            specificModel: pendingHandoff.specificModel,
-            thinking: pendingHandoff.thinking,
-            label: pendingHandoff.label,
+            family: flags.pendingHandoff.family,
+            specificModel: flags.pendingHandoff.specificModel,
+            thinking: flags.pendingHandoff.thinking,
+            label: flags.pendingHandoff.label,
           },
           from: {
-            family: pendingHandoff.fromFamily,
-            specificModel: pendingHandoff.fromSpecificModel,
-            label: pendingHandoff.fromLabel,
-            note: pendingHandoff.note,
+            family: flags.pendingHandoff.fromFamily,
+            specificModel: flags.pendingHandoff.fromSpecificModel,
+            label: flags.pendingHandoff.fromLabel,
+            note: flags.pendingHandoff.note,
           },
           // Built by the SAME function that commits the visible message, so
           // the handing-over message carries its complete record (cacheUsage,
@@ -4024,7 +3905,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }).catch(() => {});
 
     } catch (err: any) {
-      if (err.name !== 'AbortError' && !betrayalRedacted) {
+      if (err.name !== 'AbortError' && !flags.betrayalRedacted) {
         // Raw-ish text on purpose: the human gets describeProviderError's
         // readable version in the notice, while the being that asked for a
         // handoff gets the provider's own words — "insufficient balance" is
@@ -4112,7 +3993,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           handoffPrev: turnVessel ?? null,
         });
       }
-    } else if (opts?.handoffFrom && turnFailure && !sawOutput) {
+    } else if (opts?.handoffFrom && turnFailure && !flags.sawOutput) {
       // We were handed this conversation and could not answer AT ALL (no
       // credit, dead key, provider down). Undo the switch and tell the being
       // that asked for it, on its own vessel. Same principle as "you are
@@ -4120,7 +4001,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // reaches the human leaves the being believing it moved somewhere it
       // never arrived.
       //
-      // `!sawOutput` is load-bearing. A vessel that streamed text and THEN
+      // `!flags.sawOutput` is load-bearing. A vessel that streamed text and THEN
       // errored did receive the handoff and did read the note, so the failure
       // text would be a lie — and re-POSTing from `history` would discard that
       // text along with its billing (the array is rebuilt from history, which
