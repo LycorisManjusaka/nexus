@@ -1068,14 +1068,22 @@ export async function saveLog(
           // Counting is a courtesy for the warning text; failing to count must
           // not turn a clean refusal into an error.
         }
-        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}`);
+        // `by` is in the log line because the answer is only in the RESPONSE
+        // otherwise, and the response is read by a browser tab -- so a refusal
+        // investigated later from the server side could not tell "our own
+        // racing save" from "a real second tab". MEASURED 2026-10-28: with
+        // 52 refusals in this log I had to infer that split from base/disk
+        // timestamps instead of reading it. A diagnostic that does not reach
+        // the place it is read from is the same as not having it.
+        const writtenBy = whoWrote(convoId, head.updatedAt);
+        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}, by ${writtenBy ?? 'unknown'}`);
         return {
           ok: false,
           conflict: {
             diskUpdatedAt: head.updatedAt,
             title: head.title ?? undefined,
             messageCount,
-            diskWrittenBy: whoWrote(convoId, head.updatedAt),
+            diskWrittenBy: writtenBy,
           },
         };
       }
