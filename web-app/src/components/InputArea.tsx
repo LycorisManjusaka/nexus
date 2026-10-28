@@ -914,7 +914,14 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           <button
             onClick={handleSend}
             disabled={disabled || (!text.trim() && attachments.length === 0)}
-            title={effectiveMode === 'interject' ? t('input.mode.interject') : t('input.mode.send')}
+            // Idle names the ACTION, not a mode. The picker above only exists
+            // while a turn runs, so idle has no alternative to choose — and a
+            // title saying "send as a message" would imply there is one. (This
+            // button had no title at all before 2026-10-27; the mode label got
+            // applied to both states by the same edit that added it.)
+            title={isGenerating
+              ? (effectiveMode === 'interject' ? t('input.mode.interject') : t('input.mode.send'))
+              : t('input.send')}
             className={`p-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shadow-sm ${
               effectiveMode === 'interject'
                 ? 'bg-amber-500 text-white'
