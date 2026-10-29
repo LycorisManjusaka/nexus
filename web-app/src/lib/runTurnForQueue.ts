@@ -87,6 +87,16 @@ export interface RunTurnDeps {
    * turn was aimed at.
    */
   origin: string;
+  /**
+   * Hand every decoded chunk to a live relay (lib/turnBus), so a tab that is
+   * not running this turn can still watch it.
+   *
+   * Injected rather than imported for the reason the rest of this file is:
+   * the runner stays a pure function of its dependencies, and `beginTurn` /
+   * `endTurn` stay with the caller that knows the turn's whole lifetime —
+   * including the paths that end before this function is ever entered.
+   */
+  onRawText?: (text: string) => void;
 }
 
 export type RunTurnResult =
@@ -198,7 +208,9 @@ export async function runTurnForQueue(
   const sink = createRunnerSink();
 
   try {
-    await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps));
+    await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
+      onRawText: deps.onRawText,
+    });
   } catch (e) {
     // The stream threw: an API error frame, or a transport failure. What the
     // model produced before that point is NOT saved — same as the browser,
@@ -235,9 +247,28 @@ export async function runTurnForQueue(
   // ~55 fields are the ones the browser last saved; rebuilding them here
   // would mean a runner's save could differ from a tab's save in a field
   // neither of us is looking at.
+  //
+  // ⚠ EXCEPT `updatedAt`, which must NOT travel. MEASURED 2026-10-29:
+  // fsStorage.saveLog does `logData.updatedAt = logData.updatedAt || Date.now()`
+  // — it stamps a new version only when the caller did not bring one. The
+  // browser never brings one (its save payload has no such field), so for a
+  // tab this is invisible. Spreading the loaded log DOES bring one, and the
+  // result is a write that keeps the OLD version number:
+  //
+  //   · every open tab's optimistic lock sees base === disk and happily
+  //     overwrites the runner's turn with its own stale copy (MEASURED: a
+  //     turn ran, saved six messages, and was back to four a second later)
+  //   · lastWriter records a version nobody will ever ask about
+  //   · the sidebar sorts by updatedAt, so a runner turn never moves its
+  //     conversation up
+  //
+  // Dropping the key is the whole fix: saveLog then stamps now, exactly as it
+  // does for a tab.
+  const { updatedAt: _carriedVersion, ...logWithoutVersion } = log;
+  void _carriedVersion;
   const result = await deps.saveLog(
     convoId,
-    { ...log, messages: [...history, assistant] },
+    { ...logWithoutVersion, messages: [...history, assistant] },
     {
       expectedUpdatedAt: typeof log.updatedAt === 'number' ? log.updatedAt : undefined,
       clientId: deps.clientId,

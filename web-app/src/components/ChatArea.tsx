@@ -51,6 +51,10 @@ import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
 import { createTurnAccState } from '@/lib/turnAccState';
+// Named for the runner, shared with the watcher: both are hosts that read a
+// turn stream they did not POST, and a second literal here would be a second
+// definition of what a turn's non-accumulating flags are.
+import { createTurnFlags } from '@/lib/runnerSink';
 import { type TurnEventFlags, type TurnEventSink, type TurnEventDeps, type DescribedAttachmentEvent } from '@/lib/turnEventReducer';
 import { parseHandoffModels } from '@/lib/modelHandoff';
 import { buildSlimHistory } from '@/lib/slimHistory';
@@ -2562,6 +2566,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
        * refreshes on the 5s poll that already exists.
        */
       ageMs: number;
+      /**
+       * Is the SERVER streaming bytes for this conversation right now?
+       *
+       * The only evidence that the lease holder still exists. A lease
+       * file outlives whatever wrote it; lib/turnBus is in memory, so a
+       * live relay means a live turn. Absent (older server) is treated
+       * as NOT live, which only ever offers the break button -- the safe
+       * direction, since breaking asks for a confirmation.
+       */
+      relayLive: boolean;
     } | null;
   };
   const [stock, setStock] = useState<StockView | null>(null);
@@ -2592,6 +2606,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               holder: d.lease.holder,
               startedAt: Number(d.lease.startedAt) || 0,
               ageMs: Math.max(0, Date.now() - (Number(d.lease.startedAt) || 0)),
+              relayLive: d.lease.relayLive === true,
             }
           : null,
       });
@@ -2637,78 +2652,206 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   /**
-   * Run the stock as one turn. Claim → send the composed batch through the
-   * normal send path → release the ids the server said are consumable.
+   * Replace what is on screen with what is on disk, without writing anything.
    *
-   * Released AFTER the turn resolves, and `abandon`ed if it throws. So a tab
-   * killed mid-turn leaves the batch in the stock and the button offers it
-   * again — a visible duplicate a human decides about, never a silent loss.
-   * (turnQueue.release prefers the opposite order for an automatic runner,
-   * where re-running costs money with nobody watching. Here someone is.)
+   * Used after a SERVER-SIDE turn. The runner is the writer for those, so the
+   * tab must not also save: two writers on one conversation is exactly the
+   * 409 that lib/lastWriter.ts exists to explain. `skipNextAutoSave` is the
+   * same flag opening a conversation uses, and for the same reason — applying
+   * loaded state re-fires the save effect, and that fire must not bump
+   * updatedAt.
+   *
+   * Only `messages` and the version are taken. The runner writes the log back
+   * WHOLE with only `messages` replaced, so every other field on disk is the
+   * one this tab already has; re-applying them would re-run thirty setStates
+   * for no change.
+   */
+  const reloadMessagesFromDisk = useCallback(async () => {
+    if (!convoId) return;
+    try {
+      const r = await fetch(`/api/logs/${convoId}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!data || !Array.isArray(data.messages)) return;
+      skipNextAutoSaveRef.current = true;
+      baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
+      const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
+        .map((m) => ({ ...m, autoPlay: false }));
+      setMessages(dedupeMessageIds(loaded).messages);
+    } catch {
+      // A failed reload leaves the screen as it was. The turn is on disk
+      // either way; the cost is a stale view until the next open, which is
+      // strictly better than clearing a conversation because a fetch blipped.
+    }
+  }, [convoId]);
+
+  /**
+   * Hand this conversation's queued batch to the SERVER-SIDE runner, and WATCH.
+   *
+   * ── WHY THIS REPLACED "claim, then send it from here" ──────────────────────
+   *
+   * MEASURED 2026-10-29 (つよ): with the auto-trigger checked, sending and then
+   * closing the tab stopped LM Studio mid-generation, and the lease stayed
+   * behind. The queue was never the problem. The old drain claimed the batch
+   * and then called handleSend — so the BROWSER POSTed /api/chat, and the
+   * tab's connection WAS the turn's lifeline. Closing the tab aborted
+   * `req.signal` and the route tore the generation down; `catch`/`finally`
+   * could not put the lease back because the process holding them was gone.
+   *
+   * Now the turn runs in the server process and writes the log itself. This
+   * tab only kicks it and then subscribes to a relay (lib/turnBus) that
+   * carries the IDENTICAL SSE bytes, read by the IDENTICAL lib/turnStreamLoop.
+   * Closing the tab now costs a view, never an answer.
+   *
+   * ── WHAT IS DELIBERATELY NOT HERE ─────────────────────────────────────────
+   *
+   * No claim and no release. Both belong to whoever runs the turn, and that is
+   * no longer this tab — a claim here would make the runner's claim fail as
+   * `busy` and nothing would run at all.
+   *
+   * No save. See reloadMessagesFromDisk above.
+   *
+   * No user bubble. The batch's text is not on this tab: GET /api/turn-queue
+   * reports labels, never bodies. So the sent message appears when the reload
+   * brings it back, and until then the stock panel's "running" line is what
+   * says a turn is in flight. (A direct send knows its own text and can show
+   * it; that path is not this one.)
+   */
+  const runOnRunner = useCallback(async (): Promise<'ran' | 'idle' | 'failed'> => {
+    if (!folderName || !convoId) return 'failed';
+
+    // A placeholder to stream into. It never reaches disk: the save effect is
+    // gated on `loading`, and the reload below replaces it with the runner's
+    // own finalized message.
+    const watchId = `watch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    let raf: number | null = null;
+    setLoading(true);
+    setMessages(prev => [...prev, {
+      id: watchId, role: 'assistant', content: '', timestamp: Date.now(), streaming: true,
+    }]);
+
+    try {
+      const kick = await fetch('/api/runner/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ being: folderName, convoId, detach: true }),
+      });
+      const kd = await kick.json().catch(() => null);
+      if (!kd?.ok) {
+        // `reason` is the runner's own sentence — "nobody hosts turns for this
+        // store", most often. Surfacing it beats a generic failure, because it
+        // names a setting someone can change.
+        setStockNote(String(kd?.reason || t('chat.stock.failed')));
+        return 'failed';
+      }
+
+      const ev = await fetch(`/api/turn-events?convoId=${encodeURIComponent(convoId)}`);
+      // `idle` is not an error: the turn may have finished between the kick and
+      // the subscribe. The reload in `finally` is the answer either way.
+      if (!ev.ok || !ev.body || ev.headers.get('X-Turn-Bus') === 'idle') return 'idle';
+
+      const acc = createTurnAccState({ continuedSeed: '', continuedThought: '', continuedBlocks: [], notices: [] });
+      const flags = createTurnFlags();
+
+      const paint = () => {
+        raf = null;
+        setMessages(prev => prev.map(m => m.id !== watchId ? m : ({
+          ...m,
+          content: acc.currentText,
+          thoughtProcess: acc.currentThought,
+          toolCalls: [...acc.toolCalls],
+          notices: [...acc.notices],
+          streaming: true,
+        })));
+      };
+      const schedule = () => { if (raf === null) raf = requestAnimationFrame(paint); };
+
+      // Display only. Every method here changes what a screen shows and
+      // nothing that reaches disk — the runner's own sink made the same split
+      // and implements all thirteen as no-ops.
+      const watchSink: TurnEventSink = {
+        modelSelected: (specificModel) => setLiveModel(specificModel),
+        // Not adopted. A Claude OAuth session id belongs to whoever sends the
+        // NEXT request, and for a queued conversation that is the runner,
+        // which reads it from the log. A watching tab storing it would hand a
+        // second claimant to the same session.
+        sessionId: () => {},
+        phaseThinkingUnlessReplying: () =>
+          setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking')),
+        phaseReplying: () => setStreamPhase('replying'),
+        requestFlush: schedule,
+        // A watcher cannot answer. The card's answer goes to /api/chat/answer
+        // with an askId the RUNNER's turn owns, and a tab that only watches
+        // has no claim on it — offering the card would promise a reply this
+        // path cannot deliver.
+        askOpened: () => {},
+        askResolved: () => {},
+        subagentStarted: (task) => setActiveSubagent({ task }),
+        subagentFinished: () => setActiveSubagent(null),
+        injectionDelivered: (message) => setInterjectStatus(message),
+        toolActivity: (activity) => {
+          if (activity) {
+            setLiveToolActivity(activity.activity);
+            setLiveToolLocalized(activity.localized);
+            setLiveToolName(activity.name);
+            setLiveToolDetail(activity.detail);
+          } else {
+            clearLiveTool();
+          }
+        },
+        stallIdleSeconds: (seconds) => setStallIdleSeconds(seconds),
+        // The runner records these as unapplied (RunnerSinkReport) rather
+        // than editing an earlier message it is about to save. A watcher
+        // editing it here would make the tab the writer again, which is the
+        // whole thing this path removed.
+        attachmentDescribed: () => {},
+      };
+
+      await runTurnStream(
+        ev.body.getReader(),
+        acc, flags, watchSink,
+        { t, settings: globalSettings, newAttachmentId: uuidv4 },
+        { onChunk: schedule },
+      );
+      return 'ran';
+    } catch (e) {
+      setStockNote(String((e as Error)?.message || t('chat.stock.failed')));
+      return 'failed';
+    } finally {
+      if (raf !== null) cancelAnimationFrame(raf);
+      clearLiveTool();
+      setActiveSubagent(null);
+      setStallIdleSeconds(null);
+      setStreamPhase(null);
+      // Reload BEFORE clearing `loading`. While loading is true the save
+      // effect returns on its first line, so the placeholder on screen can
+      // never be written; clearing first would open a window in which it
+      // could.
+      await reloadMessagesFromDisk();
+      setLoading(false);
+    }
+  }, [folderName, convoId, t, globalSettings, reloadMessagesFromDisk]);
+
+  /**
+   * The "run it now" button: ask the runner for this conversation's batch.
+   *
+   * Thin on purpose. Everything that used to be here — claim, compose, send,
+   * release, abandon — moved to the server with the turn, which is what makes
+   * a closed tab survivable. What is left is the part that genuinely belongs
+   * to a tab: the busy latch and the note the person reads.
    */
   const drainStock = useCallback(async () => {
     if (stockBusy || loading || !folderName || !convoId) return;
     setStockBusy(true);
     setStockNote(null);
-    let token = '';
     try {
-      const res = await fetch('/api/turn-queue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'claim', being: folderName, convoId,
-          holder: MY_STOCK_HOLDER,
-        }),
-      });
-      const d = await res.json().catch(() => null);
-      if (!res.ok || !d?.ok) {
-        setStockNote(
-          d?.reason === 'busy' ? t('chat.stock.busy')
-          : d?.reason === 'empty' ? null
-          : t('chat.stock.failed')
-        );
-        return;
-      }
-      token = d.token;
-      const composed = d.composed || { text: '', attachments: [], skipped: [] };
-      if (Array.isArray(composed.skipped) && composed.skipped.length > 0) {
-        // Not silently dropped: they stay in the stock and are reported.
-        console.warn('[stock] items left unrendered:', composed.skipped);
-        setStockNote(t('chat.stock.skipped').replace('{n}', String(composed.skipped.length)));
-      }
-      if (!String(composed.text || '').trim() && (composed.attachments || []).length === 0) {
-        await fetch('/api/turn-queue', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'abandon', being: folderName, convoId, token }),
-        }).catch(() => {});
-        token = '';
-        return;
-      }
-      await handleSendRef.current?.(composed.text, composed.attachments || []);
-      await fetch('/api/turn-queue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'release', being: folderName, convoId, token,
-          consumedIds: Array.isArray(d.consumable) ? d.consumable : [],
-        }),
-      });
-      token = '';
-    } catch {
-      if (token) {
-        await fetch('/api/turn-queue', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'abandon', being: folderName, convoId, token }),
-        }).catch(() => {});
-      }
-      setStockNote(t('chat.stock.failed'));
+      const outcome = await runOnRunner();
+      if (outcome === 'idle') setStockNote(t('chat.stock.nothingRan'));
     } finally {
       setStockBusy(false);
       refreshStock();
     }
-  }, [stockBusy, loading, folderName, convoId, refreshStock, t]);
+  }, [stockBusy, loading, folderName, convoId, runOnRunner, refreshStock, t]);
 
   /**
    * Clear a lease whose holder is gone.
@@ -5559,7 +5702,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             .replace('{holder}', stock.lease.holder)
                             .replace('{min}', String(Math.round(stock.lease.ageMs / 60000)))}
                     </span>
-                    {stock.lease.holder !== MY_STOCK_HOLDER ? (
+                    {/* Offer the break ONLY when nothing is streaming.
+                        The old test was "the holder is not my tab", which
+                        stopped meaning anything when turns moved to the
+                        server: every healthy turn is now held by
+                        `runner:<tree>`, so that test would offer to break
+                        a lease that is working. Both conditions are kept:
+                        a tab CAN still hold one (an older build, or a
+                        direct send), and breaking your own live turn is
+                        what Stop is for. */}
+                    {!stock.lease.relayLive && stock.lease.holder !== MY_STOCK_HOLDER ? (
                       <button
                         onClick={breakStock}
                         disabled={stockBusy}

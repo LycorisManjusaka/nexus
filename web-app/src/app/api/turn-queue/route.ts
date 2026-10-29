@@ -3,6 +3,7 @@ import {
   enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
   breakLease,
 } from '@/lib/turnQueue';
+import { liveTurnStatus } from '@/lib/turnBus';
 
 // The stock a being's turns are fed from (phase 4a, 2026-10-27).
 //
@@ -65,7 +66,22 @@ export async function GET(req: Request) {
       items: items.map((i) => ({
         id: i.id, at: i.at, from: i.from, kind: i.kind, claimed: claimedSet.has(i.id),
       })),
-      lease: lease ? { holder: lease.holder, startedAt: lease.startedAt } : null,
+      // `relayLive` is the only EVIDENCE anyone has that the process holding
+      // this lease still exists. It is not derived from the lease — a lease
+      // file outlives whatever wrote it — but from lib/turnBus, which is in
+      // memory and says "bytes are flowing for this conversation right now".
+      //
+      // It exists because the break button's old test ("the holder is not my
+      // tab") stopped meaning anything the moment turns moved to the server:
+      // the holder is `runner:<tree>` for every healthy turn too, so without
+      // this the UI would offer to break a lease that is working.
+      //
+      // A false NEGATIVE is the safe direction: a server restart loses the
+      // relay, the button comes back, and the human can clear a lease whose
+      // owner really is gone.
+      lease: lease
+        ? { holder: lease.holder, startedAt: lease.startedAt, relayLive: liveTurnStatus(convoId)?.live === true }
+        : null,
     });
   } catch (e) {
     return fail(e, 'failed to read the stock');

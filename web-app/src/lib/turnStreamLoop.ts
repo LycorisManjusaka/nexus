@@ -54,6 +54,16 @@ export interface TurnStreamHooks {
    * screen and passes nothing.
    */
   onChunk?: () => void;
+  /**
+   * Called with each decoded chunk BEFORE any frame in it is applied.
+   *
+   * Before, deliberately: `applyTurnEvent` can throw (an API error frame is
+   * re-thrown by design), and a relay that published after applying would
+   * drop exactly the chunk that explains why the turn died — on the one path
+   * where the tab is not the one reading the stream. The relay must see what
+   * the reducer saw, including what killed it.
+   */
+  onRawText?: (text: string) => void;
 }
 
 /**
@@ -99,6 +109,8 @@ export async function runTurnStream(
     const text = typeof value === 'string'
       ? value
       : decoder.decode(value, { stream: true });
+
+    hooks?.onRawText?.(text);
 
     // `[DONE]` falls through rather than breaking. MEASURED 2026-10-28: all
     // six `data: [DONE]` enqueue sites in the chat route send it immediately
