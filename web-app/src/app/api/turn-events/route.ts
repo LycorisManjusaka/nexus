@@ -17,6 +17,12 @@ import { subscribeTurn, liveTurnStatus } from '@/lib/turnBus';
 //   replay    the turn finished already; everything is in this response
 //   idle      nothing is running for this conversation
 //
+// `X-Turn-Id` names the turn, so a watching tab can Stop it
+// (/api/chat/active) and interject into it (/api/chat/inject). Both already
+// work and neither was reachable from a tab that did not POST the turn
+// itself -- without this, moving turns to the server would silently cost
+// both, with the buttons still on screen.
+//
 // A tab that reads `idle` should reload the conversation rather than wait:
 // either the turn never started, or it ended before anyone subscribed and the
 // authoritative answer is already on disk.
@@ -105,6 +111,7 @@ export async function GET(req: Request) {
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
       'X-Turn-Bus': status.done ? 'replay' : 'live',
+      'X-Turn-Id': status.turnId,
     },
   });
 }

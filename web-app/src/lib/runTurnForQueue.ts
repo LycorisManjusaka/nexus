@@ -97,6 +97,18 @@ export interface RunTurnDeps {
    * including the paths that end before this function is ever entered.
    */
   onRawText?: (text: string) => void;
+  /**
+   * The name this turn answers to for an out-of-band Stop and for
+   * interjections.
+   *
+   * REQUIRED, and taken rather than generated, because the relay has to
+   * publish it before this function is entered — a tab subscribes the instant
+   * its kick returns, and an id invented here would arrive after the watcher
+   * had already decided it had none. Optional-with-a-fallback was the other
+   * option and is worse: the relay and the turn would disagree silently, and
+   * Stop would answer "no such turn" with every button still on screen.
+   */
+  injectTurnId: string;
 }
 
 export type RunTurnResult =
@@ -166,7 +178,8 @@ export async function runTurnForQueue(
     turnAiName: aiName,
   });
 
-  const injectTurnId = `turn_${nowStart.toString(36)}_${deps.newId().slice(0, 6)}`;
+  // Taken, not generated: see RunTurnDeps.injectTurnId.
+  const injectTurnId = deps.injectTurnId;
   const input = turnInputFromLog(log, {
     convoId,
     messages: slim as unknown as SlimHistoryMessage[],

@@ -2745,10 +2745,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         return 'failed';
       }
 
+      // Deliberately NOT abortable from Stop. Stop's POST reaches the chat
+      // route through turnStop, the route tears the turn down, the runner
+      // closes the relay, and this stream ends on its own about a second
+      // later — carrying whatever the model said last. Aborting the watch as
+      // well would only throw that away, and wiring this fetch into
+      // abortControllerRef made the React compiler flag two EXISTING
+      // mutations of that ref (a hook capturing it forbids later writes).
+      // Measured: +2 lint for a beat of latency nobody asked to remove.
       const ev = await fetch(`/api/turn-events?convoId=${encodeURIComponent(convoId)}`);
       // `idle` is not an error: the turn may have finished between the kick and
       // the subscribe. The reload in `finally` is the answer either way.
       if (!ev.ok || !ev.body || ev.headers.get('X-Turn-Bus') === 'idle') return 'idle';
+
+      // Adopt the RUNNER's turn id. Both of this tab's out-of-band channels
+      // are addressed by it and neither cares who started the turn:
+      //   /api/chat/active { event: 'stop' }  → turnStop → the route aborts
+      //   /api/chat/inject { turnId, text }   → folded in at a tool boundary
+      // Without this the Stop button and the interjection box are still on
+      // screen and silently address nothing — the worst shape a control can
+      // take. The id comes from the relay, which is also what the runner used,
+      // so there is one name and not two.
+      const relayTurnId = ev.headers.get('X-Turn-Id') || '';
+      if (relayTurnId) {
+        activeTurnKeyRef.current = { convoId, turnId: relayTurnId };
+        setInjectTurnId(relayTurnId);
+      }
 
       const acc = createTurnAccState({ continuedSeed: '', continuedThought: '', continuedBlocks: [], notices: [] });
       const flags = createTurnFlags();
@@ -2780,12 +2802,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking')),
         phaseReplying: () => setStreamPhase('replying'),
         requestFlush: schedule,
-        // A watcher cannot answer. The card's answer goes to /api/chat/answer
-        // with an askId the RUNNER's turn owns, and a tab that only watches
-        // has no claim on it — offering the card would promise a reply this
-        // path cannot deliver.
-        askOpened: () => {},
-        askResolved: () => {},
+        // A watcher CAN answer. MEASURED: /api/chat/answer takes `askId` and
+        // nothing else — no turn id, no session — so the card works exactly as
+        // it does for a turn this tab POSTed. (The first version of this file
+        // assumed otherwise and left both as no-ops; the route disagreed.)
+        askOpened: (ask) => setPendingAsk({ askId: ask.askId, questions: ask.questions }),
+        askResolved: (askId) =>
+          setPendingAsk(prev => (prev && prev.askId === askId ? null : prev)),
         subagentStarted: (task) => setActiveSubagent({ task }),
         subagentFinished: () => setActiveSubagent(null),
         injectionDelivered: (message) => setInterjectStatus(message),
@@ -2819,6 +2842,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       return 'failed';
     } finally {
       if (raf !== null) cancelAnimationFrame(raf);
+      setInjectTurnId(null);
+      setInterjectStatus(null);
+      setPendingAsk(null);
+      activeTurnKeyRef.current = null;
       clearLiveTool();
       setActiveSubagent(null);
       setStallIdleSeconds(null);

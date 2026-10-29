@@ -44,6 +44,7 @@ import {
 } from '@/lib/turnBus';
 
 const CONVO = 'c-1';
+const TURN = 'turn_abc';
 
 /** Collect everything a subscriber receives, end signal included. */
 function watcher() {
@@ -74,7 +75,7 @@ describe('turnBus: nothing is running', () => {
 describe('turnBus: replay and live', () => {
   test('a late subscriber gets everything that came before, in order', () => {
     __resetTurnBus();
-    beginTurn(CONVO, 1000);
+    beginTurn(CONVO, TURN, 1000);
     publishTurnText(CONVO, 'a');
     publishTurnText(CONVO, 'b');
 
@@ -83,6 +84,10 @@ describe('turnBus: replay and live', () => {
     assert.deepEqual(sub.replay, ['a', 'b']);
     assert.equal(sub.done, false);
     assert.equal(sub.startedAt, 1000);
+    // WHAT-BREAKS: without the id a watching tab cannot Stop the turn or
+    // interject into it — both endpoints are addressed by turn id, and the
+    // buttons stay on screen either way.
+    assert.equal(sub.turnId, TURN);
     // Replay is handed back, NOT pushed through the callback: the caller
     // writes it into its own response. Pushing both would double every frame.
     assert.deepEqual(w.got, []);
@@ -90,7 +95,7 @@ describe('turnBus: replay and live', () => {
 
   test('frames published after subscribing reach the callback', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const w = watcher();
     subscribeTurn(CONVO, w.fn);
     publishTurnText(CONVO, 'x');
@@ -100,7 +105,7 @@ describe('turnBus: replay and live', () => {
 
   test('WHAT-BREAKS: no chunk can land between the snapshot and the registration', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     publishTurnText(CONVO, '1');
 
     // Publish from inside the subscribe callback's own registration window by
@@ -117,7 +122,7 @@ describe('turnBus: replay and live', () => {
 
   test('two watchers of one turn each get the whole stream', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const a = watcher();
     const b = watcher();
     subscribeTurn(CONVO, a.fn);
@@ -129,7 +134,7 @@ describe('turnBus: replay and live', () => {
 
   test('unsubscribing stops delivery without affecting the other watcher', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const a = watcher();
     const b = watcher();
     const sa = subscribeTurn(CONVO, a.fn)!;
@@ -142,8 +147,8 @@ describe('turnBus: replay and live', () => {
 
   test('relays do not cross conversations', () => {
     __resetTurnBus();
-    beginTurn('one');
-    beginTurn('two');
+    beginTurn('one', TURN);
+    beginTurn('two', 'turn-2');
     const w = watcher();
     subscribeTurn('one', w.fn);
     publishTurnText('two', 'not yours');
@@ -152,7 +157,7 @@ describe('turnBus: replay and live', () => {
 
   test('an empty string is not published — it would be a frame carrying nothing', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const w = watcher();
     subscribeTurn(CONVO, w.fn);
     publishTurnText(CONVO, '');
@@ -163,7 +168,7 @@ describe('turnBus: replay and live', () => {
 describe('turnBus: ending', () => {
   test('WHAT-BREAKS: the note is published BEFORE the end signal', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const w = watcher();
     subscribeTurn(CONVO, w.fn);
 
@@ -177,7 +182,7 @@ describe('turnBus: ending', () => {
 
   test('ending with no note signals the end and adds no frame', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const w = watcher();
     subscribeTurn(CONVO, w.fn);
     endTurn(CONVO);
@@ -186,7 +191,7 @@ describe('turnBus: ending', () => {
 
   test('a finished relay still replays, and says it is done', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     publishTurnText(CONVO, 'all of it');
     endTurn(CONVO);
 
@@ -202,13 +207,13 @@ describe('turnBus: ending', () => {
     // only one in the file that changes.
     publishTurnText(CONVO, 'late');
     assert.deepEqual(w.got, []);
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     assert.deepEqual(w.got, [], 'a watcher of a finished relay is not carried into the next turn');
   });
 
   test('publishing after the end changes nothing', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     endTurn(CONVO);
     publishTurnText(CONVO, 'too late');
     assert.deepEqual(subscribeTurn(CONVO, () => {})!.replay, []);
@@ -216,7 +221,7 @@ describe('turnBus: ending', () => {
 
   test('ending twice signals once', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const w = watcher();
     subscribeTurn(CONVO, w.fn);
     endTurn(CONVO);
@@ -226,23 +231,23 @@ describe('turnBus: ending', () => {
 
   test('liveTurnStatus distinguishes running from finished', () => {
     __resetTurnBus();
-    beginTurn(CONVO, 500);
+    beginTurn(CONVO, TURN, 500);
     publishTurnText(CONVO, 'abc');
-    assert.deepEqual(liveTurnStatus(CONVO), { live: true, done: false, startedAt: 500, chars: 3 });
+    assert.deepEqual(liveTurnStatus(CONVO), { live: true, done: false, turnId: TURN, startedAt: 500, chars: 3 });
     endTurn(CONVO);
-    assert.deepEqual(liveTurnStatus(CONVO), { live: false, done: true, startedAt: 500, chars: 3 });
+    assert.deepEqual(liveTurnStatus(CONVO), { live: false, done: true, turnId: TURN, startedAt: 500, chars: 3 });
   });
 });
 
 describe('turnBus: a second turn in the same conversation', () => {
   test('WHAT-BREAKS: begin replaces, and tells the old watchers', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     publishTurnText(CONVO, 'first turn');
     const old = watcher();
     subscribeTurn(CONVO, old.fn);
 
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
 
     // The old watcher is released rather than left on a relay that will never
     // publish again — it can reconnect and get the new turn from its start.
@@ -254,7 +259,7 @@ describe('turnBus: a second turn in the same conversation', () => {
 describe('turnBus: a broken subscriber', () => {
   test('WHAT-BREAKS: a throwing watcher cannot stop delivery to the others', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const good = watcher();
     subscribeTurn(CONVO, () => { throw new Error('controller already closed'); });
     subscribeTurn(CONVO, good.fn);
@@ -264,7 +269,7 @@ describe('turnBus: a broken subscriber', () => {
 
   test('a throwing watcher cannot stop the end signal either', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const good = watcher();
     subscribeTurn(CONVO, () => { throw new Error('gone'); });
     subscribeTurn(CONVO, good.fn);
@@ -276,7 +281,7 @@ describe('turnBus: a broken subscriber', () => {
 describe('turnBus: the buffer is bounded', () => {
   test('past the cap, LIVE delivery continues and the replay says it is short', () => {
     __resetTurnBus();
-    beginTurn(CONVO);
+    beginTurn(CONVO, TURN);
     const big = 'x'.repeat(1_000_000);
     for (let i = 0; i < 9; i++) publishTurnText(CONVO, big);
 

@@ -68,6 +68,18 @@ type Outcome = {
   result?: RunTurnResult;
 };
 
+/**
+ * The name a turn answers to for Stop and interjections.
+ *
+ * Minted HERE rather than inside runTurnForQueue because the relay has to
+ * carry it, and the relay opens before the turn does. Same shape ChatArea
+ * uses for a turn it POSTs itself, so /api/chat/active and /api/chat/inject
+ * cannot tell the two apart -- which is the point.
+ */
+function newTurnId(): string {
+  return `turn_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`;
+}
+
 function fail(e: unknown, fallback: string) {
   const msg = e instanceof Error ? e.message : fallback;
   return NextResponse.json({ error: msg }, { status: 500 });
@@ -140,8 +152,16 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
       // A relay for a turn that is ABOUT to produce frames. Not opened before
       // the claim: a pass that skips must not clear the relay of a turn that
       // another pass is already streaming into.
-      if (liveTurnStatus(t.convoId)?.live !== true) {
-        beginTurn(t.convoId);
+      // The RELAY is the single source of this turn's id: a tab that is
+      // already watching read it from there, and minting a second one here
+      // would leave Stop pointing at a turn that does not exist.
+      const existing = liveTurnStatus(t.convoId);
+      let turnId: string;
+      if (existing?.live === true) {
+        turnId = existing.turnId;
+      } else {
+        turnId = newTurnId();
+        beginTurn(t.convoId, turnId);
         open.add(t.convoId);
       }
 
@@ -168,6 +188,7 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
           // was aimed at rather than a port this file invented.
           origin: opts.origin,
           onRawText: (text) => publishTurnText(t.convoId, text),
+          injectTurnId: turnId,
         });
       } catch (e) {
         // runTurnForQueue returns its failures; reaching here means something
@@ -254,13 +275,14 @@ export async function POST(req: Request) {
       if (liveTurnStatus(oneConvo)?.live === true) {
         return NextResponse.json({ ok: true, started: false, attached: true, host: selfId });
       }
-      beginTurn(oneConvo);
+      const turnId = newTurnId();
+      beginTurn(oneConvo, turnId);
       void runPass({ auto, oneBeing, oneConvo, selfId, origin, relayConvoId: oneConvo })
         .catch((e) => {
           console.error('[runner] detached pass threw:', e);
           endTurn(oneConvo, { type: 'error', error: String((e as Error)?.message || e) });
         });
-      return NextResponse.json({ ok: true, started: true, attached: false, host: selfId });
+      return NextResponse.json({ ok: true, started: true, attached: false, host: selfId, turnId });
     }
 
     const r = await runPass({ auto, oneBeing, oneConvo, selfId, origin, relayConvoId: null });

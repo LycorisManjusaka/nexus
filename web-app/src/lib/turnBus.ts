@@ -33,6 +33,18 @@
 /** One conversation's in-flight (or just-finished) turn. */
 interface LiveTurn {
   convoId: string;
+  /**
+   * The turn's `injectTurnId` — the name the chat route answers to for an
+   * out-of-band Stop (`/api/chat/active`) and for an interjection
+   * (`/api/chat/inject`).
+   *
+   * Carried here because both of those already work and neither can be used
+   * by a tab that merely WATCHES: the browser generates this id for a turn it
+   * POSTs itself, and a runner's turn has no such moment. Without it, moving
+   * a turn to the server silently costs Stop and interjections — two things
+   * that look like they still work, because the buttons are still there.
+   */
+  turnId: string;
   startedAt: number;
   endedAt: number | null;
   /** Raw SSE text, in emission order. Concatenating them replays the stream. */
@@ -56,26 +68,38 @@ const MAX_BUFFER_CHARS = 8_000_000;
 /** How many conversations' relays to retain. Oldest finished evicted first. */
 const MAX_LIVE_TURNS = 16;
 
-const live = new Map<string, LiveTurn>();
+// ⚠ `globalThis`, not a module-level `const`. Same pattern as turnStop /
+// turnRegistry / lastWriter, and for the same measured reason: Next's dev
+// server re-evaluates modules on hot reload, and two routes can end up holding
+// two different instances of this file. MEASURED 2026-10-29 — the tick route
+// opened a relay, answered, and the turn-events route in the very next request
+// reported `idle` for the same conversation, because it was reading a second,
+// empty Map. The turn ran fine; only the watcher was blind, which is the
+// hardest kind of fault to see from a screen.
+const g = globalThis as unknown as { __nexusTurnBus?: Map<string, LiveTurn> };
+function liveMap(): Map<string, LiveTurn> {
+  if (!g.__nexusTurnBus) g.__nexusTurnBus = new Map<string, LiveTurn>();
+  return g.__nexusTurnBus;
+}
 
 function evictIfNeeded() {
-  while (live.size > MAX_LIVE_TURNS) {
+  while (liveMap().size > MAX_LIVE_TURNS) {
     // Prefer a finished relay: dropping a live one would blind a tab that is
     // watching right now, while dropping a finished one costs only a replay
     // that the conversation reload already supersedes.
     let victim: LiveTurn | null = null;
-    for (const t of live.values()) {
+    for (const t of liveMap().values()) {
       if (!t.done) continue;
       if (!victim || (t.endedAt ?? 0) < (victim.endedAt ?? 0)) victim = t;
     }
     if (!victim) {
-      for (const t of live.values()) {
+      for (const t of liveMap().values()) {
         if (!victim || t.startedAt < victim.startedAt) victim = t;
       }
     }
     if (!victim) return;
     for (const fn of victim.subs) { try { fn(null); } catch { /* a dead subscriber must not block eviction */ } }
-    live.delete(victim.convoId);
+    liveMap().delete(victim.convoId);
   }
 }
 
@@ -88,13 +112,14 @@ function evictIfNeeded() {
  * subscribe would answer "idle" and the tab would stop watching a turn that
  * was about to start.
  */
-export function beginTurn(convoId: string, nowMs: number = Date.now()): void {
-  const prev = live.get(convoId);
+export function beginTurn(convoId: string, turnId: string, nowMs: number = Date.now()): void {
+  const prev = liveMap().get(convoId);
   if (prev) {
     for (const fn of prev.subs) { try { fn(null); } catch { /* see above */ } }
   }
-  live.set(convoId, {
+  liveMap().set(convoId, {
     convoId,
+    turnId,
     startedAt: nowMs,
     endedAt: null,
     frames: [],
@@ -109,7 +134,7 @@ export function beginTurn(convoId: string, nowMs: number = Date.now()): void {
 /** Append one decoded chunk and hand it to every live subscriber. */
 export function publishTurnText(convoId: string, text: string): void {
   if (!text) return;
-  const t = live.get(convoId);
+  const t = liveMap().get(convoId);
   if (!t || t.done) return;
   if (t.chars + text.length <= MAX_BUFFER_CHARS) {
     t.frames.push(text);
@@ -128,7 +153,7 @@ export function publishTurnText(convoId: string, text: string): void {
  * carried the turn, instead of seeing the stream stop and having to guess.
  */
 export function endTurn(convoId: string, note?: { type: string; [k: string]: unknown }, nowMs: number = Date.now()): void {
-  const t = live.get(convoId);
+  const t = liveMap().get(convoId);
   if (!t || t.done) return;
   if (note) publishTurnText(convoId, `data: ${JSON.stringify(note)}\n\n`);
   t.done = true;
@@ -139,6 +164,8 @@ export function endTurn(convoId: string, note?: { type: string; [k: string]: unk
 }
 
 export interface TurnSubscription {
+  /** The turn's id, so a watcher can Stop it and interject into it. */
+  turnId: string;
   /** Everything emitted before this subscriber joined, in order. */
   replay: string[];
   /** True when the turn already finished: replay is all there is. */
@@ -162,11 +189,12 @@ export function subscribeTurn(
   convoId: string,
   onText: (text: string | null) => void,
 ): TurnSubscription | null {
-  const t = live.get(convoId);
+  const t = liveMap().get(convoId);
   if (!t) return null;
   const replay = [...t.frames];
   if (!t.done) t.subs.add(onText);
   return {
+    turnId: t.turnId,
     replay,
     done: t.done,
     truncated: t.truncated,
@@ -176,13 +204,13 @@ export function subscribeTurn(
 }
 
 /** What a poller can know without subscribing. */
-export function liveTurnStatus(convoId: string): { live: boolean; done: boolean; startedAt: number; chars: number } | null {
-  const t = live.get(convoId);
+export function liveTurnStatus(convoId: string): { live: boolean; done: boolean; turnId: string; startedAt: number; chars: number } | null {
+  const t = liveMap().get(convoId);
   if (!t) return null;
-  return { live: !t.done, done: t.done, startedAt: t.startedAt, chars: t.chars };
+  return { live: !t.done, done: t.done, turnId: t.turnId, startedAt: t.startedAt, chars: t.chars };
 }
 
 /** Test-only. Module state is per-process and nothing else may clear it. */
 export function __resetTurnBus(): void {
-  live.clear();
+  liveMap().clear();
 }
