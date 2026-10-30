@@ -3,6 +3,7 @@ import { claim, release, abandon, queuedConversations } from '@/lib/turnQueue';
 import { runTurnForQueue, type RunTurnResult } from '@/lib/runTurnForQueue';
 import { runnerHostStatus, describeRunnerHost, installationId } from '@/lib/runnerHost';
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
+import { onStop } from '@/lib/turnStop';
 import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnBus';
 import { loadLog, saveLog, listFolders, loadUserSettings } from '@/lib/fsStorage';
 // ⚠ The FIRST route-to-route import in this tree (measured: zero others).
@@ -165,9 +166,20 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
         open.add(t.convoId);
       }
 
+      // Watch for an explicit Stop so a cancel can be told from a failure.
+      // Registered HERE, before the turn starts, because this route knows the
+      // turnId first and requestStop fires every listener for the key — the
+      // chat route's (which aborts the generation) and this one (which only
+      // records that it happened). A callback, not isStopRequested read later:
+      // the chat route calls forgetStop the instant it aborts, so by the time
+      // runTurnForQueue's throw is caught the record is already gone.
+      let stopped = false;
+      const offStop = onStop(t.convoId, turnId, () => { stopped = true; });
+
       let result: RunTurnResult;
       try {
         result = await runTurnForQueue(t.being, t.convoId, c.claim.items, {
+          wasStopped: () => stopped,
           loadLog,
           saveLog,
           chatPost,
@@ -191,6 +203,7 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
           injectTurnId: turnId,
         });
       } catch (e) {
+        offStop();
         // runTurnForQueue returns its failures; reaching here means something
         // outside its own error handling threw. The lease still has to go back
         // and the watcher still has to be told, or a crash in one turn leaves
@@ -202,11 +215,22 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
         continue;
       }
 
-      // Release only on success. A failure ABANDONS, which puts the lease
-      // back and leaves the items untouched — so the batch is unchanged, the
-      // auto-trigger signature is unchanged, and an instantly-failing turn
-      // cannot re-fire forever. The same guard the client-side drain uses.
-      if (result.ok) {
+      offStop();
+
+      // CONSUME the batch on success AND on an explicit Stop; ABANDON every
+      // other failure.
+      //
+      //   · success  — the turn is saved, the items are done.
+      //   · stopped  — the person cancelled. runTurnForQueue already saved the
+      //     user turn with no reply; consuming the items here is what makes
+      //     Stop stick. Abandoning would leave them for the auto-trigger to
+      //     re-fire, and the generation just stopped would start over — which
+      //     is exactly the "Stop does nothing" this fixes.
+      //   · other failure — abandon puts the lease back and leaves the items,
+      //     so the batch is unchanged, the auto-trigger signature is unchanged,
+      //     and an instantly-failing turn cannot re-fire forever.
+      const consume = result.ok || result.stage === 'stopped';
+      if (consume) {
         await release(
           t.being,
           t.convoId,
@@ -223,9 +247,17 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
       console.log(
         result.ok
           ? `[runner] ran ${t.being}/${t.convoId} — saved ${result.messageId}`
-          : `[runner] FAILED ${t.being}/${t.convoId} at ${result.stage}: ${result.reason}`,
+          : result.stage === 'stopped'
+            ? `[runner] stopped ${t.being}/${t.convoId} — cancelled by request`
+            : `[runner] FAILED ${t.being}/${t.convoId} at ${result.stage}: ${result.reason}`,
       );
-      closeRelay(t.convoId, result.ok ? undefined : { type: 'error', error: result.reason });
+      // A stop is not an error: the watcher gets a notice, not an error frame.
+      closeRelay(
+        t.convoId,
+        result.ok ? undefined
+        : result.stage === 'stopped' ? { type: 'notice', content: 'Stopped.' }
+        : { type: 'error', error: result.reason },
+      );
     }
   } finally {
     // Nothing may leave a watcher hanging — including a target list that never

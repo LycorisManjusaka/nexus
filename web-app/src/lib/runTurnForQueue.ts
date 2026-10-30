@@ -109,6 +109,17 @@ export interface RunTurnDeps {
    * Stop would answer "no such turn" with every button still on screen.
    */
   injectTurnId: string;
+  /**
+   * Was an explicit Stop requested for this turn? Read only when the stream
+   * throws, to tell "the person cancelled" (save the user turn, consume the
+   * batch, never re-run) from "a transient failure" (abandon, let the next
+   * poll retry). A callback and not `isStopRequested` on purpose: the chat
+   * route calls forgetStop the instant it aborts, so the record is gone by the
+   * time this throw is caught. The tick route holds the real flag — it
+   * registered an onStop listener before the turn began, because it knows the
+   * turnId first.
+   */
+  wasStopped?: () => boolean;
 }
 
 export type RunTurnResult =
@@ -119,7 +130,17 @@ export type RunTurnResult =
    * generic failure: a runner that logs "could not run" tells the operator
    * nothing they can act on.
    */
-  | { ok: false; stage: 'no-log' | 'post' | 'stream' | 'save'; reason: string };
+  | { ok: false; stage: 'no-log' | 'post' | 'stream' | 'save'; reason: string }
+  /**
+   * The person pressed Stop. The user's message was saved with NO reply — the
+   * browser Stop keeps the user turn and drops the partial the same way — so
+   * the batch must be CONSUMED (the tick route releases it, not abandons it)
+   * or the auto-trigger re-fires the very generation that was just stopped,
+   * which from the outside looks exactly like "Stop does nothing". ok:false
+   * because no assistant turn was produced, but unlike the failures above this
+   * is not an error.
+   */
+  | { ok: false; stage: 'stopped'; reason: string };
 
 /**
  * The reducer's dependencies, for a host with no translator.
@@ -163,6 +184,33 @@ export async function runTurnForQueue(
 
   const stored = Array.isArray(log.messages) ? (log.messages as SlimHistoryMessage[]) : [];
   const history = [...stored, userMessage as SlimHistoryMessage];
+
+  // Write the log back WHOLE, with only `messages` replaced. The other ~55
+  // fields are the ones the browser last saved; rebuilding them here would
+  // mean a runner's save could differ from a tab's save in a field neither of
+  // us is looking at. One helper so the success save and the Stop save (which
+  // saves the user turn with no reply) cannot drift apart.
+  //
+  // ⚠ `updatedAt` must NOT travel. MEASURED 2026-10-29: fsStorage.saveLog does
+  // `logData.updatedAt = logData.updatedAt || Date.now()` — it stamps a new
+  // version only when the caller did not bring one. The browser never brings
+  // one; spreading the loaded log DOES, and the result is a write that keeps
+  // the OLD version number, so every open tab's optimistic lock sees
+  // base === disk and overwrites the runner's turn with its own stale copy
+  // (MEASURED: a turn saved six messages and was back to four a second later).
+  // Dropping the key is the whole fix: saveLog then stamps now, as it does for
+  // a tab.
+  const { updatedAt: _carriedVersion, ...logWithoutVersion } = log;
+  void _carriedVersion;
+  const saveMessages = (messages: unknown[]) =>
+    deps.saveLog(
+      convoId,
+      { ...logWithoutVersion, messages },
+      {
+        expectedUpdatedAt: typeof log.updatedAt === 'number' ? log.updatedAt : undefined,
+        clientId: deps.clientId,
+      },
+    );
 
   // A queued turn is a fresh user turn, so turnAiName is the being's saved
   // vessel family, not a handoff override (there is none to carry in).
@@ -225,11 +273,30 @@ export async function runTurnForQueue(
       onRawText: deps.onRawText,
     });
   } catch (e) {
-    // The stream threw: an API error frame, or a transport failure. What the
-    // model produced before that point is NOT saved — same as the browser,
-    // where an un-finalized streaming message is dropped on an error that is
-    // not an abort. Saving a partial turn here would put a truncated answer
-    // on disk with nothing marking it as truncated.
+    // The person pressed Stop: save the user's turn with NO reply and report
+    // 'stopped', so the tick route CONSUMES the batch instead of abandoning it.
+    // Abandoning would leave the items for the auto-trigger to re-fire — the
+    // generation just stopped would start over, which looks exactly like "Stop
+    // does nothing" (MEASURED: that is the bug this fixes). The partial the
+    // model produced is dropped, as the browser Stop drops its own partial.
+    if (deps.wasStopped?.()) {
+      const saved = await saveMessages(history);
+      if (!saved.ok) {
+        return {
+          ok: false,
+          stage: 'save',
+          reason: saved.conflict
+            ? 'refused: the conversation changed on disk while this turn ran'
+            : `save failed: ${String(saved.error || 'unknown')}`,
+        };
+      }
+      return { ok: false, stage: 'stopped', reason: 'stopped by request' };
+    }
+    // The stream threw for another reason: an API error frame, or a transport
+    // failure. What the model produced before that point is NOT saved — same
+    // as the browser, where an un-finalized streaming message is dropped on an
+    // error that is not an abort. Saving a partial turn here would put a
+    // truncated answer on disk with nothing marking it as truncated.
     return { ok: false, stage: 'stream', reason: String((e as Error)?.message || e) };
   }
 
@@ -256,37 +323,9 @@ export async function runTurnForQueue(
     },
   );
 
-  // The log is written back WHOLE, with only `messages` replaced. The other
-  // ~55 fields are the ones the browser last saved; rebuilding them here
-  // would mean a runner's save could differ from a tab's save in a field
-  // neither of us is looking at.
-  //
-  // ⚠ EXCEPT `updatedAt`, which must NOT travel. MEASURED 2026-10-29:
-  // fsStorage.saveLog does `logData.updatedAt = logData.updatedAt || Date.now()`
-  // — it stamps a new version only when the caller did not bring one. The
-  // browser never brings one (its save payload has no such field), so for a
-  // tab this is invisible. Spreading the loaded log DOES bring one, and the
-  // result is a write that keeps the OLD version number:
-  //
-  //   · every open tab's optimistic lock sees base === disk and happily
-  //     overwrites the runner's turn with its own stale copy (MEASURED: a
-  //     turn ran, saved six messages, and was back to four a second later)
-  //   · lastWriter records a version nobody will ever ask about
-  //   · the sidebar sorts by updatedAt, so a runner turn never moves its
-  //     conversation up
-  //
-  // Dropping the key is the whole fix: saveLog then stamps now, exactly as it
-  // does for a tab.
-  const { updatedAt: _carriedVersion, ...logWithoutVersion } = log;
-  void _carriedVersion;
-  const result = await deps.saveLog(
-    convoId,
-    { ...logWithoutVersion, messages: [...history, assistant] },
-    {
-      expectedUpdatedAt: typeof log.updatedAt === 'number' ? log.updatedAt : undefined,
-      clientId: deps.clientId,
-    },
-  );
+  // Saved through the one helper built above (see it for why `updatedAt` is
+  // dropped), so the success save and the Stop save cannot drift apart.
+  const result = await saveMessages([...history, assistant]);
   if (!result.ok) {
     return {
       ok: false,
