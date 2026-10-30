@@ -3082,34 +3082,80 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       tokens: 0 // Will update below
     };
 
-    const newMessages = [...messages, newMessage];
-    setMessages(newMessages);
+    // ── First message of a brand-new conversation: run it in the BROWSER ─────
+    // The server-side runner runs a turn by loading the conversation log
+    // (runTurnForQueue → loadLog → 'no-log' when there is none). A conversation
+    // that has never been saved has no log yet, so its FIRST turn has to be the
+    // one that creates it — and the thing that writes the first log is the
+    // browser's save effect. Every message AFTER this one has a log to load and
+    // routes through the runner below.
+    //
+    // Boundary, documented: the very first message of a brand-new conversation
+    // is not yet tab-close-safe. Writing an empty log up front so the runner can
+    // take the first message too is a clean follow-up.
+    if (messages.length === 0) {
+      const newMessages = [...messages, newMessage];
+      setMessages(newMessages);
 
-    // If the "next message is first-original" flag is pending, promote this
-    // new user message to the marker and clear the flag. This is the second
-    // half of the new clone workflow: clone sets the flag, the next user
-    // turn here consumes it.
-    if (firstOriginalIsNext && !firstOriginalMessageId) {
-      setFirstOriginalMessageId(newMessage.id);
-      setFirstOriginalIsNext(false);
+      // If the "next message is first-original" flag is pending, promote this
+      // new user message to the marker and clear the flag. This is the second
+      // half of the new clone workflow: clone sets the flag, the next user
+      // turn here consumes it.
+      if (firstOriginalIsNext && !firstOriginalMessageId) {
+        setFirstOriginalMessageId(newMessage.id);
+        setFirstOriginalIsNext(false);
+      }
+
+      // Calculate tokens for user message locally (text only)
+      const newTokens = await fetchTokensForText(text, localAiName);
+      newMessage.textTokens = newTokens;
+      newMessage.tokens = newTokens;
+      setMessages([...newMessages]); // update token count in state
+
+      // A fresh user turn always starts on the being's SAVED default vessel, not
+      // on a change_model override left over from the previous turn's handoff
+      // chain (トカゲくん: as a 24/7 feature it is structurally right to always
+      // begin from the cheap default — the handoff vessel is transient to the
+      // chain the model itself drove, and reverts the moment the human speaks
+      // again). forceSavedVessel makes THIS request ignore the stale
+      // handoffOverride closure; setHandoffOverride(null) reverts the delivery
+      // badge on the next render. Reload is no longer needed to return to default.
+      setHandoffOverride(null);
+      await generateAiResponse(newMessages, { forceSavedVessel: true });
+      return;
     }
 
-    // Calculate tokens for user message locally (text only)
-    const newTokens = await fetchTokensForText(text, localAiName);
-    newMessage.textTokens = newTokens;
-    newMessage.tokens = newTokens;
-    setMessages([...newMessages]); // update token count in state
-
-    // A fresh user turn always starts on the being's SAVED default vessel, not
-    // on a change_model override left over from the previous turn's handoff
-    // chain (トカゲくん: as a 24/7 feature it is structurally right to always
-    // begin from the cheap default — the handoff vessel is transient to the
-    // chain the model itself drove, and reverts the moment the human speaks
-    // again). forceSavedVessel makes THIS request ignore the stale
-    // handoffOverride closure; setHandoffOverride(null) reverts the delivery
-    // badge on the next render. Reload is no longer needed to return to default.
+    // ── Every later message: hand the turn to the SERVER-SIDE runner ─────────
+    // The browser no longer POSTs /api/chat for a normal send. A browser turn's
+    // lifeline is the tab's connection: closing it mid-turn aborted req.signal
+    // and the route tore the generation down (MEASURED: LM Studio stopped
+    // mid-token when the tab closed). Now this message is ENQUEUED and the
+    // runner — a server process — runs it and writes the log itself; this tab
+    // only kicks it and watches a relay (runOnRunner). Closing the tab now costs
+    // a view, never the answer.
+    //
+    // enqueue THIS message; the runner's claim pulls in whatever is already
+    // waiting in the queue and composes it all FIFO into one turn (Lizard-kun's
+    // merge: a send with stock behind it goes together as one message).
+    //
+    // setLoading(true) BEFORE the first await, in the same render as the
+    // optimistic bubble, does two things that both have to happen before any
+    // state settles:
+    //   · gates the save effect (`if (loading) return`) so the BROWSER never
+    //     writes this user message — the runner owns it, via composeBatch, and
+    //     two writers on one conversation is the 409 lastWriter.ts explains;
+    //   · gates the auto-trigger effect so the stock refresh enqueue fires
+    //     cannot start a SECOND, racing drain of the same batch.
+    // runOnRunner owns clearing loading in its finally.
+    //
+    // The optimistic bubble is this tab showing what the sender just typed;
+    // composeBatch produces the SAME content for a single item (unwrapped), and
+    // runOnRunner's reload replaces this copy with the runner's saved message.
+    setLoading(true);
+    setMessages(prev => [...prev, newMessage]);
     setHandoffOverride(null);
-    await generateAiResponse(newMessages, { forceSavedVessel: true });
+    await enqueueToStock(text, attachments, opts?.from || '');
+    await runOnRunner();
   };
 
   useEffect(() => {
