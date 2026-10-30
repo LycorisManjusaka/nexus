@@ -2664,6 +2664,39 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   /**
+   * Put a rerun/continue COMMAND in the queue.
+   *
+   * Separate from enqueueToStock because the two carry opposite things: that
+   * one carries a body, this one carries only a pointer (`targetMsgId`) at a
+   * message already on disk. Keeping them apart is what lets the route reject
+   * an empty send while still accepting a command that has no text at all.
+   *
+   * Returns false on failure so the caller can clear `loading` — a command
+   * that never reached the queue must not leave the tab waiting for a turn
+   * that will never start.
+   */
+  const enqueueCommand = async (kind: 'rerun' | 'continue', targetMsgId: string) => {
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'enqueue', being: folderName, convoId, kind, targetMsgId }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setStockNote(String(d?.error || t('chat.stock.failed')));
+        return false;
+      }
+      return true;
+    } catch {
+      setStockNote(t('chat.stock.failed'));
+      return false;
+    } finally {
+      refreshStock();
+    }
+  };
+
+  /**
    * Replace what is on screen with what is on disk, without writing anything.
    *
    * Used after a SERVER-SIDE turn. The runner is the writer for those, so the
@@ -2698,6 +2731,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   }, [convoId]);
 
   /**
+   * What a watch is looking at, when it is not a brand-new reply.
+   *
+   * Only `continue` needs this: the message it extends already exists, so the
+   * watcher paints into that id and starts from that content instead of
+   * minting a placeholder and starting from nothing.
+   */
+  interface WatchTarget {
+    continueMsgId: string;
+    continuedSeed: string;
+    continuedThought: string;
+    continuedBlocks: Array<{ thinking: string; signature: string }>;
+  }
+
+  /**
    * Hand this conversation's queued batch to the SERVER-SIDE runner, and WATCH.
    *
    * ── WHY THIS REPLACED "claim, then send it from here" ──────────────────────
@@ -2729,18 +2776,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * says a turn is in flight. (A direct send knows its own text and can show
    * it; that path is not this one.)
    */
-  const runOnRunner = useCallback(async (): Promise<'ran' | 'idle' | 'failed'> => {
+  const runOnRunner = useCallback(async (
+    watch?: WatchTarget,
+  ): Promise<'ran' | 'idle' | 'failed'> => {
     if (!folderName || !convoId) return 'failed';
 
     // A placeholder to stream into. It never reaches disk: the save effect is
     // gated on `loading`, and the reload below replaces it with the runner's
     // own finalized message.
-    const watchId = `watch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    //
+    // A CONTINUE has no placeholder: the message being extended is already on
+    // screen, and this streams into IT — the same thing the browser path does
+    // (`setMessages(prev => prev.map(m => m.id === continueMsgId ? …))`). The
+    // seed is passed in rather than read from `messages` so this callback's
+    // deps do not have to include the array, which changes every render and
+    // would re-arm the auto-trigger effect on each one.
+    const watchId = watch?.continueMsgId
+      || `watch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     let raf: number | null = null;
     setLoading(true);
-    setMessages(prev => [...prev, {
-      id: watchId, role: 'assistant', content: '', timestamp: Date.now(), streaming: true,
-    }]);
+    if (watch?.continueMsgId) {
+      setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true } : m)));
+    } else {
+      setMessages(prev => [...prev, {
+        id: watchId, role: 'assistant', content: '', timestamp: Date.now(), streaming: true,
+      }]);
+    }
 
     try {
       const kick = await fetch('/api/runner/tick', {
@@ -2784,7 +2845,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setInjectTurnId(relayTurnId);
       }
 
-      const acc = createTurnAccState({ continuedSeed: '', continuedThought: '', continuedBlocks: [], notices: [] });
+      // Seeded for a continue, so the first painted frame is "the half that
+      // exists + what just arrived". An empty seed here would blank the
+      // message on screen the instant the continuation's first chunk landed,
+      // and only the reload at the end would put it back.
+      const acc = createTurnAccState({
+        continuedSeed: watch?.continuedSeed || '',
+        continuedThought: watch?.continuedThought || '',
+        continuedBlocks: watch?.continuedBlocks ? [...watch.continuedBlocks] : [],
+        notices: [],
+      });
       const flags = createTurnFlags();
 
       const paint = () => {
@@ -3500,6 +3570,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
   };
 
+  // ⚠ UNREACHABLE AS OF 2026-10-30, and kept only because this whole function
+  // is: `generateAiResponse` now has exactly TWO callers, both inside itself
+  // (the vessel-handoff re-POST and the handoff-failure retry). Normal sends,
+  // reruns and continues all go through the server-side runner. `continueMsgId`
+  // is passed by nobody — tsc would name the caller if one appeared — so the
+  // continuation branches below cannot execute today. They go when the handoff
+  // chain moves to the runner and this function is deleted whole (pending §79);
+  // taking them out separately would be a diff in a file already slated for a
+  // bigger one. Do NOT reason about continue from the code here: the live rule
+  // is in lib/runTurnForQueue.ts.
+  //
   // `continueMsgId` turns this into a CONTINUATION of an existing assistant
   // message instead of a new one: no placeholder is added, the stream is seeded
   // with the text already there, and everything appends to that same bubble.
@@ -4253,16 +4334,50 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
   /* eslint-enable react-hooks/purity */
 
+  // ── Rerun / Continue: COMMANDS on the queue, not browser turns ────────────
+  //
+  // Both used to call generateAiResponse, which means the BROWSER POSTed
+  // /api/chat and the tab's connection was the turn's lifeline — closing it
+  // aborted req.signal and the generation died (MEASURED by Lizard-kun
+  // 2026-10-30, with LM Studio stopping mid-token). They now go the same way a
+  // normal send does: enqueue, then hand the turn to the server-side runner.
+  //
+  // What is enqueued is a POINTER, not a body: `{ kind, targetMsgId }`. The
+  // runner reads the target from the log itself. An index would name a
+  // different message if anything landed in between; an id that is no longer
+  // there is a failure it can report (stage 'target'), which is the difference
+  // between "nothing happened, here is why" and "something happened to the
+  // wrong message".
+  //
+  // `setLoading(true)` before the first await, for the two reasons a send has
+  // it: it gates the save effect (the runner owns this write — two writers on
+  // one conversation is the 409 lastWriter.ts explains) and it gates the
+  // auto-trigger so a stock refresh cannot start a second, racing drain.
+  // runOnRunner's `finally` clears it; the early returns here clear it
+  // themselves, because in those paths runOnRunner is never entered.
+
   const handleRerun = async (msgId: string) => {
+    if (loading) return;
     const idx = messages.findIndex(m => m.id === msgId);
     if (idx === -1) return;
-    const newHistory = messages.slice(0, idx);
-    setMessages(newHistory);
     // Rerunning rewinds the timeline. The Anthropic OAuth session (if any)
     // is now out of sync with NEXUS's local history — invalidate so the
     // backend starts a fresh session for the next generation.
     setAgentSession(null);
-    await generateAiResponse(newHistory);
+    setHandoffOverride(null);
+    setLoading(true);
+    // Optimistic: drop the answer being replaced, so the screen already looks
+    // like what the runner is about to write. The reload at the end of the
+    // watch is still the authority.
+    setMessages(messages.slice(0, idx));
+    if (!(await enqueueCommand('rerun', msgId))) {
+      // Nothing was queued, so no turn will run and nothing will reload —
+      // put the screen back rather than leaving a silent truncation behind.
+      await reloadMessagesFromDisk();
+      setLoading(false);
+      return;
+    }
+    await runOnRunner();
   };
 
   // Continue an assistant message that stopped short — whether it was truncated
@@ -4271,12 +4386,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // turn; the server adds the "carry on" user turn (an assistant message in last
   // position would be a prefill, which Claude rejects while thinking is on).
   const handleContinue = async (msgId: string) => {
+    if (loading) return;
     const idx = messages.findIndex(m => m.id === msgId);
     if (idx === -1 || messages[idx].role === 'user') return;
+    const target = messages[idx];
     // The local timeline is about to diverge from Anthropic's OAuth session,
     // same as a rerun — drop it so the next generation reconstructs cleanly.
     setAgentSession(null);
-    await generateAiResponse(messages.slice(0, idx + 1), { continueMsgId: msgId });
+    setHandoffOverride(null);
+    setLoading(true);
+    if (!(await enqueueCommand('continue', msgId))) {
+      setLoading(false);
+      return;
+    }
+    // The watcher paints into the EXISTING message and starts from its own
+    // text and thinking. Without the seed the bubble would blank itself on the
+    // continuation's first chunk and only come back on the reload.
+    await runOnRunner({
+      continueMsgId: msgId,
+      continuedSeed: typeof target.content === 'string' ? target.content : '',
+      continuedThought: typeof target.thoughtProcess === 'string' ? target.thoughtProcess : '',
+      continuedBlocks: Array.isArray(target.claudeThinkingBlocks) ? target.claudeThinkingBlocks : [],
+    });
   };
 
   const handleEdit = async (id: string, newContent: string) => {

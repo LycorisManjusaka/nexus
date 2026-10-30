@@ -47,7 +47,10 @@ import { finalizeTurnMessage } from '@/lib/finalizeTurnMessage';
 import { runTurnStream } from '@/lib/turnStreamLoop';
 import { createRunnerSink, createTurnFlags } from '@/lib/runnerSink';
 import { effectiveFullAccess } from '@/lib/agentCapabilities';
-import { composeBatch, type QueueItem } from '@/lib/turnQueue';
+import {
+  composeBatch, splitLeadingTurn, isCommandKind,
+  type QueueItem, type CommandPayload,
+} from '@/lib/turnQueue';
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
 
 /** What the runner could not do itself. */
@@ -122,15 +125,38 @@ export interface RunTurnDeps {
   wasStopped?: () => boolean;
 }
 
+/**
+ * Which queue ids this turn finished with, for the caller to `release`.
+ *
+ * ALWAYS present, including on failures, because "consume or abandon" is a
+ * decision only this function can make correctly and the tick route used to
+ * make it by consuming every id it had handed over. Two cases break that:
+ *
+ *   · a MIXED batch — only the leading run was processed, so releasing the
+ *     rest would delete messages nobody answered;
+ *   · an UNPROCESSABLE command — its target is gone and will not come back,
+ *     so abandoning it means the auto-trigger re-fires it forever.
+ *
+ * An empty array means "abandon": leave the items, let the next poll retry.
+ */
+interface Consumed { consumedIds: string[] }
+
 export type RunTurnResult =
   /** The turn ran and the log was written. */
-  | { ok: true; messageId: string; savedAt: number; unappliedDescriptions: number }
+  | ({ ok: true; messageId: string; savedAt: number; unappliedDescriptions: number } & Consumed)
   /**
    * Nothing was run. `reason` names which precondition failed, never a
    * generic failure: a runner that logs "could not run" tells the operator
    * nothing they can act on.
    */
-  | { ok: false; stage: 'no-log' | 'post' | 'stream' | 'save'; reason: string }
+  | ({ ok: false; stage: 'no-log' | 'post' | 'stream' | 'save'; reason: string } & Consumed)
+  /**
+   * A rerun/continue whose target cannot be acted on — the id is not in the
+   * log any more, it is not the last message, or continue was pointed at a
+   * user turn. Separate from the failures above because it is PERMANENT:
+   * retrying cannot change the answer, so this consumes its item.
+   */
+  | ({ ok: false; stage: 'target'; reason: string } & Consumed)
   /**
    * The person pressed Stop. The user's message was saved with NO reply — the
    * browser Stop keeps the user turn and drops the partial the same way — so
@@ -140,7 +166,7 @@ export type RunTurnResult =
    * because no assistant turn was produced, but unlike the failures above this
    * is not an error.
    */
-  | { ok: false; stage: 'stopped'; reason: string };
+  | ({ ok: false; stage: 'stopped'; reason: string } & Consumed);
 
 /**
  * The reducer's dependencies, for a host with no translator.
@@ -166,24 +192,108 @@ export async function runTurnForQueue(
 ): Promise<RunTurnResult> {
   const log = await deps.loadLog(convoId);
   if (!log) {
-    return { ok: false, stage: 'no-log', reason: `no log on disk for ${convoId}` };
+    return { ok: false, stage: 'no-log', reason: `no log on disk for ${convoId}`, consumedIds: [] };
   }
 
-  // The queue batch becomes ONE user message, exactly as the client-side
-  // drain composes it: `[label]\ntext` per item, FIFO, skipped items
-  // contributing nothing at all (including their attachments).
-  const batch = composeBatch(items);
-  const nowStart = deps.nowMs();
-  const userMessage = {
-    id: deps.newId(),
-    role: 'user',
-    content: batch.text,
-    attachments: batch.attachments,
-    timestamp: nowStart,
-  };
+  // Only the leading run of one shape. A command cannot merge with text, and
+  // taking the claim whole would make composeBatch skip the command while the
+  // caller released its id anyway — the message would vanish with no error.
+  const { take } = splitLeadingTurn(items);
+  if (take.length === 0) {
+    return { ok: false, stage: 'target', reason: 'empty batch', consumedIds: [] };
+  }
+  const consumedIds = take.map((i) => i.id);
 
   const stored = Array.isArray(log.messages) ? (log.messages as SlimHistoryMessage[]) : [];
-  const history = [...stored, userMessage as SlimHistoryMessage];
+  const nowStart = deps.nowMs();
+
+  // ── What shape of turn is this? ────────────────────────────────────────────
+  //
+  //   send      history = stored + a NEW user message        save: + assistant
+  //   rerun     history = stored MINUS the last message      save: + assistant
+  //   continue  history = stored (ends on the target)        save: target REPLACED
+  //
+  // `base` is what finalizeTurnMessage spreads: a fresh skeleton for send and
+  // rerun, the TARGET ITSELF for continue — which is how the browser does it
+  // (`setMessages(prev => prev.map(m => m.id === msgId ? buildFinalized(m) : m))`),
+  // and the reason a continued message keeps its id, role, name and timestamp
+  // instead of becoming a new message that merely looks similar.
+  const command = isCommandKind(take[0].kind) ? take[0] : null;
+
+  let history: SlimHistoryMessage[];
+  let keep: SlimHistoryMessage[];        // what survives in front of the reply
+  let base: Record<string, unknown>;
+  let seed = { continuedSeed: '', continuedThought: '', continuedBlocks: [] as Array<{ thinking: string; signature: string }> };
+  let continueFromMessageId: string | null = null;
+
+  if (command) {
+    const targetMsgId = (command.payload as CommandPayload | null)?.targetMsgId;
+    if (typeof targetMsgId !== 'string' || !targetMsgId) {
+      return { ok: false, stage: 'target', reason: `${command.kind} item has no targetMsgId`, consumedIds };
+    }
+    const idx = stored.findIndex((m) => String((m as Record<string, unknown>).id) === targetMsgId);
+    if (idx === -1) {
+      return { ok: false, stage: 'target', reason: `message ${targetMsgId} is not in this log`, consumedIds };
+    }
+    // REFUSE when the target is not last. The buttons are only offered on the
+    // last message (ChatArea: `msgIdx === messages.length - 1`), so this can
+    // only happen when something landed between the click and this read — and
+    // then a rerun would silently delete whatever that was. The browser cannot
+    // hit this case because it acts on its own in-memory array; a runner reads
+    // the log fresh, so the precondition has to be re-checked here.
+    if (idx !== stored.length - 1) {
+      return {
+        ok: false,
+        stage: 'target',
+        reason: `message ${targetMsgId} is no longer the last message (${stored.length - 1 - idx} after it)`,
+        consumedIds,
+      };
+    }
+    const target = stored[idx] as Record<string, unknown>;
+
+    if (command.kind === 'rerun') {
+      // Throw the answer away and ask again from the same point.
+      history = stored.slice(0, idx);
+      keep = history;
+      base = { id: deps.newId(), role: 'assistant', timestamp: nowStart };
+    } else {
+      if (target.role === 'user') {
+        return { ok: false, stage: 'target', reason: 'cannot continue a user message', consumedIds };
+      }
+      // The model must see its own unfinished text as its own turn; the chat
+      // route appends the "carry on" user turn server-side (an assistant in
+      // last position is a prefill, which Claude rejects while thinking is on).
+      history = stored;
+      keep = stored.slice(0, idx);
+      base = { ...target };
+      continueFromMessageId = targetMsgId;
+      seed = {
+        continuedSeed: typeof target.content === 'string' ? target.content : '',
+        // Carried for the same reason the browser carries it: every flush
+        // REPLACES thoughtProcess/claudeThinkingBlocks, so an empty seed
+        // erases the first half's thinking on the continuation's first chunk.
+        continuedThought: typeof target.thoughtProcess === 'string' ? target.thoughtProcess : '',
+        continuedBlocks: Array.isArray(target.claudeThinkingBlocks)
+          ? [...(target.claudeThinkingBlocks as Array<{ thinking: string; signature: string }>)]
+          : [],
+      };
+    }
+  } else {
+    // The queue batch becomes ONE user message, exactly as the client-side
+    // drain composes it: `[label]\ntext` per item, FIFO, skipped items
+    // contributing nothing at all (including their attachments).
+    const batch = composeBatch(take);
+    const userMessage = {
+      id: deps.newId(),
+      role: 'user',
+      content: batch.text,
+      attachments: batch.attachments,
+      timestamp: nowStart,
+    };
+    history = [...stored, userMessage as SlimHistoryMessage];
+    keep = history;
+    base = { id: deps.newId(), role: 'assistant', timestamp: nowStart };
+  }
 
   // Write the log back WHOLE, with only `messages` replaced. The other ~55
   // fields are the ones the browser last saved; rebuilding them here would
@@ -237,7 +347,14 @@ export async function runTurnForQueue(
     clientId: deps.clientId,
     folderDefaults: deps.folderDefaults,
   });
-  const body = buildTurnRequestBody(input);
+  // The chat route only reads this as a BOOLEAN (`continueFromMessage`): when
+  // the history ends on an assistant turn it appends the resume instruction
+  // itself. Passing the id anyway keeps one name for the thing across the
+  // browser path and this one.
+  const body = buildTurnRequestBody(
+    input,
+    continueFromMessageId ? { continueFromMessageId } : undefined,
+  );
 
   let res: Response;
   try {
@@ -249,22 +366,20 @@ export async function runTurnForQueue(
       }),
     );
   } catch (e) {
-    return { ok: false, stage: 'post', reason: String((e as Error)?.message || e) };
+    return { ok: false, stage: 'post', reason: String((e as Error)?.message || e), consumedIds: [] };
   }
   if (!res.ok || !res.body) {
     return {
       ok: false,
       stage: 'post',
       reason: `route answered ${res.status}${res.body ? '' : ' with no body'}`,
+      consumedIds: [],
     };
   }
 
-  const acc = createTurnAccState({
-    continuedSeed: '',
-    continuedThought: '',
-    continuedBlocks: [],
-    notices: [],
-  });
+  // Empty for a send or a rerun; the target's own half for a continue (see
+  // the shape block above for why the thinking has to travel too).
+  const acc = createTurnAccState({ ...seed, notices: [] });
   const flags = createTurnFlags();
   const sink = createRunnerSink();
 
@@ -280,6 +395,11 @@ export async function runTurnForQueue(
     // does nothing" (MEASURED: that is the bug this fixes). The partial the
     // model produced is dropped, as the browser Stop drops its own partial.
     if (deps.wasStopped?.()) {
+      // `history` is the right thing to write for all three shapes:
+      //   send      stored + the user message  → the user turn, no reply
+      //   rerun     stored MINUS the target    → the rewind stands, no reply
+      //   continue  stored UNCHANGED           → the half-finished message is
+      //                                          left exactly as it was
       const saved = await saveMessages(history);
       if (!saved.ok) {
         return {
@@ -288,28 +408,34 @@ export async function runTurnForQueue(
           reason: saved.conflict
             ? 'refused: the conversation changed on disk while this turn ran'
             : `save failed: ${String(saved.error || 'unknown')}`,
+          consumedIds: [],
         };
       }
-      return { ok: false, stage: 'stopped', reason: 'stopped by request' };
+      return { ok: false, stage: 'stopped', reason: 'stopped by request', consumedIds };
     }
     // The stream threw for another reason: an API error frame, or a transport
     // failure. What the model produced before that point is NOT saved — same
     // as the browser, where an un-finalized streaming message is dropped on an
     // error that is not an abort. Saving a partial turn here would put a
     // truncated answer on disk with nothing marking it as truncated.
-    return { ok: false, stage: 'stream', reason: String((e as Error)?.message || e) };
+    return { ok: false, stage: 'stream', reason: String((e as Error)?.message || e), consumedIds: [] };
   }
 
   // ⚠ `attachments` — see F34. finalizeTurnMessage does NOT set it; in the
   // browser the streaming flush has already written tool attachments onto the
   // message being finalized. A runner has no flush, so it must put them on
   // the base itself or a file a tool produced vanishes with no error anywhere.
+  //
+  // For a CONTINUE, `base` is the target message itself, so the files its
+  // first half produced are already in there — append rather than replace, or
+  // continuing a reply would silently drop the attachments it had earned.
   const assistant = finalizeTurnMessage(
     {
-      id: deps.newId(),
-      role: 'assistant',
-      timestamp: deps.nowMs(),
-      attachments: flags.toolAttachments,
+      ...base,
+      attachments: [
+        ...(Array.isArray(base.attachments) ? base.attachments : []),
+        ...flags.toolAttachments,
+      ],
       ...(acc.currentThought ? { thoughtProcess: acc.currentThought } : {}),
     },
     assertFinalizable(acc),
@@ -325,7 +451,10 @@ export async function runTurnForQueue(
 
   // Saved through the one helper built above (see it for why `updatedAt` is
   // dropped), so the success save and the Stop save cannot drift apart.
-  const result = await saveMessages([...history, assistant]);
+  // `keep` is history for a send or a rerun, and everything BEFORE the
+  // target for a continue — where `assistant` carries the target's own id,
+  // so this replaces it in place instead of appending a near-duplicate.
+  const result = await saveMessages([...keep, assistant]);
   if (!result.ok) {
     return {
       ok: false,
@@ -333,6 +462,7 @@ export async function runTurnForQueue(
       reason: result.conflict
         ? 'refused: the conversation changed on disk while this turn ran'
         : `save failed: ${String(result.error || 'unknown')}`,
+      consumedIds: [],
     };
   }
 
@@ -341,5 +471,6 @@ export async function runTurnForQueue(
     messageId: String(assistant.id),
     savedAt: deps.nowMs(),
     unappliedDescriptions: sink.report.unappliedDescriptions.length,
+    consumedIds,
   };
 }

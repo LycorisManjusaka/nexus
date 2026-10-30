@@ -210,33 +210,28 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
         // the conversation permanently "running".
         await abandon(t.being, t.convoId, c.claim.token);
         const reason = String((e as Error)?.message || e);
-        outcomes.push({ being: t.being, convoId: t.convoId, ran: false, result: { ok: false, stage: 'post', reason } });
+        outcomes.push({ being: t.being, convoId: t.convoId, ran: false, result: { ok: false, stage: 'post', reason, consumedIds: [] } });
         closeRelay(t.convoId, { type: 'error', error: reason });
         continue;
       }
 
       offStop();
 
-      // CONSUME the batch on success AND on an explicit Stop; ABANDON every
-      // other failure.
+      // WHICH ids are done is the runner's answer, not this route's.
       //
-      //   · success  — the turn is saved, the items are done.
-      //   · stopped  — the person cancelled. runTurnForQueue already saved the
-      //     user turn with no reply; consuming the items here is what makes
-      //     Stop stick. Abandoning would leave them for the auto-trigger to
-      //     re-fire, and the generation just stopped would start over — which
-      //     is exactly the "Stop does nothing" this fixes.
-      //   · other failure — abandon puts the lease back and leaves the items,
-      //     so the batch is unchanged, the auto-trigger signature is unchanged,
-      //     and an instantly-failing turn cannot re-fire forever.
-      const consume = result.ok || result.stage === 'stopped';
-      if (consume) {
-        await release(
-          t.being,
-          t.convoId,
-          c.claim.token,
-          c.claim.items.map((i) => i.id),
-        );
+      // It used to be `every id we handed over`, which was right while a batch
+      // could only be a run of user messages. It stopped being right the
+      // moment rerun/continue existed: the runner takes only the LEADING run
+      // of one shape, so the rest of a mixed batch was never answered and
+      // releasing it here would delete those messages silently. The runner
+      // also consumes a few FAILURES on purpose (a command whose target is
+      // gone is permanent — abandoning it re-fires it forever).
+      //
+      // An empty list means abandon: the lease goes back, the items stay, the
+      // auto-trigger signature is unchanged, and an instantly-failing turn
+      // cannot re-fire forever.
+      if (result.consumedIds.length > 0) {
+        await release(t.being, t.convoId, c.claim.token, result.consumedIds);
       } else {
         await abandon(t.being, t.convoId, c.claim.token);
       }

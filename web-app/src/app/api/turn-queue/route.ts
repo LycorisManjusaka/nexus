@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
-  breakLease,
+  breakLease, isCommandKind,
 } from '@/lib/turnQueue';
 import { liveTurnStatus } from '@/lib/turnBus';
 
@@ -104,6 +104,24 @@ export async function POST(req: Request) {
 
   try {
     if (action === 'enqueue') {
+      // A COMMAND (rerun/continue) carries a pointer, not a body, so it takes
+      // the other validation entirely: `targetMsgId` is required and text is
+      // meaningless. Kept in this branch rather than loosening the emptiness
+      // check below — that check is what stops an accidental blank send from
+      // waking a being, and a command must not be the hole in it.
+      if (isCommandKind(String(body.kind))) {
+        const targetMsgId = typeof body.targetMsgId === 'string' ? body.targetMsgId.trim() : '';
+        if (!targetMsgId) {
+          return NextResponse.json({ error: 'targetMsgId is required' }, { status: 400 });
+        }
+        const r = await enqueue(being, convoId, {
+          kind: body.kind as 'rerun' | 'continue',
+          from: typeof body.from === 'string' ? body.from : '',
+          payload: { targetMsgId },
+        });
+        return NextResponse.json({ ok: true, id: r.item.id, position: r.position });
+      }
+
       const text = typeof body.text === 'string' ? body.text : '';
       const attachments = Array.isArray(body.attachments) ? body.attachments : [];
       // An empty message with no attachments is not a thing to wake anyone for.

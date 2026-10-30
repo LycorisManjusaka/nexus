@@ -45,11 +45,31 @@ import crypto from 'crypto';
 import { BEINGS_DIR, sanitizeBeingName } from './beingPaths';
 
 /**
- * What woke (or will wake) the being. Only `user_message` is produced today;
- * the others are the extension points phase 4c/4d land on and are declared
- * here so the on-disk shape does not have to change when they arrive.
+ * What woke (or will wake) the being.
+ *
+ * Two families, and the difference decides how a batch may be formed:
+ *
+ *   · CONTENT  — `user_message` (and later letter/schedule/system): the item
+ *     CARRIES the thing to answer. Several in a row merge into one turn.
+ *   · COMMAND  — `rerun`, `continue`: the item carries only a POINTER
+ *     (`{ targetMsgId }`) at a message already on disk. Nothing to merge, and
+ *     merging would be wrong: a rerun means "throw that answer away", which
+ *     cannot also mean "and here is some new text".
+ *
+ * `letter`/`schedule`/`system` are still unproduced extension points, declared
+ * so the on-disk shape does not change when they arrive.
  */
-export type QueueItemKind = 'user_message' | 'letter' | 'schedule' | 'system';
+export type QueueItemKind =
+  | 'user_message' | 'letter' | 'schedule' | 'system'
+  | 'rerun' | 'continue';
+
+/** The kinds that point at an existing message instead of carrying one. */
+export const COMMAND_KINDS = ['rerun', 'continue'] as const;
+export type CommandKind = (typeof COMMAND_KINDS)[number];
+
+export function isCommandKind(kind: string): kind is CommandKind {
+  return (COMMAND_KINDS as readonly string[]).includes(kind);
+}
 
 export interface QueueItem {
   /** Unique per item. Also the ack/dedupe handle for the enqueuer. */
@@ -477,11 +497,54 @@ export async function queuedConversations(
   return out;
 }
 
-/** `user_message` payload shape. The only kind produced today. */
+/** `user_message` payload shape. */
 export interface UserMessagePayload {
   /** The text EXACTLY as it would have been sent directly, label included. */
   text: string;
   attachments?: unknown[];
+}
+
+/**
+ * `rerun` / `continue` payload shape: a pointer, never a body.
+ *
+ * The id and NOT the index, because the queue and the runner read the log at
+ * two different moments. An index would silently name a different message if
+ * anything landed in between; an id that no longer exists is a failure the
+ * runner can report, which is the difference between "nothing happened, here
+ * is why" and "something happened to the wrong message".
+ */
+export interface CommandPayload {
+  targetMsgId: string;
+}
+
+/**
+ * Take the longest leading run of items that can form ONE turn together.
+ *
+ * FIFO is the whole contract of this queue, so the answer is always a PREFIX:
+ * nothing is reordered and nothing is skipped over. Two shapes exist —
+ *
+ *   [user, user, user]            → all three (they merge, composeBatch)
+ *   [rerun, …]                    → just the rerun (a command stands alone)
+ *   [user, user, rerun, user]     → the two users; the rerun waits for the
+ *                                   next pass, which then takes it alone
+ *
+ * WHY THIS EXISTS AT ALL: before commands, every item merged, so the runner
+ * could take the claim whole and the tick route could consume every id it was
+ * given. The first mixed batch breaks both — composeBatch would SKIP the
+ * command (no payload.text) while the route released its id anyway, and the
+ * rerun would vanish with no error anywhere. That is the exact failure
+ * `Batch.skipped` warns about, so the fix belongs here rather than in a
+ * caller remembering to check.
+ *
+ * `rest` is returned rather than implied so a caller cannot compute it a
+ * second, differing way.
+ */
+export function splitLeadingTurn(items: QueueItem[]): { take: QueueItem[]; rest: QueueItem[] } {
+  if (items.length === 0) return { take: [], rest: [] };
+  if (isCommandKind(items[0].kind)) return { take: [items[0]], rest: items.slice(1) };
+  let n = 0;
+  while (n < items.length && !isCommandKind(items[n].kind)) n++;
+  return { take: items.slice(0, n), rest: items.slice(n) };
 }
 
 export interface Batch {

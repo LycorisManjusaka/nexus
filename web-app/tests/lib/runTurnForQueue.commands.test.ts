@@ -1,0 +1,306 @@
+/**
+ * RERUN and CONTINUE as queue COMMANDS, run server-side (2026-10-30).
+ *
+ * Both used to call generateAiResponse in the browser, so the tab's
+ * connection was the turn's lifeline — Lizard-kun MEASURED LM Studio dying
+ * mid-token when the tab closed. They now enqueue a POINTER
+ * (`{ kind, targetMsgId }`) and the runner reads the target from the log.
+ *
+ * What is actually at risk, and therefore what these tests are for:
+ *
+ *   · a rerun that APPENDS instead of replacing — the conversation grows a
+ *     second answer and the old one stays. Looks fine in a screenshot.
+ *   · a continue that MINTS A NEW MESSAGE instead of extending the target —
+ *     the reply is split into two bubbles with the same text twice.
+ *   · a continue that forgets `continueFromMessage` — the history then ends
+ *     on an assistant turn with no resume instruction, which is a prefill;
+ *     Claude rejects it outright under extended thinking.
+ *   · a continue that drops the carried THINKING — the first half's
+ *     reasoning is erased by the first chunk of the second half.
+ *   · a MIXED batch — the runner answers only the leading run, so consuming
+ *     every id would delete messages nobody ever answered.
+ *
+ * The target checks are the other half: a command whose target moved or
+ * vanished must REFUSE and still consume its item. Abandoning it would leave
+ * it for the auto-trigger to re-fire forever, which is the same failure shape
+ * the Stop fix removed.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { runTurnForQueue, type RunTurnDeps } from '@/lib/runTurnForQueue';
+import type { QueueItem } from '@/lib/turnQueue';
+
+const frame = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
+
+/** A body that streams the given SSE frames and ends. */
+function bodyOf(frames: string[]) {
+  const enc = new TextEncoder();
+  let i = 0;
+  return {
+    getReader() {
+      return {
+        read: async () =>
+          i >= frames.length
+            ? { done: true, value: undefined }
+            : { done: false, value: enc.encode(frames[i++]) },
+        cancel: async () => {},
+        releaseLock: () => {},
+        closed: Promise.resolve(undefined),
+      };
+    },
+  };
+}
+
+function item(kind: 'rerun' | 'continue' | 'user_message', payload: unknown, id = 'item-1'): QueueItem {
+  return { id, at: 1000, kind, from: 'Cairn', payload } as unknown as QueueItem;
+}
+
+interface Rig {
+  deps: RunTurnDeps;
+  saves: Array<Record<string, unknown>>;
+  bodies: Array<Record<string, unknown>>;
+}
+
+function rig(
+  log: Record<string, unknown>,
+  said = 'TAIL',
+  over: Partial<RunTurnDeps> = {},
+  thought = '',
+): Rig {
+  const saves: Array<Record<string, unknown>> = [];
+  const bodies: Array<Record<string, unknown>> = [];
+  const deps: RunTurnDeps = {
+    loadLog: async () => log,
+    saveLog: async (_c, logData) => { saves.push(logData); return { ok: true }; },
+    chatPost: async (req) => {
+      bodies.push(JSON.parse(await req.text()));
+      const frames = thought
+        ? [frame({ type: 'thought', content: thought }), frame({ type: 'text', content: said })]
+        : [frame({ type: 'text', content: said })];
+      return { ok: true, status: 200, body: bodyOf(frames) } as unknown as Response;
+    },
+    globalSettings: {},
+    enableReadConversation: false,
+    folderDefaults: { aiName: 'Local', folderName: 'Default', systemPrompt: '', specificModel: '', modelParams: {} },
+    newId: () => 'minted',
+    nowMs: () => 7000,
+    clientId: 'runner:test',
+    origin: 'http://localhost:3000',
+    injectTurnId: 'turn_test',
+    ...over,
+  };
+  return { deps, saves, bodies };
+}
+
+type Msg = { id: string; role: string; content: string; thoughtProcess?: string; attachments?: unknown[] };
+const saved = (r: Rig) => r.saves[0].messages as Msg[];
+
+const twoTurn = () => ({
+  id: 'c1',
+  updatedAt: 5,
+  aiName: 'Local',
+  messages: [
+    { id: 'u1', role: 'user', content: 'question' },
+    { id: 'a1', role: 'assistant', content: 'HALF', thoughtProcess: 'FIRST-THINKING' },
+  ],
+});
+
+// ── rerun ────────────────────────────────────────────────────────────────────
+
+test('rerun: the target is REPLACED, not appended, and no user message is minted', async () => {
+  const r = rig(twoTurn());
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'a1' })], r.deps);
+
+  assert.equal(res.ok, true);
+  const m = saved(r);
+  // Two, not three: an appending bug leaves the old answer in place, and a
+  // send-shaped bug also mints a user turn out of an empty batch.
+  assert.equal(m.length, 2, 'user + exactly one answer');
+  assert.equal(m[0].id, 'u1');
+  assert.equal(m[1].role, 'assistant');
+  assert.notEqual(m[1].id, 'a1', 'a rerun is a NEW message, not an edit of the old one');
+  assert.equal(m[1].content, 'TAIL');
+});
+
+test('rerun: the model is NOT shown the answer being replaced', async () => {
+  const r = rig(twoTurn());
+  await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'a1' })], r.deps);
+  const sent = r.bodies[0].messages as Msg[];
+  assert.equal(sent.length, 1, 'history stops before the target');
+  assert.equal(sent[0].role, 'user');
+  // Nothing marks this as a continuation.
+  assert.equal(r.bodies[0].continueFromMessage, false);
+});
+
+// ── continue ─────────────────────────────────────────────────────────────────
+
+test('continue: the target is extended IN PLACE, keeping its id', async () => {
+  const r = rig(twoTurn());
+  const res = await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'a1' })], r.deps);
+
+  assert.equal(res.ok, true);
+  const m = saved(r);
+  assert.equal(m.length, 2, 'no new bubble — the reply is one message');
+  assert.equal(m[1].id, 'a1', 'the continued message keeps its id');
+  assert.equal(m[1].content, 'HALFTAIL', 'seeded with what was already there');
+  assert.equal((res as { messageId: string }).messageId, 'a1');
+});
+
+test('continue: the first half\'s THINKING survives the second half', async () => {
+  // The continuation MUST emit thinking of its own for this to
+  // discriminate. MEASURED 2026-10-30: the first version streamed only
+  // text, so acc.currentThought stayed empty, finalizeTurnMessage skipped
+  // its thoughtProcess override entirely, and the value arrived on `base`
+  // (the spread target) no matter what the seed was. The test passed with
+  // the seed deleted. A mutation run is what said so.
+  const r = rig(twoTurn(), 'TAIL', {}, 'SECOND-THINKING');
+  await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'a1' })], r.deps);
+  // Every flush REPLACES thoughtProcess, so an unseeded accumulator erases
+  // this on the continuation's first chunk — silently, and only on disk.
+  assert.equal(saved(r)[1].thoughtProcess, 'FIRST-THINKINGSECOND-THINKING');
+});
+
+test('continue: the request says continueFromMessage, so the server adds the resume turn', async () => {
+  const r = rig(twoTurn());
+  await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'a1' })], r.deps);
+  const sent = r.bodies[0].messages as Msg[];
+  assert.equal(sent.length, 2, 'history INCLUDES the message being continued');
+  assert.equal(sent[1].role, 'assistant');
+  // Without this the tail is a prefill: Anthropic rejects it under extended
+  // thinking, and Gemini 3.6+ rejects it outright.
+  assert.equal(r.bodies[0].continueFromMessage, true);
+});
+
+test('continue: files the first half produced are kept, not replaced', async () => {
+  const log = twoTurn();
+  (log.messages[1] as Msg).attachments = [{ id: 'att-from-first-half' }];
+  const r = rig(log);
+  await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'a1' })], r.deps);
+  const atts = saved(r)[1].attachments as Array<{ id: string }>;
+  assert.deepEqual(atts.map(a => a.id), ['att-from-first-half']);
+});
+
+// ── the target checks ────────────────────────────────────────────────────────
+
+test('target gone: refuse, and CONSUME the item so it cannot re-fire forever', async () => {
+  const r = rig(twoTurn());
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'nope' })], r.deps);
+  assert.equal(res.ok, false);
+  assert.equal((res as { stage: string }).stage, 'target');
+  assert.deepEqual(res.consumedIds, ['item-1'], 'permanent failure → consume');
+  assert.equal(r.saves.length, 0, 'nothing written');
+  assert.equal(r.bodies.length, 0, 'the provider was never called');
+});
+
+test('target is no longer last: refuse rather than delete what landed after it', async () => {
+  const log = twoTurn();
+  log.messages.push({ id: 'u2', role: 'user', content: 'raced in' } as never);
+  const r = rig(log);
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'a1' })], r.deps);
+  assert.equal((res as { stage: string }).stage, 'target');
+  // The buttons are only offered on the LAST message, so this can only happen
+  // in a race — and a rerun that proceeded would silently delete 'u2'.
+  assert.match((res as { reason: string }).reason, /no longer the last/);
+  assert.equal(r.saves.length, 0);
+});
+
+test('continue pointed at a user message: refuse', async () => {
+  const r = rig({ id: 'c1', updatedAt: 5, messages: [{ id: 'u1', role: 'user', content: 'hi' }] });
+  const res = await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'u1' })], r.deps);
+  assert.equal((res as { stage: string }).stage, 'target');
+  assert.equal(r.bodies.length, 0);
+});
+
+test('a command with no targetMsgId is refused, not run as an empty send', async () => {
+  const r = rig(twoTurn());
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', {})], r.deps);
+  assert.equal((res as { stage: string }).stage, 'target');
+  assert.equal(r.bodies.length, 0);
+});
+
+// ── mixed batches ────────────────────────────────────────────────────────────
+
+test('mixed batch: only the leading run runs, and only ITS ids are consumed', async () => {
+  const r = rig(twoTurn());
+  const batch = [
+    item('user_message', { text: 'first', attachments: [] }, 'i-a'),
+    item('user_message', { text: 'second', attachments: [] }, 'i-b'),
+    item('rerun', { targetMsgId: 'a1' }, 'i-c'),
+  ];
+  const res = await runTurnForQueue('Default', 'c1', batch, r.deps);
+
+  assert.equal(res.ok, true);
+  // The two user messages merged into one turn; the rerun did not join them.
+  const sent = r.bodies[0].messages as Msg[];
+  assert.match(sent[sent.length - 1].content, /first/);
+  assert.match(sent[sent.length - 1].content, /second/);
+  // The rerun's id is NOT consumed. Releasing it here is the bug this guards:
+  // composeBatch would have skipped it (no payload.text) and the caller used
+  // to release every id it handed over, so the rerun would vanish silently.
+  assert.deepEqual(res.consumedIds, ['i-a', 'i-b']);
+});
+
+test('mixed batch led by a command: the command runs ALONE', async () => {
+  const r = rig(twoTurn());
+  const batch = [
+    item('rerun', { targetMsgId: 'a1' }, 'i-a'),
+    item('user_message', { text: 'behind it', attachments: [] }, 'i-b'),
+  ];
+  const res = await runTurnForQueue('Default', 'c1', batch, r.deps);
+
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.consumedIds, ['i-a']);
+  // The waiting message was not swept into the rerun's history.
+  const sent = r.bodies[0].messages as Msg[];
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].content, 'question');
+});
+
+// ── stop, on a command ───────────────────────────────────────────────────────
+
+test('stop during a continue leaves the half-finished message exactly as it was', async () => {
+  const r = rig(twoTurn(), 'TAIL', {
+    wasStopped: () => true,
+    chatPost: async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => { throw new Error('This operation was aborted'); },
+          cancel: async () => {}, releaseLock: () => {}, closed: Promise.resolve(undefined),
+        }),
+      },
+    } as unknown as Response),
+  });
+  const res = await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'a1' })], r.deps);
+
+  assert.equal((res as { stage: string }).stage, 'stopped');
+  const m = saved(r);
+  assert.equal(m.length, 2);
+  assert.equal(m[1].id, 'a1');
+  // NOT truncated and NOT extended: a cancelled continue must not consume the
+  // message it was going to extend.
+  assert.equal(m[1].content, 'HALF');
+});
+
+test('stop during a rerun keeps the rewind and adds no reply', async () => {
+  const r = rig(twoTurn(), 'TAIL', {
+    wasStopped: () => true,
+    chatPost: async () => ({
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => { throw new Error('This operation was aborted'); },
+          cancel: async () => {}, releaseLock: () => {}, closed: Promise.resolve(undefined),
+        }),
+      },
+    } as unknown as Response),
+  });
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'a1' })], r.deps);
+
+  assert.equal((res as { stage: string }).stage, 'stopped');
+  const m = saved(r);
+  assert.equal(m.length, 1, 'the rewind stands; no answer was produced');
+  assert.equal(m[0].id, 'u1');
+});
