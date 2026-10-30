@@ -2810,8 +2810,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // seed is passed in rather than read from `messages` so this callback's
     // deps do not have to include the array, which changes every render and
     // would re-arm the auto-trigger effect on each one.
-    const watchId = watch?.continueMsgId
-      || `watch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // A REAL message id, not a throwaway marker: it is sent to the runner as
+    // `assistantMsgId` and becomes the id of the message that lands on disk.
+    // That identity is what keeps this bubble MOUNTED across the reload in
+    // `finally` -- and streaming TTS lives entirely in that component's refs.
+    // MEASURED 2026-10-31: with a throwaway id, a long reply stops being
+    // spoken the moment the turn ends, and nothing reports an error.
+    const watchId = watch?.continueMsgId || uuidv4();
     let raf: number | null = null;
     // Hoisted out of the `try` so the catch can reach it: an error frame makes
     // runTurnStream throw while the relay is still OPEN, and the catch has to
@@ -2834,7 +2839,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const kick = await fetch('/api/runner/tick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ being: folderName, convoId, detach: true }),
+        // `assistantMsgId` only for a fresh reply. A continue already streams
+        // into an existing message, and the runner keeps that id by itself.
+        body: JSON.stringify({
+          being: folderName,
+          convoId,
+          detach: true,
+          ...(watch?.continueMsgId ? {} : { assistantMsgId: watchId }),
+        }),
       });
       const kd = await kick.json().catch(() => null);
       if (!kd?.ok) {

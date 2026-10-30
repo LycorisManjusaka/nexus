@@ -93,6 +93,13 @@ interface PassOpts {
   selfId: string;
   origin: string;
   /**
+   * The placeholder id a kicking tab is already streaming into. Passed
+   * straight through to the runner, which adopts it for the first pass so the
+   * tab's end-of-turn reload does not change the React key. See
+   * RunTurnDeps.proposedAssistantId.
+   */
+  assistantMsgId: string;
+  /**
    * A relay this route already opened (the `detach` path). Whatever happens —
    * including nothing at all, because the batch was claimed by someone else —
    * it must be closed, or the tab that is watching waits forever on a turn
@@ -193,6 +200,7 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
             modelParams: (t.settings.modelParams || {}) as Record<string, unknown>,
           },
           newId: () => crypto.randomUUID(),
+          proposedAssistantId: opts.assistantMsgId || undefined,
           nowMs: () => Date.now(),
           clientId: holder,
           // The route reads the body, not the host — but a Request needs a URL,
@@ -272,6 +280,9 @@ export async function POST(req: Request) {
     const detach = body.detach === true;
     const oneBeing = typeof body.being === 'string' ? body.being.trim() : '';
     const oneConvo = typeof body.convoId === 'string' ? body.convoId.trim() : '';
+    // Only meaningful alongside a single being+convo: it names ONE placeholder.
+    // A sweep over every being has no tab behind it and leaves this empty.
+    const assistantMsgId = typeof body.assistantMsgId === 'string' ? body.assistantMsgId.trim() : '';
     const origin = new URL(req.url).origin;
 
     // ── Who may run turns for this store ──────────────────────────────────
@@ -304,7 +315,7 @@ export async function POST(req: Request) {
       }
       const turnId = newTurnId();
       beginTurn(oneConvo, turnId);
-      void runPass({ auto, oneBeing, oneConvo, selfId, origin, relayConvoId: oneConvo })
+      void runPass({ auto, oneBeing, oneConvo, selfId, origin, assistantMsgId, relayConvoId: oneConvo })
         .catch((e) => {
           console.error('[runner] detached pass threw:', e);
           endTurn(oneConvo, { type: 'error', error: String((e as Error)?.message || e) });
@@ -312,7 +323,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, started: true, attached: false, host: selfId, turnId });
     }
 
-    const r = await runPass({ auto, oneBeing, oneConvo, selfId, origin, relayConvoId: null });
+    const r = await runPass({ auto, oneBeing, oneConvo, selfId, origin, assistantMsgId, relayConvoId: null });
     return NextResponse.json({ ok: true, host: selfId, auto, ...r });
   } catch (e) {
     return fail(e, 'the runner tick failed');

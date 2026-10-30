@@ -96,6 +96,26 @@ export interface RunTurnDeps {
   };
   /** Fresh message / turn / attachment ids. */
   newId: () => string;
+  /**
+   * The id the CALLER has already painted a placeholder under, adopted as the
+   * first pass's assistant message id.
+   *
+   * ⚠ This is not cosmetic. ChatArea renders the message list with
+   * `key={msg.id}`, and a watching tab reloads from disk when the relay
+   * closes. If the id this runner saves differs from the id the tab streamed
+   * into, that reload unmounts the streaming bubble and mounts a new one --
+   * taking every ref inside it with it. Streaming TTS keeps its processed
+   * offset, its ordered audio slots and its in-flight synthesis fetches
+   * there, so a long reply stops being spoken partway through with no error
+   * anywhere. MEASURED 2026-10-31.
+   *
+   * Ignored (and `newId` used instead) when absent, empty, or already present
+   * in the log: a duplicate id is worse than a remount.
+   *
+   * Only the FIRST pass. A handoff's second pass is a genuinely new message
+   * that no tab has painted, so it keeps minting its own.
+   */
+  proposedAssistantId?: string;
   /** Clock, injected so a test is deterministic. */
   nowMs: () => number;
   /** This runner's identity, for lastWriter and the turn registry. */
@@ -239,6 +259,19 @@ export async function runTurnForQueue(
   const stored = Array.isArray(log.messages) ? (log.messages as SlimHistoryMessage[]) : [];
   const nowStart = deps.nowMs();
 
+  // The first pass's assistant id: the caller's if it is usable, ours if not.
+  // Collision check against the log is the whole reason this is a function and
+  // not a `??` -- two messages with one id breaks dedupe, rerun's "is it last"
+  // check, and every edit-by-id path at once.
+  const firstPassAssistantId = (): string => {
+    const proposed = deps.proposedAssistantId;
+    if (typeof proposed !== 'string' || !proposed) return deps.newId();
+    if (stored.some((m) => String((m as Record<string, unknown>).id) === proposed)) {
+      return deps.newId();
+    }
+    return proposed;
+  };
+
   // ── What shape of turn is this? ────────────────────────────────────────────
   //
   //   send      history = stored + a NEW user message        save: + assistant
@@ -287,7 +320,7 @@ export async function runTurnForQueue(
       // Throw the answer away and ask again from the same point.
       history = stored.slice(0, idx);
       keep = history;
-      base = { id: deps.newId(), role: 'assistant', timestamp: nowStart };
+      base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
     } else {
       if (target.role === 'user') {
         return { ok: false, stage: 'target', reason: 'cannot continue a user message', consumedIds };
@@ -324,7 +357,7 @@ export async function runTurnForQueue(
     };
     history = [...stored, userMessage as SlimHistoryMessage];
     keep = history;
-    base = { id: deps.newId(), role: 'assistant', timestamp: nowStart };
+    base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
   }
 
   // Write the log back WHOLE, with only `messages` replaced. The other ~55
