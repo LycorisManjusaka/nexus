@@ -280,10 +280,17 @@ test('stop during a continue leaves the half-finished message exactly as it was'
   assert.equal(m[1].id, 'a1');
   // NOT truncated and NOT extended: a cancelled continue must not consume the
   // message it was going to extend.
+  //
+  // This still holds after the 2026-10-30 partial-commit fix, and the reason is
+  // THIS fixture: the reader rejects on its FIRST read, so nothing was
+  // delivered and the committed partial is the target unchanged. A continue
+  // stopped AFTER some text arrives keeps that text — see
+  // runTurnForQueue.stop.test.ts, which drives the same path with a reader that
+  // delivers first.
   assert.equal(m[1].content, 'HALF');
 });
 
-test('stop during a rerun keeps the rewind and adds no reply', async () => {
+test('stop during a rerun keeps the rewind and commits a marked, empty reply', async () => {
   const r = rig(twoTurn(), 'TAIL', {
     wasStopped: () => true,
     chatPost: async () => ({
@@ -301,6 +308,15 @@ test('stop during a rerun keeps the rewind and adds no reply', async () => {
 
   assert.equal((res as { stage: string }).stage, 'stopped');
   const m = saved(r);
-  assert.equal(m.length, 1, 'the rewind stands; no answer was produced');
+  // ⚠ CORRECTED 2026-10-30. This asserted `m.length === 1` — "the rewind
+  // stands; no answer was produced" — which encoded the bug Lizard-kun then
+  // measured: a stopped rerun lost the old reply AND saved nothing in its
+  // place, so a reload came back one message short. Every shape now commits
+  // its partial, and when nothing was delivered the partial is an empty reply
+  // carrying the stop marker, so the log says what happened.
+  assert.equal(m.length, 2, 'the user turn and the (empty) stopped reply');
   assert.equal(m[0].id, 'u1');
+  assert.equal(m[1].role, 'assistant');
+  assert.equal(m[1].content, '', 'nothing was delivered before the stop');
+  assert.notEqual(m[1].id, 'a1', 'the rewind stands: the old reply is not resurrected');
 });

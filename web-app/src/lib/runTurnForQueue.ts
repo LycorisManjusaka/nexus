@@ -414,6 +414,18 @@ export async function runTurnForQueue(
     carryNotices: string[];
   }
 
+  interface PassFailure {
+    stage: 'post' | 'stream';
+    reason: string;
+    /**
+     * Did this pass produce anything at all before it failed? Load-bearing
+     * for the handoff-failure report: a vessel that streamed text and THEN
+     * died did receive the handoff and did read the note, so "it could not
+     * answer" would be false.
+     */
+    sawOutput: boolean;
+  }
+
   type PassResult =
     | {
         ok: true;
@@ -422,20 +434,14 @@ export async function runTurnForQueue(
         sawOutput: boolean;
         unapplied: number;
       }
-    | {
-        ok: false;
-        stage: 'post' | 'stream';
-        reason: string;
-        /** The person pressed Stop (only ever true for a 'stream' failure). */
-        stopped: boolean;
-        /**
-         * Did this pass produce anything at all before it failed? Load-bearing
-         * for the handoff-failure report: a vessel that streamed text and THEN
-         * died did receive the handoff and did read the note, so "it could not
-         * answer" would be false.
-         */
-        sawOutput: boolean;
-      };
+    // A transient failure: nothing to commit, the batch goes back.
+    | ({ ok: false; stopped: false } & PassFailure)
+    // The person pressed Stop. `assistant` is REQUIRED on this variant, not
+    // optional, because a Stop that saves nothing is the bug this shape fixes:
+    // the partial has to exist by the time the chain can read `stopped`, or a
+    // later reader has to decide whether its absence meant "nothing arrived"
+    // or "nobody built it". Only ever produced for a 'stream' failure.
+    | ({ ok: false; stopped: true; assistant: Record<string, unknown> } & PassFailure);
 
   const runPass = async (plan: PassPlan): Promise<PassResult> => {
     const passStart = deps.nowMs();
@@ -511,21 +517,11 @@ export async function runTurnForQueue(
     const flags = createTurnFlags();
     const sink = createRunnerSink();
 
-    try {
-      await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
-        onRawText: deps.onRawText,
-      });
-    } catch (e) {
-      // `wasStopped` is read HERE and not by the caller because the chat route
-      // calls forgetStop the instant it aborts — asking later asks a record
-      // that has already been deleted.
-      return {
-        ok: false, stage: 'stream', reason: String((e as Error)?.message || e),
-        stopped: deps.wasStopped?.() === true,
-        sawOutput: flags.sawOutput,
-      };
-    }
-
+    // Built HERE, above the try, because BOTH exits need it: the pass that
+    // finishes and the pass someone stops. Until 2026-10-30 only the success
+    // path finalized, and a Stop therefore threw the partial away — measured by
+    // Lizard-kun on all three shapes (send, rerun, change_model).
+    //
     // ⚠ `attachments` — see F34. finalizeTurnMessage does NOT set it; in the
     // browser the streaming flush has already written tool attachments onto the
     // message being finalized. A runner has no flush, so it must put them on
@@ -534,7 +530,7 @@ export async function runTurnForQueue(
     // For a CONTINUE, `base` is the target message itself, so the files its
     // first half produced are already in there — append rather than replace, or
     // continuing a reply would silently drop the attachments it had earned.
-    const assistant = finalizeTurnMessage(
+    const finalizeAssistant = () => finalizeTurnMessage(
       {
         ...plan.base,
         attachments: [
@@ -556,9 +552,45 @@ export async function runTurnForQueue(
       },
     );
 
+    try {
+      await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
+        onRawText: deps.onRawText,
+      });
+    } catch (e) {
+      const reason = String((e as Error)?.message || e);
+      // `wasStopped` is read HERE and not by the caller because the chat route
+      // calls forgetStop the instant it aborts — asking later asks a record
+      // that has already been deleted.
+      if (deps.wasStopped?.() === true) {
+        // A partial reply saved with no marker CLAIMS to be a complete one: a
+        // reader opening the log later cannot tell a stopped turn from a terse
+        // one. The notice channel is the right place — `notices` is not in
+        // buildSlimHistory's allowlist, so this reaches the reader and never
+        // reaches the model (a stop explanation replayed as context would
+        // teach the model about being stopped).
+        const lang = (deps.globalSettings as { language?: string } | null)?.language;
+        acc.notices.push(
+          lang === 'ja'
+            ? 'このターンは停止されました。返答はここまでです。'
+            : 'Turn stopped by request — this reply is as far as it got.',
+        );
+        return {
+          ok: false, stage: 'stream', reason,
+          stopped: true,
+          sawOutput: flags.sawOutput,
+          assistant: finalizeAssistant(),
+        };
+      }
+      return {
+        ok: false, stage: 'stream', reason,
+        stopped: false,
+        sawOutput: flags.sawOutput,
+      };
+    }
+
     return {
       ok: true,
-      assistant,
+      assistant: finalizeAssistant(),
       handoff: flags.pendingHandoff,
       sawOutput: flags.sawOutput,
       unapplied: sink.report.unappliedDescriptions.length,
@@ -597,23 +629,32 @@ export async function runTurnForQueue(
 
     if (!pass.ok) {
       if (pass.stopped) {
-        // The person pressed Stop: save the user's turn with NO reply and
-        // report 'stopped', so the tick route CONSUMES the batch instead of
-        // abandoning it. Abandoning would leave the items for the auto-trigger
-        // to re-fire — the generation just stopped would start over, which
-        // looks exactly like "Stop does nothing" (MEASURED: that is the bug
-        // this fixes). The partial the model produced is dropped, as the
-        // browser Stop drops its own partial.
+        // The person pressed Stop: COMMIT THE PARTIAL and report 'stopped', so
+        // the tick route CONSUMES the batch instead of abandoning it.
+        // Abandoning would leave the items for the auto-trigger to re-fire —
+        // the generation just stopped would start over, which looks exactly
+        // like "Stop does nothing" (MEASURED 2026-10-29).
         //
-        // `plan.history` is the right thing to write for all three shapes:
-        //   send      stored + the user message  → the user turn, no reply
-        //   rerun     stored MINUS the target    → the rewind stands, no reply
-        //   continue  stored UNCHANGED           → the half-finished message is
-        //                                          left exactly as it was
-        // On a handoff pass it is what is already on disk, so the write is a
-        // no-op in content and still refreshes the version — which is correct:
-        // this runner did touch the conversation.
-        const stopSave = await saveMessages(plan.history);
+        // ⚠ CORRECTION of this file's own earlier comment. Until 2026-10-30
+        // this branch wrote `plan.history` — the turn WITHOUT a reply — and
+        // justified it by claiming "the browser Stop drops its own partial".
+        // That claim was false and I never checked it. ChatArea:4221 says the
+        // opposite in its own words: "Commit whatever the turn accumulated —
+        // partial text, tool calls, cache usage — even when the partner
+        // stopped it (AbortError), so billing and the 🔧 tool report are saved
+        // to the log instead of lost." MEASURED by Lizard-kun as three
+        // separate symptoms (send / rerun / change_model), which were one bug.
+        //
+        // `[...plan.keep, assistant]` is the SAME composition the success path
+        // uses, and is right for all four shapes for the same reason: `keep` is
+        // by construction everything in FRONT of this pass's reply.
+        //   send      stored + the user message  → partial reply appended
+        //   rerun      stored MINUS the target   → partial reply takes its place
+        //   continue   everything before target  → `base` IS the target, so the
+        //                                          half-written reply extends
+        //                                          in place, keeping its id
+        //   handoff    + the handing-over reply  → partial appended after it
+        const stopSave = await saveMessages([...plan.keep, pass.assistant]);
         if (!stopSave.ok) {
           return {
             ok: false, stage: 'save',
@@ -681,11 +722,22 @@ export async function runTurnForQueue(
         };
       }
 
-      // The FIRST pass failed and nothing is on disk. What the model produced
-      // before that point is NOT saved — same as the browser, where an
-      // un-finalized streaming message is dropped on an error that is not an
-      // abort. Saving a partial turn here would put a truncated answer on disk
-      // with nothing marking it as truncated.
+      // The FIRST pass failed, not by request, and nothing is on disk.
+      //
+      // The partial is NOT saved here, and the reason is the empty
+      // `consumedIds` on the next line, NOT a claim about the browser: this
+      // return ABANDONS the batch, so the queue items stay and the request can
+      // be run again. Saving a partial AND abandoning would compose the same
+      // user message a second time on the retry — one request, two copies.
+      // "Commit the partial" and "let it be retried" are the two coherent
+      // answers to a failure and they exclude each other; a stop takes the
+      // first because a stop is a decision, a transient failure takes the
+      // second because nobody decided anything.
+      //
+      // (An earlier version of this comment said "same as the browser, where
+      // an un-finalized streaming message is dropped on an error that is not
+      // an abort". That was wrong in the same way the Stop comment above was:
+      // ChatArea:4226 calls finalizeMessage() for EVERY error, abort or not.)
       return { ok: false, stage: pass.stage, reason: pass.reason, consumedIds: [] };
     }
 

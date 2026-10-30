@@ -962,6 +962,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // a failed probe leaves behind: not knowing must never block sending.
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeTurnKeyRef = useRef<{ convoId: string; turnId: string } | null>(null);
+  // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
+  //
+  // A watched runner turn ends, when stopped, with the route's own abort echo
+  // ("This operation was aborted") arriving as an error frame — so the watch
+  // loop throws and the catch writes it into the note a person reads. That
+  // reads as a failure, and nothing failed: the partial is saved and on disk.
+  //
+  // ⚠ KNOWN GAP: this is a per-tab flag, so a turn stopped from ANOTHER tab
+  // still shows the abort text here. Fixing that needs the route to mark its
+  // own stop on the wire (today only the message text distinguishes it, and
+  // matching provider prose is not a signal) — not done.
+  const stopPressedRef = useRef(false);
   const [foreignTurn, setForeignTurn] = useState<{ label?: string; startedAt?: number } | null>(null);
   // Bumped to re-fire the auto-save effect on demand — used by the conflict
   // banner's "overwrite with this tab" escape hatch, which clears the base
@@ -2778,7 +2790,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    */
   const runOnRunner = useCallback(async (
     watch?: WatchTarget,
-  ): Promise<'ran' | 'idle' | 'failed'> => {
+  ): Promise<'ran' | 'idle' | 'failed' | 'stopped'> => {
     if (!folderName || !convoId) return 'failed';
 
     // A placeholder to stream into. It never reaches disk: the save effect is
@@ -2794,6 +2806,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const watchId = watch?.continueMsgId
       || `watch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     let raf: number | null = null;
+    // Cleared at the START of each watch, not at the end of the last one: a
+    // Stop that lands after the turn already finished must not silence the
+    // note for the NEXT turn.
+    stopPressedRef.current = false;
     setLoading(true);
     if (watch?.continueMsgId) {
       setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true } : m)));
@@ -2920,6 +2936,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       );
       return 'ran';
     } catch (e) {
+      // A stop is not a failure. The route aborts the provider call, which
+      // usually emits one last error frame, which lands here — and the turn's
+      // partial is already saved by the runner, so there is nothing for a
+      // person to act on. Still returns 'stopped' rather than 'ran' so the
+      // caller does not read it as a completed turn.
+      if (stopPressedRef.current) return 'stopped';
       setStockNote(String((e as Error)?.message || t('chat.stock.failed')));
       return 'failed';
     } finally {
@@ -2938,8 +2960,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // could.
       await reloadMessagesFromDisk();
       setLoading(false);
+      // The panel's poll only runs while `injectTurnId` is set, and Stop clears
+      // that immediately — so without this read the lease row FREEZES at its
+      // last value and keeps saying a turn is running after it stopped
+      // (MEASURED by Lizard-kun: "⏳ 1 通を動かしています / runner:… が持っています"
+      // left on screen until a reload). Every exit from a watch needs it, not
+      // just the button's — the button already had one in its own finally.
+      refreshStock();
     }
-  }, [folderName, convoId, t, globalSettings, reloadMessagesFromDisk]);
+  }, [folderName, convoId, t, globalSettings, reloadMessagesFromDisk, refreshStock]);
 
   /**
    * The "run it now" button: ask the runner for this conversation's batch.
@@ -3426,6 +3455,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleStop = () => {
+    // Set FIRST, before anything that can yield: the watch loop can throw on
+    // the route's abort echo while this function is still running, and the
+    // catch over there reads this flag to tell "stopped on purpose" from "the
+    // turn failed".
+    stopPressedRef.current = true;
+
     // ── Say "stop THIS turn" out loud, then abort ─────────────────────────
     // The abort below is what stops the turn today, and this POST changes
     // nothing a person can see. It is here because the two are not the same
