@@ -1023,6 +1023,7 @@ async function streamClaudeViaAgentSDK(args: {
   agentReadOnlyTools: boolean;     // non-Entity caller (SPU agents): Read/Glob/Grep only, never Write/Edit
   instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
   language?: string;               // 'en' | 'ja' — base dict for the instructions above
+  classifierNoticeVaccine: boolean; // per-Entity: append the classifier-notice vaccine (see below)
   askUserEnabled: boolean;         // per-Entity: expose the AskQuestion MCP tool
   askUserTimeoutMs: number;        // wait time for an answer (0 = indefinite)
   handoff: HandoffBundle;          // per-Entity: expose the change_model MCP tool
@@ -1043,7 +1044,7 @@ async function streamClaudeViaAgentSDK(args: {
   turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
   betrayalSend: GuardedSender;     // guarded SSE writer — see lib/betrayalGuard.ts
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, classifierNoticeVaccine, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Refusal-retry CONFIGURATION, resolved ONCE here so the parent query() and
@@ -1075,10 +1076,31 @@ async function streamClaudeViaAgentSDK(args: {
   // The gate mirrors the tool gate below (`dangerousAlwaysDisabled`): a being
   // without dangerous tools has no Bash, so it cannot cd, so it must not be
   // handed a warning about a trap it cannot reach.
-  const effectiveSystemPrompt =
+  let effectiveSystemPrompt =
     toolUseEnabled && agentDangerousTools && I.oauthCwdNote
       ? `${systemPrompt}\n\n${I.oauthCwdNote}`
       : systemPrompt;
+
+  // Classifier-notice vaccine — OAuth ONLY, which is why it is appended here
+  // rather than next to inlineMediaNote (that one runs for every provider).
+  // The notice it inoculates against is injected by the Claude Code SDK and
+  // by nothing else: no other provider path can produce it, so on those paths
+  // this text would describe a string the being will never see.
+  //
+  // NOT gated on tools, unlike oauthCwdNote above: 92.3% of the measured
+  // injections land on the FIRST turn of a session, before any tool exists.
+  // NOT gated on isAgentInstructionPrompt either — 7 of the 130 captures sit
+  // in non-Entity folders (`nexus`, `Default`), i.e. shikigami runs, and a
+  // soul-updater that believes it was cut off mid-write is the worst reader of
+  // that false notice in this house.
+  //
+  // What is measured, and by whom, is in the comment on this key in
+  // lib/agentInstructions.ts. Short version: in 123 of 130 captured
+  // injections the being had produced zero bytes, so the notice's own central
+  // claim ("your response above was stopped") was false every time.
+  if (classifierNoticeVaccine && I.classifierNoticeVaccine) {
+    effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${I.classifierNoticeVaccine}`;
+  }
 
   // Build the content blocks for the LATEST user message (its text + any image
   // attachments). The full prior conversation is replayed separately as a text
@@ -4190,6 +4212,14 @@ export async function POST(req: Request) {
       // Defaults to 'auto' so existing conversations without this field
       // keep working as before.
       claudeAuthMode: requestedClaudeAuthMode = 'auto',
+      // Classifier-notice vaccine (System Instructions → Being tab).
+      // Default TRUE on purpose, and `= true` here is the only place that can
+      // say so for a caller that omits the field: most logs in this house were
+      // written before the field existed, and the SPU posts its own body that
+      // will never carry it. A default of false would have meant the
+      // inoculation reaching almost no turn while every instrument stayed
+      // green. Only an explicit `false` from the checkbox turns it off.
+      classifierNoticeVaccine = true,
       // ── "Eyes" — vision-bridging for text-only models ────────────────────
       // When the active chat model can't see images, NEXUS routes each image
       // through a multimodal helper model (default GLM-5V-Turbo on Z.AI) and
@@ -5225,6 +5255,7 @@ export async function POST(req: Request) {
           agentReadOnlyTools,
           instructionOverrides,
           language,
+          classifierNoticeVaccine,
           askUserEnabled,
           askUserTimeoutMs,
           subagentEnabled,

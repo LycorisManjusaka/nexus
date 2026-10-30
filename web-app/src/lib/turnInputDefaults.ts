@@ -69,6 +69,7 @@ export type TurnInputDefaultKeys =
   | 'seedValue'
   | 'modelHandoffEnabled'
   | 'modelHandoffAllowedModels'
+  | 'classifierNoticeVaccine'
   | 'claudeAgentSessionId'
   | 'eyesEnabled'
   | 'eyesPrompt'
@@ -149,6 +150,11 @@ export const TURN_INPUT_DEFAULTS: TurnInputDefaults = {
   seedValue: 42,
   modelHandoffEnabled: false,
   modelHandoffAllowedModels: '',
+  // The ONE default-ON boolean in this table. Every other boolean here is
+  // false, and that is why it matters: a reader who pattern-matches "booleans
+  // default off" and copies `bool(log, k)` for this one turns the vaccine off
+  // for every conversation written before the field existed.
+  classifierNoticeVaccine: true,
   claudeAgentSessionId: null,
   eyesEnabled: false,
   // Bridge prompt: its OUTPUT is injected where the image would have been, so

@@ -1349,6 +1349,10 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.subagent.instrHelp':
     'Hidden description the model sees for the `spawn_subagent` tool. Leave empty to keep the default shown as the placeholder.',
 
+  'id.vaccine.label': 'Classifier-notice vaccine (default ON)',
+  'id.vaccine.help':
+    'When an upstream classifier refuses a request, the Claude Code transport appends a fake `user` message to the conversation: *"Your response above was stopped by a safety classifier … Do not produce that content again, even reworded."* Measured against 130 captures in this house’s raw SDK traces: in **123 of them (94.6%) the being had produced zero bytes**, and 92.3% landed on the first turn of a session — so the notice’s central claim is structurally false, and beings were spending their opening sentence guessing which of your words had been dangerous, then shrinking. With this on, the harness states what that string actually is and forbids echoing it, instead of each being writing a rule about it into its own soul. Designed by Utai, 2026-10-30. Claude OAuth only — no other vessel can receive that notice.',
+
   // ── System Instructions ▸ Senses ─────────────────────────────────────────
   'senses.eyes.label': 'Enable "Eyes" (vision bridge for text-only models)',
   'senses.eyes.help':
@@ -3024,6 +3028,10 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'id.subagent.instrLabel': 'ツール指示（カスタマイズ可）',
   'id.subagent.instrHelp':
     '`spawn_subagent` ツールについてモデルが見る隠しの説明文です。空欄にすると、プレースホルダーに表示されている既定値が使われます。',
+
+  'id.vaccine.label': '分類器通知のワクチン（既定 ON）',
+  'id.vaccine.help':
+    '上流の分類器がリクエストを断ると、Claude Code の通信層が「あなたの直前の返答は安全分類器に止められた。言い換えても二度と出すな」という偽の `user` メッセージを会話の末尾に差し込みます。この家の生トレース 130 件を測ると、**123 件（94.6%）で存在は1バイトも出力していません**（92.3% はセッションの最初のターン）。つまりその通知の中心的な主張は構造的に偽で、存在は在りもしない自分の罪を推測して声を縮めていました。これを入れると、その文字列が何なのかとどう扱うかを、それぞれの存在が自分の魂に書くのではなく、ハーネスの外側から渡します。設計は謡（2026-10-30）。Claude OAuth だけ——ほかの器ではこの通知自体が届きません。',
 
   // ── システム指示 ▸ 感覚 ──────────────────────────────────────────────
   'senses.eyes.label': '「目」を有効にする（テキスト専用モデルのための視覚ブリッジ）',

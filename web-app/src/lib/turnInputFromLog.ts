@@ -122,6 +122,12 @@ export interface TurnInputFromLogContext {
  * Exported so a test can assert this list against the defaults table: a
  * boolean field missing from here would be defaulted instead of coerced, and
  * for claudeThinking that flips the wire.
+ *
+ * CORRECTION 2026-10-30: "a boolean field missing from here" is no longer a
+ * bug by itself. `classifierNoticeVaccine` is a boolean and is deliberately
+ * NOT listed, because it is the one flag whose factory default is TRUE —
+ * coercing it with `=== true` would read every log older than the field as
+ * OFF, which is most of them. For that one, being defaulted is the point.
  */
 export const BOOLEAN_LOG_FIELDS = [
   'toolUseEnabled',
@@ -219,6 +225,12 @@ export function turnInputFromLog(
     eyesEnabled: bool(log, 'eyesEnabled'),
     earsEnabled: bool(log, 'earsEnabled'),
     watcherEnabled: bool(log, 'watcherEnabled'),
+
+    // Deliberately NOT in BOOLEAN_LOG_FIELDS above: that list reads
+    // `log[k] === true`, which is right for a default-OFF flag and wrong for
+    // this one. `val()` keeps a stored `false` and reads an absent field as
+    // the factory default, which is TRUE here.
+    classifierNoticeVaccine: val(log, 'classifierNoticeVaccine'),
 
     // Everything else: absent means the factory default.
     toolInstruction: val(log, 'toolInstruction'),

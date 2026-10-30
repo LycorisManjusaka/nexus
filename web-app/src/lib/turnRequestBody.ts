@@ -109,6 +109,14 @@ export interface TurnRequestInput {
   modelHandoffAllowedModels: string;
 
   /**
+   * Claude OAuth only: append the classifier-notice vaccine to the system
+   * prompt (see lib/agentInstructions.ts for the measurement). Default TRUE —
+   * read from a log with `??`, not `=== true`, so a conversation older than
+   * the field is inoculated rather than excluded.
+   */
+  classifierNoticeVaccine: boolean;
+
+  /**
    * Only consumed by the Claude OAuth path. When null, backend starts a
    * fresh Anthropic-side session. When set, backend resumes that session
    * (so role semantics are preserved without flatten).
@@ -210,6 +218,7 @@ export function buildTurnRequestBody(
     seedValue: input.seedValue,
     modelHandoffEnabled: input.modelHandoffEnabled,
     modelHandoffAllowedModels: input.modelHandoffAllowedModels,
+    classifierNoticeVaccine: input.classifierNoticeVaccine,
     // Only set on the FIRST request after a switch: the note the previous
     // vessel wrote. The server injects it as a user turn (it is not the
     // partner's voice, and it says so).

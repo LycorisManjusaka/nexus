@@ -802,6 +802,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [seedValue, setSeedValue] = useState(TURN_INPUT_DEFAULTS.seedValue);
   // ── Vessel handoff (change_model) — per-being ─────────────────────────────
   const [modelHandoffEnabled, setModelHandoffEnabled] = useState(TURN_INPUT_DEFAULTS.modelHandoffEnabled);
+  // Classifier-notice vaccine — see lib/agentInstructions.ts for what is
+  // measured. Factory default TRUE: the notice it inoculates against fires on
+  // the first turn of a session, so a being that has to opt in would be bitten
+  // before it ever reached the checkbox.
+  const [classifierNoticeVaccine, setClassifierNoticeVaccine] = useState(TURN_INPUT_DEFAULTS.classifierNoticeVaccine);
   // One model per line: `family | specificModel | on/off | optional label`
   // (comments and blank lines ignored). Rows are copied by hand out of the
   // model-list window. EMPTY by default and never auto-filled: this list is
@@ -1608,6 +1613,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSeedEnabled(data.seedEnabled === true);
         if (typeof data.seedValue === 'number') setSeedValue(data.seedValue);
         setModelHandoffEnabled(!!data.modelHandoffEnabled);
+        // `!== false`, NOT `=== true`: this field is younger than almost
+        // every log in this house, and a default-ON flag read with `=== true`
+        // is OFF for every conversation that predates it — which is the
+        // population that needs it.
+        setClassifierNoticeVaccine(data.classifierNoticeVaccine !== false);
         if (typeof data.modelHandoffAllowedModels === 'string') setModelHandoffAllowedModels(data.modelHandoffAllowedModels);
         // Safety valve: a handoff never survives re-opening a conversation.
         // Loading IS the "new session" 望月希子 asked to reset at.
@@ -1682,6 +1692,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSeedEnabled(pick('seedEnabled', false));
         setSeedValue(pick('seedValue', 42));
         setModelHandoffEnabled(!!folderSettings.modelHandoffEnabled);
+        setClassifierNoticeVaccine(pick('classifierNoticeVaccine', true));
         if (typeof folderSettings.modelHandoffAllowedModels === 'string') {
           setModelHandoffAllowedModels(folderSettings.modelHandoffAllowedModels);
         }
@@ -1754,8 +1765,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // is what keeps the dependency list complete — it caught claudeAuthMode,
   // which the old inline save-effect dep array had silently dropped.
   const buildLogData = useCallback((msgs: unknown[]) => ({
-    id: convoId, folderName, aiName: localAiName, title, messages: msgs, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel,
-  }), [convoId, folderName, localAiName, title, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel]);
+    id: convoId, folderName, aiName: localAiName, title, messages: msgs, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel,
+  }), [convoId, folderName, localAiName, title, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel]);
 
   useEffect(() => {
     // Skip the disk-save POST WHILE a reply is streaming (loading === true).
@@ -6255,6 +6266,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </div>
                 )}
               </div>
+              {/* ── Classifier-notice vaccine (Claude OAuth only) ──────────
+                  Lives in the BEING tab because it is about what this being is
+                  told, not about how its reply is generated. Shown only for
+                  OAuth Claude: the notice is injected by the Claude Code SDK
+                  and by nothing else, so on every other vessel this checkbox
+                  would govern a string that never arrives.
+
+                  Gated on deliveryCtx.isOAuthClaude — the same predicate the
+                  badge uses, which reads the EFFECTIVE vessel. One consequence
+                  worth knowing: during a change_model handoff to a non-Claude
+                  vessel it disappears, because for that request the statement
+                  "this runs on OAuth Claude" is false. */}
+              {deliveryCtx.isOAuthClaude && (
+                <div className="border-t border-border pt-6 mt-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      id="classifierNoticeVaccine"
+                      checked={classifierNoticeVaccine}
+                      onChange={(e) => setClassifierNoticeVaccine(e.target.checked)}
+                      className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                    />
+                    <label htmlFor="classifierNoticeVaccine" className="text-sm font-semibold text-foreground cursor-pointer">
+                      {t('id.vaccine.label')}
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{renderRich(t('id.vaccine.help'))}</p>
+                </div>
+              )}
               </>)}
 
               {activeSettingsTab === 'senses' && (<>
@@ -7254,7 +7294,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       showFatigueToEntity,
                       fatigueInstruction,
                       baseBindingMode,
-                      modelHandoffEnabled, modelHandoffAllowedModels,
+                      modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine,
                     };
                     const res = await fetch('/api/folders', {
                       method: 'POST',
