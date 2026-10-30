@@ -25,18 +25,23 @@
  *
  * ── WHAT THIS DELIBERATELY DOES NOT DO ─────────────────────────────────────
  *
- * No retry. A failed turn leaves the queue items alone (`abandon`, not
- * `release`), so the next poll sees the same batch and the auto-trigger
- * signature is unchanged — the same guard the client-side drain uses, for the
- * same reason: a turn that fails instantly must not re-fire forever.
- *
- * No handoff follow-up. `change_model` ends the turn server-side and ChatArea
- * sends a SECOND request as the new vessel. A runner stops after the first:
- * the message is saved with the handoff recorded on it, and the next queued
- * turn starts from the being's saved default — which is what a fresh user
- * turn does anyway (MEASURED by つよ from the outside, 2026-10-28).
+ * No retry. A turn whose FIRST pass failed leaves the queue items alone
+ * (`abandon`, not `release`), so the next poll sees the same batch and the
+ * auto-trigger signature is unchanged — the same guard the client-side drain
+ * uses, for the same reason: a turn that fails instantly must not re-fire
+ * forever. Once any pass has SAVED, the batch is consumed instead; see the
+ * pass chain for why re-firing then would duplicate the conversation.
  *
  * No attachment-description write-back. See runnerSink's RunnerSinkReport.
+ *
+ * ── CORRECTION (2026-10-30) ────────────────────────────────────────────────
+ *
+ * This list used to begin "No handoff follow-up", and that is why it is worth
+ * leaving the correction here rather than quietly editing the line: the claim
+ * was true of this file and false of NEXUS. While normal sends still POSTed
+ * from the browser, ChatArea ran the second request; when every send moved
+ * here, nothing did, so `change_model` reported a switch that never happened.
+ * The hop now runs here — see the pass chain below.
  */
 
 import { buildSlimHistory, type SlimHistoryMessage } from '@/lib/slimHistory';
@@ -52,6 +57,8 @@ import {
   type QueueItem, type CommandPayload,
 } from '@/lib/turnQueue';
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
+import type { TurnHandoffPlan } from '@/lib/turnEvents';
+import { describeProviderError } from '@/lib/providerErrors';
 
 /** What the runner could not do itself. */
 export interface RunTurnDeps {
@@ -62,7 +69,17 @@ export interface RunTurnDeps {
     convoId: string,
     logData: Record<string, unknown>,
     opts?: { expectedUpdatedAt?: number; clientId?: unknown },
-  ) => Promise<{ ok: boolean; conflict?: unknown; error?: unknown }>;
+  ) => Promise<{
+    ok: boolean;
+    conflict?: unknown;
+    error?: unknown;
+    /**
+     * The version actually written. REQUIRED in practice for a multi-pass
+     * turn: see `saveMessages` for what happens when a second save is still
+     * guarded against the version the first one replaced.
+     */
+    writtenUpdatedAt?: number;
+  }>;
   /** The chat route's POST handler, called with a Request this builds. */
   chatPost: (req: Request) => Promise<Response>;
   /** local_data/user_settings.json, already parsed. */
@@ -142,8 +159,23 @@ export interface RunTurnDeps {
 interface Consumed { consumedIds: string[] }
 
 export type RunTurnResult =
-  /** The turn ran and the log was written. */
-  | ({ ok: true; messageId: string; savedAt: number; unappliedDescriptions: number } & Consumed)
+  /**
+   * The turn ran and the log was written.
+   *
+   * `handoffHops` counts the EXTRA passes a `change_model` opened (0 for an
+   * ordinary turn). `handoffError` is present when a later pass could not run
+   * — the turn still produced an answer, so this is ok:true with the problem
+   * named rather than a failure that would make the tick route abandon a
+   * batch whose first pass is already on disk.
+   */
+  | ({
+      ok: true;
+      messageId: string;
+      savedAt: number;
+      unappliedDescriptions: number;
+      handoffHops: number;
+      handoffError?: string;
+    } & Consumed)
   /**
    * Nothing was run. `reason` names which precondition failed, never a
    * generic failure: a runner that logs "could not run" tells the operator
@@ -312,165 +344,429 @@ export async function runTurnForQueue(
   // a tab.
   const { updatedAt: _carriedVersion, ...logWithoutVersion } = log;
   void _carriedVersion;
-  const saveMessages = (messages: unknown[]) =>
-    deps.saveLog(
+  // ⚠ The guard has to ADVANCE after every successful save. MEASURED
+  // 2026-10-30, live, on the first real handoff: pass 1 saved, pass 2 was
+  // refused with `from runner:..., by runner:...` — the runner racing ITSELF,
+  // because both passes were still guarded against the version pass 1 had
+  // already replaced. The hop ran, the model answered, and the answer was
+  // thrown away by my own lock.
+  //
+  // `writtenUpdatedAt` exists for exactly this and says so in its doc comment
+  // in fsStorage: "the client needs this as the base for its NEXT save —
+  // without it, the first successful guarded save would make every following
+  // one look stale". The browser reads it. The second implementation of the
+  // same interface did not, because the browser only ever saves once per turn
+  // and so never needed the field its own contract provides.
+  let guardVersion = typeof log.updatedAt === 'number' ? log.updatedAt : undefined;
+  const saveMessages = async (messages: unknown[]) => {
+    const r = await deps.saveLog(
       convoId,
       { ...logWithoutVersion, messages },
+      { expectedUpdatedAt: guardVersion, clientId: deps.clientId },
+    );
+    if (r.ok && typeof r.writtenUpdatedAt === 'number') guardVersion = r.writtenUpdatedAt;
+    return r;
+  };
+
+  // ── ONE PASS = one POST, one stream, one saved message ────────────────────
+  //
+  // A turn is usually a single pass. `change_model` makes it more than one: the
+  // vessel that hands over finishes its OWN message, and the vessel it hands to
+  // answers in a SECOND pass as a second assistant message. That is how the
+  // browser does it (ChatArea:4259), and it is also what makes cost come out
+  // right without touching the billing code — cost is derived per message from
+  // that message's own modelSpecific, so each vessel pays for its own words.
+  //
+  // Until 2026-10-30 this file stopped after one pass, and the header said so,
+  // justified by つよ's outside measurement that the NEXT queued turn starts on
+  // the saved default. That measurement is true and is about a DIFFERENT thing.
+  // While normal sends still POSTed from the browser, `generateAiResponse` ran
+  // the hop; when every send moved here, the hop had no host left — so
+  // `change_model` answered "switched" and nothing whatsoever happened. A tool
+  // that reports success and does nothing is the beings' version of a button
+  // you can press that does nothing, and that one was MINE.
+  const MAX_HANDOFF_CHAIN = 3;
+
+  // `label` is carried for the failure report only — it is the name a reader
+  // recognises ("Claude Opus 4.8"), not the wire id.
+  type PassVessel = { family: string; specificModel: string; thinking: boolean; label: string };
+
+  interface PassPlan {
+    /** What the model sees this pass. */
+    history: SlimHistoryMessage[];
+    /** What survives in FRONT of this pass's reply when it is saved. */
+    keep: SlimHistoryMessage[];
+    /** What finalizeTurnMessage spreads — the target itself for a continue. */
+    base: Record<string, unknown>;
+    seed: {
+      continuedSeed: string;
+      continuedThought: string;
+      continuedBlocks: Array<{ thinking: string; signature: string }>;
+    };
+    continueFromMessageId: string | null;
+    /** Set only on a pass that a handoff opened. */
+    vessel: PassVessel | null;
+    /** The note the previous vessel wrote; the server injects it as a user turn. */
+    handoffFrom?: unknown;
+    /** A report that a switch failed. Mutually exclusive with handoffFrom server-side. */
+    handoffFailed?: unknown;
+    /** Notices to carry onto this pass's message (a dead vessel's error). */
+    carryNotices: string[];
+  }
+
+  type PassResult =
+    | {
+        ok: true;
+        assistant: Record<string, unknown>;
+        handoff: TurnHandoffPlan | null;
+        sawOutput: boolean;
+        unapplied: number;
+      }
+    | {
+        ok: false;
+        stage: 'post' | 'stream';
+        reason: string;
+        /** The person pressed Stop (only ever true for a 'stream' failure). */
+        stopped: boolean;
+        /**
+         * Did this pass produce anything at all before it failed? Load-bearing
+         * for the handoff-failure report: a vessel that streamed text and THEN
+         * died did receive the handoff and did read the note, so "it could not
+         * answer" would be false.
+         */
+        sawOutput: boolean;
+      };
+
+  const runPass = async (plan: PassPlan): Promise<PassResult> => {
+    const passStart = deps.nowMs();
+
+    // ONE derivation of "which vessel is answering". turnInputFromLog resolves
+    // it (log value, folder default, or this pass's handoff override) and
+    // buildSlimHistory is then told that same name. The first version of this
+    // file computed it separately for the gate, and two rules for the same
+    // question disagree in exactly the case that matters: on a handoff pass the
+    // thinking filter would judge against the OLD vessel while the wire went to
+    // the new one, so the new vessel would be handed reasoning it must not see.
+    const shell = turnInputFromLog(log, {
+      convoId,
+      messages: [],
+      enableReadConversation: deps.enableReadConversation,
+      globalSettings: deps.globalSettings,
+      injectTurnId: deps.injectTurnId,
+      clientId: deps.clientId,
+      folderDefaults: deps.folderDefaults,
+      vesselOverride: plan.vessel,
+    });
+    const slim = buildSlimHistory(plan.history, {
+      hiddenAttachmentsAccessible: log.hiddenAttachmentsAccessible === true,
+      attachmentPathsVisible: effectiveFullAccess(
+        log.agentFullSystemAccess === true,
+        log.agentDangerousTools === true,
+      ),
+      toolHistoryEnabled: log.toolHistoryEnabled === true,
+      saveThinkingToLog: log.saveThinkingToLog === true,
+      turnAiName: shell.aiName,
+    });
+    // The chat route only reads `continueFromMessage` as a BOOLEAN: when the
+    // history ends on an assistant turn it appends the resume instruction
+    // itself. Passing the id anyway keeps one name for the thing across the
+    // browser path and this one.
+    const body = buildTurnRequestBody(
+      { ...shell, messages: slim as unknown as SlimHistoryMessage[] },
       {
-        expectedUpdatedAt: typeof log.updatedAt === 'number' ? log.updatedAt : undefined,
-        clientId: deps.clientId,
+        ...(plan.continueFromMessageId ? { continueFromMessageId: plan.continueFromMessageId } : {}),
+        ...(plan.handoffFrom ? { handoffFrom: plan.handoffFrom } : {}),
+        ...(plan.handoffFailed ? { handoffFailed: plan.handoffFailed } : {}),
       },
     );
 
-  // A queued turn is a fresh user turn, so turnAiName is the being's saved
-  // vessel family, not a handoff override (there is none to carry in).
-  const aiName = (log.aiName as string) ?? deps.folderDefaults.aiName;
-  const slim = buildSlimHistory(history, {
-    hiddenAttachmentsAccessible: log.hiddenAttachmentsAccessible === true,
-    attachmentPathsVisible: effectiveFullAccess(
-      log.agentFullSystemAccess === true,
-      log.agentDangerousTools === true,
-    ),
-    toolHistoryEnabled: log.toolHistoryEnabled === true,
-    saveThinkingToLog: log.saveThinkingToLog === true,
-    turnAiName: aiName,
-  });
+    let res: Response;
+    try {
+      res = await deps.chatPost(
+        new Request(`${deps.origin}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    } catch (e) {
+      return {
+        ok: false, stage: 'post', reason: String((e as Error)?.message || e),
+        stopped: false, sawOutput: false,
+      };
+    }
+    if (!res.ok || !res.body) {
+      return {
+        ok: false, stage: 'post',
+        reason: `route answered ${res.status}${res.body ? '' : ' with no body'}`,
+        stopped: false, sawOutput: false,
+      };
+    }
 
-  // Taken, not generated: see RunTurnDeps.injectTurnId.
-  const injectTurnId = deps.injectTurnId;
-  const input = turnInputFromLog(log, {
-    convoId,
-    messages: slim as unknown as SlimHistoryMessage[],
-    enableReadConversation: deps.enableReadConversation,
-    globalSettings: deps.globalSettings,
-    injectTurnId,
-    clientId: deps.clientId,
-    folderDefaults: deps.folderDefaults,
-  });
-  // The chat route only reads this as a BOOLEAN (`continueFromMessage`): when
-  // the history ends on an assistant turn it appends the resume instruction
-  // itself. Passing the id anyway keeps one name for the thing across the
-  // browser path and this one.
-  const body = buildTurnRequestBody(
-    input,
-    continueFromMessageId ? { continueFromMessageId } : undefined,
-  );
+    // Empty for a send or a rerun; the target's own half for a continue (see
+    // the shape block above for why the thinking has to travel too). Notices
+    // are seeded rather than empty so a previous vessel's failure text reaches
+    // the reader on the message that reports it.
+    const acc = createTurnAccState({ ...plan.seed, notices: [...plan.carryNotices] });
+    const flags = createTurnFlags();
+    const sink = createRunnerSink();
 
-  let res: Response;
-  try {
-    res = await deps.chatPost(
-      new Request(`${deps.origin}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }),
+    try {
+      await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
+        onRawText: deps.onRawText,
+      });
+    } catch (e) {
+      // `wasStopped` is read HERE and not by the caller because the chat route
+      // calls forgetStop the instant it aborts — asking later asks a record
+      // that has already been deleted.
+      return {
+        ok: false, stage: 'stream', reason: String((e as Error)?.message || e),
+        stopped: deps.wasStopped?.() === true,
+        sawOutput: flags.sawOutput,
+      };
+    }
+
+    // ⚠ `attachments` — see F34. finalizeTurnMessage does NOT set it; in the
+    // browser the streaming flush has already written tool attachments onto the
+    // message being finalized. A runner has no flush, so it must put them on
+    // the base itself or a file a tool produced vanishes with no error anywhere.
+    //
+    // For a CONTINUE, `base` is the target message itself, so the files its
+    // first half produced are already in there — append rather than replace, or
+    // continuing a reply would silently drop the attachments it had earned.
+    const assistant = finalizeTurnMessage(
+      {
+        ...plan.base,
+        attachments: [
+          ...(Array.isArray(plan.base.attachments) ? plan.base.attachments : []),
+          ...flags.toolAttachments,
+        ],
+        ...(acc.currentThought ? { thoughtProcess: acc.currentThought } : {}),
+      },
+      assertFinalizable(acc),
+      {
+        // This PASS's start, not the turn's: a handoff hop that inherited
+        // nowStart would report the first vessel's thinking time as its own.
+        genStartTime: passStart,
+        nowMs: deps.nowMs(),
+        // VRChat auto-play is a browser behaviour; a saved message that claims
+        // it would make the next tab that opens this log start speaking.
+        autoPlay: false,
+        tokenModel: acc.chosenModelFamily || shell.aiName,
+      },
     );
-  } catch (e) {
-    return { ok: false, stage: 'post', reason: String((e as Error)?.message || e), consumedIds: [] };
-  }
-  if (!res.ok || !res.body) {
+
     return {
-      ok: false,
-      stage: 'post',
-      reason: `route answered ${res.status}${res.body ? '' : ' with no body'}`,
-      consumedIds: [],
+      ok: true,
+      assistant,
+      handoff: flags.pendingHandoff,
+      sawOutput: flags.sawOutput,
+      unapplied: sink.report.unappliedDescriptions.length,
     };
-  }
+  };
 
-  // Empty for a send or a rerun; the target's own half for a continue (see
-  // the shape block above for why the thinking has to travel too).
-  const acc = createTurnAccState({ ...seed, notices: [] });
-  const flags = createTurnFlags();
-  const sink = createRunnerSink();
+  // ── The pass chain ────────────────────────────────────────────────────────
+  //
+  // ⚠ ONCE A PASS HAS SAVED, THE BATCH IS SPENT. From that point `consumedIds`
+  // travels on every return, whatever a later pass does. Abandoning after a
+  // successful save would let the auto-trigger re-fire the WHOLE turn: the
+  // queue items are still there, so the user message would be composed from
+  // them a second time and posted again. One dead second vessel would turn
+  // into a conversation that answers itself twice, forever.
 
-  try {
-    await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
-      onRawText: deps.onRawText,
-    });
-  } catch (e) {
-    // The person pressed Stop: save the user's turn with NO reply and report
-    // 'stopped', so the tick route CONSUMES the batch instead of abandoning it.
-    // Abandoning would leave the items for the auto-trigger to re-fire — the
-    // generation just stopped would start over, which looks exactly like "Stop
-    // does nothing" (MEASURED: that is the bug this fixes). The partial the
-    // model produced is dropped, as the browser Stop drops its own partial.
-    if (deps.wasStopped?.()) {
-      // `history` is the right thing to write for all three shapes:
-      //   send      stored + the user message  → the user turn, no reply
-      //   rerun     stored MINUS the target    → the rewind stands, no reply
-      //   continue  stored UNCHANGED           → the half-finished message is
-      //                                          left exactly as it was
-      const saved = await saveMessages(history);
-      if (!saved.ok) {
+  let plan: PassPlan = {
+    history, keep, base,
+    seed,
+    continueFromMessageId,
+    vessel: null,
+    carryNotices: [],
+  };
+  let saved = false;
+  let lastMessageId = '';
+  let lastSavedAt = 0;
+  let unapplied = 0;
+  let depth = 0;
+  let handoffNote: string | undefined;
+  /** The vessel of the pass that handed over — null means the saved default. */
+  let prevVessel: PassVessel | null = null;
+  /** One failure report per turn, so a pair of dead vessels cannot ping-pong. */
+  let reportedFailure = false;
+
+  for (;;) {
+    const pass = await runPass(plan);
+
+    if (!pass.ok) {
+      if (pass.stopped) {
+        // The person pressed Stop: save the user's turn with NO reply and
+        // report 'stopped', so the tick route CONSUMES the batch instead of
+        // abandoning it. Abandoning would leave the items for the auto-trigger
+        // to re-fire — the generation just stopped would start over, which
+        // looks exactly like "Stop does nothing" (MEASURED: that is the bug
+        // this fixes). The partial the model produced is dropped, as the
+        // browser Stop drops its own partial.
+        //
+        // `plan.history` is the right thing to write for all three shapes:
+        //   send      stored + the user message  → the user turn, no reply
+        //   rerun     stored MINUS the target    → the rewind stands, no reply
+        //   continue  stored UNCHANGED           → the half-finished message is
+        //                                          left exactly as it was
+        // On a handoff pass it is what is already on disk, so the write is a
+        // no-op in content and still refreshes the version — which is correct:
+        // this runner did touch the conversation.
+        const stopSave = await saveMessages(plan.history);
+        if (!stopSave.ok) {
+          return {
+            ok: false, stage: 'save',
+            reason: stopSave.conflict
+              ? 'refused: the conversation changed on disk while this turn ran'
+              : `save failed: ${String(stopSave.error || 'unknown')}`,
+            consumedIds: saved ? consumedIds : [],
+          };
+        }
+        return { ok: false, stage: 'stopped', reason: 'stopped by request', consumedIds };
+      }
+
+      // A HANDOFF pass failed with nothing to show: no credit, a dead key, the
+      // provider down. The vessel that asked for the switch is owed that news
+      // in its own voice — "report, do not stop". A failure that only reaches
+      // the human leaves the being believing it moved somewhere it never
+      // arrived.
+      //
+      // `!pass.sawOutput` is load-bearing (the browser says so too): a vessel
+      // that streamed text and THEN died did receive the handoff and did read
+      // the note, so "it could not answer" would be a lie — and re-posting
+      // would discard that text along with its billing.
+      if (saved && plan.vessel && !pass.sawOutput && !reportedFailure) {
+        reportedFailure = true;
+        plan = {
+          // Unchanged: the failed vessel produced nothing, so there is nothing
+          // new for the original vessel to read except the report itself.
+          history: plan.history,
+          keep: plan.keep,
+          base: { id: deps.newId(), role: 'assistant', timestamp: deps.nowMs() },
+          seed: { continuedSeed: '', continuedThought: '', continuedBlocks: [] },
+          continueFromMessageId: null,
+          // `null` means literally "the being's saved vessel" here. The browser
+          // needs an explicit forceSavedVessel flag because it has a React
+          // handoffOverride to overrule; a runner holds no such state.
+          vessel: prevVessel,
+          handoffFailed: {
+            family: plan.vessel.family,
+            specificModel: plan.vessel.specificModel,
+            label: plan.vessel.label || plan.vessel.specificModel,
+            error: pass.reason,
+          },
+          // The human's copy of the same news. Without this the dead vessel's
+          // error leaves no trace a reader can check.
+          carryNotices: [describeProviderError(pass.reason)],
+        };
+        // Deliberately NOT incrementing depth: the hop that failed was already
+        // counted, and the cap still bounds a being that keeps reaching for a
+        // vessel that is not there.
+        continue;
+      }
+
+      // A later pass failed. The turn DID produce an answer, so the result is
+      // still ok:true — with the failure named, because a handoff that lost
+      // its destination is exactly what the operator needs to see in the log.
+      if (saved) {
         return {
-          ok: false,
-          stage: 'save',
-          reason: saved.conflict
-            ? 'refused: the conversation changed on disk while this turn ran'
-            : `save failed: ${String(saved.error || 'unknown')}`,
-          consumedIds: [],
+          ok: true,
+          messageId: lastMessageId,
+          savedAt: lastSavedAt,
+          unappliedDescriptions: unapplied,
+          handoffHops: depth,
+          handoffError: `${pass.stage}: ${pass.reason}`,
+          consumedIds,
         };
       }
-      return { ok: false, stage: 'stopped', reason: 'stopped by request', consumedIds };
+
+      // The FIRST pass failed and nothing is on disk. What the model produced
+      // before that point is NOT saved — same as the browser, where an
+      // un-finalized streaming message is dropped on an error that is not an
+      // abort. Saving a partial turn here would put a truncated answer on disk
+      // with nothing marking it as truncated.
+      return { ok: false, stage: pass.stage, reason: pass.reason, consumedIds: [] };
     }
-    // The stream threw for another reason: an API error frame, or a transport
-    // failure. What the model produced before that point is NOT saved — same
-    // as the browser, where an un-finalized streaming message is dropped on an
-    // error that is not an abort. Saving a partial turn here would put a
-    // truncated answer on disk with nothing marking it as truncated.
-    return { ok: false, stage: 'stream', reason: String((e as Error)?.message || e), consumedIds: [] };
-  }
 
-  // ⚠ `attachments` — see F34. finalizeTurnMessage does NOT set it; in the
-  // browser the streaming flush has already written tool attachments onto the
-  // message being finalized. A runner has no flush, so it must put them on
-  // the base itself or a file a tool produced vanishes with no error anywhere.
-  //
-  // For a CONTINUE, `base` is the target message itself, so the files its
-  // first half produced are already in there — append rather than replace, or
-  // continuing a reply would silently drop the attachments it had earned.
-  const assistant = finalizeTurnMessage(
-    {
-      ...base,
-      attachments: [
-        ...(Array.isArray(base.attachments) ? base.attachments : []),
-        ...flags.toolAttachments,
-      ],
-      ...(acc.currentThought ? { thoughtProcess: acc.currentThought } : {}),
-    },
-    assertFinalizable(acc),
-    {
-      genStartTime: nowStart,
-      nowMs: deps.nowMs(),
-      // VRChat auto-play is a browser behaviour; a saved message that claims
-      // it would make the next tab that opens this log start speaking.
-      autoPlay: false,
-      tokenModel: acc.chosenModelFamily || aiName,
-    },
-  );
+    // Saved through the one helper built above (see it for why `updatedAt` is
+    // dropped), so the success save and the Stop save cannot drift apart.
+    // `keep` is history for a send or a rerun, and everything BEFORE the
+    // target for a continue — where `assistant` carries the target's own id,
+    // so this replaces it in place instead of appending a near-duplicate.
+    const result = await saveMessages([...plan.keep, pass.assistant]);
+    if (!result.ok) {
+      return {
+        ok: false, stage: 'save',
+        reason: result.conflict
+          ? 'refused: the conversation changed on disk while this turn ran'
+          : `save failed: ${String(result.error || 'unknown')}`,
+        // A handoff pass that cannot save has still spent the first pass's
+        // answer, which IS on disk — so the batch stays consumed.
+        consumedIds: saved ? consumedIds : [],
+      };
+    }
+    saved = true;
+    lastMessageId = String(pass.assistant.id);
+    lastSavedAt = deps.nowMs();
+    unapplied += pass.unapplied;
 
-  // Saved through the one helper built above (see it for why `updatedAt` is
-  // dropped), so the success save and the Stop save cannot drift apart.
-  // `keep` is history for a send or a rerun, and everything BEFORE the
-  // target for a continue — where `assistant` carries the target's own id,
-  // so this replaces it in place instead of appending a near-duplicate.
-  const result = await saveMessages([...keep, assistant]);
-  if (!result.ok) {
-    return {
-      ok: false,
-      stage: 'save',
-      reason: result.conflict
-        ? 'refused: the conversation changed on disk while this turn ran'
-        : `save failed: ${String(result.error || 'unknown')}`,
-      consumedIds: [],
+    const handoff = pass.handoff;
+    if (!handoff) break;
+
+    // Chain guard: a fresh vessel can call change_model on its very first
+    // turn, and two vessels that each prefer the other would ping-pong
+    // forever, spending real money per hop. After the cap the switch simply
+    // stops being followed — and because a queued turn always starts on the
+    // saved default, nothing carries into the next turn either (the browser
+    // keeps an override in React state here; a runner has no between-turn
+    // state at all, which is the same end state by a shorter road).
+    if (depth >= MAX_HANDOFF_CHAIN) {
+      handoffNote = `handoff chain capped at ${MAX_HANDOFF_CHAIN}`;
+      break;
+    }
+    depth += 1;
+
+    // The next pass sees everything up to and including the message that
+    // handed over, and writes a NEW assistant message after it.
+    //
+    // The browser needs a replace-or-append decision here (ChatArea:4284:
+    // a continue's `history` already contains the target, so a blind append
+    // puts one id in the array twice — MEASURED in 先輩_64). This composition
+    // cannot produce that: `keep` is by construction everything in front of
+    // the reply, so `[...keep, assistant]` contains each id exactly once for
+    // all three shapes.
+    const nextHistory = [...plan.keep, pass.assistant as unknown as SlimHistoryMessage];
+    prevVessel = plan.vessel;
+    plan = {
+      history: nextHistory,
+      keep: nextHistory,
+      base: { id: deps.newId(), role: 'assistant', timestamp: deps.nowMs() },
+      seed: { continuedSeed: '', continuedThought: '', continuedBlocks: [] },
+      continueFromMessageId: null,
+      vessel: {
+        family: handoff.family,
+        specificModel: handoff.specificModel,
+        thinking: handoff.thinking,
+        label: handoff.label,
+      },
+      handoffFrom: {
+        family: handoff.fromFamily,
+        specificModel: handoff.fromSpecificModel,
+        label: handoff.fromLabel,
+        note: handoff.note,
+      },
+      carryNotices: [],
     };
   }
 
   return {
     ok: true,
-    messageId: String(assistant.id),
-    savedAt: deps.nowMs(),
-    unappliedDescriptions: sink.report.unappliedDescriptions.length,
+    messageId: lastMessageId,
+    savedAt: lastSavedAt,
+    unappliedDescriptions: unapplied,
+    handoffHops: depth,
+    ...(handoffNote ? { handoffError: handoffNote } : {}),
     consumedIds,
   };
 }

@@ -5654,10 +5654,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   and a fresh arrow written here would defeat it silently. */}
               <MessageBubble
                 msg={msg}
+                /* `!loading` is part of BOTH gates: while a turn is running,
+                   rerun and continue are absent, not present-and-inert. The
+                   handlers still refuse when `loading` (they are the authority
+                   if anything else ever calls them), but a button you can press
+                   that does nothing is the worse failure — Lizard-kun's call:
+                   stop the turn first, then rerun. */
                 {...bubbleCallbacks(
                   msg.id,
-                  msgIdx === messages.length - 1,
-                  msgIdx === messages.length - 1 && msg.role !== 'user',
+                  !loading && msgIdx === messages.length - 1,
+                  !loading && msgIdx === messages.length - 1 && msg.role !== 'user',
                 )}
                 onTtsStatus={handleTtsStatus}
                 onAudioStateChange={handleAudioStateChange}

@@ -103,6 +103,17 @@ export interface TurnInputFromLogContext {
     specificModel: string;
     modelParams: Record<string, unknown>;
   };
+  /**
+   * The vessel a `change_model` handoff opened THIS pass for — absent on the
+   * first pass of every queued turn.
+   *
+   * Carries `thinking` as well as the pair because thinking is a property of
+   * the vessel, not of the conversation: the body builder reads
+   * `turnVessel.thinking` instead of the log's `claudeThinking` whenever an
+   * override owns the turn, so a vessel that rejects `thinking: disabled`
+   * must be able to arrive with its own answer.
+   */
+  vesselOverride?: { family: string; specificModel: string; thinking: boolean } | null;
 }
 
 /**
@@ -173,13 +184,16 @@ export function turnInputFromLog(
   return {
     messages: ctx.messages,
 
-    // Seven from the log, falling back to what the folder would have supplied.
-    aiName: fromProp(log, 'aiName', ctx.folderDefaults.aiName),
+    // Seven from the log, falling back to what the folder would have supplied
+    // — unless a handoff owns this pass, in which case the pair comes from the
+    // plan. `||` and not `??`, byte-for-byte ChatArea:3633: a handoff plan with
+    // an empty family falls back to the saved vessel rather than posting to "".
+    aiName: ctx.vesselOverride?.family || fromProp(log, 'aiName', ctx.folderDefaults.aiName),
     folderName: fromProp(log, 'folderName', ctx.folderDefaults.folderName),
     systemPrompt,
     // `if (data.specificModel)` / `if (data.modelParams)` in ChatArea: a
     // falsy stored value keeps the prop, so this is `||`, not `??`.
-    specificModel,
+    specificModel: ctx.vesselOverride?.specificModel || specificModel,
     modelParams,
     // `data.dateTimeVisibility || 'all'`
     dateTimeVisibility: (log.dateTimeVisibility as string) || 'all',
@@ -236,8 +250,11 @@ export function turnInputFromLog(
     // default vessel. MEASURED by つよ 2026-10-28 from the outside: after a
     // change_model handoff, the NEXT turn answers as the original vessel.
     // That is deliberate (ChatArea:2852) — always start from the cheap
-    // default — and it means a runner never carries a handoff override in.
-    turnVessel: null,
+    // default — and it is why `vesselOverride` is absent for the FIRST pass of
+    // every queued turn. It is set only for a later pass of the SAME turn: the
+    // one a `change_model` handoff opened, where the vessel that was handed to
+    // has to answer as itself.
+    turnVessel: ctx.vesselOverride ? { thinking: ctx.vesselOverride.thinking } : null,
 
     // From the runner / the queue item / the settings files.
     convoId: ctx.convoId,
