@@ -9,7 +9,7 @@ import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId } from '@/lib/firstOriginal';
-import { runTurnStream } from '@/lib/turnStreamLoop';
+import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -2806,6 +2806,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const watchId = watch?.continueMsgId
       || `watch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     let raf: number | null = null;
+    // Hoisted out of the `try` so the catch can reach it: an error frame makes
+    // runTurnStream throw while the relay is still OPEN, and the catch has to
+    // drain it before the reload. See drainStreamToEnd.
+    let reader: ReadableStreamDefaultReader<Uint8Array | string> | null = null;
     // Cleared at the START of each watch, not at the end of the last one: a
     // Stop that lands after the turn already finished must not silence the
     // note for the NEXT turn.
@@ -2928,18 +2932,34 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         attachmentDescribed: () => {},
       };
 
+      reader = ev.body.getReader();
       await runTurnStream(
-        ev.body.getReader(),
+        reader,
         acc, flags, watchSink,
         { t, settings: globalSettings, newAttachmentId: uuidv4 },
         { onChunk: schedule },
       );
       return 'ran';
     } catch (e) {
-      // A stop is not a failure. The route aborts the provider call, which
-      // usually emits one last error frame, which lands here — and the turn's
-      // partial is already saved by the runner, so there is nothing for a
-      // person to act on. Still returns 'stopped' rather than 'ran' so the
+      // ⚠ WAIT FOR THE RELAY TO CLOSE BEFORE FALLING INTO `finally`.
+      //
+      // The reload down there is the authority on what this turn produced, and
+      // it can only be right if the runner has finished WRITING. A throw here
+      // does not mean that: the error frame the route emits on abort reaches
+      // this tab at the same instant it reaches the runner, and the runner
+      // still has to finalize and save. The relay closing is what says the
+      // save is done — the same signal a normal completion already waits for.
+      //
+      // ⚠ CORRECTED 2026-10-30. This comment used to justify going straight on
+      // with "the turn's partial is already saved by the runner, so there is
+      // nothing for a person to act on". The first clause was false, and it
+      // was the premise: MEASURED by Lizard-kun (count to 400, stop at 84, then
+      // rerun and stop at 162, then continue and stop at 340) the tab showed
+      // the state from BEFORE the turn every time, and a manual reload showed
+      // the right thing every time. Three symptoms, one race, and the lie was
+      // in the sentence that explained why no wait was needed.
+      if (reader) await drainStreamToEnd(reader);
+      // A stop is not a failure. Returns 'stopped' rather than 'ran' so the
       // caller does not read it as a completed turn.
       if (stopPressedRef.current) return 'stopped';
       setStockNote(String((e as Error)?.message || t('chat.stock.failed')));

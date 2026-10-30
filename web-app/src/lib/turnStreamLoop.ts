@@ -156,3 +156,87 @@ export async function runTurnStream(
     hooks?.onChunk?.();
   }
 }
+
+/**
+ * How long `drainStreamToEnd` will wait for the producer to close.
+ *
+ * Generous on purpose, because the two failure directions cost differently:
+ * giving up EARLY shows a screen that disagrees with the disk (the measured
+ * bug this exists for), while giving up LATE shows a spinner for a moment
+ * longer. In practice the wait is the time one finalize-and-save takes —
+ * sub-second — and this bound only matters if the producer never closes at all.
+ */
+export const RELAY_DRAIN_TIMEOUT_MS = 10_000;
+
+/**
+ * Read the rest of a stream and throw it away, returning when the PRODUCER
+ * closes it (or the bound expires).
+ *
+ * ── WHY THIS EXISTS ────────────────────────────────────────────────────────
+ *
+ * A throw out of `runTurnStream` is not the end of the turn. It is the end of
+ * THIS READER's interest in the turn, and those are different moments for a
+ * tab watching a server-side turn through lib/turnBus:
+ *
+ *   route aborts → emits an error frame
+ *     ├─ runner:  publishes the frame, then applies it, then THROWS
+ *     │             → catch → finalize → await saveLog   ← takes a while
+ *     │             → the route then calls endTurn(), which closes the relay
+ *     └─ watcher: receives the same frame over HTTP → THROWS
+ *                   → catch → reload the conversation from disk
+ *
+ * Both start at the same instant, so the watcher's READ races the runner's
+ * WRITE — and MEASURED 2026-10-30 (Lizard-kun, counting to 400 and stopping at
+ * 84 / 162 / 340) the read wins. The tab then shows the version from BEFORE
+ * the turn: nothing for a fresh send, the old answer for a rerun, the
+ * un-extended half for a continue. All three were one race, and a manual
+ * reload always showed the right thing, which is the signature of reading too
+ * early rather than of saving wrong.
+ *
+ * A NORMAL completion never had this problem, and the reason names the fix:
+ * the loop above exits on `done`, and the relay only reaches `done` when the
+ * runner has finished saving and the route called `endTurn`. So the correct
+ * signal already existed on this very stream — the throw just skipped past it.
+ * Draining to the end restores it, with no second mechanism to drift from the
+ * first (a poll on `updatedAt` would have been one).
+ *
+ * Discards rather than applies: whatever arrives after the throw is the
+ * producer's parting words, and the conversation reload that follows is the
+ * authority on what the turn actually produced.
+ */
+export async function drainStreamToEnd(
+  reader: ReadableStreamDefaultReader<Uint8Array | string>,
+  timeoutMs: number = RELAY_DRAIN_TIMEOUT_MS,
+): Promise<'closed' | 'timeout' | 'error'> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  // ONE expiry promise for the whole drain, not one per read: a fresh timer
+  // per iteration would reset the bound on every chunk, so a producer that
+  // keeps talking forever would never time out.
+  const expiry = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  try {
+    while (true) {
+      const next = await Promise.race([
+        reader.read().then((r) => (r.done ? 'closed' as const : 'more' as const)),
+        expiry,
+      ]);
+      if (next === 'more') continue;
+      if (next === 'timeout') {
+        // Let go of the connection. A reader left holding a stream nobody is
+        // reading keeps the server's subscription (and its keepalive timer)
+        // alive for as long as the tab lives.
+        try { await reader.cancel(); } catch { /* already gone */ }
+      }
+      return next;
+    }
+  } catch {
+    // A read that rejects (the server restarted, the socket died) IS an end of
+    // stream for this purpose: there is nothing more coming, so the caller
+    // should get on with reloading. Reported distinctly from 'closed' so a
+    // caller that wants to tell a clean goodbye from a dropped one can.
+    return 'error';
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}

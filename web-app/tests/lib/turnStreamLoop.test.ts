@@ -35,7 +35,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runTurnStream } from '@/lib/turnStreamLoop';
+import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { recordingSink, freshFlags, freshAcc, deps } from '../_helpers/turnHarness';
 
 /**
@@ -287,5 +287,105 @@ describe('runTurnStream -- the runner transport: string chunks', () => {
       h.acc, h.flags, h.sink, deps,
     );
     assert.equal(h.acc.currentText, 'A B C');
+  });
+});
+
+/**
+ * drainStreamToEnd — "a throw is not the end of the stream" (2026-10-30).
+ *
+ * What would look different without each rule:
+ *
+ *   the LOOP (read until `done`, not once): absent, the drain returns while
+ *       the producer is still mid-sentence, which is exactly the bug it was
+ *       written for — the caller reloads from disk before the writer wrote.
+ *   ONE expiry promise for the whole drain: absent (a fresh timer per read),
+ *       a producer that keeps emitting resets the bound on every chunk and the
+ *       drain never ends. This is the only test here that can tell the two
+ *       designs apart, because a producer that simply HANGS times out under
+ *       both.
+ *   `reader.cancel()` on timeout: absent, a stream nobody reads keeps the
+ *       server's subscription and its keepalive timer alive for the tab's
+ *       whole life.
+ *   the `catch`: absent, a read that rejects throws out of the drain — and
+ *       the one caller is already inside a catch handling a different error,
+ *       so the real one would be replaced by this one.
+ *
+ * NOT COVERED, named rather than implied: a producer whose chunks resolve
+ * SYNCHRONOUSLY forever would starve the macrotask queue and the timer would
+ * never fire. The infinite reader below yields through a timer precisely so it
+ * does not test that, and the real producer is an HTTP body, where every chunk
+ * costs I/O. If a synchronous in-process producer is ever given to this, the
+ * bound is not a bound.
+ */
+describe('drainStreamToEnd', () => {
+  it('reads to the producer\'s close, not to the first chunk', async () => {
+    let reads = 0;
+    const reader = {
+      async read() {
+        reads += 1;
+        if (reads <= 2) return { done: false, value: 'data: {}\n\n' };
+        return { done: true, value: undefined };
+      },
+      async cancel() {},
+      releaseLock() {},
+      closed: Promise.resolve(undefined),
+    } as unknown as ReadableStreamDefaultReader<Uint8Array | string>;
+
+    assert.equal(await drainStreamToEnd(reader, 2_000), 'closed');
+    // 3 = two chunks plus the one that reported `done`. A single-read drain
+    // would leave this at 1 and still have claimed success.
+    assert.equal(reads, 3);
+  });
+
+  it('returns at once for a stream that is already finished', async () => {
+    const reader = {
+      async read() { return { done: true, value: undefined }; },
+      async cancel() {},
+      releaseLock() {},
+    } as unknown as ReadableStreamDefaultReader<Uint8Array | string>;
+    assert.equal(await drainStreamToEnd(reader, 2_000), 'closed');
+  });
+
+  it('times out on a producer that keeps talking and never closes', async () => {
+    let cancelled = false;
+    let stop = false;
+    const reader = {
+      async read() {
+        // Through a timer, so this models an HTTP body and not a synchronous
+        // generator — see the NOT COVERED note above.
+        await new Promise((r) => setTimeout(r, 1));
+        if (stop) return { done: true, value: undefined };
+        return { done: false, value: 'data: {}\n\n' };
+      },
+      async cancel() { cancelled = true; },
+      releaseLock() {},
+    } as unknown as ReadableStreamDefaultReader<Uint8Array | string>;
+
+    // ⚠ The drain is raced against a bound of the test's OWN, so a drain that
+    // never returns FAILS instead of HANGING. A per-read timer (the design
+    // this test exists to rule out) would wait forever here, and a hang is not
+    // a test result: the mutation harness would stall on it rather than
+    // reporting it CAUGHT.
+    const outcome = await Promise.race([
+      drainStreamToEnd(reader, 40),
+      new Promise<'never-returned'>((r) => { setTimeout(() => r('never-returned'), 3_000); }),
+    ]);
+    stop = true;
+    assert.equal(outcome, 'timeout');
+    // The drain let go of the stream. Without this the subscription upstream
+    // stays registered with nobody reading it.
+    assert.equal(cancelled, true);
+  });
+
+  it('a rejecting read ends the drain instead of throwing out of it', async () => {
+    const reader = {
+      async read(): Promise<never> { throw new Error('socket closed'); },
+      async cancel() {},
+      releaseLock() {},
+    } as unknown as ReadableStreamDefaultReader<Uint8Array | string>;
+
+    // Distinct from 'closed': a dropped socket and a clean goodbye are not the
+    // same fact, even though both mean "stop waiting".
+    assert.equal(await drainStreamToEnd(reader, 2_000), 'error');
   });
 });
