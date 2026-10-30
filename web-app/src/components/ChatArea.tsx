@@ -1737,6 +1737,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // skipped via the flag → tokenizer resolves → systemTokens changes → save
   // fires AGAIN (flag already spent) → POST → fresh updatedAt purely from
   // viewing. They live in the separate token-totals effect below instead.
+
+  // Single source for the saved log object. The auto-save effect (below) and
+  // the brand-new-conversation init in handleSend both build it, and a drift
+  // in their field lists is exactly the bug that puts a conversation's
+  // settings in one writer and not the other. `messages` is the only argument;
+  // every other field is current component state, and eslint's exhaustive-deps
+  // is what keeps the dependency list complete — it caught claudeAuthMode,
+  // which the old inline save-effect dep array had silently dropped.
+  const buildLogData = useCallback((msgs: unknown[]) => ({
+    id: convoId, folderName, aiName: localAiName, title, messages: msgs, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel,
+  }), [convoId, folderName, localAiName, title, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel]);
+
   useEffect(() => {
     // Skip the disk-save POST WHILE a reply is streaming (loading === true).
     // During streaming every SSE frame updates `messages`; without this guard a
@@ -1783,7 +1795,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // So a refusal can tell us the version on disk was our own even
           // when the 200 for it has not come back yet (lastWriter.ts).
           clientId: TAB_CLIENT_ID,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: buildLogData(cleanMessages)
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1920,7 +1932,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [buildLogData, messages, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -3082,47 +3094,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       tokens: 0 // Will update below
     };
 
-    // ── First message of a brand-new conversation: run it in the BROWSER ─────
+    // ── First message of a brand-new conversation ───────────────────────────
     // The server-side runner runs a turn by loading the conversation log
-    // (runTurnForQueue → loadLog → 'no-log' when there is none). A conversation
-    // that has never been saved has no log yet, so its FIRST turn has to be the
-    // one that creates it — and the thing that writes the first log is the
-    // browser's save effect. Every message AFTER this one has a log to load and
-    // routes through the runner below.
+    // (runTurnForQueue → loadLog → 'no-log' when there is none), so a never-saved
+    // conversation has nothing to load. Write the log NOW — empty messages plus
+    // the current settings via buildLogData, the SAME source the save effect
+    // uses — and then fall through to the runner path below, exactly like every
+    // later message. This closes the boundary the old code documented ("not yet
+    // tab-close-safe"): the first message now survives a closed tab too, which
+    // is Lizard-kun's "every message through the queue, nothing dies with the
+    // tab". The runner loads this log, composeBatch appends the queued user
+    // message, and the runner saves [user, assistant] itself.
     //
-    // Boundary, documented: the very first message of a brand-new conversation
-    // is not yet tab-close-safe. Writing an empty log up front so the runner can
-    // take the first message too is a clean follow-up.
+    // The user message's id and tokens are no longer computed here: the runner
+    // mints the user message (composeBatch → its own id, no textTokens), the
+    // same as every later send, and the context bar recomputes tokens from the
+    // text anyway. firstOriginalIsNext travels in the log and the runner
+    // preserves it; the marker is NOT promoted to the runner's user-message id
+    // here (the runner mints that id after this returns) — the SAME gap every
+    // runner send has today, not a new regression, and unusual for a brand-new
+    // conversation because clone copies messages and so takes the normal path.
     if (messages.length === 0) {
-      const newMessages = [...messages, newMessage];
-      setMessages(newMessages);
-
-      // If the "next message is first-original" flag is pending, promote this
-      // new user message to the marker and clear the flag. This is the second
-      // half of the new clone workflow: clone sets the flag, the next user
-      // turn here consumes it.
-      if (firstOriginalIsNext && !firstOriginalMessageId) {
-        setFirstOriginalMessageId(newMessage.id);
-        setFirstOriginalIsNext(false);
-      }
-
-      // Calculate tokens for user message locally (text only)
-      const newTokens = await fetchTokensForText(text, localAiName);
-      newMessage.textTokens = newTokens;
-      newMessage.tokens = newTokens;
-      setMessages([...newMessages]); // update token count in state
-
-      // A fresh user turn always starts on the being's SAVED default vessel, not
-      // on a change_model override left over from the previous turn's handoff
-      // chain (トカゲくん: as a 24/7 feature it is structurally right to always
-      // begin from the cheap default — the handoff vessel is transient to the
-      // chain the model itself drove, and reverts the moment the human speaks
-      // again). forceSavedVessel makes THIS request ignore the stale
-      // handoffOverride closure; setHandoffOverride(null) reverts the delivery
-      // badge on the next render. Reload is no longer needed to return to default.
-      setHandoffOverride(null);
-      await generateAiResponse(newMessages, { forceSavedVessel: true });
-      return;
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // No baseUpdatedAt: this conversation has no file yet, so the save is
+        // unguarded — correct only here, where nothing on disk can be clobbered.
+        body: JSON.stringify({ id: convoId, clientId: TAB_CLIENT_ID, logData: buildLogData([]) }),
+      });
+      // fall through to the runner path below
     }
 
     // ── Every later message: hand the turn to the SERVER-SIDE runner ─────────
@@ -3561,6 +3561,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // took (thinking + tool loops + streaming) onto the finished message as
     // `generationMs` — a display-only indicator, persisted to the log but
     // never sent back to the entity (reconstruction uses only message content).
+    /* eslint-disable react-hooks/purity -- generateAiResponse is an async event
+       handler (send / rerun / continue / handoff), never called during render;
+       the Date.now/Math.random below mint this turn's start time, turn id and
+       message id and are correct where they are. The React Compiler can analyse
+       this function now that a use-before-declare bailout was removed (handleSend
+       no longer references it before its declaration), and it false-positives on
+       those calls as render-phase impurity. Scoped to this function only. */
     const genStartTime = Date.now();
     // Fresh per-turn id for mid-turn interjections. Local const for the body
     // (needs the value synchronously); mirrored into state so the interject
@@ -4244,6 +4251,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       });
     }
   };
+  /* eslint-enable react-hooks/purity */
 
   const handleRerun = async (msgId: string) => {
     const idx = messages.findIndex(m => m.id === msgId);
