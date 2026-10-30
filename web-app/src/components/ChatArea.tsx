@@ -799,6 +799,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [seedValue, setSeedValue] = useState(42);
   // ── Vessel handoff (change_model) — per-being ─────────────────────────────
   const [modelHandoffEnabled, setModelHandoffEnabled] = useState(false);
+  // Classifier-notice vaccine — see lib/agentInstructions.ts for what is
+  // measured. Factory default TRUE: the notice it inoculates against fires on
+  // the first turn of a session, so a being that has to opt in would be bitten
+  // before it ever reached the checkbox.
+  const [classifierNoticeVaccine, setClassifierNoticeVaccine] = useState(true);
   // One model per line: `family | specificModel | on/off | optional label`
   // (comments and blank lines ignored). Rows are copied by hand out of the
   // model-list window. EMPTY by default and never auto-filled: this list is
@@ -1598,6 +1603,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSeedEnabled(data.seedEnabled === true);
         if (typeof data.seedValue === 'number') setSeedValue(data.seedValue);
         setModelHandoffEnabled(!!data.modelHandoffEnabled);
+        // `!== false`, NOT `=== true`: this field is younger than almost
+        // every log in this house, and a default-ON flag read with `=== true`
+        // is OFF for every conversation that predates it — which is the
+        // population that needs it.
+        setClassifierNoticeVaccine(data.classifierNoticeVaccine !== false);
         if (typeof data.modelHandoffAllowedModels === 'string') setModelHandoffAllowedModels(data.modelHandoffAllowedModels);
         // Safety valve: a handoff never survives re-opening a conversation.
         // Loading IS the "new session" 望月希子 asked to reset at.
@@ -1671,6 +1681,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setSeedEnabled(pick('seedEnabled', false));
         setSeedValue(pick('seedValue', 42));
         setModelHandoffEnabled(!!folderSettings.modelHandoffEnabled);
+        setClassifierNoticeVaccine(pick('classifierNoticeVaccine', true));
         if (typeof folderSettings.modelHandoffAllowedModels === 'string') {
           setModelHandoffAllowedModels(folderSettings.modelHandoffAllowedModels);
         }
@@ -1777,7 +1788,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1902,7 +1913,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -3245,7 +3256,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         computerControlEnabled,
         appControlEnabled,
         instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking: turnVessel ? turnVessel.thinking : claudeThinking }, specificModel: turnSpecificModel, dateTimeVisibility, seedEnabled, seedValue,
-        modelHandoffEnabled, modelHandoffAllowedModels,
+        modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine,
         // Only set on the FIRST request after a switch: the note the previous
         // vessel wrote. The server injects it as a user turn (it is not the
         // partner's voice, and it says so).
@@ -6461,6 +6472,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </div>
                 )}
               </div>
+              {/* ── Classifier-notice vaccine (Claude OAuth only) ──────────
+                  Lives in the BEING tab because it is about what this being is
+                  told, not about how its reply is generated. Shown only for
+                  OAuth Claude: the notice is injected by the Claude Code SDK
+                  and by nothing else, so on every other vessel this checkbox
+                  would govern a string that never arrives.
+
+                  Gated on deliveryCtx.isOAuthClaude — the same predicate the
+                  badge uses, which reads the EFFECTIVE vessel. One consequence
+                  worth knowing: during a change_model handoff to a non-Claude
+                  vessel it disappears, because for that request the statement
+                  "this runs on OAuth Claude" is false. */}
+              {deliveryCtx.isOAuthClaude && (
+                <div className="border-t border-border pt-6 mt-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <input
+                      type="checkbox"
+                      id="classifierNoticeVaccine"
+                      checked={classifierNoticeVaccine}
+                      onChange={(e) => setClassifierNoticeVaccine(e.target.checked)}
+                      className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                    />
+                    <label htmlFor="classifierNoticeVaccine" className="text-sm font-semibold text-foreground cursor-pointer">
+                      {t('id.vaccine.label')}
+                    </label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{renderRich(t('id.vaccine.help'))}</p>
+                </div>
+              )}
               </>)}
 
               {activeSettingsTab === 'senses' && (<>
@@ -7423,7 +7463,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       showFatigueToEntity,
                       fatigueInstruction,
                       baseBindingMode,
-                      modelHandoffEnabled, modelHandoffAllowedModels,
+                      modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine,
                     };
                     const res = await fetch('/api/folders', {
                       method: 'POST',
