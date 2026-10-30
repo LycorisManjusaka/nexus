@@ -3,6 +3,15 @@
  *
  * WHY THIS EXISTS (Phase 4b-4, 2026-10-28)
  *
+ * ⚠ CORRECTION 2026-10-30: `generateAiResponse` NO LONGER EXISTS. It was
+ * deleted whole once every send, rerun, continue and handoff had moved to
+ * the server-side runner. Read the paragraphs below as the record of where
+ * these rules came from, not as a place to go and look. Today's consumers
+ * are lib/runTurnForQueue.ts (the runner) and ChatArea's `runOnRunner`
+ * (the watcher), both through lib/turnEventReducer.ts. The present tense
+ * below is preserved as written rather than quietly edited, because the
+ * measurements in it were taken against that function.
+ *
  * `generateAiResponse` in ChatArea.tsx consumes 22 event kinds from
  * /api/chat. Each handler does two separate things in two separate
  * statements: it NORMALISES the wire payload (defaults, coercions,
