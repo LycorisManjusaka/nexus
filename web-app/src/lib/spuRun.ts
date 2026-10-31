@@ -142,6 +142,58 @@ export function spuRelayKey(folder: string, label: string): string {
   return `spu:${folder}:${label}`;
 }
 
+/**
+ * A run that is over and left something behind.
+ *
+ * `status !== 'running'` rather than `status === 'done'`, deliberately: a
+ * stopped run and a run that errored after producing text both hold work the
+ * panel knows how to keep -- it marks a partial rather than dropping it --
+ * and narrowing to `done` here would discard exactly the text the stop branch
+ * exists to preserve.
+ *
+ * The `accum` check separates "finished" from "finished with nothing": an
+ * empty result handed to the panel would overwrite the right pane with
+ * nothing, which looks identical to the failure this path was built to
+ * remove.
+ */
+export function isFinishedRun(rec: SpuRunRecord | null | undefined): rec is SpuRunRecord {
+  return !!rec && rec.status !== 'running' && !!rec.accum;
+}
+
+/**
+ * Whether the panel in front of you may apply that run at all.
+ *
+ * `convoId` is carried on the record as provenance, and this is the check it
+ * exists for: by the time someone comes back, the panel may be pointed at a
+ * different conversation, and a soul written from one conversation must not
+ * be applied to another.
+ *
+ * The action is NOT checked here. The banner collects a record through the
+ * handler that produced it, so the record names its own action -- comparing
+ * that field to itself would be a test that cannot fail.
+ */
+export function isCollectableHere(
+  rec: SpuRunRecord | null | undefined,
+  convoId: string,
+): rec is SpuRunRecord {
+  return isFinishedRun(rec) && rec.convoId === convoId;
+}
+
+/**
+ * Whether a run ABOUT TO START should hand back a stored record instead.
+ *
+ * The extra condition over isCollectableHere is the action, and it is what
+ * keeps a genesis document from being pushed through the indexer's
+ * post-processing -- which would write it to disk as a real generation.
+ */
+export function isCollectableBy(
+  rec: SpuRunRecord | null | undefined,
+  action: string,
+  convoId: string,
+): rec is SpuRunRecord {
+  return isCollectableHere(rec, convoId) && rec.action === action;
+}
+
 export async function runSpuLoop(
   args: SpuRunArgs,
   deps: SpuRunDeps
