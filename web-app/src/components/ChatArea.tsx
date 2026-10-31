@@ -8,7 +8,7 @@ import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
-import { makeIsOriginalId } from '@/lib/firstOriginal';
+import { makeIsOriginalId, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
@@ -979,6 +979,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // it was offline. Cleared by the next reload that completes. See the
   // probe effect, which retries it the moment connectivity returns.
   const staleViewRef = useRef<boolean>(false);
+  // The copied/original boundary, mirrored for callbacks that must not take it
+  // as a dependency.
+  //
+  // ⚠ WHY A REF AND NOT DEPS. `reloadMessagesFromDisk` has to compare state
+  // against disk (see adoptResolvedMarker), and it is itself a dependency of
+  // `runOnRunner`, which effects depend on in turn. Adding the marker to its
+  // deps would change runOnRunner's identity the moment a boundary resolves,
+  // re-running those effects — and one of them is the auto-trigger. A tab
+  // re-firing a drain because a marker moved is a worse bug than the one being
+  // fixed. Same shape as handleSendRef below.
+  const markerRef = useRef<FirstOriginalMarker>({ firstOriginalMessageId: null, firstOriginalIsNext: false });
+  useEffect(() => {
+    markerRef.current = { firstOriginalMessageId, firstOriginalIsNext };
+  }, [firstOriginalMessageId, firstOriginalIsNext]);
   // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
   //
   // A watched runner turn ends, when stopped, with the route's own abort echo
@@ -2817,6 +2831,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
         .map((m) => ({ ...m, autoPlay: false }));
       setMessages(dedupeMessageIds(loaded).messages);
+      // Learn a boundary something else resolved. The RUNNER mints the user
+      // message the marker names, so the tab cannot compute it; and this
+      // reload replaces `messages` only, so without this the tab's state keeps
+      // the pending flag and `buildLogData` writes it back on the next save,
+      // silently reverting the runner. Monotone: pending -> resolved only,
+      // never the reverse (adoptResolvedMarker).
+      const adopted = adoptResolvedMarker(markerRef.current, data);
+      if (adopted) {
+        setFirstOriginalMessageId(adopted.firstOriginalMessageId);
+        setFirstOriginalIsNext(false);
+      }
       return 'loaded';
     } catch {
       // A failed reload leaves the screen as it was. The turn is on disk
@@ -3418,6 +3443,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // here (the runner mints that id after this returns) — the SAME gap every
     // runner send has today, not a new regression, and unusual for a brand-new
     // conversation because clone copies messages and so takes the normal path.
+    //
+    // ⚠ CORRECTION 2026-10-31: "the SAME gap every runner send has today, not
+    // a new regression" was wrong on the second half. `main` promoted the
+    // marker in handleSend; `dev` promoted it nowhere, so it WAS a regression
+    // against the branch this one replaces — and the consequence is not a
+    // missing marker but an inverted reading: pending-with-no-marker makes
+    // makeIsOriginalIndex answer "nothing is original", so every message in
+    // every cloned conversation read as carry-over, permanently (REPORTED by
+    // ふわふわ). The runner now promotes it (promotePendingMarker). Writing
+    // down that a gap is not new is not the same as measuring whether it is.
     if (messages.length === 0) {
       await fetch('/api/logs', {
         method: 'POST',

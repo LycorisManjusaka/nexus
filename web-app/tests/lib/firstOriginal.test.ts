@@ -15,7 +15,10 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeIsOriginalIndex, makeIsOriginalId } from '../../src/lib/firstOriginal';
+import {
+  makeIsOriginalIndex, makeIsOriginalId,
+  isMarkerPending, promotePendingMarker, adoptResolvedMarker,
+} from '../../src/lib/firstOriginal';
 
 const msgs = (...ids: string[]) => ids.map((id) => ({ id }));
 const FIVE = msgs('a', 'b', 'c', 'd', 'e');
@@ -132,5 +135,104 @@ describe('the two adapters cannot drift apart', () => {
     // Say what was covered, so a shrunken list cannot pass quietly.
     assert.equal(checked, states.length * FIVE.length);
     assert.equal(checked, 50);
+  });
+});
+
+// ── the clone boundary's SECOND HALF (2026-10-31) ────────────────────────────
+//
+// REGRESSION, reported by ふわふわ: "Next = First Original" stopped working on
+// dev. The rule used to be three lines in ChatArea.handleSend, which minted the
+// user message; the server-side runner mints it now, and nothing took over. The
+// flag stayed pending forever, and pending-with-no-marker reads as "NOTHING is
+// original" — so every message in every cloned conversation read as carry-over,
+// permanently. These pin the rule in its new home.
+
+describe('isMarkerPending', () => {
+  it('pending means the flag is set and no marker has landed yet', () => {
+    assert.equal(isMarkerPending({ firstOriginalIsNext: true }), true);
+    assert.equal(isMarkerPending({ firstOriginalIsNext: true, firstOriginalMessageId: null }), true);
+  });
+
+  it('a marker that already landed is NOT pending', () => {
+    // Without this, a second send would move the boundary to itself and
+    // everything between the clone and now would flip to "copied".
+    assert.equal(isMarkerPending({ firstOriginalIsNext: true, firstOriginalMessageId: 'u9' }), false);
+  });
+
+  it('no flag is not pending, and a non-boolean flag is not pending', () => {
+    assert.equal(isMarkerPending({}), false);
+    assert.equal(isMarkerPending({ firstOriginalIsNext: 'yes' as never }), false);
+  });
+});
+
+describe('promotePendingMarker', () => {
+  it('a pending boundary lands on the new user message and the flag clears', () => {
+    assert.deepEqual(
+      promotePendingMarker({ firstOriginalIsNext: true }, 'u-new'),
+      { firstOriginalMessageId: 'u-new', firstOriginalIsNext: false },
+    );
+  });
+
+  it('REGRESSION: a log that was never cloned is NOT touched', () => {
+    // The load-bearing case. Without the pending gate every ordinary send
+    // would set the marker to its own message, and the whole conversation
+    // above it would read as copied context — the inverse of today's bug and
+    // just as invisible.
+    assert.equal(promotePendingMarker({}, 'u-new'), null);
+    assert.equal(promotePendingMarker({ firstOriginalIsNext: false }, 'u-new'), null);
+  });
+
+  it('an already-resolved boundary is not moved', () => {
+    assert.equal(
+      promotePendingMarker({ firstOriginalIsNext: true, firstOriginalMessageId: 'u1' }, 'u-new'),
+      null,
+    );
+  });
+
+  it('an empty id does not resolve the boundary', () => {
+    // A patch carrying '' would clear the pending flag AND resolve to no
+    // marker (`markerId || null`), which reads as "everything original" — the
+    // boundary would be lost with nothing left to say it was ever pending.
+    assert.equal(promotePendingMarker({ firstOriginalIsNext: true }, ''), null);
+  });
+});
+
+describe('adoptResolvedMarker', () => {
+  it('a pending tab learns the marker the runner resolved', () => {
+    assert.deepEqual(
+      adoptResolvedMarker({ firstOriginalIsNext: true }, { firstOriginalMessageId: 'u-run', firstOriginalIsNext: false }),
+      { firstOriginalMessageId: 'u-run', firstOriginalIsNext: false },
+    );
+  });
+
+  it('MONOTONE: a marker the state already holds is never overruled', () => {
+    // Without this a reload could overwrite a boundary the human set by hand
+    // from the message menu, and the only trace would be the screen changing.
+    assert.equal(
+      adoptResolvedMarker(
+        { firstOriginalIsNext: false, firstOriginalMessageId: 'mine' },
+        { firstOriginalMessageId: 'other', firstOriginalIsNext: false },
+      ),
+      null,
+    );
+  });
+
+  it('MONOTONE: a tab that is not pending never acquires a boundary', () => {
+    // A conversation that never went through the clone workflow must not read
+    // its own early history as carry-over because disk happens to carry a
+    // marker from somewhere.
+    assert.equal(adoptResolvedMarker({}, { firstOriginalMessageId: 'u-run' }), null);
+  });
+
+  it('nothing is adopted while disk is still pending too', () => {
+    assert.equal(adoptResolvedMarker({ firstOriginalIsNext: true }, { firstOriginalIsNext: true }), null);
+    assert.equal(adoptResolvedMarker({ firstOriginalIsNext: true }, {}), null);
+  });
+
+  it('a non-string marker on disk is not adopted', () => {
+    assert.equal(
+      adoptResolvedMarker({ firstOriginalIsNext: true }, { firstOriginalMessageId: 7 as never }),
+      null,
+    );
   });
 });

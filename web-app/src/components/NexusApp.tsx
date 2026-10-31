@@ -591,6 +591,14 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     // marking the LAST source-conversation message as the boundary, which
     // wrongly classified the last assistant turn as 'original' even though
     // it came straight from the previous conversation.
+    //
+    // ⚠ CORRECTION 2026-10-31: "consumed by ChatArea.handleSend" stopped being
+    // true when sends moved to the server-side runner — the handler no longer
+    // mints the user message, so it cannot name the id the marker lands on.
+    // The consumer is now `promotePendingMarker`, called by the runner at the
+    // moment it composes that message (runTurnForQueue). Leaving the sentence
+    // rather than editing it: it is the record of where the rule used to live,
+    // and the rule moving is exactly what broke this feature for a day.
     data.firstOriginalMessageId = null;
     data.firstOriginalIsNext = true;
 

@@ -320,3 +320,90 @@ test('stop during a rerun keeps the rewind and commits a marked, empty reply', a
   assert.equal(m[1].content, '', 'nothing was delivered before the stop');
   assert.notEqual(m[1].id, 'a1', 'the rewind stands: the old reply is not resurrected');
 });
+
+// ── the clone boundary: a SEND resolves it, a COMMAND must not ───────────────
+//
+// REGRESSION 2026-10-31, reported by ふわふわ: "Next = First Original" stopped
+// working. `NexusApp` sets `firstOriginalIsNext` when it clones a conversation
+// forward; the consumer was three lines in ChatArea.handleSend, which minted
+// the user message. The runner mints it now, and nothing took over — so the
+// flag stayed pending, and pending-with-no-marker makes makeIsOriginalIndex
+// answer "nothing is original". Every message in every cloned conversation
+// read as carry-over, permanently, with no error anywhere.
+//
+// The runner is the only place that CAN resolve it: the marker has to name the
+// id of the user message, and that id is minted here, after the tab's send has
+// already returned.
+
+/** A log mid-clone: the whole history is carry-over, nothing is original yet. */
+const pendingLog = () => ({
+  id: 'c1',
+  updatedAt: 5,
+  aiName: 'Local',
+  firstOriginalMessageId: null,
+  firstOriginalIsNext: true,
+  messages: [
+    { id: 'u1', role: 'user', content: 'carried question' },
+    { id: 'a1', role: 'assistant', content: 'carried answer' },
+  ],
+});
+
+/** Distinct ids, so "the marker names the USER message" can be told apart. */
+const counting = () => {
+  let n = 0;
+  return () => `n${++n}`;
+};
+
+const lastSave = (r: Rig) => r.saves[r.saves.length - 1];
+
+test('send: the pending boundary lands on the user message the RUNNER minted', async () => {
+  const r = rig(pendingLog(), 'ANSWER', { newId: counting() });
+  const res = await runTurnForQueue(
+    'Default', 'c1', [item('user_message', { text: 'first original' })], r.deps,
+  );
+
+  assert.equal(res.ok, true);
+  const log = lastSave(r);
+  const m = log.messages as Msg[];
+  assert.equal(m.length, 4, 'carried pair, the new user turn, the answer');
+  const newUser = m[2];
+  assert.equal(newUser.role, 'user', 'carried pair first, then the new user turn');
+  assert.equal(m[3].role, 'assistant', 'and the answer last');
+  // The id, not just "some id": a marker naming the ASSISTANT would make the
+  // user's own message read as carry-over.
+  assert.equal(log.firstOriginalMessageId, newUser.id);
+  assert.equal(log.firstOriginalIsNext, false, 'the flag is consumed, so a later send cannot move it');
+});
+
+test('send: a log that was never cloned keeps its boundary untouched', async () => {
+  // Without the pending gate, EVERY send would set the marker to itself and
+  // the history above it would flip to copied — the inverse defect.
+  const r = rig({ ...twoTurn(), firstOriginalMessageId: 'u1', firstOriginalIsNext: false }, 'ANSWER', { newId: counting() });
+  await runTurnForQueue('Default', 'c1', [item('user_message', { text: 'later message' })], r.deps);
+
+  const log = lastSave(r);
+  assert.equal(log.firstOriginalMessageId, 'u1', 'an already-resolved boundary does not move');
+  assert.equal(log.firstOriginalIsNext, false);
+});
+
+test('rerun: a command does NOT resolve the boundary (it adds no user message)', async () => {
+  const r = rig(pendingLog(), 'AGAIN', { newId: counting() });
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'a1' })], r.deps);
+
+  assert.equal(res.ok, true);
+  const log = lastSave(r);
+  // A rerun that promoted would pin the boundary to the message it is
+  // REPLACING, so the clone's carry-over would start reading as original.
+  assert.equal(log.firstOriginalMessageId, null, 'still pending');
+  assert.equal(log.firstOriginalIsNext, true, 'the flag survives for the next real send');
+});
+
+test('continue: a command does NOT resolve the boundary', async () => {
+  const r = rig(pendingLog(), 'MORE', { newId: counting() });
+  const res = await runTurnForQueue('Default', 'c1', [item('continue', { targetMsgId: 'a1' })], r.deps);
+
+  assert.equal(res.ok, true);
+  const log = lastSave(r);
+  assert.equal(log.firstOriginalMessageId, null, 'still pending');
+  assert.equal(log.firstOriginalIsNext, true);
+});

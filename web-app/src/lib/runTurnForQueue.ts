@@ -59,6 +59,7 @@ import {
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
 import type { TurnHandoffPlan } from '@/lib/turnEvents';
 import { describeProviderError } from '@/lib/providerErrors';
+import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 
 /** What the runner could not do itself. */
 export interface RunTurnDeps {
@@ -294,6 +295,15 @@ export async function runTurnForQueue(
   let dropId: string | null = null;
   /** send only: the composed batch, because the queue never reports bodies. */
   let announcedUser: Record<string, unknown> | null = null;
+  /**
+   * send only: the two "copied vs original" fields, when THIS turn's new user
+   * message resolves a boundary the clone left pending.
+   *
+   * ⚠ Empty for rerun and continue, and that is the point — neither adds a
+   * user message, so neither may move the boundary. Spread into the save
+   * unconditionally, so there is no second place deciding whether to apply it.
+   */
+  let markerPatch: Partial<ResolvedMarker> = {};
 
   if (command) {
     const targetMsgId = (command.payload as CommandPayload | null)?.targetMsgId;
@@ -364,6 +374,14 @@ export async function runTurnForQueue(
     keep = history;
     base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
     announcedUser = userMessage as Record<string, unknown>;
+    // The clone workflow's second half. `NexusApp` sets `firstOriginalIsNext`
+    // when it clones a conversation forward and its comment says the flag is
+    // "consumed by ChatArea.handleSend" — which stopped being true when sends
+    // moved here, because the id the marker has to name is `userMessage.id`,
+    // minted in this process, after the tab's send has already returned. (A
+    // comment that counts lines instead of naming the thing is wrong the next
+    // time anyone edits above it; this one said "four lines up" and meant 15.)
+    markerPatch = promotePendingMarker(log, userMessage.id) ?? {};
   }
 
   // Write the log back WHOLE, with only `messages` replaced. The other ~55
@@ -400,7 +418,9 @@ export async function runTurnForQueue(
   const saveMessages = async (messages: unknown[]) => {
     const r = await deps.saveLog(
       convoId,
-      { ...logWithoutVersion, messages },
+      // `markerPatch` AFTER `messages`: it must win over the pending fields
+      // carried in `logWithoutVersion`, which are what the tab last saved.
+      { ...logWithoutVersion, messages, ...markerPatch },
       { expectedUpdatedAt: guardVersion, clientId: deps.clientId },
     );
     if (r.ok && typeof r.writtenUpdatedAt === 'number') guardVersion = r.writtenUpdatedAt;
