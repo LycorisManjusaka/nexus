@@ -50,6 +50,7 @@ export const SINK_METHODS = [
   'toolActivity',
   'stallIdleSeconds',
   'attachmentDescribed',
+  'turnPlan',
 ] as const;
 
 /**
@@ -97,6 +98,11 @@ export function createRunnerSink(): RunnerSink {
     attachmentDescribed(data: TurnEventPayload): void {
       // NOT a no-op: recorded so the caller can report a gap it cannot close.
       report.unappliedDescriptions.push(data);
+    },
+    turnPlan(): void {
+      // The runner is the one who PUBLISHED this frame. Reading its own
+      // announcement back off the relay and acting on it would be the second
+      // derivation of a decision it already made.
     },
   };
 }

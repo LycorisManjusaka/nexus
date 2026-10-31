@@ -280,3 +280,67 @@ export function resolveToolActivity(
     detail: typeof data.detail === 'string' && data.detail ? data.detail : null,
   };
 }
+
+/**
+ * `turn_plan` — WHICH message on screen this pass is about to write.
+ *
+ * Published by the server-side runner (lib/runTurnForQueue) at the top of each
+ * pass, BEFORE that pass posts to the provider. That ordering is the whole
+ * reason this is a frame and not a header on /api/turn-events: a frame enters
+ * the relay buffer, so it is also the first thing in the REPLAY handed to a tab
+ * that attaches a millisecond later. A header would only reach whoever was
+ * already subscribed.
+ *
+ * It exists for a tab that did NOT start the turn. The tab that kicked it
+ * chose `assistantId` itself and already has the user text on screen, so it
+ * ignores this; a runner ignores its own announcement.
+ *
+ * MEASURED 2026-10-31 (ふわふわ): two tabs on one conversation, send from the
+ * left. The right tab showed a cross-tab warning and no content at all, and
+ * only matched after a reload. Everything a watching tab was missing is in
+ * these six fields.
+ */
+export interface TurnPlanEvent {
+  /** The id the reply will be saved under. Paint into this one. */
+  assistantId: string;
+  /** A rerun target: the answer being discarded. Drop it or it sits above the new one. */
+  dropId: string | null;
+  /**
+   * A send batch, composed. GET /api/turn-queue reports labels and never
+   * bodies, so without this a watching tab shows an answer to a question it
+   * cannot see.
+   */
+  user: Record<string, unknown> | null;
+  /**
+   * A continue starts from text that already exists. Carried for the same
+   * reason the kicking tab carries it as a WatchTarget: every flush REPLACES
+   * content and thoughtProcess, so an empty seed blanks the first half on the
+   * continuation first chunk.
+   */
+  continuedSeed: string;
+  continuedThought: string;
+  continuedBlocks: Array<{ thinking: string; signature: string }>;
+}
+
+/**
+ * Returns null when the frame names no destination.
+ *
+ * Deliberately not an empty-id plan: "which bubble" must never fall back to
+ * "some bubble", and a caller that gets null simply does not paint.
+ */
+export function normaliseTurnPlan(data: TurnEventPayload): TurnPlanEvent | null {
+  const assistantId = typeof data.assistantId === 'string' ? data.assistantId : '';
+  if (!assistantId) return null;
+  return {
+    assistantId,
+    dropId: typeof data.dropId === 'string' && data.dropId ? data.dropId : null,
+    user: data.user && typeof data.user === 'object' && !Array.isArray(data.user)
+      ? (data.user as Record<string, unknown>)
+      : null,
+    continuedSeed: typeof data.continuedSeed === 'string' ? data.continuedSeed : '',
+    continuedThought: typeof data.continuedThought === 'string' ? data.continuedThought : '',
+    continuedBlocks: Array.isArray(data.continuedBlocks)
+      ? (data.continuedBlocks as Array<{ thinking: string; signature: string }>)
+      : [],
+  };
+}

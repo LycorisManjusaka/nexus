@@ -50,8 +50,10 @@ import {
   betrayalNoticeKey,
   findOpenSubagentRun,
   resolveToolActivity,
+  normaliseTurnPlan,
   type TurnEventPayload,
   type TurnHandoffPlan,
+  type TurnPlanEvent,
   type TurnToolActivity,
 } from '@/lib/turnEvents';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
@@ -147,6 +149,17 @@ export interface TurnEventSink {
    * state here, the log on disk in a runner.
    */
   attachmentDescribed(data: TurnEventPayload): void;
+  /**
+   * The runner announced which message this pass is about to write, and for a
+   * send the user message it composed.
+   *
+   * Belongs in the sink and not in `acc` by this house test: drop it and a
+   * screen is wrong until the next reload, while nothing on disk changes. The
+   * runner is the producer and implements it as a no-op; the tab that started
+   * the turn chose these values itself and ignores them too. Only a WATCHING
+   * tab acts on it.
+   */
+  turnPlan(plan: TurnPlanEvent): void;
 }
 
 /**
@@ -219,6 +232,13 @@ export function applyTurnEvent(
     // already committed server-side (that turn ended); all that is left is to
     // finish this message and send a new request as the new vessel.
     flags.pendingHandoff = normaliseHandoff(data);
+  } else if (data.type === 'turn_plan') {
+    // A frame that /api/chat never emits: the relay carries this one on behalf
+    // of the runner. The chain stays the single parser either way — this is
+    // the only place the extra type is understood, and every other host
+    // receives it as a no-op.
+    const plan = normaliseTurnPlan(data);
+    if (plan) sink.turnPlan(plan);
   } else if (data.type === 'cache_usage') {
     acc.cacheUsage = normaliseCacheUsage(data);
   } else if (data.type === 'web_sources') {

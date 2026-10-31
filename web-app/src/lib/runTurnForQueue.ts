@@ -290,6 +290,10 @@ export async function runTurnForQueue(
   let base: Record<string, unknown>;
   let seed = { continuedSeed: '', continuedThought: '', continuedBlocks: [] as Array<{ thinking: string; signature: string }> };
   let continueFromMessageId: string | null = null;
+  /** rerun only: the answer being discarded, so a watcher can drop it too. */
+  let dropId: string | null = null;
+  /** send only: the composed batch, because the queue never reports bodies. */
+  let announcedUser: Record<string, unknown> | null = null;
 
   if (command) {
     const targetMsgId = (command.payload as CommandPayload | null)?.targetMsgId;
@@ -321,6 +325,7 @@ export async function runTurnForQueue(
       history = stored.slice(0, idx);
       keep = history;
       base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
+      dropId = targetMsgId;
     } else {
       if (target.role === 'user') {
         return { ok: false, stage: 'target', reason: 'cannot continue a user message', consumedIds };
@@ -358,6 +363,7 @@ export async function runTurnForQueue(
     history = [...stored, userMessage as SlimHistoryMessage];
     keep = history;
     base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
+    announcedUser = userMessage as Record<string, unknown>;
   }
 
   // Write the log back WHOLE, with only `messages` replaced. The other ~55
@@ -445,6 +451,15 @@ export async function runTurnForQueue(
     handoffFailed?: unknown;
     /** Notices to carry onto this pass's message (a dead vessel's error). */
     carryNotices: string[];
+    /**
+     * Corrections a WATCHING tab needs, set only on the FIRST pass.
+     *
+     * Not part of what the model sees or what gets saved — these two travel
+     * with the plan because the plan is what the announcement is made from,
+     * and a handoff pass must announce a NEW bubble with neither of them.
+     */
+    dropId?: string | null;
+    announcedUser?: Record<string, unknown> | null;
   }
 
   interface PassFailure {
@@ -478,6 +493,29 @@ export async function runTurnForQueue(
 
   const runPass = async (plan: PassPlan): Promise<PassResult> => {
     const passStart = deps.nowMs();
+
+    // ── Tell every WATCHING tab which bubble this pass writes ───────────────
+    //
+    // Emitted here, at the top of EVERY pass, rather than once before the
+    // chain: a handoff opens a second pass with a freshly minted id, and a
+    // watcher told only about the first would paint the second vessel's answer
+    // into the first vessel's message. One site, so the two cannot drift.
+    //
+    // Before the post, so it is the first frame of this pass in the relay and
+    // therefore the first frame of any later subscriber's replay. See
+    // normaliseTurnPlan for why a frame and not a response header.
+    //
+    // `onRawText` is the relay hook (lib/turnBus); this is the one place the
+    // runner feeds it something the provider did not say.
+    deps.onRawText?.(`data: ${JSON.stringify({
+      type: 'turn_plan',
+      assistantId: String(plan.base.id || ''),
+      dropId: plan.dropId ?? null,
+      user: plan.announcedUser ?? null,
+      continuedSeed: plan.seed.continuedSeed,
+      continuedThought: plan.seed.continuedThought,
+      continuedBlocks: plan.seed.continuedBlocks,
+    })}\n\n`);
 
     // ONE derivation of "which vessel is answering". turnInputFromLog resolves
     // it (log value, folder default, or this pass's handoff override) and
@@ -645,6 +683,8 @@ export async function runTurnForQueue(
     continueFromMessageId,
     vessel: null,
     carryNotices: [],
+    dropId,
+    announcedUser,
   };
   let saved = false;
   let lastMessageId = '';

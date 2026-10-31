@@ -2797,6 +2797,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    */
   const runOnRunner = useCallback(async (
     watch?: WatchTarget,
+    /**
+     * ATTACH to a turn somebody else already started, instead of kicking one.
+     *
+     * The whole body below is already a watcher — the kick is four lines of
+     * it. So a second tab joins by running this with the kick skipped, rather
+     * than through a parallel copy that would drift from this one in the
+     * thirteen display channels, the drain-before-reload rule and the Stop
+     * adoption.
+     *
+     * What an attaching tab does NOT know, and a kicking tab does:
+     * which message is about to be written, and (for a send) the user text.
+     * Both arrive as the first frame of the replay — see `turnPlan` below and
+     * normaliseTurnPlan in lib/turnEvents.
+     */
+    attach = false,
   ): Promise<'ran' | 'idle' | 'failed' | 'stopped'> => {
     if (!folderName || !convoId) return 'failed';
 
@@ -2816,7 +2831,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // `finally` -- and streaming TTS lives entirely in that component's refs.
     // MEASURED 2026-10-31: with a throwaway id, a long reply stops being
     // spoken the moment the turn ends, and nothing reports an error.
-    const watchId = watch?.continueMsgId || uuidv4();
+    // MUTABLE, and empty while attaching: a tab that did not start the turn
+    // does not know the destination until the plan frame arrives. Painting
+    // before then is not "paint into a guess" — it is not painting at all.
+    let watchId = watch?.continueMsgId || (attach ? '' : uuidv4());
     let raf: number | null = null;
     // Hoisted out of the `try` so the catch can reach it: an error frame makes
     // runTurnStream throw while the relay is still OPEN, and the catch has to
@@ -2826,8 +2844,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Stop that lands after the turn already finished must not silence the
     // note for the NEXT turn.
     stopPressedRef.current = false;
+    // `loading` also blocks the save effect and the send button. For an
+    // attaching tab both are exactly right: the runner is the writer, and a
+    // second turn into the same log is the thing the old cross-tab warning
+    // could only ask people not to do.
     setLoading(true);
-    if (watch?.continueMsgId) {
+    if (attach) {
+      // Nothing to show yet, and deliberately no placeholder: an empty bubble
+      // that may turn out to belong to a continue (which paints into a message
+      // already on screen) would have to be removed again.
+    } else if (watch?.continueMsgId) {
       setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true } : m)));
     } else {
       setMessages(prev => [...prev, {
@@ -2836,7 +2862,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
 
     try {
-      const kick = await fetch('/api/runner/tick', {
+      const kick = attach ? null : await fetch('/api/runner/tick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `assistantMsgId` only for a fresh reply. A continue already streams
@@ -2848,7 +2874,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           ...(watch?.continueMsgId ? {} : { assistantMsgId: watchId }),
         }),
       });
-      const kd = await kick.json().catch(() => null);
+      const kd = kick ? await kick.json().catch(() => null) : { ok: true };
       if (!kd?.ok) {
         // `reason` is the runner's own sentence — "nobody hosts turns for this
         // store", most often. Surfacing it beats a generic failure, because it
@@ -2898,6 +2924,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
       const paint = () => {
         raf = null;
+        // No destination yet: attaching, and the plan frame has not arrived.
+        // The runner emits that frame before its first post, so this can only
+        // be true before any text exists to paint.
+        if (!watchId) return;
         setMessages(prev => prev.map(m => m.id !== watchId ? m : ({
           ...m,
           content: acc.currentText,
@@ -2949,6 +2979,47 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // editing it here would make the tab the writer again, which is the
         // whole thing this path removed.
         attachmentDescribed: () => {},
+        // ── WHERE to paint, for a tab that did not start this turn ──────────
+        turnPlan: (plan) => {
+          // The kicking tab decided all of this before the stream opened.
+          if (!attach) return;
+          // FIRST plan only. A handoff opens a second pass under a new id; a
+          // watcher appends it to the first vessel's bubble, which is exactly
+          // what the KICKING tab does today, and the reload at the end splits
+          // them into two messages for both. Two tabs agreeing on a rough
+          // picture beats one of them being cleverer mid-turn.
+          if (watchId) return;
+          watchId = plan.assistantId;
+          // Seeded BEFORE any text, which the runner guarantees by emitting
+          // this frame ahead of its post. An unseeded continue would blank the
+          // half that already exists on the continuation's first chunk.
+          acc.currentText = plan.continuedSeed;
+          acc.currentThought = plan.continuedThought;
+          acc.claudeThinkingBlocks = [...plan.continuedBlocks];
+          const user = plan.user as { id?: unknown } | null;
+          setMessages(prev => {
+            // A rerun discards its target. Dropped now rather than at the
+            // reload, so the old answer does not sit above the new one for the
+            // length of a generation.
+            let next = plan.dropId ? prev.filter(m => m.id !== plan.dropId) : prev;
+            // The sent text is on neither this tab nor the disk: the runner
+            // saves the whole turn at the end, and GET /api/turn-queue reports
+            // labels and never bodies. Matched by id in case a reload already
+            // brought it.
+            if (user && !next.some(m => m.id === user.id)) next = [...next, { ...user, autoPlay: false }];
+            // A continue paints into a message that is already on screen.
+            if (next.some(m => m.id === plan.assistantId)) {
+              return next.map(m => (m.id === plan.assistantId ? { ...m, streaming: true } : m));
+            }
+            return [...next, {
+              id: plan.assistantId,
+              role: 'assistant',
+              content: plan.continuedSeed,
+              timestamp: Date.now(),
+              streaming: true,
+            }];
+          });
+        },
       };
 
       reader = ev.body.getReader();
@@ -3542,19 +3613,29 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // (optimistic concurrency in /api/logs) — so a lost 'end' or an unreachable
   // probe must never stop a turn or block a send.
   //
-  // ⚠ NOTHING PUBLISHES HERE ANY MORE (measured 2026-10-30). A turn becomes
-  // "active" in the registry by its first 'beat' (the route takes only
-  // 'beat' | 'end' | 'stop' — there is no 'begin'), and the only beater was
-  // the interval inside the browser turn engine, which is gone. So
-  // `probeForeignTurn` answers null for every runner turn and the
-  // "running in another tab" indicator cannot light up. This is not a
-  // regression from deleting that engine — the engine was already
-  // unreachable, so no beats were being sent before either.
+  // ⚠ CORRECTED 2026-10-31. This block used to claim "NOTHING PUBLISHES HERE
+  // ANY MORE", reasoning that a turn becomes active only by its first 'beat'
+  // and the only beater was the browser turn engine I had just deleted. The
+  // premise was wrong and I never opened the file it was about: the CHAT ROUTE
+  // publishes (route.ts, `markTurnActive(convoId, injectTurnId, clientId,
+  // …)`), and its own header says so — "the only writer of 'a turn started' is
+  // the chat route itself". The POST reaching it is the RUNNER's, carrying
+  // `clientId: runner:<install>`, so every tab reads `mine: false` and the
+  // indicator lights for all of them.
   //
-  // The fix belongs to phase 4d and is NOT "make the watcher beat": two tabs
-  // watching one runner turn would both beat under different clientIds, and
-  // the route decides "mine" from clientId. The turn is owned by the server
-  // now, so the server is what should register it.
+  // DISPROVED BY OBSERVATION, not by re-reading: ふわふわ opened two tabs on one
+  // conversation and reported the warning appearing — a thing I had written
+  // down as impossible. The same post-mortem as F65, two days running: a
+  // claim about another file that no instrument in this repo can check.
+  //
+  // What was true in it: beating from a WATCHER is the wrong fix. Two tabs
+  // watching one runner turn would beat under different clientIds and the
+  // route decides "mine" from clientId. The turn belongs to the server, so
+  // the server registers it — which is what the chat route was doing all along.
+  //
+  // `foreignTurn` is now a fallback, not the feature. A tab that finds a turn
+  // it did not start ATTACHES to it (see the effect below) and shows the real
+  // thing; the banner is for the case where attaching found nothing to watch.
   const retireTurnRegistration = () => {
     if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     const k = activeTurnKeyRef.current;
@@ -3581,15 +3662,48 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
   };
 
-  // Keep `foreignTurn` current. Mirrors the runtime-flags probe (mount, window
-  // focus, tab becoming visible) and adds a slow interval, because unlike a
-  // server flag this can change while the tab just sits there. Skipped while
-  // THIS tab is generating — the answer would be "yes, you", and sending is
-  // already unavailable then.
+  /**
+   * Turns this tab has already tried to attach to, as `convoId:startedAt`.
+   *
+   * Needed because attaching can legitimately find nothing: a registry entry
+   * outlives its turn by up to the TTL, and /api/turn-events then answers
+   * `idle`. Without a memory the probe would retry that same dead turn every
+   * ten seconds forever, and each attempt ends in a reload — a quiet polling
+   * loop on a conversation nobody is even looking at.
+   */
+  const attachedTurnRef = useRef<string>('');
+
+  // Keep `foreignTurn` current, AND join a turn this tab did not start.
+  //
+  // Mirrors the runtime-flags probe (mount, window focus, tab becoming
+  // visible) and adds a slow interval, because unlike a server flag this can
+  // change while the tab just sits there. Skipped while THIS tab is
+  // generating — the answer would be "yes, you", and sending is already
+  // unavailable then.
+  //
+  // The probe is what triggers the attach, rather than a second poller: it
+  // already answers exactly the question an attach needs ("is a turn running
+  // here that is not mine"), it already fires on the three moments that matter
+  // (mount, focus, becoming visible), and `loading` already means "this tab is
+  // busy with a turn" for both.
   useEffect(() => {
     if (!convoId) return;
     let cancelled = false;
-    const read = () => { if (!cancelled && !loading) probeForeignTurn(); };
+    const read = async () => {
+      if (cancelled || loading) return;
+      const foreign = await probeForeignTurn();
+      // `loading` re-checked: the probe is a round trip, and this tab may have
+      // started its own turn while it was in flight.
+      if (!foreign || cancelled || loading) return;
+      const key = `${convoId}:${foreign.startedAt || 0}`;
+      if (attachedTurnRef.current === key) return;
+      // Marked BEFORE the await, and never unmarked. An attach that fails is
+      // not retried: the same two reasons the SPU collector marks first —
+      // a retry loop costs more than a missed view, and the failure is
+      // visible (the banner stays up).
+      attachedTurnRef.current = key;
+      await runOnRunner(undefined, true);
+    };
     read();
     const iv = setInterval(read, 10_000);
     const onVisible = () => { if (document.visibilityState === 'visible') read(); };

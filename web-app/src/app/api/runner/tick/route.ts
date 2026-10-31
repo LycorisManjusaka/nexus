@@ -5,6 +5,10 @@ import { runnerHostStatus, describeRunnerHost, installationId } from '@/lib/runn
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
 import { onStop } from '@/lib/turnStop';
 import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnBus';
+// Aliased: `endTurn` above closes the RELAY (what watchers read), this one
+// retires the cross-tab REGISTRY entry (what tabs probe before sending). Two
+// different lifetimes that happen to end at the same moment.
+import { endTurn as endRegistryTurn } from '@/lib/turnRegistry';
 import { loadLog, saveLog, listFolders, loadUserSettings } from '@/lib/fsStorage';
 // ⚠ The FIRST route-to-route import in this tree (measured: zero others).
 // The alternative was an HTTP fetch to our own server, which would have to get
@@ -212,6 +216,7 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
         });
       } catch (e) {
         offStop();
+        endRegistryTurn(t.convoId, turnId);
         // runTurnForQueue returns its failures; reaching here means something
         // outside its own error handling threw. The lease still has to go back
         // and the watcher still has to be told, or a crash in one turn leaves
@@ -224,6 +229,20 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
       }
 
       offStop();
+      // ── Retire the cross-tab registry entry ─────────────────────────────
+      // The chat route registers a turn when it starts one and retires it on
+      // `req.signal` abort — but the runner's POST ends by RETURNING, not by
+      // aborting, so for a server-side turn that listener never fires and the
+      // entry lingers until its 25s TTL.
+      //
+      // MEASURED 2026-10-31 (ふわふわ): after the answer landed, the tab that
+      // SENT it also showed "running somewhere else", and both tabs kept
+      // saying so for a few seconds. The turn was over; the registry had not
+      // been told. A cross-tab warning that outlives its turn is the exact
+      // shape this house refuses — a control that reports a state nobody is
+      // in. Now the entry dies with the turn, and the TTL is back to being a
+      // backstop instead of the normal path.
+      endRegistryTurn(t.convoId, turnId);
 
       // WHICH ids are done is the runner's answer, not this route's.
       //
