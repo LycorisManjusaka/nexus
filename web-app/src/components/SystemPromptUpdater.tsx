@@ -371,12 +371,24 @@ interface Props {
  * watched. They were the same four lines twice, and the one that matters most
  * is the one that is hardest to exercise by hand.
  */
-async function fetchSpuRunRecord(folder: string, label: string): Promise<SpuRunRecord | null> {
+async function fetchSpuRunRecord(
+  folder: string, label: string,
+): Promise<{ record: SpuRunRecord | null; relayLive: boolean }> {
   const res = await fetch(
     `/api/spu-run?folder=${encodeURIComponent(folder)}&label=${encodeURIComponent(label)}`
   );
   const d = await res.json().catch(() => ({}));
-  return (d?.record as SpuRunRecord | null | undefined) || null;
+  return {
+    record: (d?.record as SpuRunRecord | null | undefined) || null,
+    // The route has always reported this (`live: liveTurnStatus(relayKey)`);
+    // this function used to drop it. Needed from 2026-10-31 to tell a run
+    // still streaming on this server from one whose process is gone — the
+    // record says "running" for both, because nothing rewrites it from
+    // outside. Defaults to false: a server too old to report it, or a reply
+    // that failed to parse, must not make the panel wait on a stream that
+    // will never speak.
+    relayLive: d?.live?.live === true,
+  };
 }
 
 /**
@@ -434,6 +446,24 @@ export default function SystemPromptUpdater({
   // without this one failed delete re-offers the same record every time
   // `running` settles -- not a duplicate delivery, an unbounded loop.
   const collectedRef = useRef<Set<string>>(new Set());
+  /**
+   * Run keys this panel has tried to REJOIN, cleared by every reconnect.
+   *
+   * Separate from collectedRef because the two mean different things. A
+   * collected key is a document already applied — permanent for the life of
+   * the panel. An attached key is only "I have already asked to rejoin this
+   * stream once", and the reason to remember it (don't loop while `running`
+   * settles twice) stops applying the moment the network changes underneath.
+   */
+  const attachedRef = useRef<Set<string>>(new Set());
+  /**
+   * Bumped by the reconnect listeners to re-run the record sweep.
+   *
+   * State and not a ref: the sweep is an effect, and an effect cannot be
+   * re-run by writing a ref. The cost is one render per wake event, which is
+   * bounded by how often a person switches windows.
+   */
+  const [sweepTick, setSweepTick] = useState(0);
 
   // ── Close/reload guard ─────────────────────────────────────────────────────
   // A soul-packing run is the most expensive thing in Nexus to lose: minutes of
@@ -1395,7 +1425,7 @@ export default function SystemPromptUpdater({
     // record as provenance for exactly this check: by the time someone comes
     // back the panel may be pointed at a different conversation, and output
     // written for one run must not be applied to another.
-    const prior = await fetchSpuRunRecord(soulKey, label);
+    const { record: prior } = await fetchSpuRunRecord(soulKey, label);
     if (isCollectableBy(prior, a.action, convoId)) {
       // Paint before clearing. onProgress writes the right pane, so the text
       // is on screen at the moment the box on disk becomes empty -- the
@@ -1473,7 +1503,7 @@ export default function SystemPromptUpdater({
     // EOF on the relay means the route called endTurn, which it does only
     // AFTER runSpuAction has written the record. Reading earlier is the race
     // that made a stopped chat turn show its previous answer (2026-10-30).
-    const record = await fetchSpuRunRecord(soulKey, label);
+    const { record } = await fetchSpuRunRecord(soulKey, label);
     if (!record) throw new Error(t('spu.st.runNoRecord'));
     // An error with nothing to show KEEPS its record: the throw above puts the
     // reason in the status line, and the record is the only place the stage and
@@ -2776,11 +2806,37 @@ export default function SystemPromptUpdater({
       // delivery that never happened. decideRunRecord refuses a `running`
       // RECORD; this is about this panel.
       if (running !== null || loading || !agents) return;
-      const rec = await fetchSpuRunRecord(soulKey, nextLabel).catch(() => null);
+      const found = await fetchSpuRunRecord(soulKey, nextLabel)
+        .catch(() => ({ record: null, relayLive: false }));
       if (cancelled) return;
+      const rec = found.record;
       const d = decideRunRecord(
-        rec, convoId, collectedRef.current, (a) => !!recoverHandlers[a],
+        rec, convoId,
+        // The union, because the two refs have different LIFETIMES and the
+        // predicate only needs one answer. `collectedRef` survives for the
+        // life of the panel: a delivered document must never be delivered
+        // twice. `attachedRef` is cleared by every reconnect trigger below:
+        // a failed attach is not a finished delivery, and refusing to retry
+        // it after the network comes back is the whole bug 1.3 names.
+        new Set([...collectedRef.current, ...attachedRef.current]),
+        (a) => !!recoverHandlers[a],
+        found.relayLive,
       );
+      if (d.kind === 'attach') {
+        // Marked for the same reason 'collect' is: this effect re-fires every
+        // time `running` settles, and a handler that dies early settles it
+        // twice. The difference is that this mark is releasable — the
+        // reconnect listeners clear it — so a drop during the attach costs
+        // one wait rather than the result.
+        attachedRef.current.add(d.key);
+        setRecoverable(null);
+        // collectingRef, same as collect: the handlers open with
+        // maybeShiftRightToLeft, whose confirm must not appear for a delivery
+        // nobody asked for by hand.
+        collectingRef.current = true;
+        try { await recoverHandlers[rec!.action]!(); } finally { collectingRef.current = false; }
+        return;
+      }
       if (d.kind !== 'collect') { setRecoverable(d.kind === 'show' ? rec : null); return; }
       // Marked BEFORE the call: if the DELETE inside runOnServer fails the
       // record stays on disk, and marking afterwards would re-enter here
@@ -2799,7 +2855,44 @@ export default function SystemPromptUpdater({
       try { await recoverHandlers[rec!.action]!(); } finally { collectingRef.current = false; }
     })();
     return () => { cancelled = true; };
-  }, [open, soulKey, nextLabel, running, loading, agents, convoId, recoverHandlers]);
+  }, [open, soulKey, nextLabel, running, loading, agents, convoId, recoverHandlers, sweepTick]);
+
+  // ── Reconnect ────────────────────────────────────────────────────────────
+  // 1.3, 2026-10-31. The sweep above re-fires on its deps, and none of them
+  // move when connectivity returns — so a run that finished (or is still
+  // streaming) while this panel was offline sat there until someone closed
+  // and reopened the panel.
+  //
+  // Three events, NO interval, and the absence is a decision:
+  //   - 'online' is the signal that exists for exactly this;
+  //   - 'visibilitychange' covers a phone that was asleep, where the tab is
+  //     restored without the network ever having been reported down;
+  //   - 'focus' covers a desktop window that was behind something during a
+  //     blip, and costs nothing when it fires spuriously (the sweep is one
+  //     GET that usually finds no record).
+  // A poll would also cover a browser that never fires 'online'. I have no
+  // measurement that any browser here behaves that way, and ChatArea's 10s
+  // probe exists for cross-tab visibility, not for this — so adding one would
+  // be machinery justified by a guess. Recorded as a limitation instead: if a
+  // reconnect is ever observed NOT to recover, the poll is the next move.
+  useEffect(() => {
+    if (!open) return;
+    const wake = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      // Only the attach marks. Clearing collectedRef here would re-deliver a
+      // document already in the right pane on every tab switch.
+      attachedRef.current.clear();
+      setSweepTick((n) => n + 1);
+    };
+    window.addEventListener('online', wake);
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      window.removeEventListener('online', wake);
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [open]);
 
   if (!open) return null;
 

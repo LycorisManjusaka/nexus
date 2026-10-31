@@ -208,7 +208,17 @@ export function spuRecordKey(rec: SpuRunRecord): string {
 export type SpuRecordDisposition =
   | { kind: 'none' }
   | { kind: 'show' }
-  | { kind: 'collect'; key: string };
+  | { kind: 'collect'; key: string }
+  /**
+   * A run still going on this server, which this panel has lost its stream to.
+   *
+   * ADDED 2026-10-31 for 1.3. Distinct from 'collect' because the work is the
+   * opposite shape: 'collect' reads a finished document off disk, 'attach'
+   * rejoins a live relay and waits. Distinct from 'none' because doing nothing
+   * is what leaves a run finishing invisibly behind a dead stream — the exact
+   * failure the server-side move was supposed to end.
+   */
+  | { kind: 'attach'; key: string };
 
 /**
  * What a panel should do with the record it just found on disk.
@@ -226,10 +236,44 @@ export function decideRunRecord(
   convoId: string,
   seen: ReadonlySet<string>,
   hasHandler: (action: string) => boolean,
+  /**
+   * Does THIS server still hold a live relay for this run?
+   *
+   * From `/api/spu-run`'s GET, which reports `liveTurnStatus(relayKey)`.
+   * In-memory and per process, which is the correct semantics rather than a
+   * limitation: 3000 and 3001 are separate installs, and a panel must only
+   * rejoin a stream the server it is talking to can actually serve.
+   */
+  relayLive: boolean,
 ): SpuRecordDisposition {
-  // Covers both "no record" and "still running". A live run is being watched
-  // somewhere; collecting it would hand out a half-written document as a
-  // result, and showing it would offer a result that is not one yet.
+  // ── still running ────────────────────────────────────────────────────────
+  // CORRECTED 2026-10-31: the comment here read "covers both 'no record' and
+  // 'still running'", and treating those two the same is what made 1.3 a
+  // task. A run still live on THIS server with no reader is a result being
+  // produced into nothing; rejoining its relay costs one fetch and is the
+  // only way the text reaches the person who asked for it.
+  //
+  // `relayLive` and not the record's own status: the record says "running"
+  // for a run whose process died too (nothing rewrites it from outside), and
+  // attaching to a relay that is not there would hang on a stream that never
+  // speaks. The POST path already reports that case as a stuck run with a
+  // discard button, so returning 'none' here hands it to the half of the
+  // machinery that can say something true about it.
+  if (rec && rec.status === 'running') {
+    if (!relayLive) return { kind: 'none' };
+    // The same provenance gate as 'collect', for the same reason: attaching
+    // ends in the handler applying the text, so a run started against a
+    // different conversation log must not be rejoined here. 'none' rather
+    // than 'show' — every sentence the banner owns is in the past tense, and
+    // reusing one for a run still going would be a true display with a false
+    // reason, which this house pays for more than it pays for silence.
+    if (rec.convoId !== convoId) return { kind: 'none' };
+    if (!hasHandler(rec.action)) return { kind: 'none' };
+    if (seen.has(spuRecordKey(rec))) return { kind: 'none' };
+    return { kind: 'attach', key: spuRecordKey(rec) };
+  }
+
+  // No record, or one that finished having produced nothing.
   if (!isFinishedRun(rec)) return { kind: 'none' };
 
   // Shown, never collected: this panel must not apply output produced against

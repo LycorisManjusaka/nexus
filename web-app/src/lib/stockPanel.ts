@@ -14,10 +14,18 @@
 // isCollectableHere were pulled out of their routes and panels.
 //
 // ── What "machinery" means here ─────────────────────────────────────────────
-// The stock, the lease, the holder and the claimed-count are implementation.
-// NEXUS looked the same before server-side turns existed and must look the
-// same after: a user cannot act on "runner:c:\dev\nexus holds it (just now)"
-// and should not be asked to read it.
+// The lease, the holder and the claimed-count are implementation. NEXUS looked
+// the same before server-side turns existed and must look the same after: a
+// user cannot act on "runner:c:\dev\nexus holds it (just now)" and should not
+// be asked to read it.
+//
+// CORRECTION 2026-10-31: this sentence began "The stock, the lease, …" and
+// put the whole stock on the hidden side. トカゲくん's policy that evening
+// splits it: hide how a turn is run, show what the browser version could not
+// do. A message QUEUED BEHIND a running turn is in the second group — the
+// browser version simply dropped it, so there is nothing to look the same as,
+// and a person is waiting for it. `stockWaiting > 0` therefore opens the
+// panel on its own. The lease and the claimed-count stay hidden.
 //
 // ── Why hiding it does not hide a stuck message (measured 2026-10-31) ───────
 //   - a refused kick sets a 'problem' note, which is shown either way;
@@ -53,22 +61,48 @@ export type StockPanelInput = {
   noteKind: StockNoteKind | null;
   /** Items in the queue for this conversation, waiting plus claimed. */
   stockCount: number;
+  /**
+   * Items NOT yet claimed by a runner — i.e. queued behind something.
+   *
+   * Separate from `stockCount` because the two answer different questions.
+   * `count` is "is there anything on disk", which stays true for the whole of
+   * a healthy turn (release happens after the turn resolves, on purpose) and
+   * so cannot decide whether a person is waiting. `waiting` excludes claimed
+   * items, so it is non-zero only while something really is behind something.
+   */
+  stockWaiting: number;
 };
 
 /**
- * Two independent reasons to show the panel, in priority order:
+ * Three independent reasons to show the panel, in priority order:
  *
  *   1. a 'problem' note — ALWAYS, debug or not. Something a person asked for
  *      did not happen, and the sentence is the only place that says so.
- *   2. debug, and there is anything at all to look at.
+ *   2. a WAITING stock — ALWAYS. Someone's message is queued behind another
+ *      turn; the browser version could not do that, so there is no old look
+ *      to preserve, and a person is waiting for an answer.
+ *   3. debug, and there is anything at all to look at.
  *
- * Note that (2) requires something present. A debug flag alone must not paint
+ * CORRECTION 2026-10-31: this said "Two independent reasons" and listed (1)
+ * and (3). Clause (2) was added the same evening, below this comment, which
+ * left a count in prose contradicting the code three lines down — the exact
+ * failure the ChatArea call site above was corrected for on the same day.
+ *
+ * Note that (3) requires something present. A debug flag alone must not paint
  * an empty box: an empty panel in a corner is indistinguishable from a panel
  * that is broken, and this house has paid for that confusion once already
  * (a button that returned `{ok:true}` while doing nothing, F1).
  */
 export function showStockPanel(i: StockPanelInput): boolean {
   if (i.noteKind === 'problem') return true;
+  // Queued-behind-something is NOT machinery. ADDED 2026-10-31 on トカゲくん's
+  // policy: hide how a turn is run, show what the browser version could not
+  // do. A message waiting behind another turn is new, a person is waiting for
+  // it, and the live count is the only honest statement of that.
+  //
+  // Keyed on `stockWaiting` and not `stockCount`: count stays positive for
+  // the whole of a healthy turn, so it would paint this row on every send.
+  if (i.stockWaiting > 0) return true;
   if (!i.debug) return false;
   return i.stockCount > 0 || i.noteKind !== null;
 }

@@ -2658,7 +2658,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const debugRunner = globalSettings?.showRunnerNotices === true;
 
   /**
-   * Show the panel for a PROBLEM always, and for machinery only in debug.
+   * Show the panel for a PROBLEM always, for a WAITING stock always, and for
+   * machinery only in debug.
+   *
+   * CORRECTION 2026-10-31: the first line said "for a PROBLEM always, and for
+   * machinery only in debug" and listed two clauses. There are three (see
+   * @/lib/stockPanel) — a stock queued behind a running turn is shown to
+   * everyone. The behaviour was changed the same evening the sentence was
+   * written, which is exactly how a summary outlives what it summarises.
    *
    * Hiding the machinery does not hide a stuck message, measured three ways
    * on 2026-10-31:
@@ -2675,6 +2682,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     debug: debugRunner,
     noteKind: stockNote?.kind ?? null,
     stockCount: stock?.count ?? 0,
+    stockWaiting: stock?.waiting ?? 0,
   });
 
   const refreshStock = useCallback(async () => {
@@ -5559,7 +5567,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     ) : null}
                   </>
                 ) : null}
-                {stockNote ? (
+                {/* The note row, gated 2026-10-31. A 'problem' always reaches
+                    a person; an 'info' note is machinery and waits for debug.
+                    This gate did not matter while the panel itself was
+                    debug-only, and started mattering the moment a waiting
+                    stock could open the panel on its own: without it,
+                    `chat.stock.added` — the sentence that claimed a stock
+                    which had already drained — would ride back in beside the
+                    live count that replaces it. */}
+                {stockNote && (stockNote.kind === 'problem' || debugRunner) ? (
                   <span className="text-xs text-muted-foreground w-full">{stockNote.text}</span>
                 ) : null}
               </div>

@@ -213,37 +213,96 @@ const EMPTY: ReadonlySet<string> = new Set();
 
 test('decideRunRecord: a finished record for this conversation is collected', () => {
   const r = rec();
-  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), {
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), {
     kind: 'collect', key: '2@1',
   });
 });
 
-test('decideRunRecord: running is none — not shown, not collected', () => {
+test('decideRunRecord: running with a DEAD relay is none', () => {
+  // Nothing rewrites a record from outside, so this is also the shape left by
+  // a run whose process is gone. 'none' hands it to the POST path, which
+  // reports it as a stuck run with a discard button — the half of the
+  // machinery that can say something true about it.
   const r = rec({ status: 'running', accum: 'half a soul' });
-  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), { kind: 'none' });
+});
+
+test('decideRunRecord: running with a LIVE relay is ATTACH', () => {
+  // 1.3. Absent, a run still streaming on this server with no reader keeps
+  // producing a result into nothing — the exact failure moving turns to the
+  // server was supposed to end. This is the clause the old comment ("covers
+  // both no-record and still-running") actively argued against.
+  const r = rec({ status: 'running', accum: 'half a soul' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, true), {
+    kind: 'attach', key: '2@1',
+  });
+});
+
+test('decideRunRecord: attach needs NO accum — a run that has said nothing yet', () => {
+  // isFinishedRun requires text, for a good reason (an empty document would
+  // blank the pane). Attaching has no such requirement and must not borrow
+  // it: the most valuable moment to rejoin is before any text exists, and a
+  // reconnect two seconds after a drop lands exactly there.
+  const r = rec({ status: 'running', accum: '' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, true), {
+    kind: 'attach', key: '2@1',
+  });
+});
+
+test('decideRunRecord: a live run for ANOTHER conversation is none, not attach', () => {
+  // Attaching ends in the handler applying the text, so the same provenance
+  // gate as collect. 'none' and not 'show': every sentence the banner owns is
+  // past tense, and a true display with a false reason is worse than silence
+  // because the next reader reuses the reason.
+  const r = rec({ status: 'running', accum: 'half', convoId: 'some-other-log' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, true), { kind: 'none' });
+});
+
+test('decideRunRecord: a live run already attached once is none', () => {
+  // The loop guard. This effect re-fires whenever `running` settles, and a
+  // handler that dies early settles it twice. Absent, one dead attach becomes
+  // an unbounded retry loop against a stream that is not answering.
+  const r = rec({ status: 'running', accum: 'half' });
+  const seen = new Set([spuRecordKey(r)]);
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL, true), { kind: 'none' });
+});
+
+test('decideRunRecord: a live run with no handler is none, not show', () => {
+  const r = rec({ status: 'running', accum: 'half', action: 'some-future-action' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, NONE, true), { kind: 'none' });
+});
+
+test('decideRunRecord: relayLive does NOT change a finished record', () => {
+  // The new argument must be consulted only on the running branch. Absent
+  // this, a 'collect' could start depending on whether the relay happened to
+  // still be open when the sweep ran — which is a race, not a rule.
+  const r = rec();
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, true), {
+    kind: 'collect', key: '2@1',
+  });
 });
 
 test('decideRunRecord: no record at all is none', () => {
-  assert.deepEqual(decideRunRecord(null, CONVO, EMPTY, ALL), { kind: 'none' });
-  assert.deepEqual(decideRunRecord(undefined, CONVO, EMPTY, ALL), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(null, CONVO, EMPTY, ALL, false), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(undefined, CONVO, EMPTY, ALL, false), { kind: 'none' });
 });
 
 test('decideRunRecord: finished with nothing is none', () => {
   // Same reasoning as isFinishedRun: delivering an empty accum writes the
   // right pane with nothing, which is the blank pane this path exists to
   // prevent — produced by the fix.
-  assert.deepEqual(decideRunRecord(rec({ accum: '' }), CONVO, EMPTY, ALL), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(rec({ accum: '' }), CONVO, EMPTY, ALL, false), { kind: 'none' });
 });
 
 test('decideRunRecord: a record for another conversation is SHOWN, not collected', () => {
   const r = rec({ convoId: 'some-other-log' });
-  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), { kind: 'show' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), { kind: 'show' });
 });
 
 test('decideRunRecord: a key already seen is none', () => {
   const r = rec();
   const seen = new Set([spuRecordKey(r)]);
-  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL, false), { kind: 'none' });
 });
 
 test('decideRunRecord: seen is checked BEFORE hasHandler', () => {
@@ -251,25 +310,25 @@ test('decideRunRecord: seen is checked BEFORE hasHandler', () => {
   // which claims the record could not be collected — about a record that was.
   const r = rec();
   const seen = new Set([spuRecordKey(r)]);
-  assert.deepEqual(decideRunRecord(r, CONVO, seen, NONE), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, NONE, false), { kind: 'none' });
 });
 
 test('decideRunRecord: an action this build cannot apply is SHOWN', () => {
   const r = rec({ action: 'some-future-action' });
-  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, NONE), { kind: 'show' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, NONE, false), { kind: 'show' });
 });
 
 test('decideRunRecord: hasHandler is asked about the RECORD\'s action', () => {
   // Not about whatever the panel is pointed at. Absent, a panel on 'genesis'
   // would answer for genesis while holding an 'index' record.
   const asked: string[] = [];
-  decideRunRecord(rec({ action: 'index' }), CONVO, EMPTY, (a) => { asked.push(a); return true; });
+  decideRunRecord(rec({ action: 'index' }), CONVO, EMPTY, (a) => { asked.push(a); return true; }, false);
   assert.deepEqual(asked, ['index']);
 });
 
 test('decideRunRecord: stopped WITH text is collected', () => {
   const r = rec({ status: 'stopped', sawSentinel: false, accum: 'three rounds of a soul' });
-  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), { kind: 'collect', key: '2@1' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), { kind: 'collect', key: '2@1' });
 });
 
 test('spuRecordKey: two runs of the same label are different keys', () => {
@@ -285,8 +344,8 @@ test('decideRunRecord: the returned key is the one seen is tested against', () =
   // and the next call must recognise it. A key built differently in the two
   // places would re-collect forever while looking correct in each half.
   const r = rec({ label: '9', startedAt: 4242 });
-  const d = decideRunRecord(r, CONVO, EMPTY, ALL);
+  const d = decideRunRecord(r, CONVO, EMPTY, ALL, false);
   assert.equal(d.kind, 'collect');
   const seen = new Set([(d as { key: string }).key]);
-  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL, false), { kind: 'none' });
 });
