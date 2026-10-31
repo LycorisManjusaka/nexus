@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { claim, release, abandon, queuedConversations } from '@/lib/turnQueue';
 import { runTurnForQueue, type RunTurnResult } from '@/lib/runTurnForQueue';
-import { runnerHostStatus, describeRunnerHost, installationId } from '@/lib/runnerHost';
+import { runnerHostStatus, describeRunnerHost, installationId, claimRunnerHostIfUnset } from '@/lib/runnerHost';
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
 import { onStop } from '@/lib/turnStop';
 import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnBus';
@@ -306,15 +306,49 @@ export async function POST(req: Request) {
 
     // ── Who may run turns for this store ──────────────────────────────────
     const selfId = await installationId();
-    const status = await runnerHostStatus(selfId);
+    let status = await runnerHostStatus(selfId);
+
+    // Nobody holds the role, and a TAB is behind this tick: take it.
+    //
+    // Gated on `detach` and not on every tick. MEASURED 2026-10-31: `detach:
+    // true` has exactly ONE caller in the whole source (ChatArea's
+    // runOnRunner), so a detach tick always has a browser pointed at this
+    // port behind it. A sweep tick — no being, no convoId — has nobody
+    // behind it, and letting that claim would hand the role to whichever
+    // installation happened to poll first. That is precisely the race the
+    // "nobody hosts" default in runnerHost.ts exists to prevent, so the
+    // default is kept for sweeps and relaxed only where a person acted.
+    //
+    // Race-free by construction: claimRunnerHostIfUnset writes with
+    // `flag: 'wx'`, so of two installations claiming in the same instant
+    // exactly one write lands and the loser gets EEXIST. Both then re-read,
+    // both agree, and the loser returns the sentence below. The status is
+    // re-read rather than inferred from the return value because the record
+    // on disk is the authority and a human could have cleared it in between.
+    let claimOutcome: 'claimed' | 'taken' | 'failed' | null = null;
+    if (status === 'unset' && detach) {
+      claimOutcome = await claimRunnerHostIfUnset(selfId, { note: 'claimed automatically by the first server-side turn' });
+      status = await runnerHostStatus(selfId);
+    }
+
     if (status !== 'host') {
       return NextResponse.json({
         ok: false,
         skipped: 'not-host',
         // The sentence, not just the status word: a runner that idles without
         // saying why is indistinguishable from one that is broken.
-        reason: describeRunnerHost(status, selfId),
+        //
+        // 'failed' is appended because it is the ONE outcome the sentence
+        // cannot cover: describeRunnerHost('unset') now says the first turn
+        // claims the role automatically, and this turn just tried to and
+        // could not. 'taken' needs no suffix — the status is 'not-host' by
+        // then, and that sentence names the winner.
+        reason: describeRunnerHost(status, selfId)
+          + (claimOutcome === 'failed'
+            ? ` This turn tried to take the role and the write failed, so the store may be read-only.`
+            : ''),
         self: selfId,
+        ...(claimOutcome ? { claim: claimOutcome } : {}),
       });
     }
 

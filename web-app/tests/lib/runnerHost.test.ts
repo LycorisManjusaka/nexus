@@ -47,6 +47,7 @@ import {
   describeRunnerHost,
   setRunnerHost,
   clearRunnerHost,
+  claimRunnerHostIfUnset,
 } from '@/lib/runnerHost';
 
 let dir: string;
@@ -214,5 +215,86 @@ describe('runnerHost: installationId', () => {
     // Identity is the tree, not web-app: both installations have a web-app.
     const id = await installationId(path.join(dir, 'web-app'));
     assert.equal(id, normaliseInstallPath(dir));
+  });
+});
+
+
+/**
+ * claimRunnerHostIfUnset — 2026-10-31.
+ *
+ * Added for 1.4: a user should not have to press a button called "runner:
+ * this environment" before a message they sent will run.
+ *
+ * NOT written from the implementation (these catch a real inversion):
+ *   "claims when unset"      — absent, the shipped experience for every
+ *       single-installation user is: send a message, get nothing, and the
+ *       reason lives in a panel behind a badge they have never clicked.
+ *   "never steals"           — absent, the dev tree takes the role from the
+ *       house tree on the next send and turns run on the wrong code with
+ *       NOTHING on screen saying which. This is the exact failure the
+ *       "nobody hosts" default exists to prevent, re-introduced from the
+ *       other side.
+ *   "does not rewrite its OWN record" — absent, every send rewrites setAt,
+ *       so the one timestamp that says when the role was decided becomes a
+ *       timestamp of the last message. A field that silently retargets.
+ *   "a claim makes runnerHostStatus say host" — the route re-reads status
+ *       after claiming rather than trusting the return value; absent, that
+ *       re-read could disagree with the claim and the turn would be refused
+ *       immediately after successfully taking the role.
+ *
+ * Written from the implementation (they restate it): the note/now passthrough.
+ */
+describe('runnerHost: claiming the role automatically', () => {
+  it('claims when nobody holds it, and names THIS installation', async () => {
+    assert.equal(await claimRunnerHostIfUnset(SELF, { dataDir: dir }), 'claimed');
+    const rec = await readRunnerHost(dir);
+    assert.equal(rec?.host, normaliseInstallPath(SELF));
+  });
+
+  it('a claim makes runnerHostStatus report host — and only for the claimer', async () => {
+    await claimRunnerHostIfUnset(SELF, { dataDir: dir });
+    assert.equal(await runnerHostStatus(SELF, dir), 'host');
+    assert.equal(await runnerHostStatus(OTHER, dir), 'not-host');
+  });
+
+  it('NEVER steals a role another installation holds', async () => {
+    await setRunnerHost(OTHER, { dataDir: dir, now: '2020-01-01T00:00:00.000Z' });
+    assert.equal(await claimRunnerHostIfUnset(SELF, { dataDir: dir }), 'taken');
+    const rec = await readRunnerHost(dir);
+    // Both halves matter: the right answer AND an untouched record.
+    assert.equal(rec?.host, normaliseInstallPath(OTHER));
+    assert.equal(rec?.setAt, '2020-01-01T00:00:00.000Z');
+    assert.equal(await runnerHostStatus(SELF, dir), 'not-host');
+  });
+
+  it('does not rewrite its own record on a second claim', async () => {
+    await setRunnerHost(SELF, { dataDir: dir, now: '2020-01-01T00:00:00.000Z', note: 'by hand' });
+    assert.equal(await claimRunnerHostIfUnset(SELF, { dataDir: dir, now: '2026-10-31T00:00:00.000Z' }), 'taken');
+    const rec = await readRunnerHost(dir);
+    assert.equal(rec?.setAt, '2020-01-01T00:00:00.000Z');
+    assert.equal(rec?.note, 'by hand');
+  });
+
+  it('carries the note and the timestamp it was given', async () => {
+    await claimRunnerHostIfUnset(SELF, { dataDir: dir, note: 'auto', now: '2026-10-31T12:00:00.000Z' });
+    const rec = await readRunnerHost(dir);
+    assert.equal(rec?.note, 'auto');
+    assert.equal(rec?.setAt, '2026-10-31T12:00:00.000Z');
+  });
+
+  it('a cleared flag is claimable again', async () => {
+    await setRunnerHost(OTHER, { dataDir: dir });
+    assert.equal(await claimRunnerHostIfUnset(SELF, { dataDir: dir }), 'taken');
+    assert.equal(await clearRunnerHost(dir), true);
+    assert.equal(await claimRunnerHostIfUnset(SELF, { dataDir: dir }), 'claimed');
+    assert.equal(await runnerHostStatus(SELF, dir), 'host');
+  });
+
+  it('reports failed — not taken — when the store cannot be written', async () => {
+    // A directory that does not exist stands in for an unwritable store. The
+    // distinction is load-bearing: 'taken' sends a reader looking for a
+    // competing installation, and there is none.
+    const gone = path.join(dir, 'no', 'such', 'dir');
+    assert.equal(await claimRunnerHostIfUnset(SELF, { dataDir: gone }), 'failed');
   });
 });

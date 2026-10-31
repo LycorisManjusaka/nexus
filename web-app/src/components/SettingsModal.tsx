@@ -578,6 +578,23 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               {runnerHost ? runnerSentence(runnerHost.status) : t('settings.runner.unreachable')}
             </div>
             <div className="text-muted-foreground">{t('settings.runner.caveat')}</div>
+
+            {/* The debug toggle lives INSIDE the debug panel.
+                Not in Preferences: a person who has never clicked this badge
+                has no use for it, and a checkbox in Preferences would be the
+                machinery narrating itself one level up. OFF by default — see
+                `debugRunner` in ChatArea for why a setting and not an env
+                var in the .bat. */}
+            <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
+              <input
+                type="checkbox"
+                checked={globalSettings.showRunnerNotices === true}
+                onChange={e => setGlobalSettings({ ...globalSettings, showRunnerNotices: e.target.checked })}
+                className="w-4 h-4 accent-indigo-500"
+              />
+              <span className="text-foreground">{t('settings.runner.notices')}</span>
+            </label>
+            <p className="text-muted-foreground ml-6">{t('settings.runner.noticesHelp')}</p>
             <div className="font-mono text-[11px] space-y-0.5">
               <div className="truncate">
                 <span className="text-muted-foreground">{t('settings.runner.self')}</span>{' '}

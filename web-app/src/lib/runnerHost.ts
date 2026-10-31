@@ -181,7 +181,11 @@ export function describeRunnerHost(status: RunnerHostStatus, selfId: string, hos
     case 'not-host':
       return `Server-side turns for this store are hosted by ${hostId ?? 'another installation'}, not by this one (${selfId}). Nothing will run here.`;
     case 'unset':
-      return `No installation is set as the host for this store, so NO server-side turns run anywhere. Set one to enable them.`;
+      // "Set one to enable them" stood here until 2026-10-31 and became a
+      // signpost pointing at a button nobody should need: a tick with a tab
+      // behind it now claims the role itself. A sweep still does not, which
+      // is why this sentence can still be reached.
+      return `No installation is set as the host for this store, so NO server-side turns run anywhere. The first turn sent from a tab claims the role for its installation automatically.`;
     case 'unreadable':
       return `The host flag for this store exists but could not be read, so no server-side turns run here as a precaution.`;
   }
@@ -210,6 +214,60 @@ export async function setRunnerHost(
   };
   await atomicWriteFile(runnerHostPath(dataDir), JSON.stringify(rec, null, 2));
   return rec;
+}
+
+/**
+ * Take the host role IF AND ONLY IF nobody holds it.
+ *
+ * WHY (2026-10-31): the default "nobody hosts" is right for a SHARED store
+ * read by two installations, and wrong for the case every real user is in —
+ * one installation, one person, who sends a message and gets nothing while a
+ * settings panel they have never opened holds the reason. Pressing a button
+ * called "runner: this environment" is not a decision a person has the
+ * information to make.
+ *
+ * ── Why create-only, and not `setRunnerHost` ──────────────────────────────
+ * `setRunnerHost` overwrites: it is the HUMAN choosing, and overwriting is
+ * what choosing means. This one must never steal a role another installation
+ * already holds, so it is `flag: 'wx'` — the filesystem refuses the write if
+ * the file exists. Two write paths, two different operations; not two answers
+ * to one question.
+ *
+ * `wx` also gives exclusivity that a write-temp-then-rename cannot: two
+ * installations claiming in the same instant produce exactly one winner,
+ * decided by the OS. The cost is that the write is not atomic for READERS —
+ * a reader can in principle see a partial file. That fails in the safe
+ * direction: `readRunnerHost` throws on bad JSON, `runnerHostStatus` turns
+ * that into `'unreadable'`, and `'unreadable'` means DO NOT RUN. It is also
+ * transient; the next read gets whole bytes.
+ *
+ * ── What the caller must still do ─────────────────────────────────────────
+ * Re-read the status after calling. `'claimed'` means this process won the
+ * write, NOT that it is the host: a human can clear the flag between the
+ * write and the read, and a caller that trusted the return value would run a
+ * turn for a store that no longer names it. The record on disk is the only
+ * authority, and it costs one read to ask.
+ */
+export async function claimRunnerHostIfUnset(
+  selfId: string,
+  opts: { note?: string; dataDir?: string; now?: string } = {},
+): Promise<'claimed' | 'taken' | 'failed'> {
+  const dataDir = opts.dataDir ?? DATA_DIR;
+  const rec: RunnerHostRecord = {
+    host: normaliseInstallPath(selfId),
+    ...(opts.note ? { note: opts.note } : {}),
+    setAt: opts.now ?? new Date().toISOString(),
+  };
+  try {
+    await fs.writeFile(runnerHostPath(dataDir), JSON.stringify(rec, null, 2), { flag: 'wx' });
+    return 'claimed';
+  } catch (e: unknown) {
+    if ((e as { code?: string } | null)?.code === 'EEXIST') return 'taken';
+    // Any other write error: say so rather than reporting 'taken', which
+    // would send the caller looking for a competing installation that does
+    // not exist.
+    return 'failed';
+  }
 }
 
 /**

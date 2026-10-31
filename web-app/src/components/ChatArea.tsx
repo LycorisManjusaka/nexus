@@ -59,6 +59,8 @@ import type { CameraSignal } from '@/lib/cameraTypes';
 import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
 import { AUTO_TRIGGER_KEYS, autoTriggerEnabled, parseAutoTriggers, setAutoTrigger } from '@/lib/autoTriggers';
 import type { AutoTriggers } from '@/lib/autoTriggers';
+import { showStockPanel } from '@/lib/stockPanel';
+import type { StockNote } from '@/lib/stockPanel';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
 
@@ -2580,6 +2582,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // it lands; `kind` already carries 'letter' | 'schedule'.
   /** What GET /api/turn-queue reports per item — labels only, never bodies. */
   type StockItem = { id: string; at: number; from: string; kind: string; claimed?: boolean };
+  /* `StockNote` and the show/hide rule live in @/lib/stockPanel — a boolean
+     inside this component is a rule no test and no mutation check reaches. */
   type StockView = {
     count: number;
     /** Not yet taken by any turn. THIS is the number a human should read. */
@@ -2625,7 +2629,53 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
   const [stock, setStock] = useState<StockView | null>(null);
   const [stockBusy, setStockBusy] = useState(false);
-  const [stockNote, setStockNote] = useState<string | null>(null);
+  /**
+   * A note for the person, and WHAT KIND of note it is.
+   *
+   * The kind is carried and not inferred. MEASURED 2026-10-31: this one
+   * variable held both `chat.stock.added` ("added to the stock (1 waiting)",
+   * set on SUCCESS) and every failure sentence in the stock machinery. A
+   * renderer that wanted to show only the failures would have had to guess
+   * from the text, so the setter declares instead: 'problem' means someone
+   * has to act, 'info' means the machinery is narrating itself.
+   */
+  const [stockNote, setStockNote] = useState<StockNote | null>(null);
+
+  /**
+   * Is the server machinery allowed on screen?
+   *
+   * OFF by default, which is the whole point: NEXUS looked the same before
+   * server-side turns existed and must look the same after. The stock, the
+   * lease and the holder are implementation, and an implementation that
+   * narrates itself to every user is noise they cannot act on.
+   *
+   * A setting and not an env var in the .bat. MEASURED 2026-10-27: a
+   * `NEXT_PUBLIC_` variable is read from the environment under `next dev`
+   * but BAKED IN at `next build` time, so the .bat would silently stop
+   * working on the day this moves to a production build — and that move is
+   * a live pending task. A setting survives it.
+   */
+  const debugRunner = globalSettings?.showRunnerNotices === true;
+
+  /**
+   * Show the panel for a PROBLEM always, and for machinery only in debug.
+   *
+   * Hiding the machinery does not hide a stuck message, measured three ways
+   * on 2026-10-31:
+   *   - a refused kick sets a 'problem' note (runOnRunner), which shows;
+   *   - a claim that cannot be taken closes the relay with a `notice`
+   *     frame, which lands on the assistant bubble, not here;
+   *   - an item stranded by a tab that died between enqueue and kick is
+   *     invisible until the next send, and that send's claim takes the
+   *     leading run of same-kind items, so the stranded one is DELIVERED
+   *     with it rather than lost.
+   * The third is a real residual: invisible, bounded, self-healing.
+   */
+  const stockPanelVisible = showStockPanel({
+    debug: debugRunner,
+    noteKind: stockNote?.kind ?? null,
+    stockCount: stock?.count ?? 0,
+  });
 
   const refreshStock = useCallback(async () => {
     if (!folderName || !convoId) return;
@@ -2685,12 +2735,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.ok) {
-        setStockNote(t('chat.stock.failed'));
+        setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
         return;
       }
-      setStockNote(t('chat.stock.added').replace('{n}', String(d.position)));
+      // 'info': this fires when enqueue SUCCEEDED, and a normal send kicks
+      // the runner in the same handler microseconds later. Nothing is wrong,
+      // so outside debug nothing is said.
+      setStockNote({ text: t('chat.stock.added').replace('{n}', String(d.position)), kind: 'info' });
     } catch {
-      setStockNote(t('chat.stock.failed'));
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
     } finally {
       refreshStock();
     }
@@ -2717,12 +2770,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.ok) {
-        setStockNote(String(d?.error || t('chat.stock.failed')));
+        setStockNote({ text: String(d?.error || t('chat.stock.failed')), kind: 'problem' });
         return false;
       }
       return true;
     } catch {
-      setStockNote(t('chat.stock.failed'));
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
       return false;
     } finally {
       refreshStock();
@@ -2905,7 +2958,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // `reason` is the runner's own sentence — "nobody hosts turns for this
         // store", most often. Surfacing it beats a generic failure, because it
         // names a setting someone can change.
-        setStockNote(String(kd?.reason || t('chat.stock.failed')));
+        setStockNote({ text: String(kd?.reason || t('chat.stock.failed')), kind: 'problem' });
         return 'failed';
       }
 
@@ -3078,7 +3131,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // A stop is not a failure. Returns 'stopped' rather than 'ran' so the
       // caller does not read it as a completed turn.
       if (stopPressedRef.current) return 'stopped';
-      setStockNote(String((e as Error)?.message || t('chat.stock.failed')));
+      setStockNote({ text: String((e as Error)?.message || t('chat.stock.failed')), kind: 'problem' });
       return 'failed';
     } finally {
       if (raf !== null) cancelAnimationFrame(raf);
@@ -3120,7 +3173,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     setStockNote(null);
     try {
       const outcome = await runOnRunner();
-      if (outcome === 'idle') setStockNote(t('chat.stock.nothingRan'));
+      if (outcome === 'idle') setStockNote({ text: t('chat.stock.nothingRan'), kind: 'problem' });
     } finally {
       setStockBusy(false);
       refreshStock();
@@ -3163,14 +3216,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const d = await res.json().catch(() => null);
       // Name which answer came back. "stale" means the lease changed while the
       // panel sat open, and the honest next move is to look again, not retry.
+      // Only the first of the four reports success, so only it is 'info'.
       setStockNote(
-        d?.ok ? t('chat.stock.broke')
-        : d?.reason === 'stale' ? t('chat.stock.breakStale')
-        : d?.reason === 'no-lease' ? t('chat.stock.breakGone')
-        : t('chat.stock.failed')
+        d?.ok ? { text: t('chat.stock.broke'), kind: 'info' as const }
+        : d?.reason === 'stale' ? { text: t('chat.stock.breakStale'), kind: 'problem' as const }
+        : d?.reason === 'no-lease' ? { text: t('chat.stock.breakGone'), kind: 'problem' as const }
+        : { text: t('chat.stock.failed'), kind: 'problem' as const }
       );
     } catch {
-      setStockNote(t('chat.stock.failed'));
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
     } finally {
       setStockBusy(false);
       refreshStock();
@@ -3203,8 +3257,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    *
    * A ref and not state: the latch must not cause a render, and nothing in the
    * render tree reads it. The "it did not start by itself" button keys off
-   * `stockNote` instead — the failure REPORT, which is the honest signal for
-   * offering a retry, and which is already state.
+   * `stockNote` instead, which is already state.
+   *
+   * CORRECTION 2026-10-31: the line here called `stockNote` "the failure
+   * REPORT". It was not — the same variable also carried
+   * `chat.stock.added`, set when enqueue SUCCEEDED, and that sentence is
+   * what stayed on screen claiming "1 waiting" after the stock had drained.
+   * The note now carries a `kind`; this button keys off the note's presence
+   * either way, because a retry is worth offering whenever a person is
+   * looking at a non-empty stock.
    *
    * Deliberately NOT a timer. A poller that fires on a schedule is phase 4b,
    * and it belongs on the server where it keeps working with every tab closed.
@@ -5411,13 +5472,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 a banner with no button would be a dead end.
 
                 Case (a) is keyed off the note rather than off the auto-drain's
-                latch, because the note IS the failure report; a latch would
-                make the button appear during the milliseconds before the first
-                attempt, which reads as "it isn't going to run". */}
-            {(stock && stock.count > 0) || stockNote ? (
+                latch; a latch would make the button appear during the
+                milliseconds before the first attempt, which reads as "it
+                isn't going to run".
+
+                CORRECTION 2026-10-31: the reason given here was "because the
+                note IS the failure report". It is not, and was not when this
+                was written — `chat.stock.added` rides the same variable and
+                is set when enqueue SUCCEEDS. The note now carries a `kind`
+                (see @/lib/stockPanel); the button still keys off presence
+                rather than kind, because a retry is worth offering to anyone
+                looking at a non-empty stock. The behaviour was right and the
+                stated reason was wrong, which is worse than no reason: the
+                next reader reuses the reason. */}
+            {stockPanelVisible ? (
               <div className="mb-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-sm">
                 <span>⏳</span>
-                {stock && (stock.claimed > 0 || stock.claimedUnknown) ? (
+                {debugRunner && stock && (stock.claimed > 0 || stock.claimedUnknown) ? (
                   <span className="font-medium">
                     {stock.claimedUnknown
                       ? t('chat.stock.running')
@@ -5428,7 +5499,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     `waiting > 0` branch below ON PURPOSE: a stock that is
                     fully claimed has waiting = 0, and that is exactly the
                     state a dead holder leaves behind. */}
-                {stock?.lease ? (
+                {debugRunner && stock?.lease ? (
                   <>
                     <span className="text-xs text-muted-foreground truncate max-w-[45%]">
                       {/* Under a minute, say so in words: "0 min ago" reads as a
@@ -5476,7 +5547,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <span className="text-xs text-muted-foreground truncate max-w-[40%]">
                       {stock.items.filter((i) => !i.claimed).map((i) => i.from).filter(Boolean).join(', ')}
                     </span>
-                    {(stockNote || !autoRunStock) && !loading && !injectTurnId ? (
+                    {(stockNote !== null || !autoRunStock) && !loading && !injectTurnId ? (
                       <button
                         onClick={drainStock}
                         disabled={stockBusy}
@@ -5489,7 +5560,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </>
                 ) : null}
                 {stockNote ? (
-                  <span className="text-xs text-muted-foreground w-full">{stockNote}</span>
+                  <span className="text-xs text-muted-foreground w-full">{stockNote.text}</span>
                 ) : null}
               </div>
             ) : null}
