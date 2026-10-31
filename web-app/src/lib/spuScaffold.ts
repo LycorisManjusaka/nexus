@@ -19,6 +19,39 @@
 
 export type ScaffoldLang = 'en' | 'ja';
 
+// ── Continuation loop contract ────────────────────────
+// Moved here 2026-10-31 from SystemPromptUpdater.tsx. The sentinel and the
+// turn shape are the SPU loop's wire contract, and the loop now runs
+// server-side (lib/spuRun.ts) as well as in the panel - so neither can live
+// inside a React component any more. buildContinuationUserMsg, the only
+// thing buildSpuTurns collaborates with, is already in this file.
+
+// Continuation sentinel the agent is asked to print at the very end of its
+// output. Its absence after a stream means the output was truncated at the
+// model's token cap → we prefill-continue. Stripped before saving.
+export const END_SENTINEL = '<<<NEXUS_END>>>';
+
+// One source for the turns every SPU loop sends — all four actions (update,
+// redistribute, genesis, index) had the identical four lines inline.
+//
+// attempt 0 is the plain request. A continuation is THREE turns: the request,
+// what the model produced so far, and a user turn asking for the rest. It is
+// deliberately NOT a prefill (a request ending on the assistant turn): that
+// shape makes GLM-5.3 rewrite its own Changelog with 4.6-7.5x the reasoning,
+// 400s DeepSeek-direct unless reasoning_content is echoed, and 400s Gemini
+// 3.5-flash-lite and newer outright. See buildContinuationUserMsg for the
+// measurement table.
+export function buildSpuTurns(attempt: number, userMsg: string, accum: string, lang: 'en' | 'ja') {
+  const now = Date.now();
+  const request = { role: 'user', content: userMsg, timestamp: now };
+  if (attempt === 0) return [request];
+  return [
+    request,
+    { role: 'assistant', content: accum, timestamp: now },
+    { role: 'user', content: buildContinuationUserMsg({ lang, endSentinel: END_SENTINEL }), timestamp: now },
+  ];
+}
+
 // ── update (updater.md / defragmenter.md) ──────────────────────────────────
 export interface UpdateScaffoldArgs {
   lang: ScaffoldLang;
