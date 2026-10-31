@@ -89,10 +89,6 @@ const TAB_CLIENT_ID = `tab_${Math.random().toString(36).slice(2, 10)}${Date.now(
 // same reason as the id above, and because a per-render copy would be listed as
 // a hook dependency that cannot actually change.
 const MY_STOCK_HOLDER = `tab:${TAB_CLIENT_ID.slice(0, 8)}`;
-// How often to tell the server "still running". Mirrors HEARTBEAT_MS in
-// turnRegistry.ts; the TTL there is ~3x this, so one dropped beat is harmless.
-const TURN_HEARTBEAT_MS = 8_000;
-
 // All cloud models known to NEXUS, in the line format the vessel-handoff
 // allow-list reads (`family | modelId | on/off | label`). Shown read-only in
 // the model-list window — never pasted automatically; see modelHandoff.ts.
@@ -956,13 +952,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // ever be the disk head.
   const ownWritesRef = useRef<number[]>([]);
   // ── Cross-tab turn visibility ─────────────────────────────────────────────
-  // While a turn runs, this tab beats to /api/chat/active so other tabs can see
-  // it; on finish it retires the entry. `foreignTurn` is what we were last told
-  // about a turn running SOMEWHERE ELSE on this conversation — used to warn and
-  // to hold back a second send. Null means "nothing known", which is also what
-  // a failed probe leaves behind: not knowing must never block sending.
-  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  //
+  // ⚠ CORRECTED 2026-10-31. This used to open with "While a turn runs, this tab
+  // beats to /api/chat/active so other tabs can see it". IT DOES NOT, and has
+  // not since 2026-10-30: the only beater was beginTurnRegistration inside the
+  // browser turn engine, deleted with those 764 lines. The entry is published
+  // by the CHAT ROUTE when a turn actually starts, and nothing keeps it alive,
+  // so it expires 25s in — which is exactly why a tab reconnecting after a
+  // network drop used to be told nothing was running. See resolveActiveTurn in
+  // lib/turnRegistry.ts. Left wrong-and-corrected: the sentence is what made
+  // the hole invisible to me for two days.
+  //
+  // This tab still RETIRES its entry on finish (retireTurnRegistration below).
+  //
+  // `foreignTurn` is what we were last told about a turn running SOMEWHERE ELSE
+  // on this conversation — used to warn and to hold back a second send. Null
+  // means "nothing known", which is also what a failed probe leaves behind:
+  // not knowing must never block sending.
   const activeTurnKeyRef = useRef<{ convoId: string; turnId: string } | null>(null);
+  // Is the screen known to be behind what is on disk?
+  //
+  // Set only when a reload could not REACH the server, which since the
+  // runner means the turn went on without this tab and was written while
+  // it was offline. Cleared by the next reload that completes. See the
+  // probe effect, which retries it the moment connectivity returns.
+  const staleViewRef = useRef<boolean>(false);
   // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
   //
   // A watched runner turn ends, when stopped, with the route's own abort echo
@@ -2730,22 +2744,34 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * one this tab already has; re-applying them would re-run thirty setStates
    * for no change.
    */
-  const reloadMessagesFromDisk = useCallback(async () => {
-    if (!convoId) return;
+  const reloadMessagesFromDisk = useCallback(async (): Promise<'loaded' | 'skipped' | 'unreachable'> => {
+    if (!convoId) return 'skipped';
     try {
       const r = await fetch(`/api/logs/${convoId}`);
-      if (!r.ok) return;
+      if (!r.ok) return 'skipped';
       const data = await r.json();
-      if (!data || !Array.isArray(data.messages)) return;
+      if (!data || !Array.isArray(data.messages)) return 'skipped';
       skipNextAutoSaveRef.current = true;
       baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
       const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
         .map((m) => ({ ...m, autoPlay: false }));
       setMessages(dedupeMessageIds(loaded).messages);
+      return 'loaded';
     } catch {
       // A failed reload leaves the screen as it was. The turn is on disk
       // either way; the cost is a stale view until the next open, which is
       // strictly better than clearing a conversation because a fetch blipped.
+      //
+      // The CALLER is told, though — see staleViewRef. "Until the next open"
+      // used to be the whole story because a dropped connection also dropped
+      // the turn. It does not any more: the runner finishes and writes while
+      // the tab is offline, so this exact failure is now the difference
+      // between a half-painted reply and the real one.
+      //
+      // 'skipped' above is NOT this. A 404 or a malformed body is the server
+      // answering; retrying it on a timer would be a poll with no end. Only
+      // "the request never completed" is worth coming back for.
+      return 'unreachable';
     }
   }, [convoId]);
 
@@ -3068,7 +3094,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // effect returns on its first line, so the placeholder on screen can
       // never be written; clearing first would open a window in which it
       // could.
-      await reloadMessagesFromDisk();
+      staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
       setLoading(false);
       // The panel's poll only runs while `injectTurnId` is set, and Stop clears
       // that immediately — so without this read the lease row FREEZES at its
@@ -3637,7 +3663,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // it did not start ATTACHES to it (see the effect below) and shows the real
   // thing; the banner is for the case where attaching found nothing to watch.
   const retireTurnRegistration = () => {
-    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     const k = activeTurnKeyRef.current;
     activeTurnKeyRef.current = null;
     if (!k) return;
@@ -3670,6 +3695,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * `idle`. Without a memory the probe would retry that same dead turn every
    * ten seconds forever, and each attempt ends in a reload — a quiet polling
    * loop on a conversation nobody is even looking at.
+   *
+   * CLEARED on a FAILED attach — see the effect below. "Never unmarked" was
+   * written when attaching was a nicety for a second tab; it is now how a tab
+   * gets its view back after the network drops, and those drops come in runs.
    */
   const attachedTurnRef = useRef<string>('');
 
@@ -3686,33 +3715,99 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // here that is not mine"), it already fires on the three moments that matter
   // (mount, focus, becoming visible), and `loading` already means "this tab is
   // busy with a turn" for both.
+  //
+  // `online` is the fourth moment, and the one this effect exists for since
+  // 2026-10-31: the browser itself says when connectivity returns, so a tab
+  // whose watch died in a tunnel rejoins at once instead of in up to ten
+  // seconds. It is an EXTRA trigger, never the only one — the event reports
+  // the link layer and not reachability, so a false `online` costs one probe
+  // and a missed one is covered by the interval.
   useEffect(() => {
     if (!convoId) return;
     let cancelled = false;
     const read = async () => {
       if (cancelled || loading) return;
+      // ── CATCH UP WITH DISK FIRST ───────────────────────────────────────
+      // A watch whose reload could not reach the server left this screen
+      // showing a turn that has since been finished and written by the
+      // runner. Attaching cannot fix that: by then the relay is closed, so
+      // the probe below finds nothing and there is nothing to join.
+      //
+      // MEASURED 2026-10-31 (Lizard-kun, airplane mode): the long turn was
+      // rejoined and the view came back. A SHORT one would not have been —
+      // it ends during the outage, and the only thing that can repair the
+      // screen is the reload that already failed once.
+      //
+      // This is not a second mechanism. It is the SAME reload, retried at
+      // the one moment it can now succeed. The flag is set only by a
+      // request that never completed, so a server that answered (404,
+      // malformed body) is never retried.
+      if (staleViewRef.current) {
+        if ((await reloadMessagesFromDisk()) !== 'unreachable') {
+          staleViewRef.current = false;
+          // The MESSAGES are not the only thing the outage froze. Three notes
+          // were written while the network was down and all three say
+          // something that stopped being true the moment the reload landed:
+          //
+          //   the stock note    "network error" — from the watch that died
+          //   the lease row     last read before the outage, so it still
+          //                     claims a turn that has since finished
+          //   the save banner   "this turn is not on disk yet" — and it IS,
+          //                     the runner wrote it; this screen is now a
+          //                     copy of that file
+          //
+          // MEASURED 2026-10-31: after the view repaired itself, both of the
+          // first two were still on screen describing a world from a minute
+          // ago. A note that outlives its truth is the shape this house
+          // refuses, and here it outlives it by exactly as long as the tab
+          // stays open.
+          //
+          // A CONFLICT banner is left alone. That one is not a report, it is
+          // a question — which copy wins — and the reload has just answered
+          // it one way without asking.
+          setStockNote(null);
+          void refreshStock();
+          setSaveError(prev => (prev && prev.kind !== 'conflict' ? null : prev));
+        }
+        if (cancelled || loading) return;
+      }
       const foreign = await probeForeignTurn();
       // `loading` re-checked: the probe is a round trip, and this tab may have
       // started its own turn while it was in flight.
       if (!foreign || cancelled || loading) return;
       const key = `${convoId}:${foreign.startedAt || 0}`;
       if (attachedTurnRef.current === key) return;
-      // Marked BEFORE the await, and never unmarked. An attach that fails is
-      // not retried: the same two reasons the SPU collector marks first —
-      // a retry loop costs more than a missed view, and the failure is
-      // visible (the banner stays up).
+      // Marked BEFORE the await, so a second probe landing mid-attach does not
+      // start a second watch of the same turn.
       attachedTurnRef.current = key;
-      await runOnRunner(undefined, true);
+      const outcome = await runOnRunner(undefined, true);
+      // Cleared ONLY on 'failed'.
+      //
+      //   'idle'  — the relay had nothing to give. KEEP the mark: this is the
+      //             stale-registry case the mark was invented for, and a tab
+      //             that retries it polls a dead turn forever.
+      //   'failed' — the attach itself broke (the kick, the subscribe, or the
+      //             stream). Almost always the network, and the network is
+      //             exactly what a reconnect is recovering from. Refusing to
+      //             retry here leaves the tab permanently blind to a turn that
+      //             is still running, which is the bug this whole path fixes.
+      //
+      // Guarded on the key still being ours: the conversation may have moved
+      // on while the attach ran, and clearing someone else's mark would make
+      // THAT turn retryable.
+      if (outcome === 'failed' && attachedTurnRef.current === key) attachedTurnRef.current = '';
     };
     read();
     const iv = setInterval(read, 10_000);
     const onVisible = () => { if (document.visibilityState === 'visible') read(); };
     window.addEventListener('focus', read);
+    window.addEventListener('online', read);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(iv);
       window.removeEventListener('focus', read);
+      window.removeEventListener('online', read);
       document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3798,7 +3893,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (!(await enqueueCommand('rerun', msgId))) {
       // Nothing was queued, so no turn will run and nothing will reload —
       // put the screen back rather than leaving a silent truncation behind.
-      await reloadMessagesFromDisk();
+      staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
       setLoading(false);
       return;
     }

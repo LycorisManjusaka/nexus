@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getActiveTurn, touchTurn, endTurn, HEARTBEAT_MS } from '@/lib/turnRegistry';
+import { getActiveTurn, touchTurn, endTurn, HEARTBEAT_MS, resolveActiveTurn } from '@/lib/turnRegistry';
+import { liveTurnStatus } from '@/lib/turnBus';
 import { requestStop, forgetStop } from '@/lib/turnStop';
 
 // Read/refresh "is a turn running for this conversation, and is it mine".
@@ -24,17 +25,21 @@ export async function GET(req: Request) {
     const clientId = url.searchParams.get('clientId') || '';
     if (!convoId) return NextResponse.json({ error: 'convoId is required' }, { status: 400 });
 
-    const t = getActiveTurn(convoId);
-    if (!t) return NextResponse.json({ active: false, mine: false, heartbeatMs: HEARTBEAT_MS });
-
+    // BOTH sources. The registry alone goes quiet 25s into a server-run turn
+    // (nothing beats for one), and a tab reconnecting after a network drop
+    // asks exactly this question — see resolveActiveTurn in turnRegistry.ts
+    // for the measurement and for why the relay may only add, never subtract.
+    const ans = resolveActiveTurn(getActiveTurn(convoId), liveTurnStatus(convoId), clientId);
+    if (!ans.active) {
+      return NextResponse.json({ active: false, mine: false, source: ans.source, heartbeatMs: HEARTBEAT_MS });
+    }
     return NextResponse.json({
       active: true,
-      // The server decides this, not the caller — so "is it me?" is answered
-      // the same way everywhere instead of being re-derived per call site.
-      mine: !!clientId && t.clientId === clientId,
-      label: t.label,
-      startedAt: t.startedAt,
-      ageMs: Date.now() - t.startedAt,
+      mine: ans.mine,
+      label: ans.label,
+      startedAt: ans.startedAt,
+      ageMs: Date.now() - (ans.startedAt || 0),
+      source: ans.source,
       heartbeatMs: HEARTBEAT_MS,
     });
   } catch (e: any) {
