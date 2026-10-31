@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt, END_SENTINEL } from '@/lib/spuScaffold';
-import { isFinishedRun, isCollectableHere, isCollectableBy, type SpuRunRecord } from '@/lib/spuRun';
+import { isCollectableHere, isCollectableBy, decideRunRecord, type SpuRunRecord } from '@/lib/spuRun';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
 import { useDevice } from './DeviceProvider';
@@ -379,6 +379,22 @@ async function fetchSpuRunRecord(folder: string, label: string): Promise<SpuRunR
   return (d?.record as SpuRunRecord | null | undefined) || null;
 }
 
+/**
+ * Empty the run record for one generation.
+ *
+ * Throws on failure so the one caller that must REPORT a failed discard can,
+ * while the two that are best-effort opt out with .catch(). Three call sites
+ * were about to derive the same URL and the same error shape.
+ */
+async function deleteSpuRunRecord(folder: string, label: string): Promise<void> {
+  const r = await fetch(
+    `/api/spu-run?folder=${encodeURIComponent(folder)}&label=${encodeURIComponent(label)}`,
+    { method: 'DELETE' },
+  );
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d?.error) throw new Error(String(d?.error || `HTTP ${r.status}`));
+}
+
 export default function SystemPromptUpdater({
   open, onClose, folderName, convoId, title, originalMessages,
   aiName, specificModel, modelParams,
@@ -403,6 +419,21 @@ export default function SystemPromptUpdater({
   // it and WHICH conversation it was written for, and a boolean would
   // make the banner guess both from whatever the panel is pointed at now.
   const [recoverable, setRecoverable] = useState<SpuRunRecord | null>(null);
+
+  // Collecting a finished record is DELIVERY, not a new run. It reuses the run
+  // handlers on purpose, so the five post-processing branches stay single-source
+  // -- but four of those handlers OPEN with maybeShiftRightToLeft(), which
+  // belongs to STARTING a run: it archives the current right-side draft into
+  // the left pane, writes both files, and asks the human first. Firing that
+  // from an effect would pop a confirm dialog the instant the panel opens, and
+  // a "yes" would promote a draft nobody chose to promote. This ref is how the
+  // shift learns it is on the delivery path.
+  const collectingRef = useRef(false);
+  // Records already handed to a handler, keyed `label@startedAt`. The DELETE
+  // that empties a collected record is best-effort (`.catch(() => {})`), so
+  // without this one failed delete re-offers the same record every time
+  // `running` settles -- not a duplicate delivery, an unbounded loop.
+  const collectedRef = useRef<Set<string>>(new Set());
 
   // ── Close/reload guard ─────────────────────────────────────────────────────
   // A soul-packing run is the most expensive thing in Nexus to lose: minutes of
@@ -1370,10 +1401,7 @@ export default function SystemPromptUpdater({
       // is on screen at the moment the box on disk becomes empty -- the
       // delivery and the emptying cannot end up on opposite sides of a crash.
       a.onProgress(0, prior.accum.length, prior.accum);
-      await fetch(
-        `/api/spu-run?folder=${encodeURIComponent(soulKey)}&label=${encodeURIComponent(label)}`,
-        { method: 'DELETE' }
-      ).catch(() => {});
+      await deleteSpuRunRecord(soulKey, label).catch(() => {});
       setStatusMessage(
         t('spu.st.runRecovered')
           .replace('{n}', String(prior.accum.length))
@@ -1447,7 +1475,17 @@ export default function SystemPromptUpdater({
     // that made a stopped chat turn show its previous answer (2026-10-30).
     const record = await fetchSpuRunRecord(soulKey, label);
     if (!record) throw new Error(t('spu.st.runNoRecord'));
+    // An error with nothing to show KEEPS its record: the throw above puts the
+    // reason in the status line, and the record is the only place the stage and
+    // the attempt count survive for whoever looks next.
     if (record.status === 'error' && !record.accum) throw new Error(String(record.error || 'run failed'));
+    // This tab watched the run to its end, so the record has already done the
+    // only job it has: outliving a tab that went away. Leaving it behind made
+    // the NEXT open auto-collect a result that was already on screen and
+    // announce "collected a result that had finished on the server" -- true of
+    // the record, false of what happened. Best-effort: the text is delivered
+    // either way, and a leftover is picked up by the collector, not lost.
+    await deleteSpuRunRecord(soulKey, label).catch(() => {});
     return record;
   }, [consumeSpuStream, soulKey, nextLabel, convoId, agentFolder, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, modelParams, t]);
 
@@ -1525,6 +1563,10 @@ export default function SystemPromptUpdater({
   // as the "current soul" it feeds to the agent. Returns null to mean "the
   // run must not start" (user declined the dialog, or the shift failed).
   const maybeShiftRightToLeft = useCallback(async (): Promise<string | null> => {
+    // Delivery of a run that already finished: there is nothing to archive
+    // ahead of it (the generation is over) and nobody pressed anything, so the
+    // confirm would be asked of an empty room.
+    if (collectingRef.current) return leftText;
     // "Continue from the right-side text" means the user explicitly wants
     // this run to keep building on the current right-side draft, not archive
     // it as finished — skip the shift entirely in that case.
@@ -2452,12 +2494,7 @@ export default function SystemPromptUpdater({
       // The label it was refused FOR, not the label the panel happens to be
       // showing now — those can differ, and discarding the wrong one frees a
       // run that is alive.
-      const r = await fetch(
-        `/api/spu-run?folder=${encodeURIComponent(soulKey)}&label=${encodeURIComponent(s.label)}`,
-        { method: 'DELETE' },
-      );
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok || d?.error) throw new Error(String(d?.error || `HTTP ${r.status}`));
+      await deleteSpuRunRecord(soulKey, s.label);
       setStuckRun(null);
       setRecoverable(null);
       setStatusMessage(t('spu.st.runDiscarded'));
@@ -2562,6 +2599,23 @@ export default function SystemPromptUpdater({
       setRunning(null);
     }
   }, [running, runUpdate, runSummaryWrite]);
+
+  // Which handler re-enters the path that produced a given record. Collecting
+  // calls the SAME handler as running it: runOnServer sees the finished record
+  // and returns it instead of starting a second run, so all five actions
+  // recover through post-processing they already have.
+  //
+  // Hoisted above the collector effect and memoised: the effect needs it in its
+  // deps, and a fresh object literal every render would re-fire that effect
+  // once a second while a run is live (`nowTs` re-renders this).
+  const recoverHandlers: Record<string, (() => void) | undefined> = useMemo(() => ({
+    update: handleUpdate,
+    reorganize: handleUpdateNoConvo,
+    redistribute: handleRedistribute,
+    index: handleIndex,
+    genesis: handleGenesis,
+    summary: handleWriteSummary,
+  }), [handleUpdate, handleUpdateNoConvo, handleRedistribute, handleIndex, handleGenesis, handleWriteSummary]);
 
   // ── Persist header/focus on blur ─────────────────────────────────────────
   const persistHeaderFooter = useCallback(async () => {
@@ -2679,27 +2733,73 @@ export default function SystemPromptUpdater({
     }
   }, [soulKey, currentLabel, nextLabel, deletionPatterns, header, leftText, rightText, truncatedPane, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
 
-  // Look for a run that finished while this panel was gone. Re-checked
-  // when a run ends (`running`) because that is when the record either
-  // appears or gets consumed, and the banner must not outlive it.
+  // A run that finished while this panel was gone gets COLLECTED, not offered.
+  //
+  // The whole point of moving the loop to the server was that closing a tab
+  // costs nothing. A result that needs a button pressed before it lands still
+  // costs something -- the person has to notice a banner, read it, and decide
+  // -- and the ask was mine, not theirs: I had put the delivery path inside
+  // the run handlers, and those handlers open with a confirm dialog, so it
+  // FELT like a decision only a human could make. It was a constraint of my
+  // own routing (see collectingRef). The target is a panel that looks exactly
+  // like it always did, where a closed tab simply does not cost a run.
+  //
+  // One case stays un-automatable and so stays visible: a record written for a
+  // DIFFERENT conversation. runOnServer refuses it on action+convoId, and this
+  // panel must not apply output produced for another log.
+  //
+  // Re-checked when `running` settles, because that is when a record either
+  // appears or gets consumed.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       // The closed case clears INSIDE the async body rather than returning
       // early with a synchronous setState: react-hooks/set-state-in-effect
       // flags the synchronous form, and the observable behaviour is the same
-      // (the panel returns null while closed, so nothing renders the banner
-      // either way).
+      // (the panel returns null while closed, so nothing renders either way).
       if (!open) { if (!cancelled) setRecoverable(null); return; }
+      // Wait for the panel to finish opening before calling a handler.
+      //
+      // MEASURED 2026-10-31, first live attempt: the collector fired the
+      // instant the panel opened and runUpdate died on its first line --
+      // "updater.md not found in system_prompt_agents/ja/" -- while the panel
+      // was listing updater.md two lines below. The file was there; `agents`
+      // was still null, because the load-on-open effect had not returned yet.
+      //
+      // A handler reached by a BUTTON is guaranteed a loaded panel: the button
+      // is disabled until `busy` clears. An effect gets no such guarantee. The
+      // precondition the UI was enforcing for the human is not enforced for
+      // the caller that replaced them.
+      //
+      // `running` also covers the local side, where a handler called
+      // mid-flight would return early -- burning the collectedRef entry on a
+      // delivery that never happened. decideRunRecord refuses a `running`
+      // RECORD; this is about this panel.
+      if (running !== null || loading || !agents) return;
       const rec = await fetchSpuRunRecord(soulKey, nextLabel).catch(() => null);
       if (cancelled) return;
-      // `running` is excluded on purpose: a live run is already being
-      // watched somewhere, and offering to collect it would hand out a
-      // half-written document as if it were a result.
-      setRecoverable(isFinishedRun(rec) ? rec : null);
+      const d = decideRunRecord(
+        rec, convoId, collectedRef.current, (a) => !!recoverHandlers[a],
+      );
+      if (d.kind !== 'collect') { setRecoverable(d.kind === 'show' ? rec : null); return; }
+      // Marked BEFORE the call: if the DELETE inside runOnServer fails the
+      // record stays on disk, and marking afterwards would re-enter here
+      // every time `running` settles, without end.
+      //
+      // The mark is NOT released when a handler fails. Releasing it would be
+      // kinder to the one record and would restore exactly that loop -- a
+      // handler that dies early sets `running` twice, which re-fires this
+      // effect, which calls it again. A failure is instead left visible:
+      // every handler writes its own reason into the status line (that is how
+      // the agents-not-loaded bug above was caught), and a reload clears the
+      // ref, so the record is retried by the next person who opens the panel.
+      collectedRef.current.add(d.key);
+      setRecoverable(null);
+      collectingRef.current = true;
+      try { await recoverHandlers[rec!.action]!(); } finally { collectingRef.current = false; }
     })();
     return () => { cancelled = true; };
-  }, [open, soulKey, nextLabel, running]);
+  }, [open, soulKey, nextLabel, running, loading, agents, convoId, recoverHandlers]);
 
   if (!open) return null;
 
@@ -2709,18 +2809,6 @@ export default function SystemPromptUpdater({
   // fresh as the thing that displays it.
   const silenceMs = running && lastEventAtRef.current ? Math.max(0, nowTs - lastEventAtRef.current) : 0;
 
-  // Which button re-enters the path that produced this record. Collecting
-  // calls the SAME handler as running it: runOnServer sees the finished
-  // record and returns it instead of starting a second run, so all five
-  // actions recover through post-processing they already have.
-  const recoverHandlers: Record<string, (() => void) | undefined> = {
-    update: handleUpdate,
-    reorganize: handleUpdateNoConvo,
-    redistribute: handleRedistribute,
-    index: handleIndex,
-    genesis: handleGenesis,
-    summary: handleWriteSummary,
-  };
   // A record written for another conversation is NOT collectable here --
   // runOnServer refuses it on the same two fields -- so the banner says so
   // instead of offering a button that would silently start a fresh run.
@@ -2731,9 +2819,6 @@ export default function SystemPromptUpdater({
   // print which conversation the record belongs to, saw `never`. The predicate
   // is doing its job; it is this call site that wants only the boolean.
   const recoverableHere: boolean = isCollectableHere(recoverable, convoId);
-  const takeRecovered = recoverable && recoverableHere
-    ? recoverHandlers[recoverable.action]
-    : undefined;
 
   // On a phone the panel takes the whole screen: the 16px inset and the
   // rounded corners cost real width on a 414px device, and `h-dvh` (not
@@ -2868,34 +2953,26 @@ export default function SystemPromptUpdater({
           </div>
         )}
 
-        {/* A result that finished on the server while no tab was watching.
-            Until this existed, the record sat on disk and the panel came back
-            blank -- indistinguishable, from the chair, from the closed-tab bug
-            the server-side run was built to fix. */}
+        {/* A finished record this panel could NOT collect on its own. The
+            collectable case never reaches here -- the effect delivers it and
+            clears the state -- so anything visible in this strip is something
+            a person has to resolve. Amber, not emerald: it is a snag, not a
+            result waiting to be claimed. */}
         {recoverable && !busy && (
-          <div className="px-6 py-2 text-[12px] bg-emerald-500/10 border-b border-emerald-500/30 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-medium text-emerald-700 dark:text-emerald-400">
+          <div className="px-6 py-2 text-[12px] bg-amber-500/10 border-b border-amber-500/30 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium text-amber-700 dark:text-amber-400">
               {t('spu.recover.title')}
             </span>
             <span className="text-muted-foreground">
               {recoverableHere
-                ? t('spu.recover.body')
+                ? t('spu.recover.noHandler')
                     .replace('{action}', recoverable.action)
-                    .replace('{when}', new Date(recoverable.updatedAt).toLocaleString())
                     .replace('{n}', String(recoverable.accum.length))
                 : t('spu.recover.otherConvo').replace('{convo}', recoverable.convoId || '-')}
             </span>
-            {takeRecovered && (
-              <button
-                onClick={takeRecovered}
-                className="ml-auto px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10"
-              >
-                {t('spu.recover.take')}
-              </button>
-            )}
             <button
               onClick={discardRunRecord}
-              className={`${takeRecovered ? '' : 'ml-auto '}px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/40`}
+              className="ml-auto px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/40"
             >
               {t('spu.recover.drop')}
             </button>

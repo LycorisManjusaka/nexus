@@ -43,7 +43,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isFinishedRun, isCollectableHere, isCollectableBy, type SpuRunRecord } from '@/lib/spuRun';
+import {
+  isFinishedRun, isCollectableHere, isCollectableBy,
+  decideRunRecord, spuRecordKey, type SpuRunRecord,
+} from '@/lib/spuRun';
 
 const CONVO = 'c2e31b5f-56c0-4577-89ca-c78e791b0177';
 
@@ -169,4 +172,121 @@ test('isCollectableBy implies isCollectableHere on every input', () => {
   // Guard against an implication that holds because the antecedent is never
   // true — a vacuous pass would look identical to a real one.
   assert.equal(sawBothTrue, true, 'no input made isCollectableBy true');
+});
+
+// ── decideRunRecord — what the panel DOES with what it found ────────────────
+//
+// NEW 2026-10-31, second pass. The panel used to OFFER a finished record
+// behind a Collect button. fuwafuwa pressed it, it worked, and she said the
+// button should not exist: the target is a panel that looks exactly like it
+// always did, where closing a tab simply does not cost a run. Automating the
+// delivery takes the decision out of a person's hands, so the decision gets
+// tests.
+//
+// Each case names what would look different without the rule:
+//
+//   "running -> none" — absent, a half-written document is delivered as a
+//       result, and the DELETE empties the record out from under the run that
+//       is still appending to it.
+//   "other conversation -> show" — absent, output built from one log is
+//       applied to another and written to soul/<N>.md as that being's real
+//       generation. SHOW and not none, because a record that can never be
+//       collected here still has to be visible to be discarded.
+//   "already seen -> none" — absent, one failed best-effort DELETE re-offers
+//       the same record every time `running` settles. Not a duplicate
+//       delivery: an unbounded loop.
+//   "seen is checked BEFORE hasHandler" — absent, a record that WAS delivered
+//       (whose DELETE then failed) gets announced as "could not be collected"
+//       — a false statement about something already collected. Silence is
+//       incomplete; this would be wrong.
+//   "no handler -> show" — absent, a record written by a newer build is
+//       dropped in silence. Somebody paid for that text.
+//   "key is label@startedAt" — absent (label alone), the second run of the
+//       same generation is suppressed as a duplicate of the first.
+//   "stopped with text -> collect" — absent, every partial the stop branch
+//       saved on 2026-10-30 becomes undeliverable, undoing that work one
+//       layer up.
+
+const ALL = () => true;
+const NONE = () => false;
+const EMPTY: ReadonlySet<string> = new Set();
+
+test('decideRunRecord: a finished record for this conversation is collected', () => {
+  const r = rec();
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), {
+    kind: 'collect', key: '2@1',
+  });
+});
+
+test('decideRunRecord: running is none — not shown, not collected', () => {
+  const r = rec({ status: 'running', accum: 'half a soul' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), { kind: 'none' });
+});
+
+test('decideRunRecord: no record at all is none', () => {
+  assert.deepEqual(decideRunRecord(null, CONVO, EMPTY, ALL), { kind: 'none' });
+  assert.deepEqual(decideRunRecord(undefined, CONVO, EMPTY, ALL), { kind: 'none' });
+});
+
+test('decideRunRecord: finished with nothing is none', () => {
+  // Same reasoning as isFinishedRun: delivering an empty accum writes the
+  // right pane with nothing, which is the blank pane this path exists to
+  // prevent — produced by the fix.
+  assert.deepEqual(decideRunRecord(rec({ accum: '' }), CONVO, EMPTY, ALL), { kind: 'none' });
+});
+
+test('decideRunRecord: a record for another conversation is SHOWN, not collected', () => {
+  const r = rec({ convoId: 'some-other-log' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), { kind: 'show' });
+});
+
+test('decideRunRecord: a key already seen is none', () => {
+  const r = rec();
+  const seen = new Set([spuRecordKey(r)]);
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL), { kind: 'none' });
+});
+
+test('decideRunRecord: seen is checked BEFORE hasHandler', () => {
+  // Both conditions true at once. If the order flipped this would be 'show',
+  // which claims the record could not be collected — about a record that was.
+  const r = rec();
+  const seen = new Set([spuRecordKey(r)]);
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, NONE), { kind: 'none' });
+});
+
+test('decideRunRecord: an action this build cannot apply is SHOWN', () => {
+  const r = rec({ action: 'some-future-action' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, NONE), { kind: 'show' });
+});
+
+test('decideRunRecord: hasHandler is asked about the RECORD\'s action', () => {
+  // Not about whatever the panel is pointed at. Absent, a panel on 'genesis'
+  // would answer for genesis while holding an 'index' record.
+  const asked: string[] = [];
+  decideRunRecord(rec({ action: 'index' }), CONVO, EMPTY, (a) => { asked.push(a); return true; });
+  assert.deepEqual(asked, ['index']);
+});
+
+test('decideRunRecord: stopped WITH text is collected', () => {
+  const r = rec({ status: 'stopped', sawSentinel: false, accum: 'three rounds of a soul' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL), { kind: 'collect', key: '2@1' });
+});
+
+test('spuRecordKey: two runs of the same label are different keys', () => {
+  // label alone would make the second run look like a duplicate of the first.
+  const a = rec({ label: '7', startedAt: 1000 });
+  const b = rec({ label: '7', startedAt: 2000 });
+  assert.notEqual(spuRecordKey(a), spuRecordKey(b));
+  assert.equal(spuRecordKey(a), '7@1000');
+});
+
+test('decideRunRecord: the returned key is the one seen is tested against', () => {
+  // The round trip is the actual contract: the caller adds d.key to its set,
+  // and the next call must recognise it. A key built differently in the two
+  // places would re-collect forever while looking correct in each half.
+  const r = rec({ label: '9', startedAt: 4242 });
+  const d = decideRunRecord(r, CONVO, EMPTY, ALL);
+  assert.equal(d.kind, 'collect');
+  const seen = new Set([(d as { key: string }).key]);
+  assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL), { kind: 'none' });
 });

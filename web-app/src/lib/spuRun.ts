@@ -194,6 +194,66 @@ export function isCollectableBy(
   return isCollectableHere(rec, convoId) && rec.action === action;
 }
 
+/**
+ * Identity of a record for "have I already handed this one over".
+ *
+ * `label` alone is not enough: the same generation gets run more than once
+ * (a first attempt that came back wrong, then a second), and a label-only key
+ * would suppress the second run's result as a duplicate of the first.
+ */
+export function spuRecordKey(rec: SpuRunRecord): string {
+  return `${rec.label}@${rec.startedAt}`;
+}
+
+export type SpuRecordDisposition =
+  | { kind: 'none' }
+  | { kind: 'show' }
+  | { kind: 'collect'; key: string };
+
+/**
+ * What a panel should do with the record it just found on disk.
+ *
+ * Extracted from the effect that calls it so the branches can be tested: the
+ * failure modes here are a half-written document delivered as a result, one
+ * conversation's output applied to another, and an unbounded re-entry loop --
+ * none of which announce themselves.
+ *
+ * @param seen keys already handed to a handler (see spuRecordKey)
+ * @param hasHandler whether THIS build can apply that action
+ */
+export function decideRunRecord(
+  rec: SpuRunRecord | null | undefined,
+  convoId: string,
+  seen: ReadonlySet<string>,
+  hasHandler: (action: string) => boolean,
+): SpuRecordDisposition {
+  // Covers both "no record" and "still running". A live run is being watched
+  // somewhere; collecting it would hand out a half-written document as a
+  // result, and showing it would offer a result that is not one yet.
+  if (!isFinishedRun(rec)) return { kind: 'none' };
+
+  // Shown, never collected: this panel must not apply output produced against
+  // a different conversation log. Visible because the alternative is a record
+  // that sits on disk forever with nothing saying why.
+  if (!isCollectableHere(rec, convoId)) return { kind: 'show' };
+
+  // Checked BEFORE hasHandler, and the order is a choice about which lie to
+  // avoid. A seen key means delivery was already attempted -- so the text is
+  // most likely already in the pane -- and the record surviving means only
+  // that the best-effort DELETE did not land. Saying "could not be collected"
+  // about something already collected is a false statement; staying quiet is
+  // merely incomplete. Silence beats a lie.
+  if (seen.has(spuRecordKey(rec))) return { kind: 'none' };
+
+  // Not observed in this build -- all six actions have handlers -- so this is
+  // the shape for a record written by a newer build, or an action removed from
+  // this one. Shown rather than dropped: a result nobody can apply is still a
+  // result somebody paid for.
+  if (!hasHandler(rec.action)) return { kind: 'show' };
+
+  return { kind: 'collect', key: spuRecordKey(rec) };
+}
+
 export async function runSpuLoop(
   args: SpuRunArgs,
   deps: SpuRunDeps
