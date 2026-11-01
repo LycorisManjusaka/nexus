@@ -520,31 +520,47 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
-          <div className="flex items-baseline gap-2 min-w-0">
+          {/* Title on its own line, build label and runner badge below it.
+              They were all one `items-baseline` row, with the label set to
+              `truncate`. At a large --ui-font-scale that row could not hold
+              them: the screenshot トカゲくん sent on 2026-11-01 showed the
+              label cut to `cfc9104 dev 2026-10-31 2…` AND the two characters
+              of the title itself broken over two lines.
+
+              The label WRAPS now instead of truncating. It is space-separated
+              by construction (buildInfo.ts: `[commit, branch, stamp].join(' ')`),
+              so ordinary word wrap breaks it between those three parts and
+              never inside the sha. Truncation hid the timestamp, which is the
+              part that answers "is this checkout the one I just pulled". */}
+          <div className="flex flex-col gap-1 min-w-0">
             <h2 className="text-lg font-bold">{t('settings.title')}</h2>
-            {buildLabel && (
-              <span
-                className="text-[10px] font-mono text-muted-foreground truncate select-all"
-                title={t('settings.build.title')}
-              >
-                {buildLabel}
-              </span>
-            )}
-            {(runnerHost || runnerError) && (
-              <button
-                onClick={() => setRunnerOpen(o => !o)}
-                title={t('settings.runner.title')}
-                className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 flex items-center gap-1 transition-colors ${
-                  runnerHost?.status === 'host'
-                    ? 'border-indigo-500/40 text-indigo-400 hover:bg-indigo-500/10'
-                    : runnerHost?.status === 'unreadable' || !runnerHost
-                    ? 'border-destructive/40 text-destructive hover:bg-destructive/10'
-                    : 'border-border text-muted-foreground hover:bg-muted'
-                }`}
-              >
-                <Server size={10} />
-                {runnerHost ? runnerBadge(runnerHost.status) : t('settings.runner.badge.unreadable')}
-              </button>
+            {(buildLabel || runnerHost || runnerError) && (
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                {buildLabel && (
+                  <span
+                    className="text-[10px] font-mono text-muted-foreground select-all break-words"
+                    title={t('settings.build.title')}
+                  >
+                    {buildLabel}
+                  </span>
+                )}
+                {(runnerHost || runnerError) && (
+                  <button
+                    onClick={() => setRunnerOpen(o => !o)}
+                    title={t('settings.runner.title')}
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 flex items-center gap-1 transition-colors ${
+                      runnerHost?.status === 'host'
+                        ? 'border-indigo-500/40 text-indigo-400 hover:bg-indigo-500/10'
+                        : runnerHost?.status === 'unreadable' || !runnerHost
+                        ? 'border-destructive/40 text-destructive hover:bg-destructive/10'
+                        : 'border-border text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    <Server size={10} />
+                    {runnerHost ? runnerBadge(runnerHost.status) : t('settings.runner.badge.unreadable')}
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
