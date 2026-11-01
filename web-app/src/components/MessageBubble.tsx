@@ -10,6 +10,12 @@ import { stripLeadingTimestamps, stripAllTimestamps, isOnlyTimestamps } from '@/
 import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentSrc } from '@/lib/attachmentUrl';
+import {
+  attachmentPreviewSlice,
+  attachmentTextTruncated,
+  attachmentHasFullText,
+  type TextAttachment,
+} from '@/lib/attachmentText';
 import { useT } from '@/lib/i18n';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
@@ -173,8 +179,19 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [isZoomedIn, setIsZoomedIn] = useState(false);
-  // Full-content modal for text attachments. Holds {name, textData} or null.
-  const [viewTextAttachment, setViewTextAttachment] = useState<{ name: string; textData: string } | null>(null);
+  // Full-content modal for text attachments.
+  //
+  // `textData` is null while the body is still being fetched: a migrated
+  // attachment keeps only a preview inline (see lib/attachmentText.ts), so
+  // opening the modal can require a round-trip. The modal renders immediately
+  // with a status line rather than delaying the open, because the fetch can
+  // fail and a silently-not-opening button is the worse failure.
+  const [viewTextAttachment, setViewTextAttachment] = useState<{
+    name: string;
+    textData: string | null;
+    ref: string | null;
+    error: string | null;
+  } | null>(null);
   // Description-preview modal for media attachments processed via the
   // eyes/ears/watcher sense bridges. Holds the full report for one
   // attachment, populated when the user clicks the sense badge.
@@ -1237,6 +1254,36 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
     pushTtsDiag();
   };
 
+  /**
+   * Open the full-text modal for a text attachment, fetching the body when the
+   * conversation holds only a preview.
+   *
+   * Opens FIRST and fills in after. The alternative — await the fetch, then
+   * open — makes a slow link look like a dead button, which is the same class
+   * of failure as a Copy button that fails silently.
+   *
+   * The `prev.ref === ref` guard on both completions is load-bearing: closing
+   * this modal and opening another one while a fetch is in flight would
+   * otherwise land the first body in the second modal. Two attachments with
+   * the SAME ref are the same bytes by construction, so colliding there is
+   * harmless.
+   */
+  const openTextAttachment = async (att: TextAttachment) => {
+    const inline = typeof att?.textData === 'string' ? att.textData : null;
+    const ref = typeof att?.ref === 'string' && att.ref ? att.ref : null;
+    setViewTextAttachment({ name: att?.name || '', textData: inline, ref, error: null });
+    if (inline !== null || !ref) return;
+    try {
+      const res = await fetch(`/api/attachments/${encodeURIComponent(ref)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      setViewTextAttachment(prev => (prev && prev.ref === ref ? { ...prev, textData: text } : prev));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setViewTextAttachment(prev => (prev && prev.ref === ref ? { ...prev, error: msg } : prev));
+    }
+  };
+
   const getAttachmentPreview = (att: any) => {
     // An attachment's bytes live in ONE of two places, and both are supported
     // permanently — not as a migration window:
@@ -1263,20 +1310,29 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
     if (att.isAudio && src) {
       return <audio src={src} controls preload="metadata" className="mt-2 w-full max-w-xs" />;
     }
-    if (att.isText && att.textData) {
-      const truncated = att.textData.length > 500;
+    const inlineText = attachmentPreviewSlice(att);
+    if (att.isText && inlineText !== null) {
+      const truncated = attachmentTextTruncated(att);
+      // Only `textData` knows the real length. A migrated attachment holds a
+      // 501-char cut, so printing ITS length would claim every file in the
+      // corpus is 501 characters long. Fall back to the existing "view full
+      // text" wording rather than inventing a number — `size` is bytes, and
+      // bytes are not chars for anything written in Japanese.
+      const exactChars = typeof att.textData === 'string' ? att.textData.length : null;
       return (
         <div className="mt-2 bg-muted/50 rounded-md border border-border overflow-hidden">
           <div className="max-h-32 overflow-y-auto p-2 text-xs font-mono whitespace-pre-wrap">
-            {att.textData.slice(0, 500)}{truncated ? '…' : ''}
+            {inlineText}{truncated ? '…' : ''}
           </div>
           {truncated && (
             <button
-              onClick={() => setViewTextAttachment({ name: att.name, textData: att.textData })}
+              onClick={() => openTextAttachment(att)}
               className="w-full text-center text-[10px] py-1 bg-background/50 hover:bg-background text-muted-foreground hover:text-indigo-500 border-t border-border transition-colors"
               title={t('bubble.att.openModal')}
             >
-              {t('bubble.att.charsClick').replace('{n}', att.textData.length.toLocaleString())}
+              {exactChars !== null
+                ? t('bubble.att.charsClick').replace('{n}', exactChars.toLocaleString())
+                : t('bubble.att.viewFull')}
             </button>
           )}
         </div>
@@ -1551,9 +1607,9 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                   </span>
                 )}
                 {attachTokens(att) > 0 && <span className="text-muted-foreground bg-muted px-1.5 py-0.5 rounded text-[10px]">{attachTokens(att)} t</span>}
-                {att.isText && att.textData && (
+                {att.isText && attachmentHasFullText(att) && (
                   <button
-                    onClick={() => setViewTextAttachment({ name: att.name, textData: att.textData })}
+                    onClick={() => openTextAttachment(att)}
                     className="ml-auto p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-indigo-500"
                     title={t('bubble.att.viewFull')}
                   >
@@ -1563,7 +1619,7 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                 <button
                   onClick={() => { if (!isUndeliverable(att)) onToggleAttachment(att.id); }}
                   disabled={isUndeliverable(att)}
-                  className={`${att.isText && att.textData ? '' : 'ml-auto'} p-1 rounded-md text-muted-foreground ${
+                  className={`${att.isText && attachmentHasFullText(att) ? '' : 'ml-auto'} p-1 rounded-md text-muted-foreground ${
                     isUndeliverable(att)
                       ? 'opacity-40 cursor-not-allowed'
                       : 'hover:bg-muted hover:text-foreground'
@@ -2062,12 +2118,18 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                 <FileText size={16} className="text-blue-500 shrink-0" />
                 <span className="font-mono text-sm truncate" title={viewTextAttachment.name}>{viewTextAttachment.name}</span>
                 <span className="text-[10px] text-muted-foreground shrink-0">
-                  {t('bubble.att.chars').replace('{n}', viewTextAttachment.textData.length.toLocaleString())}
+                  {viewTextAttachment.textData !== null
+                    ? t('bubble.att.chars').replace('{n}', viewTextAttachment.textData.length.toLocaleString())
+                    : viewTextAttachment.error !== null ? '' : t('common.loading')}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={async () => {
+                    // Nothing to copy while the body is still in flight. The
+                    // button is disabled below too — this guard is what keeps
+                    // the type honest rather than casting.
+                    if (viewTextAttachment.textData === null) return;
                     // The old `catch {}` here swallowed the TypeError a phone
                     // throws (no navigator.clipboard off a secure context), so
                     // the button did nothing at all and said nothing either.
@@ -2075,7 +2137,12 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                     setTextCopyState(ok ? 'copied' : 'failed');
                     setTimeout(() => setTextCopyState('idle'), 1500);
                   }}
-                  className="text-xs px-2.5 py-1 rounded-md border border-border hover:bg-muted text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  disabled={viewTextAttachment.textData === null}
+                  className={`text-xs px-2.5 py-1 rounded-md border border-border text-muted-foreground flex items-center gap-1 ${
+                    viewTextAttachment.textData === null
+                      ? 'opacity-40 cursor-not-allowed'
+                      : 'hover:bg-muted hover:text-foreground'
+                  }`}
                   title={t('bubble.copyFile')}
                 >
                   <Copy size={12} /> {textCopyState === 'copied' ? t('common.copied')
@@ -2092,9 +2159,20 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
               </div>
             </div>
             <div className="flex-1 overflow-auto p-4">
-              <pre className="text-xs font-mono whitespace-pre-wrap break-words leading-relaxed">
-                {viewTextAttachment.textData}
-              </pre>
+              {viewTextAttachment.textData !== null ? (
+                <pre className="text-xs font-mono whitespace-pre-wrap break-words leading-relaxed">
+                  {viewTextAttachment.textData}
+                </pre>
+              ) : viewTextAttachment.error !== null ? (
+                // Say WHY. A migrated attachment whose payload went missing
+                // from the store is a real failure mode, and an empty modal
+                // would be indistinguishable from an empty file.
+                <div className="text-xs text-red-500 font-mono whitespace-pre-wrap">
+                  {t('bubble.att.fetchFailed').replace('{e}', viewTextAttachment.error)}
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
+              )}
             </div>
           </div>
         </div>
