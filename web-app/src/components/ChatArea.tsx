@@ -9,6 +9,7 @@ import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
+import { shouldReloadFromDisk } from '@/lib/diskVersion';
 import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
@@ -993,6 +994,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   useEffect(() => {
     markerRef.current = { firstOriginalMessageId, firstOriginalIsNext };
   }, [firstOriginalMessageId, firstOriginalIsNext]);
+
+  /**
+   * Audio-session mode, readable from `runOnRunner` without being a dep.
+   *
+   * ⚠ A REF ON PURPOSE. `runOnRunner` is a useCallback the auto-trigger
+   * effect depends on; adding a dep changes its identity and can re-fire a
+   * trigger. Same reason markerRef above is a ref. MEASURED: this exact
+   * trap, 2026-10-31.
+   */
+  const vrchatModeRef = useRef(false);
+  useEffect(() => { vrchatModeRef.current = vrchatMode; }, [vrchatMode]);
   // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
   //
   // A watched runner turn ends, when stopped, with the route's own abort echo
@@ -2805,6 +2817,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   /**
+   * The latest buildLogData, readable from callbacks that must not take it
+   * as a dependency. Same reason as markerRef and vrchatModeRef above.
+   */
+  const buildLogDataRef = useRef(buildLogData);
+  useEffect(() => { buildLogDataRef.current = buildLogData; }, [buildLogData]);
+
+  /**
    * Replace what is on screen with what is on disk, without writing anything.
    *
    * Used after a SERVER-SIDE turn. The runner is the writer for those, so the
@@ -2819,7 +2838,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * one this tab already has; re-applying them would re-run thirty setStates
    * for no change.
    */
-  const reloadMessagesFromDisk = useCallback(async (): Promise<'loaded' | 'skipped' | 'unreachable'> => {
+  const reloadMessagesFromDisk = useCallback(async (opts?: { keepBaseIfSettingsDiffer?: boolean }): Promise<'loaded' | 'skipped' | 'unreachable'> => {
     if (!convoId) return 'skipped';
     try {
       const r = await fetch(`/api/logs/${convoId}`);
@@ -2827,7 +2846,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const data = await r.json();
       if (!data || !Array.isArray(data.messages)) return 'skipped';
       skipNextAutoSaveRef.current = true;
-      baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
+      // ── WHEN THE BASE MAY ADVANCE ───────────────────────────────────
+      //
+      // Adopting the version on disk is what lets this tab save again
+      // without a 409. That is right when the only thing that changed is
+      // MESSAGES, which this reload has just applied — and wrong when the
+      // settings changed too, because those are NOT applied here: the next
+      // save would carry this tab's older copy of them and quietly undo
+      // the other tab's change. Before the cross-tab mirror existed, the
+      // 409 caught exactly that and asked a human which copy wins.
+      //
+      // So: compare, and leave the base alone when they disagree. The
+      // messages still arrive; only the licence to overwrite is withheld.
+      //
+      // ONE-SIDED. A key the file does not carry is not a disagreement —
+      // most logs predate some of these fields, and reading absence as
+      // divergence would make them permanently unable to mirror.
+      let settingsDiffer = false;
+      if (opts?.keepBaseIfSettingsDiffer) {
+        const mine = buildLogDataRef.current([]) as Record<string, unknown>;
+        const theirs = data as Record<string, unknown>;
+        for (const k of Object.keys(mine)) {
+          if (k === 'messages') continue;
+          if (!(k in theirs)) continue;
+          if (JSON.stringify(theirs[k]) !== JSON.stringify(mine[k])) { settingsDiffer = true; break; }
+        }
+      }
+      if (!settingsDiffer) {
+        baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
+      }
       const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
         .map((m) => ({ ...m, autoPlay: false }));
       setMessages(dedupeMessageIds(loaded).messages);
@@ -2966,10 +3013,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // that may turn out to belong to a continue (which paints into a message
       // already on screen) would have to be removed again.
     } else if (watch?.continueMsgId) {
-      setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true } : m)));
+      // `autoPlay` here and on the placeholder below is 1.5. MEASURED
+      // 2026-11-01: main sets `autoPlay: vrchatMode` in two places inside
+      // generateAiResponse (the placeholder, and the final replacement) and
+      // dev had neither after the send moved to the runner — the second
+      // casualty of that migration after the first-original marker (F76).
+      // MessageBubble's effect waits for non-empty content, so setting it
+      // up front starts the voice on the FIRST chunk rather than at the end.
+      //
+      // Only the branches where THIS tab started the turn. A watching tab
+      // paints the same reply, and two tabs on one machine would speak it
+      // twice through one pair of speakers — worse than silence.
+      setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true, autoPlay: vrchatModeRef.current } : m)));
     } else {
       setMessages(prev => [...prev, {
         id: watchId, role: 'assistant', content: '', timestamp: Date.now(), streaming: true,
+        autoPlay: vrchatModeRef.current,
       }]);
     }
 
@@ -3355,7 +3414,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // "someone is running" direction (a tab killed at the OS level holds its
     // entry until the TTL), and a wrong refusal would make the conversation
     // unusable for half a minute with no way to override.
-    const foreign = await probeForeignTurn();
+    const { foreign } = await probeConversationState();
     if (foreign) {
       const secs = foreign.startedAt ? Math.max(0, Math.round((Date.now() - foreign.startedAt) / 1000)) : null;
       const ok = window.confirm(
@@ -3776,18 +3835,39 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }).catch(() => { /* the server's abort listener and the TTL both cover this */ });
   };
 
-  /** Is a turn running elsewhere on this conversation? Stores AND returns it. */
-  const probeForeignTurn = async (): Promise<{ label?: string; startedAt?: number } | null> => {
+  /**
+   * One round trip, two answers: is a turn running elsewhere, and what
+   * version is on disk.
+   *
+   * Was `probeForeignTurn`, renamed when it started reporting the version
+   * too. A name that describes half of what a function does is the thing
+   * this house keeps paying for.
+   *
+   * `foreign` is stored in state as a side effect (the cross-tab banner
+   * reads it); `diskUpdatedAt` is returned only, because the one caller
+   * that wants it acts on it immediately and a stored copy would be a
+   * second version of the truth sitting next to baseUpdatedAtRef.
+   */
+  const probeConversationState = async (): Promise<{
+    foreign: { label?: string; startedAt?: number } | null;
+    diskUpdatedAt: number | null;
+  }> => {
     try {
       const r = await fetch(`/api/chat/active?convoId=${encodeURIComponent(convoId)}&clientId=${encodeURIComponent(TAB_CLIENT_ID)}`);
-      if (!r.ok) return null;
+      if (!r.ok) return { foreign: null, diskUpdatedAt: null };
       const j = await r.json();
       // The server decides "mine" — this tab does not re-derive it.
       const foreign = j?.active && !j?.mine ? { label: j.label, startedAt: j.startedAt } : null;
       setForeignTurn(foreign);
-      return foreign;
+      return {
+        foreign,
+        diskUpdatedAt: typeof j?.diskUpdatedAt === 'number' ? j.diskUpdatedAt : null,
+      };
     } catch {
-      return null;
+      // A failed probe must not read as "nothing is running, nothing
+      // changed". Both nulls mean "could not tell", and shouldReloadFromDisk
+      // treats a null version as exactly that.
+      return { foreign: null, diskUpdatedAt: null };
     }
   };
 
@@ -3805,6 +3885,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * gets its view back after the network drops, and those drops come in runs.
    */
   const attachedTurnRef = useRef<string>('');
+
+  /**
+   * The disk version this tab has already mirrored, as `convoId:version`,
+   * so a version whose settings disagreed (and therefore did not advance the
+   * base) is not refetched on every poll for as long as the tab stays open.
+   *
+   * Keyed by conversation for the same reason attachedTurnRef is: this
+   * component stays mounted across a switch, and a bare number would carry
+   * one conversation's version into the next one.
+   */
+  const mirroredVersionRef = useRef<string>('');
 
   // Keep `foreignTurn` current, AND join a turn this tab did not start.
   //
@@ -3875,7 +3966,66 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         }
         if (cancelled || loading) return;
       }
-      const foreign = await probeForeignTurn();
+      const { foreign, diskUpdatedAt } = await probeConversationState();
+
+      // ── MIRROR AN EDIT OR DELETE MADE IN ANOTHER TAB ────────────────
+      //
+      // The parts were all already here: this poll, reloadMessagesFromDisk
+      // (which replaces `messages` and the version and nothing else), the
+      // version this tab is working from, and the list of versions it wrote
+      // itself. The only thing missing was the question — the route never
+      // said what was on disk. See lib/diskVersion.ts for the four rules.
+      //
+      // MESSAGES ONLY, by decision. Settings are not mirrored: replacing a
+      // panel someone is in the middle of using is the shape this house
+      // refuses, and a second tab overwriting settings is already refused by
+      // saveLog's 409. nexus-overhaul-plan.md §15.
+      //
+      // An in-progress EDIT survives this: MessageBubble keeps its own
+      // `editContent` and re-syncs from props only when not editing
+      // (MessageBubble.tsx, the `if (!isEditing)` effect). MEASURED
+      // 2026-11-01 — the design note for this change had listed "typing is
+      // lost" as a hazard to design around, and the guard was already there.
+      //
+      // Runs while a foreign turn is running too: `loading` (this tab's own
+      // turn) is the guard that matters, and the effect is torn down and
+      // rebuilt on it, so an attach that is painting a placeholder never
+      // reaches here to have that placeholder replaced out from under it.
+      // ⚠ NOT WHILE THIS TAB HAS WORK THAT IS NOT ON DISK YET.
+      //
+      // A save in flight means `baseUpdatedAtRef` is still the OLD version, so
+      // "disk is newer" is true — and reloading there would throw away an edit
+      // the person just made, before it ever reached the file. Silently.
+      //
+      // It is also the one case where this mirror and the 409 path would give
+      // DIFFERENT answers to the same question: the 409 refuses and asks the
+      // human which copy wins, and remote-wins-silently is not that. Deferring
+      // keeps one answer — when this tab has something pending, the conflict
+      // path owns the decision; the mirror acts only when it has nothing.
+      // By the next poll the save has either landed (base is current, nothing
+      // to do) or been refused (the human is already being asked).
+      //
+      // The effect that saves is NOT debounced: it POSTs and increments this
+      // counter in the same synchronous run, so there is no window between a
+      // local edit and the counter going up that an awaited fetch can land in.
+      const mirrorKey = `${convoId}:${diskUpdatedAt}`;
+      if (savesInFlightRef.current === 0 && mirrorKey !== mirroredVersionRef.current && shouldReloadFromDisk({
+        diskUpdatedAt,
+        baseUpdatedAt: baseUpdatedAtRef.current,
+        ownWrites: ownWritesRef.current,
+      })) {
+        // Remembered BEFORE the await: when the settings disagree the base
+        // is deliberately not advanced, so the next poll would see the same
+        // "disk is newer" and refetch the whole log every ten seconds.
+        // Correctness does not need this; a multi-megabyte conversation does.
+        mirroredVersionRef.current = mirrorKey;
+        if (await reloadMessagesFromDisk({ keepBaseIfSettingsDiffer: true }) === 'unreachable') {
+          staleViewRef.current = true;
+          // Not actually taken — let the next poll try again.
+          mirroredVersionRef.current = '';
+        }
+        if (cancelled || loading) return;
+      }
       // `loading` re-checked: the probe is a round trip, and this tab may have
       // started its own turn while it was in flight.
       if (!foreign || cancelled || loading) return;

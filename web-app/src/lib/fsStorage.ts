@@ -1211,6 +1211,51 @@ export async function saveLog(
   });
 }
 
+/**
+ * The `updatedAt` on disk for one conversation, without parsing the file.
+ *
+ * Exists so a tab can ask "did something change while I was not looking?" on
+ * its existing ten-second poll without pulling a whole log down. One 4 KB
+ * read, not the 6 MB an image-heavy conversation can be.
+ *
+ * Returns null for "cannot tell" — file absent, or updatedAt outside the
+ * header window. Callers must not read null as "unchanged"; lib/diskVersion.ts
+ * is where that distinction is enforced.
+ *
+ * ⚠ The folder scan below is the FIFTH copy of
+ *   path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`)
+ * in this module. The other four live in saveLog (twice), loadLog and
+ * deleteLog — named rather than numbered, because a line number is a claim
+ * that stops being true the next time anything above it is edited.
+ * Deliberately not refactored in the same change that adds a new read path:
+ * loadLog's copy carries BOM stripping and parse-failure reporting that
+ * nothing tests, and a shared helper would have to preserve both.
+ */
+export async function readLogUpdatedAt(convoId: string): Promise<number | null> {
+  await ensureDirs();
+  // Inferred, not annotated. The four older copies of this scan all declare
+  // `any[]`, and reusing that here would have been one more `no-explicit-any`
+  // on the house's count — "the rule that forgives existing debt turning into
+  // the rule that permits new debt". Leaving it off lets TS infer Dirent[]
+  // without importing the type.
+  let beingDirs;
+  try { beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const dir of beingDirs) {
+    if (!dir.isDirectory()) continue;
+    const filePath = path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`);
+    try {
+      // stat first: readHeaderWindow swallows every error, so without this a
+      // missing file and an unreadable one would both say "keep scanning".
+      if (!(await fs.stat(filePath)).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const head = await readHeaderWindow(filePath);
+    return head.updatedAt;
+  }
+  return null;
+}
+
 export async function loadLog(convoId: string) {
   await ensureDirs();
   let beingDirs: any[] = [];

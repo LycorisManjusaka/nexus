@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server';
 import { getActiveTurn, touchTurn, endTurn, HEARTBEAT_MS, resolveActiveTurn } from '@/lib/turnRegistry';
 import { liveTurnStatus } from '@/lib/turnBus';
+import { readLogUpdatedAt } from '@/lib/fsStorage';
 import { requestStop, forgetStop } from '@/lib/turnStop';
 
 // Read/refresh "is a turn running for this conversation, and is it mine".
 //
-// GET  ?convoId=&clientId=   → { active, mine, label?, startedAt?, ageMs? }
+// GET  ?convoId=&clientId=   → { active, mine, label?, startedAt?, ageMs?, diskUpdatedAt }
 // POST { convoId, turnId, event: 'beat' | 'end' | 'stop' } → { ok, outcome? }
+//
+// `diskUpdatedAt` is the conversation's version ON DISK (one 4 KB header
+// read, never the whole log), or null when it cannot be told. It rides along
+// here because the poll that asks the turn question already fires at the four
+// moments a screen can be out of date - mount, focus, becoming visible, and
+// `online` - and a second route would mean a second round trip at each.
+// Callers must not read null as "unchanged"; see lib/diskVersion.ts.
 //
 // There is deliberately NO way for a client to CLAIM a turn here. The only
 // writer of "a turn started" is the chat route itself, at the point it actually
@@ -30,8 +38,15 @@ export async function GET(req: Request) {
     // asks exactly this question — see resolveActiveTurn in turnRegistry.ts
     // for the measurement and for why the relay may only add, never subtract.
     const ans = resolveActiveTurn(getActiveTurn(convoId), liveTurnStatus(convoId), clientId);
+    // Read on BOTH branches. "No turn is running" is exactly when another
+    // tab's edit or delete is most likely to be the thing this tab has not
+    // seen, so answering the version only while a turn runs would miss the
+    // common case. Failure is null, never a throw: the turn answer is the
+    // reason this route exists and must not be lost to a log read.
+    let diskUpdatedAt: number | null = null;
+    try { diskUpdatedAt = await readLogUpdatedAt(convoId); } catch { diskUpdatedAt = null; }
     if (!ans.active) {
-      return NextResponse.json({ active: false, mine: false, source: ans.source, heartbeatMs: HEARTBEAT_MS });
+      return NextResponse.json({ active: false, mine: false, source: ans.source, heartbeatMs: HEARTBEAT_MS, diskUpdatedAt });
     }
     return NextResponse.json({
       active: true,
@@ -41,6 +56,7 @@ export async function GET(req: Request) {
       ageMs: Date.now() - (ans.startedAt || 0),
       source: ans.source,
       heartbeatMs: HEARTBEAT_MS,
+      diskUpdatedAt,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'failed to read active turn' }, { status: 500 });
