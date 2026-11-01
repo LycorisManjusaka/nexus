@@ -53,7 +53,7 @@ import { runTurnStream } from '@/lib/turnStreamLoop';
 import { createRunnerSink, createTurnFlags } from '@/lib/runnerSink';
 import { effectiveFullAccess } from '@/lib/agentCapabilities';
 import {
-  composeBatch, splitLeadingTurn, isCommandKind,
+  composeBatch, splitLeadingTurn, isCommandKind, isEmptyTurnText,
   type QueueItem, type CommandPayload,
 } from '@/lib/turnQueue';
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
@@ -347,6 +347,24 @@ export async function runTurnForQueue(
     const target = stored[idx] as Record<string, unknown>;
 
     if (command.kind === 'rerun') {
+      // ── A rerun needs an ANSWER to throw away ───────────────────────────
+      // `slice(0, idx)` means "everything in front of the target", which is
+      // right for an assistant (drop the reply, ask again from the same point)
+      // and silently wrong for a user message: it would drop THAT message too
+      // and post a history with nothing in it — an empty turn, billed, with
+      // the sender's own text deleted from the log.
+      //
+      // MessageBubble only offers rerun on `!isUser`, so the UI cannot reach
+      // this. That is exactly why it is checked here anyway: the precondition
+      // below it ("still last") exists for the same reason, in this file's own
+      // words — "the browser cannot hit this case because it acts on its own
+      // in-memory array; a runner reads the log fresh, so the precondition has
+      // to be re-checked here". Refused rather than reinterpreted as "answer
+      // this again": inventing a second meaning for a button nobody can press
+      // would be a feature with no asker.
+      if (target.role === 'user') {
+        return { ok: false, stage: 'target', reason: 'cannot rerun a user message', consumedIds };
+      }
       // Throw the answer away and ask again from the same point.
       history = stored.slice(0, idx);
       keep = history;
@@ -379,6 +397,28 @@ export async function runTurnForQueue(
     // drain composes it: `[label]\ntext` per item, FIFO, skipped items
     // contributing nothing at all (including their attachments).
     const batch = composeBatch(take);
+    // ── Never POST a blank turn ─────────────────────────────────────────────
+    // REPORTED 2026-11-01 (トカゲくん): after a failed turn left an item in
+    // the stock, pressing "Run now" "sends an empty message to the model".
+    // composeBatch answers `text: ''` whenever NO item in the batch carried a
+    // string payload.text — the unproduced kinds (letter/schedule/system) and
+    // anything malformed — and this branch then wrapped that '' in a user
+    // message and sent it. An empty user turn is a real request: it costs
+    // money, it gets an answer to nothing, and it lands in the log as a blank
+    // bubble nobody typed.
+    //
+    // CONSUMED, not abandoned, and that is the difference between a bug and a
+    // loop: nothing about these items will ever become runnable, so putting
+    // them back means the panel says "1 waiting" forever and every auto-
+    // trigger tries them again. The reason travels to the relay, so the stock
+    // panel says what was dropped instead of counting it silently.
+    if (isEmptyTurnText(batch.text, batch.attachments)) {
+      const kinds = take.map((i) => i.kind).join(', ');
+      return {
+        ok: false, stage: 'target', consumedIds,
+        reason: `nothing to send: ${take.length} queued item(s) [${kinds}] carried no text and no attachments`,
+      };
+    }
     const userMessage = {
       id: deps.newId(),
       role: 'user',

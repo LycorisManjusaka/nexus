@@ -3855,7 +3855,10 @@ async function streamViaAnthropicCompat(args: {
                   resultContent = 'Error: Bash requires a non-empty "command".';
                 } else {
                   const cwd = await ensureWorkspace(folderName);
-                  const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(tu.input?.timeout_ms) || undefined });
+                  // `signal` so Stop ends the command instead of waiting it
+                  // out — the loop below re-reads turnAbort, but it cannot get
+                  // there while parked on this await (REPORTED 2026-11-01).
+                  const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(tu.input?.timeout_ms) || undefined, signal: turnAbort.signal });
                   resultContent = sh.output;
                 }
               } else if (tu.name === 'web_search') {
@@ -6330,7 +6333,7 @@ export async function POST(req: Request) {
                       resultContent = 'Error: Bash requires a non-empty "command".';
                     } else {
                       const cwd = await ensureWorkspace(folderName);
-                      const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(tu.input?.timeout_ms) || undefined });
+                      const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(tu.input?.timeout_ms) || undefined, signal: turnAbort.signal });
                       resultContent = sh.output;
                     }
                   } else if (tu.name === 'read_conversation') {
@@ -7442,7 +7445,7 @@ export async function POST(req: Request) {
                         result = { error: 'Bash requires a non-empty "command".' };
                       } else {
                         const cwd = await ensureWorkspace(folderName);
-                        const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(fc.args?.timeout_ms) || undefined });
+                        const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(fc.args?.timeout_ms) || undefined, signal: turnAbort.signal });
                         result = { output: sh.output };
                       }
                     } else if (fc.name === 'read_conversation') {
@@ -9718,7 +9721,7 @@ export async function POST(req: Request) {
                         resultText = 'Error: Bash requires a non-empty "command".';
                       } else {
                         const cwd = await ensureWorkspace(folderName);
-                        const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(parsed.timeout_ms) || undefined });
+                        const sh = await runShellCommand(cmd, { cwd, timeoutMs: Number(parsed.timeout_ms) || undefined, signal: turnAbort.signal });
                         resultText = sh.output;
                       }
                     } else if (tc.name === 'web_search') {

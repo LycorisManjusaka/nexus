@@ -37,6 +37,8 @@ import {
   queuedConversations,
   composeBatch,
   splitByLease,
+  discard,
+  isEmptyTurnText,
   LEASE_NAME,
 } from '../../src/lib/turnQueue';
 import type { QueueItem } from '../../src/lib/turnQueue';
@@ -576,5 +578,114 @@ describe('turnQueue: telling in-flight from waiting', () => {
     const items = await pending(being, CONVO, opts);
     const split = splitByLease(items, await readLease(being, CONVO, opts));
     assert.deepEqual(split, { claimed: [], waiting: [], claimedUnknown: false });
+  });
+});
+
+/**
+ * discard — the hand that was missing (REPORTED 2026-11-01, トカゲくん).
+ *
+ * These were written from the FAILURE MODE, not from the implementation: a
+ * failed turn leaves its items in the stock (correct), and the only control
+ * was "Run now", so an item nobody wanted could not be let go. The dangerous
+ * version of the fix is the one that also deletes what a LIVE turn is holding
+ * — that turn's own `release` would then remove nothing and its message would
+ * vanish with no error anywhere.
+ */
+describe('turnQueue: discard', () => {
+  it('drops the named waiting items and leaves the rest', async () => {
+    const a = await put('drop me');
+    await put('keep me');
+    const r = await discard(being, CONVO, [a.item.id], opts);
+    assert.deepEqual(r.removed, [a.item.id]);
+    assert.deepEqual(r.refused, []);
+    assert.equal(r.remaining, 1);
+    assert.deepEqual(texts(await pending(being, CONVO, opts)), ['keep me']);
+  });
+
+  it('REFUSES an item a live claim is working from', async () => {
+    const a = await put('in flight');
+    const c = await claim(being, CONVO, 'runner:x', opts);
+    assert.equal(c.ok, true);
+    if (!c.ok) return;
+    const r = await discard(being, CONVO, [a.item.id], opts);
+    assert.deepEqual(r.removed, [], 'deleting it would make the turn release nothing');
+    assert.deepEqual(r.refused, [a.item.id]);
+    // Still there, so the turn that claimed it can still consume it.
+    assert.equal((await pending(being, CONVO, opts)).length, 1);
+  });
+
+  it('a message queued DURING a turn is still discardable', async () => {
+    await put('claimed one');
+    const c = await claim(being, CONVO, 'runner:x', opts);
+    assert.equal(c.ok, true);
+    if (!c.ok) return;
+    const late = await put('arrived mid-turn');
+    const r = await discard(being, CONVO, [late.item.id], opts);
+    assert.deepEqual(r.removed, [late.item.id], 'it is not part of the running batch');
+    assert.deepEqual(r.refused, []);
+  });
+
+  it('refuses EVERYTHING when the lease does not say what it claimed', async () => {
+    const a = await put('one');
+    const b = await put('two');
+    const c = await claim(being, CONVO, 'runner:x', opts);
+    assert.equal(c.ok, true);
+    if (!c.ok) return;
+    // A lease written before claimedIds existed — splitByLease reports
+    // claimedUnknown for exactly this, and a guess here could delete the
+    // message that is in flight.
+    const leasePath = path.join(queueDir(being, CONVO, opts), LEASE_NAME);
+    const lease = JSON.parse(await fs.readFile(leasePath, 'utf-8'));
+    delete lease.claimedIds;
+    await fs.writeFile(leasePath, JSON.stringify(lease));
+    const r = await discard(being, CONVO, [a.item.id, b.item.id], opts);
+    assert.deepEqual(r.removed, []);
+    assert.deepEqual(r.refused.sort(), [a.item.id, b.item.id].sort());
+  });
+
+  it('an id that is not here is simply absent from both lists', async () => {
+    await put('one');
+    const r = await discard(being, CONVO, ['no-such-id'], opts);
+    assert.deepEqual(r.removed, []);
+    assert.deepEqual(r.refused, []);
+    assert.equal(r.remaining, 1);
+  });
+
+  it('does not touch another conversation of the same being', async () => {
+    const a = await put('here', 'Lizard-kun', CONVO);
+    await put('there', 'Lizard-kun', 'convo-b');
+    await discard(being, CONVO, [a.item.id], opts);
+    assert.equal((await pending(being, 'convo-b', opts)).length, 1);
+  });
+});
+
+/**
+ * isEmptyTurnText — one rule, two ends.
+ *
+ * The enqueue route refuses a blank send; the runner refuses to POST a blank
+ * turn. They look at different inputs and must agree, because the shape of
+ * disagreement is silent: an empty user message is a real, billed request with
+ * an answer to nothing (REPORTED 2026-11-01).
+ */
+describe('turnQueue: isEmptyTurnText', () => {
+  it('blank text with no files is empty', () => {
+    assert.equal(isEmptyTurnText('', []), true);
+    assert.equal(isEmptyTurnText('   \n\t ', []), true);
+  });
+
+  it('attachments alone are a message', () => {
+    assert.equal(isEmptyTurnText('', [{ name: 'a.png' }]), false,
+      'an image with no caption is something someone sent');
+  });
+
+  it('text alone is a message', () => {
+    assert.equal(isEmptyTurnText('hi', []), false);
+  });
+
+  it('a missing or non-string field is empty, not a crash', () => {
+    assert.equal(isEmptyTurnText(undefined, undefined), true);
+    assert.equal(isEmptyTurnText(null, null), true);
+    assert.equal(isEmptyTurnText(42, 'not-an-array'), true,
+      'composeBatch yields text:"" for a payload like this; it must not be sent');
   });
 });

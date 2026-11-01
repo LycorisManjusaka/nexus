@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
-  breakLease, isCommandKind,
+  breakLease, isCommandKind, isEmptyTurnText, discard,
 } from '@/lib/turnQueue';
 import { liveTurnStatus } from '@/lib/turnBus';
 
@@ -17,6 +17,8 @@ import { liveTurnStatus } from '@/lib/turnBus';
 // POST { action: 'abandon', being, convoId, token }               → { ok }
 // POST { action: 'break',   being, convoId, expectedHolder, expectedStartedAt }
 //                                  → { ok } | { ok:false, reason }
+// POST { action: 'discard', being, convoId, ids }
+//                                  → { ok, removed[], refused[], remaining }
 //
 // This file holds NO rules. Ordering, exclusivity and rendering all live in
 // lib/turnQueue.ts, because `next/server` cannot be imported outside Next's own
@@ -124,8 +126,10 @@ export async function POST(req: Request) {
 
       const text = typeof body.text === 'string' ? body.text : '';
       const attachments = Array.isArray(body.attachments) ? body.attachments : [];
-      // An empty message with no attachments is not a thing to wake anyone for.
-      if (!text.trim() && attachments.length === 0) {
+      // An empty message with no attachments is not a thing to wake anyone
+      // for. Shared with the runner's own refusal (lib/turnQueue) so the two
+      // ends cannot disagree about what "empty" means.
+      if (isEmptyTurnText(text, attachments)) {
         return NextResponse.json({ error: 'nothing to enqueue' }, { status: 400 });
       }
       const kind = body.kind === 'letter' || body.kind === 'schedule' || body.kind === 'system'
@@ -207,6 +211,20 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, reason: 'stale' });
       }
       return NextResponse.json({ ok: await breakLease(being, convoId, lease.token) });
+    }
+
+    // Throw items away without running them.
+    //
+    // The caller names the ids it SAW (the same witness idea as `break`): an
+    // item that arrived since the panel was drawn is not in the list and is
+    // therefore not dropped. No token — the lib refuses anything a lease
+    // covers, so this can never reach a live turn's batch.
+    if (action === 'discard') {
+      const ids = Array.isArray(body.ids)
+        ? body.ids.filter((x): x is string => typeof x === 'string')
+        : [];
+      if (ids.length === 0) return NextResponse.json({ error: 'ids is required' }, { status: 400 });
+      return NextResponse.json(await discard(being, convoId, ids));
     }
 
     return NextResponse.json({ error: `unknown action: ${action || '(none)'}` }, { status: 400 });

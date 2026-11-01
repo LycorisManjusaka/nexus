@@ -10,6 +10,7 @@ import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, 
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk } from '@/lib/diskVersion';
+import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
@@ -974,6 +975,40 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // means "nothing known", which is also what a failed probe leaves behind:
   // not knowing must never block sending.
   const activeTurnKeyRef = useRef<{ convoId: string; turnId: string } | null>(null);
+  /**
+   * Stop was pressed while this tab did not yet know the turn's NAME.
+   *
+   * ⚠ WHY (REPORTED 2026-11-01, トカゲくん: "I sent a message by mistake and
+   * pressed Stop at once — it did nothing; the thinking had not started yet").
+   * MEASURED: `activeTurnKeyRef` is set from the relay's `X-Turn-Id`, which
+   * this tab only reads AFTER two awaits (the tick kick, then the subscribe).
+   * Press Stop before that and `handleStop` found no key, posted NOTHING, and
+   * aborted `abortControllerRef` — which a runner turn does not hang from.
+   * So the earliest, most urgent press was the one guaranteed to be dropped.
+   *
+   * The server half of this rendezvous has existed since turnStop was written
+   * ("both orders work": a request naming a turn whose listener has not
+   * registered yet waits for it). The CLIENT half was missing: there was
+   * nowhere to keep "stop whatever this send turns out to be". This ref is it.
+   */
+  const pendingStopRef = useRef(false);
+  /**
+   * Ask the SERVER to stop a named turn. ONE place, two callers:
+   * `handleStop` when the name is already known, and the relay adoption in
+   * `runOnRunner` when the press arrived before the name did. Two copies of
+   * this fetch would be two answers to "how is a stop addressed".
+   *
+   * Not awaited by either caller: Stop must stay a one-click, no-latency
+   * action. `useCallback` with no deps because it closes over nothing — a
+   * fresh function each render would land in runOnRunner's dependency list
+   * and re-arm the auto-trigger effect on every render.
+   */
+  const postStop = useCallback((convoId: string, turnId: string) => {
+    fetch('/api/chat/active', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ convoId, turnId, event: 'stop' }),
+    }).catch(() => { /* best-effort; the caller has already torn down its view */ });
+  }, []);
   // Is the screen known to be behind what is on disk?
   //
   // Set only when a reload could not REACH the server, which since the
@@ -3149,7 +3184,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const relayTurnId = ev.headers.get('X-Turn-Id') || '';
       if (relayTurnId) {
         activeTurnKeyRef.current = { convoId, turnId: relayTurnId };
-        setInjectTurnId(relayTurnId);
+        // ── A Stop pressed before the id existed, delivered now ─────────────
+        // The second half of the rendezvous turnStop describes on its server
+        // side. The request may even overtake the chat route's own listener —
+        // requestStop records it and `onStop` fires the moment the route
+        // registers — so the turn dies in its first instants instead of
+        // running to completion with nobody able to name it.
+        const named = planTurnNamed(pendingStopRef.current, { convoId, turnId: relayTurnId });
+        pendingStopRef.current = false;
+        if (named.post) postStop(named.post.convoId, named.post.turnId);
+        if (named.showInterjection) setInjectTurnId(relayTurnId);
       }
 
       // Seeded for a continue, so the first painted frame is "the half that
@@ -3310,6 +3354,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       setInterjectStatus(null);
       setPendingAsk(null);
       activeTurnKeyRef.current = null;
+      // Here and NOT at the start of the watch, which is where its sibling
+      // `stopPressedRef` is cleared. A press can arrive between `setLoading`
+      // and this function being called at all (handleSend awaits an enqueue in
+      // between), so clearing on the way IN would eat the very press this ref
+      // was added to keep. Clearing on the way OUT bounds its life to one
+      // turn, which is the whole requirement.
+      pendingStopRef.current = false;
       clearLiveTool();
       setActiveSubagent(null);
       setStallIdleSeconds(null);
@@ -3374,7 +3425,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // just the button's — the button already had one in its own finally.
       refreshStock();
     }
-  }, [folderName, convoId, t, globalSettings, reloadMessagesFromDisk, refreshStock]);
+    // `postStop` is listed, not silenced: it is a useCallback with no deps of
+    // its own, so its identity never changes and adding it cannot re-arm the
+    // auto-trigger effect — which is the whole reason it is a useCallback and
+    // not a plain function written here.
+  }, [folderName, convoId, t, globalSettings, reloadMessagesFromDisk, refreshStock, postStop]);
 
   /**
    * The "run it now" button: ask the runner for this conversation's batch.
@@ -3416,6 +3471,61 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * The token is never sent here: handing it out would also hand out
    * `release`, which can delete the items of a live turn.
    */
+  /**
+   * Throw the waiting messages away instead of sending them.
+   *
+   * WHY (REPORTED 2026-11-01, トカゲくん): a turn that fails — "LM Studio: 400
+   * Failed to load model" — abandons its batch, which is correct; losing a
+   * message someone typed is the worst failure here. But the item then sat in
+   * the stock with exactly one control, "Run now", and survived every page
+   * reload, because it is a real file on disk. "I don't know why it is there
+   * and I don't want it" is a request for a HAND, not for different policy:
+   * keeping the message is still right, and now letting it go is possible.
+   *
+   * Acts on the ids that were ON SCREEN — the same witness idea as breakStock.
+   * An item that arrived since the panel was drawn is not in the list, so it is
+   * not dropped by a click aimed at something else. The server refuses anything
+   * a lease covers, so this can never reach a live turn's batch; `refused` is
+   * reported rather than hidden, because "I dropped it" and "I kept it" must
+   * not print the same sentence.
+   */
+  const discardStock = useCallback(async () => {
+    const ids = (stock?.items || []).filter((i) => !i.claimed).map((i) => i.id);
+    if (ids.length === 0 || stockBusy || !folderName || !convoId) return;
+    if (!window.confirm(t('chat.stock.discardConfirm').replace('{n}', String(ids.length)))) return;
+    setStockBusy(true);
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'discard', being: folderName, convoId, ids }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!d?.ok) {
+        setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+        return;
+      }
+      const removed = Array.isArray(d.removed) ? d.removed.length : 0;
+      const refused = Array.isArray(d.refused) ? d.refused.length : 0;
+      // 'problem' only when something was KEPT. A clean discard needs no
+      // sentence: the row it was counted on disappears, which is the answer —
+      // and lib/stockPanel's rule is that machinery waits for debug while
+      // anything a person must act on always shows.
+      setStockNote({
+        text: [
+          removed ? t('chat.stock.discarded').replace('{n}', String(removed)) : '',
+          refused ? t('chat.stock.discardRefused').replace('{n}', String(refused)) : '',
+        ].filter(Boolean).join(' / ') || t('chat.stock.discarded').replace('{n}', '0'),
+        kind: refused > 0 ? 'problem' : 'info',
+      });
+    } catch {
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+    } finally {
+      setStockBusy(false);
+      refreshStock();
+    }
+  }, [stock, stockBusy, folderName, convoId, refreshStock, t]);
+
   const breakStock = useCallback(async () => {
     const lease = stock?.lease;
     if (!lease || stockBusy || !folderName || !convoId) return;
@@ -3907,13 +4017,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Read the key BEFORE retireTurnRegistration() below clears it, and do
     // not await: Stop must stay a one-click, no-latency action, so the abort
     // runs immediately and this request catches up on its own.
-    const activeKey = activeTurnKeyRef.current;
-    if (activeKey) {
-      fetch('/api/chat/active', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ convoId: activeKey.convoId, turnId: activeKey.turnId, event: 'stop' }),
-      }).catch(() => { /* the abort below is still the thing that stops it today */ });
-    }
+    // ── The press, and what it can reach ──────────────────────────────────
+    // Either the turn has a name (POST now) or it does not yet (remember, and
+    // runOnRunner delivers it the instant the relay hands the name over). The
+    // third outcome — do nothing, silently — is the bug this replaces.
+    // See lib/pendingStop.ts for why the rule is not six lines here.
+    const plan = planStopPress(activeTurnKeyRef.current, loading);
+    pendingStopRef.current = plan.remember;
+    if (plan.post) postStop(plan.post.convoId, plan.post.turnId);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -5873,15 +5984,46 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <span className="font-medium">
                       {t('chat.stock.waiting').replace('{n}', String(stock.waiting))}
                     </span>
+                    {/* WHO it is from, or WHEN it arrived when nobody is named.
+                        A plain send carries `from: ''` (InputArea only labels a
+                        real user identity), so this span was usually EMPTY —
+                        and "1 in the stock" with nothing beside it is what
+                        トカゲくん read as "I don't know why it is there"
+                        (2026-11-01). The arrival time is already in what GET
+                        returns; the bodies deliberately are not. */}
                     <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                      {stock.items.filter((i) => !i.claimed).map((i) => i.from).filter(Boolean).join(', ')}
+                      {stock.items.filter((i) => !i.claimed).map((i) => i.from).filter(Boolean).join(', ')
+                        || t('chat.stock.waitingSince').replace('{time}', new Date(
+                          Math.min(...stock.items.filter((i) => !i.claimed).map((i) => i.at))
+                        ).toLocaleTimeString())}
                     </span>
+                    {!loading && !injectTurnId ? (
+                      <button
+                        onClick={discardStock}
+                        disabled={stockBusy}
+                        title={t('chat.stock.discardWhy')}
+                        /* ml-auto, so the pair sits at the right edge together
+                           and "Run now" stays the rightmost button it has
+                           always been. Discard is the one that cannot be
+                           undone, so it must not take over the position a
+                           hand already aims at. */
+                        className="ml-auto px-2 py-1 text-xs font-medium rounded-lg border border-red-500/50 text-red-500 dark:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-500/10"
+                      >
+                        {stockBusy ? '…' : t('chat.stock.discard')}
+                      </button>
+                    ) : null}
                     {(stockNote !== null || !autoRunStock) && !loading && !injectTurnId ? (
                       <button
                         onClick={drainStock}
                         disabled={stockBusy}
                         title={t('chat.stock.retryWhy')}
-                        className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
+                        /* ml-auto moved to Discard above, which now always
+                           renders whenever this one does (its gate is a strict
+                           superset). Two ml-auto in one flex row split the free
+                           space between them instead of pushing the pair right
+                           — the same failure the Release button's comment
+                           already names. */
+                        className="px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
                       >
                         {stockBusy ? '…' : t('chat.stock.run')}
                       </button>

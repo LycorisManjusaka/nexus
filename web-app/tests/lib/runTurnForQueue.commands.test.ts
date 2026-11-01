@@ -407,3 +407,72 @@ test('continue: a command does NOT resolve the boundary', async () => {
   assert.equal(log.firstOriginalMessageId, null, 'still pending');
   assert.equal(log.firstOriginalIsNext, true);
 });
+
+// ── never POST a blank turn (REPORTED 2026-11-01, トカゲくん) ─────────────────
+//
+// "Pressing Run now sends an empty message to the model." Two separate ways
+// this file could do that, and neither had a test:
+//
+//   · a rerun whose target is a USER message. `slice(0, idx)` means
+//     "everything in front of the target", which for a user message is a
+//     history with nothing in it — AND it drops that message from the save.
+//   · a send batch where no item carried text. composeBatch answers
+//     `text: ''`, which used to be wrapped in a user message and posted.
+//
+// An empty user turn is a real request: billed, answered, and stored as a
+// blank bubble nobody typed.
+
+test('rerun: REFUSES a user target instead of posting an empty history', async () => {
+  const log = {
+    id: 'c1', updatedAt: 5, aiName: 'Local',
+    // The shape a STOPPED turn leaves behind: the user message saved with no
+    // reply, so it is both last and a user message.
+    messages: [{ id: 'u1', role: 'user', content: 'question' }],
+  };
+  const r = rig(log);
+  const res = await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'u1' })], r.deps);
+
+  assert.equal(res.ok, false);
+  assert.match((res as { reason: string }).reason, /cannot rerun a user message/);
+  assert.deepEqual(r.bodies, [], 'nothing was sent to a model');
+  assert.deepEqual(r.saves, [], 'and the sender’s own message was not deleted');
+  // Consumed: the target cannot stop being a user message, so abandoning it
+  // would let the auto-trigger re-fire it forever.
+  assert.deepEqual(res.consumedIds, ['item-1']);
+});
+
+test('send: REFUSES a batch that carried no text and no attachments', async () => {
+  const log = { id: 'c1', updatedAt: 5, aiName: 'Local', messages: [] };
+  const r = rig(log);
+  // `letter` is a declared-but-unproduced kind: its payload has no `text`, so
+  // composeBatch skips it and answers with the empty string.
+  const res = await runTurnForQueue(
+    'Default', 'c1',
+    [item('user_message', { ref: 'x.md' }, 'item-9')],
+    r.deps,
+  );
+
+  assert.equal(res.ok, false);
+  assert.match((res as { reason: string }).reason, /nothing to send/);
+  assert.deepEqual(r.bodies, [], 'no model call');
+  assert.deepEqual(r.saves, [], 'no blank bubble on disk');
+  assert.deepEqual(res.consumedIds, ['item-9'], 'nothing here will ever become runnable');
+});
+
+test('send: an ATTACHMENT with no caption is still a message', async () => {
+  // The guard must not be "text is empty" alone. An image someone sent with
+  // nothing typed is a turn, and refusing it would lose it.
+  const log = { id: 'c1', updatedAt: 5, aiName: 'Local', messages: [] };
+  const r = rig(log, 'I see it');
+  const res = await runTurnForQueue(
+    'Default', 'c1',
+    [item('user_message', { text: '   ', attachments: [{ name: 'a.png' }] })],
+    r.deps,
+  );
+
+  assert.equal(res.ok, true);
+  assert.equal(r.bodies.length, 1, 'it was sent');
+  const msgs = saved(r);
+  assert.equal(msgs[0].role, 'user');
+  assert.deepEqual(msgs[0].attachments, [{ name: 'a.png' }]);
+});

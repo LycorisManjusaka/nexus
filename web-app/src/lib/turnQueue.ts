@@ -461,6 +461,65 @@ export async function breakLease(
 }
 
 /**
+ * Throw named items away without running them.
+ *
+ * WHY THIS EXISTS (REPORTED 2026-11-01, トカゲくん): a turn that fails —
+ * "LM Studio: 400 Failed to load model" — abandons its batch, which is right
+ * (losing a message you typed is the worst failure this family has). But the
+ * items then sit in the stock with exactly ONE control offered, "Run now", and
+ * his answer was "I don't know why it's there and I don't want it". The
+ * judgement is his; what was missing was the hand. Same sentence as
+ * `breakLease`, same reason, a different thing to let go of.
+ *
+ * ── Claimed items are REFUSED, never deleted ────────────────────────────────
+ * Deleting an item a live turn is working from would make that turn's own
+ * `release` a no-op and its message vanish with no error — the shape every
+ * guard in this file is pointed at. And when a lease exists but does not say
+ * WHICH ids it took (`claimedUnknown`), nothing is deleted at all: not knowing
+ * must fail in the direction that keeps the message.
+ *
+ * Returns what actually happened per id, because "ok" alone cannot tell "I
+ * dropped your message" from "I refused and it is still queued".
+ */
+export async function discard(
+  being: string,
+  convoId: string,
+  ids: string[],
+  opts?: Opts
+): Promise<{ ok: boolean; removed: string[]; refused: string[]; remaining: number }> {
+  const dir = queueDir(being, convoId, opts);
+  const items = await pending(being, convoId, opts);
+  const lease = await readLease(being, convoId, opts);
+  const split = splitByLease(items, lease);
+
+  const want = new Set(ids);
+  const protectedIds = split.claimedUnknown
+    ? new Set(items.map((i) => i.id))
+    : new Set(split.claimed.map((i) => i.id));
+
+  const removed: string[] = [];
+  const refused: string[] = [];
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch { /* directory vanished; nothing to remove */ }
+
+  for (const name of names.filter(isItemFile)) {
+    // Same derivation as `release`: the id is what follows the padded
+    // timestamp and its separator.
+    const id = name.slice(AT_PAD + 1, -'.json'.length);
+    if (!want.has(id)) continue;
+    if (protectedIds.has(id)) { refused.push(id); continue; }
+    try {
+      await fs.unlink(path.join(dir, name));
+      removed.push(id);
+    } catch { /* already gone — the end state is what was asked for */ }
+  }
+
+  return { ok: true, removed, refused, remaining: (await pending(being, convoId, opts)).length };
+}
+
+/**
  * Every conversation of this being that has anything queued or a live lease.
  * This is what a poller iterates; it deliberately returns the conversation
  * IDS only, so the caller decides what (if anything) to load.
@@ -599,6 +658,25 @@ export function splitByLease(
     waiting: items.filter((i) => !set.has(i.id)),
     claimedUnknown: false,
   };
+}
+
+/**
+ * Is there nothing here to wake anyone for?
+ *
+ * ONE rule, two places that must agree: the enqueue route refuses a blank
+ * send, and the runner refuses to POST a blank turn. They look at different
+ * inputs — a request body before it is stored, a composed batch after — and
+ * the rule is the same sentence about both. Written down once because the two
+ * drifting apart has a specific, silent shape: the route accepts something the
+ * runner then sends to a model as an empty user message, which is a real turn,
+ * billed, with an answer to nothing.
+ *
+ * Attachments alone ARE enough: an image with no caption is a message.
+ */
+export function isEmptyTurnText(text: unknown, attachments: unknown): boolean {
+  const hasText = typeof text === 'string' && text.trim().length > 0;
+  const hasFiles = Array.isArray(attachments) && attachments.length > 0;
+  return !hasText && !hasFiles;
 }
 
 /**
