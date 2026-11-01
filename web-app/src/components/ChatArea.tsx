@@ -1523,7 +1523,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setConvoIsLoading(false);
           return;
         }
-        const lenHeader = r.headers.get('Content-Length');
+        // X-Raw-Length is the body size BEFORE compression; Content-Length is
+        // the wire size. The browser inflates a gzipped body transparently, so
+        // `received` below counts UNCOMPRESSED bytes — dividing it by the wire
+        // size would put the bar at 100% around 36% (measured 2.8x on this
+        // house's conversations) and print "0.42 / 0.15 MB".
+        //
+        // MEASURED 2026-11-01, and it inverts what this line used to do: the
+        // dev server answers `Transfer-Encoding: chunked` with NO
+        // Content-Length at all, compressed or not. So `total` was 0 on every
+        // load and the bar has always been running in its indeterminate mode.
+        // X-Raw-Length is the first denominator it has ever had. Content-Length
+        // is kept as the fallback because a built server (`next start`) may
+        // send one, and because a route not yet converted sends no X-Raw-Length.
+        //
+        // Header name is a literal here rather than imported from
+        // lib/jsonGzip: that module imports `zlib`, which must not reach the
+        // client bundle. Same shape as X-Turn-Bus / X-Tts-Engine, which are
+        // also literals on both sides.
+        const lenHeader = r.headers.get('X-Raw-Length') || r.headers.get('Content-Length');
         const total = lenHeader ? parseInt(lenHeader, 10) : 0;
         setConvoLoadingTotal(total);
 

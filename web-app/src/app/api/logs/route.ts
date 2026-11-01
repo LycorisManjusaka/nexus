@@ -1,9 +1,13 @@
 import { NextResponse } from 'next/server';
 import { listLogs, saveLog } from '@/lib/fsStorage';
+import { jsonMaybeGzip } from '@/lib/jsonGzip';
 
-export async function GET() {
+// `req` is taken only to read Accept-Encoding. Measured 2026-11-01: 305
+// conversations => 46,383 B, and this is on the critical path of every cold
+// start (the sidebar cannot render without it).
+export async function GET(req: Request) {
   const logs = await listLogs();
-  return NextResponse.json(logs);
+  return jsonMaybeGzip(req, logs);
 }
 
 export async function POST(req: Request) {
