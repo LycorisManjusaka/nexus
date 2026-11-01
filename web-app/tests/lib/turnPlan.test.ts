@@ -145,8 +145,9 @@ function item(kind: string, payload: unknown): QueueItem {
  * claim and a list of frames cannot express it.
  */
 function rig(log: Record<string, unknown>, passes: string[][]) {
-  const published: Array<{ text: string; postsSoFar: number }> = [];
+  const published: Array<{ text: string; postsSoFar: number; savesSoFar: number }> = [];
   let posts = 0;
+  let saves = 0;
   let minted = 0;
   let disk = typeof log.updatedAt === 'number' ? (log.updatedAt as number) : 0;
   const deps: RunTurnDeps = {
@@ -156,6 +157,7 @@ function rig(log: Record<string, unknown>, passes: string[][]) {
         return { ok: false, conflict: { diskUpdatedAt: disk } };
       }
       disk += 1;
+      saves += 1;
       (logData as Record<string, unknown>).updatedAt = disk;
       return { ok: true, writtenUpdatedAt: disk };
     },
@@ -173,16 +175,23 @@ function rig(log: Record<string, unknown>, passes: string[][]) {
     clientId: 'runner:test',
     origin: 'http://localhost:3000',
     injectTurnId: 'turn_test',
-    onRawText: (text) => { published.push({ text, postsSoFar: posts }); },
+    onRawText: (text) => { published.push({ text, postsSoFar: posts, savesSoFar: saves }); },
   };
   return { deps, published };
 }
 
-/** The decoded turn_plan announcements, in order. */
-const plans = (r: { published: Array<{ text: string; postsSoFar: number }> }) =>
+type Published = { published: Array<{ text: string; postsSoFar: number; savesSoFar: number }> };
+
+/** Every published frame, decoded once. Both selectors below read this. */
+const decoded = (r: Published) =>
   r.published
-    .map(p => ({ ...p, obj: JSON.parse(p.text.replace(/^data: /, '').trim()) as Record<string, unknown> }))
-    .filter(p => p.obj.type === 'turn_plan');
+    .map(p => ({ ...p, obj: JSON.parse(p.text.replace(/^data: /, '').trim()) as Record<string, unknown> }));
+
+/** The decoded turn_plan announcements, in order. */
+const plans = (r: Published) => decoded(r).filter(p => p.obj.type === 'turn_plan');
+
+/** The decoded turn_saved frames, in order. */
+const saveds = (r: Published) => decoded(r).filter(p => p.obj.type === 'turn_saved');
 
 const twoTurn = () => ({
   id: 'c1', updatedAt: 5, aiName: 'Local',
@@ -257,4 +266,126 @@ test('a handoff announces its SECOND pass too', async () => {
   // not re-announce either, or a watcher would append the sent text twice.
   assert.equal(p[1].obj.user, null);
   assert.equal(p[1].obj.dropId, null);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// `turn_saved` — the mirror frame: what LANDED, so a tab need not re-download
+// the conversation to find out (2026-11-01).
+//
+// MEASURED over 293 real conversations: the frame is p50 7,891 B and the
+// reload it replaces is p50 438,368 B. What is at risk:
+//
+//   · a frame published when the save FAILED — the tab would adopt a version
+//     that is not on disk and then save over the copy that won.
+//   · a frame published for a HANDOFF pass — a watching tab appends the second
+//     vessel's text to the FIRST vessel's bubble (turn_plan is
+//     first-plan-only, deliberately), so a patch would show the same answer
+//     twice. The reload splits them correctly, so a handoff must keep using it.
+//   · the two versions missing or swapped — the patch gate is the only thing
+//     standing between "apply" and the F76 shape.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('send: publishes what landed, with both versions, AFTER the save', async () => {
+  const r = rig({ id: 'c1', updatedAt: 5, aiName: 'Local', messages: [] }, [
+    [frame({ type: 'text', content: 'TAIL' })],
+  ]);
+  await runTurnForQueue('Default', 'c1', [item('user_message', { text: 'hello' })], r.deps);
+
+  const s = saveds(r);
+  assert.equal(s.length, 1, 'one frame per saved pass');
+  // The version the patch is a continuation OF, and the one the tab adopts.
+  // Without the pair a tab cannot prove the patch applies to what it holds.
+  assert.equal(s[0].obj.readUpdatedAt, 5, 'the version the runner READ');
+  assert.equal(s[0].obj.writtenUpdatedAt, 6, 'the version it WROTE');
+  // Ordering claim: published after the write, never before. A frame that
+  // arrived first would let a tab adopt a version no file carries.
+  assert.equal(s[0].savesSoFar, 1, 'after the save, not before');
+  const a = s[0].obj.assistant as Record<string, unknown>;
+  const u = s[0].obj.user as Record<string, unknown>;
+  assert.ok(a?.id, 'names the message it wrote');
+  assert.equal(a.content, 'TAIL', 'and carries its canonical body');
+  assert.ok(u?.id, 'a send carries the user message the tab does not have');
+  assert.equal(s[0].obj.dropId, null, 'a send discards nothing');
+});
+
+test('rerun: publishes the discarded id so the patch can remove it', async () => {
+  const r = rig(twoTurn(), [[frame({ type: 'text', content: 'TAIL' })]]);
+  await runTurnForQueue('Default', 'c1', [item('rerun', { targetMsgId: 'a1' })], r.deps);
+
+  const s = saveds(r);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].obj.dropId, 'a1', 'without this the patch leaves the old answer');
+  assert.equal(s[0].obj.user, null, 'a rerun mints no user turn');
+});
+
+test('a HANDOFF chain publishes NO turn_saved at all', async () => {
+  // The load-bearing refusal, and the exact contrast with the test above it:
+  // a handoff announces TWO plans and saves TWO messages, and publishes ZERO
+  // patches. Remove the guard and a watching tab ends a handoff turn showing
+  // the second vessel's answer twice — once concatenated into the first
+  // bubble, once as its own message.
+  const handoff = frame({
+    type: 'model_handoff', family: 'Gemini', specificModel: 'gemini-4-argon',
+    label: 'Gemini 4 Argon', thinking: true, note: 'over to you',
+    fromFamily: 'Local', fromSpecificModel: 'gemma-4', fromLabel: 'Local Gemma',
+  });
+  const r = rig({ id: 'c1', updatedAt: 5, aiName: 'Local', messages: [] }, [
+    [handoff],
+    [frame({ type: 'text', content: '42' })],
+  ]);
+  await runTurnForQueue('Default', 'c1', [item('user_message', { text: 'ask' })], r.deps);
+
+  assert.equal(plans(r).length, 2, 'both passes are still announced');
+  assert.equal(saveds(r).length, 0, 'and neither is patched');
+});
+
+test('the marker travels with the save that persisted it', async () => {
+  // The promotion the runner performs (F76). Without it on the frame, a tab
+  // applying a patch keeps its pending flag and writes it back on the next
+  // save — reverting the runner silently, which is the whole F76 bug again
+  // by a different road.
+  const r = rig(
+    { id: 'c1', updatedAt: 5, aiName: 'Local', messages: [], firstOriginalIsNext: true },
+    [[frame({ type: 'text', content: 'TAIL' })]],
+  );
+  await runTurnForQueue('Default', 'c1', [item('user_message', { text: 'hello' })], r.deps);
+
+  const s = saveds(r);
+  assert.equal(s.length, 1);
+  const marker = s[0].obj.marker as Record<string, unknown>;
+  const user = s[0].obj.user as Record<string, unknown>;
+  assert.ok(marker, 'a promotion happened, so it is published');
+  assert.equal(marker.firstOriginalMessageId, user.id, 'and names the new user message');
+  assert.equal(marker.firstOriginalIsNext, false);
+});
+
+test('a REFUSED save publishes NOTHING', async () => {
+  // Found by the mutation check, 2026-11-01: with `if (published)` instead of
+  // `if (r.ok && published)` every test still passed, because the fixture's
+  // save never fails on the happy path.
+  //
+  // A 409 means disk was NOT changed. A tab that patched anyway would adopt a
+  // version no file carries, and then save its own array over whichever copy
+  // actually won. The contrast is the point: the PLAN is still announced
+  // (published before the post, so before anything could fail) and only the
+  // patch is withheld.
+  const r = rig({ id: 'c1', updatedAt: 5, aiName: 'Local', messages: [] }, [
+    [frame({ type: 'text', content: 'TAIL' })],
+  ]);
+  r.deps.saveLog = async () => ({ ok: false, conflict: { diskUpdatedAt: 99 } });
+  await runTurnForQueue('Default', 'c1', [item('user_message', { text: 'hello' })], r.deps);
+
+  assert.equal(plans(r).length, 1, 'the plan was announced before the post');
+  assert.equal(saveds(r).length, 0, 'and nothing claims to have landed');
+});
+
+test('no marker on a turn that promoted nothing', async () => {
+  // Empty rather than an object full of nulls: `adoptResolvedMarker` is
+  // monotone and a null-filled marker would reach it for no reason on every
+  // ordinary turn.
+  const r = rig({ id: 'c1', updatedAt: 5, aiName: 'Local', messages: [] }, [
+    [frame({ type: 'text', content: 'TAIL' })],
+  ]);
+  await runTurnForQueue('Default', 'c1', [item('user_message', { text: 'hello' })], r.deps);
+  assert.equal(saveds(r)[0].obj.marker, null);
 });

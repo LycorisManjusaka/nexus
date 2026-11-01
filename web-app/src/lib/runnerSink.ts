@@ -51,6 +51,7 @@ export const SINK_METHODS = [
   'stallIdleSeconds',
   'attachmentDescribed',
   'turnPlan',
+  'turnSaved',
 ] as const;
 
 /**
@@ -103,6 +104,10 @@ export function createRunnerSink(): RunnerSink {
       // The runner is the one who PUBLISHED this frame. Reading its own
       // announcement back off the relay and acting on it would be the second
       // derivation of a decision it already made.
+    },
+    turnSaved(): void {
+      // Same: published by the runner, after its own write. There is no
+      // "apply" for the writer.
     },
   };
 }

@@ -31,6 +31,7 @@ import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_IN
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
 import { dedupeMessageIds } from '@/lib/messageIds';
+import { applyTurnSaved, type TurnSavedEvent } from '@/lib/turnSaved';
 import { retiredModelLabel } from '@/lib/retiredModels';
 import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
@@ -1005,6 +1006,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    */
   const vrchatModeRef = useRef(false);
   useEffect(() => { vrchatModeRef.current = vrchatMode; }, [vrchatMode]);
+
+  /**
+   * The message array, readable from inside `runOnRunner` without being a dep.
+   *
+   * ⚠ A REF for the same reason as the two above — `messages` changes on every
+   * chunk of every turn, so taking it as a dependency of `runOnRunner` would
+   * rebuild that callback constantly and re-fire the auto-trigger effect.
+   *
+   * ⚠ AND WHY ONE FRAME LATE IS SAFE HERE. `useEffect` lands after the paint,
+   * so this can be one render behind. The only reader is the `turn_saved`
+   * patch (lib/turnSaved.ts), which matches by id and REPLACES — the
+   * assistant's content is taken from the frame, not from what is here, and
+   * the user message is appended only if its id is absent. The array's
+   * membership does not change during a turn (turn_plan adds the user message
+   * and the placeholder at the start, and nothing removes), so a stale read
+   * differs from a current one in the one field the patch overwrites anyway.
+   *
+   * (The PATCH removes — see localOnlyIds below. That is the patch acting on
+   * what it reads, not the array changing underneath this ref, and a turn runs
+   * for seconds at minimum, so `handleSend`'s append is long settled by then.)
+   */
+  const messagesRef = useRef(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  /**
+   * Ids of OPTIMISTIC bubbles this tab minted for the turn now in flight.
+   *
+   * `handleSend` shows what the sender typed immediately, under an id it makes
+   * up; the runner composes the batch server-side and mints its OWN id for the
+   * message it saves (the user id cannot be proposed, unlike the assistant
+   * id). A reload replaced the whole array, so the optimistic copy went away
+   * with it. A `turn_saved` patch ADDS, so it has to be told which bubbles are
+   * this tab's invention — MEASURED live 2026-11-01: without this the sent
+   * text appeared twice, the tab's copy above the runner's.
+   */
+  const optimisticIdsRef = useRef<string[]>([]);
   // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
   //
   // A watched runner turn ends, when stopped, with the route's own abort echo
@@ -3013,6 +3050,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // before then is not "paint into a guess" — it is not painting at all.
     let watchId = watch?.continueMsgId || (attach ? '' : uuidv4());
     let raf: number | null = null;
+    /**
+     * What the runner said it wrote — recorded here, APPLIED in the `finally`.
+     *
+     * Kept out of the sink's own handler on purpose: applying means setting a
+     * ref, adopting a marker and suppressing the next auto-save, and React's
+     * state updater is not a place for side effects (it can be called twice).
+     * The finally already owns that ordering — it is where the reload this
+     * replaces used to run, in front of `setLoading(false)` for the reason
+     * written there.
+     *
+     * A BOX and not a plain `let`: the only assignment is inside the sink
+     * callback, which TypeScript's control-flow analysis cannot see, so a
+     * `let` narrows to `never` at the read site and the compiler rejects
+     * reading the fields. A property is not narrowed that way.
+     */
+    const saved: { frame: TurnSavedEvent | null } = { frame: null };
     // Hoisted out of the `try` so the catch can reach it: an error frame makes
     // runTurnStream throw while the relay is still OPEN, and the catch has to
     // drain it before the reload. See drainStreamToEnd.
@@ -3209,6 +3262,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             }];
           });
         },
+        // ── WHAT the runner wrote. Applied in the finally, not here ─────────
+        //
+        // Both kinds of tab act on this, unlike `turnPlan`: the tab that
+        // started the turn needs the canonical reply just as much as a
+        // watcher does, because the stream never carried tokens, cacheUsage,
+        // generationMs, toolCalls or notices — which is exactly why the
+        // reload existed.
+        turnSaved: (ev) => { saved.frame = ev; },
       };
 
       reader = ev.body.getReader();
@@ -3257,7 +3318,53 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // effect returns on its first line, so the placeholder on screen can
       // never be written; clearing first would open a window in which it
       // could.
-      staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+      //
+      // ── OR APPLY THE PATCH, WHEN THE RUNNER PUBLISHED ONE ─────────────
+      //
+      // MEASURED 2026-11-01 over 293 conversations: the frame is p50 7,891 B
+      // and this reload is p50 438,368 B — the tab was downloading the entire
+      // history to learn what it had just watched being generated.
+      //
+      // The reload is still the DEFAULT, and still runs whenever the patch
+      // does not apply: a disconnect (no frame arrives at all), a handoff
+      // chain (the runner declines to publish — see publishableSave), a
+      // refused save, or a base that no longer matches what the runner read.
+      // Every one of those is a case where re-reading disk is the only
+      // correct answer, so this is a shortcut on the happy path and nothing
+      // more.
+      const frame = saved.frame;
+      const patch = frame
+        ? applyTurnSaved(
+            messagesRef.current,
+            baseUpdatedAtRef.current,
+            frame,
+            optimisticIdsRef.current,
+          )
+        : null;
+      if (patch && frame) {
+        // Same four steps the reload does, in the same order, from the frame
+        // instead of from a fetch.
+        skipNextAutoSaveRef.current = true;
+        setMessages(dedupeMessageIds(patch.messages).messages);
+        baseUpdatedAtRef.current = patch.base;
+        const adopted = frame.marker
+          ? adoptResolvedMarker(markerRef.current, frame.marker)
+          : null;
+        if (adopted) {
+          setFirstOriginalMessageId(adopted.firstOriginalMessageId);
+          setFirstOriginalIsNext(false);
+        }
+        // The frame arrived, so the relay was open to the end: this screen is
+        // not stale. (A dropped connection produces no frame and therefore no
+        // patch, which is the branch below.)
+        staleViewRef.current = false;
+      } else {
+        staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+      }
+      // Cleared on BOTH branches, and after both: a reload replaces the whole
+      // array so the optimistic bubbles are gone either way, and a list that
+      // outlived its turn would make the NEXT patch delete a real message.
+      optimisticIdsRef.current = [];
       setLoading(false);
       // The panel's poll only runs while `injectTurnId` is set, and Stop clears
       // that immediately — so without this read the lease row FREEZES at its
@@ -3567,8 +3674,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // The optimistic bubble is this tab showing what the sender just typed;
     // composeBatch produces the SAME content for a single item (unwrapped), and
     // runOnRunner's reload replaces this copy with the runner's saved message.
+    //
+    // ⚠ CORRECTED 2026-11-01: a reload still does exactly that, but it is no
+    // longer the only ending. A `turn_saved` patch does not rebuild the array,
+    // so it cannot replace this bubble by rebuilding — it is TOLD to drop it
+    // (optimisticIdsRef, one line below) and then inserts the runner's copy in
+    // front of the reply. MEASURED live before that was true: the sent text
+    // appeared twice, and then once but below its own answer.
     setLoading(true);
     setMessages(prev => [...prev, newMessage]);
+    // Declared as this tab's own, so the turn_saved patch removes it before
+    // appending the runner's copy. Without this the sent text appears twice
+    // (lib/turnSaved.ts, localOnlyIds).
+    optimisticIdsRef.current = [...optimisticIdsRef.current, newMessage.id];
     setHandoffOverride(null);
     await enqueueToStock(text, attachments, opts?.from || '');
     await runOnRunner();

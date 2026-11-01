@@ -42,6 +42,7 @@ export function recordingSink() {
     stallIdleSeconds: log('stallIdleSeconds'),
     attachmentDescribed: log('attachmentDescribed'),
     turnPlan: log('turnPlan'),
+    turnSaved: log('turnSaved'),
   };
   return { sink, calls, names: () => calls.map(c => c.m) };
 }

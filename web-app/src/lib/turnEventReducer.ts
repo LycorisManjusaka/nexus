@@ -58,6 +58,7 @@ import {
 } from '@/lib/turnEvents';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { applyOutputFilter } from '@/lib/outputFilter';
+import { normaliseTurnSaved, type TurnSavedEvent } from '@/lib/turnSaved';
 
 /**
  * Turn-scoped values the chain writes that are NOT part of the accumulator.
@@ -160,6 +161,16 @@ export interface TurnEventSink {
    * tab acts on it.
    */
   turnPlan(plan: TurnPlanEvent): void;
+  /**
+   * The runner finished writing the log, and published what it wrote.
+   *
+   * Same house test as `turnPlan`, same answer: drop it and a screen is
+   * briefly wrong (the tab falls back to re-downloading the conversation),
+   * while nothing on disk changes. The runner implements it as a no-op — it
+   * is the producer, and reading its own frame back would be the second
+   * source of truth about one save.
+   */
+  turnSaved(ev: TurnSavedEvent): void;
 }
 
 /**
@@ -239,6 +250,13 @@ export function applyTurnEvent(
     // receives it as a no-op.
     const plan = normaliseTurnPlan(data);
     if (plan) sink.turnPlan(plan);
+  } else if (data.type === 'turn_saved') {
+    // Also relay-only, and the mirror image of `turn_plan`: that one says
+    // where the reply is ABOUT to go, this one says what landed. Rejected
+    // frames (no assistant id) simply do not fire, and the host then does
+    // what it did before this existed — reload.
+    const saved = normaliseTurnSaved(data);
+    if (saved) sink.turnSaved(saved);
   } else if (data.type === 'cache_usage') {
     acc.cacheUsage = normaliseCacheUsage(data);
   } else if (data.type === 'web_sources') {
