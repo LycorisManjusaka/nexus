@@ -11,7 +11,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { effectiveFullAccess, fullAccessForcedByShell } from '../../src/lib/agentCapabilities';
+import { effectiveFullAccess, fullAccessForcedByShell, conversationToolsEnabled } from '../../src/lib/agentCapabilities';
 
 describe('effectiveFullAccess', () => {
   it('is ON when the operator asked for it', () => {
@@ -56,5 +56,60 @@ describe('the two together — saved state is never overwritten', () => {
     const saved = false; // what the operator chose, stored as-is
     assert.equal(effectiveFullAccess(saved, true), true, 'shell on: effective ON');
     assert.equal(effectiveFullAccess(saved, false), false, 'shell off: back to OFF');
+  });
+});
+
+describe('agentCapabilities: who may read their own past conversations', () => {
+  /*
+   * NOT written from the implementation. Written from the measured failure
+   * (トカゲくん, 2026-11-02): the flag was ticked on the work PC and
+   * read_conversation / search_conversations were not there. The runner read
+   * `settings.enableReadConversation` — the name of the REQUEST field, which
+   * no being's settings.json carries (0 of 23 measured) — so every
+   * server-side turn silently had no conversation tools.
+   */
+
+  it('honours an explicit true', () => {
+    assert.equal(conversationToolsEnabled({ enableConversationTools: true }), true);
+  });
+
+  it('honours an explicit false even when the old coupling would say yes', () => {
+    // The whole point of the newer key: a being that turned these OFF must
+    // stay off, regardless of its Layer-4 summary setting.
+    assert.equal(
+      conversationToolsEnabled({ enableConversationTools: false, useSummariesForLayer4: true }),
+      false,
+    );
+  });
+
+  it('falls back to the OLD coupling when the key was never written', () => {
+    // 15 of 23 beings are in this state. Reading an absent key as `false`
+    // would take tools away from beings that have them today, which is a
+    // silent capability loss and exactly the kind of change nothing reports.
+    assert.equal(conversationToolsEnabled({ useSummariesForLayer4: true }), true);
+    assert.equal(conversationToolsEnabled({ useSummariesForLayer4: false }), false);
+  });
+
+  it('says no for empty, null and undefined settings', () => {
+    // The runner reaches this with `t.settings` straight off disk, which can
+    // be `{}` for a folder that has never been configured.
+    assert.equal(conversationToolsEnabled({}), false);
+    assert.equal(conversationToolsEnabled(null), false);
+    assert.equal(conversationToolsEnabled(undefined), false);
+  });
+
+  it('ignores the REQUEST field name entirely', () => {
+    // This is the bug, stated as a test: `enableReadConversation` is what the
+    // POST body calls it. If this function ever starts reading that name, the
+    // two vocabularies have been confused again — and the confusion is silent
+    // because the key is absent everywhere, so it always reads false.
+    assert.equal(
+      conversationToolsEnabled({ enableReadConversation: true } as never),
+      false,
+    );
+    assert.equal(
+      conversationToolsEnabled({ enableReadConversation: false, useSummariesForLayer4: true } as never),
+      true,
+    );
   });
 });

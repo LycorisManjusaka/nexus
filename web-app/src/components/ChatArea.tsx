@@ -38,7 +38,7 @@ import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { useT, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
-import { effectiveFullAccess, fullAccessForcedByShell } from '@/lib/agentCapabilities';
+import { effectiveFullAccess, fullAccessForcedByShell, conversationToolsEnabled } from '@/lib/agentCapabilities';
 import {
   DEFAULT_MAX_CONVERSATION_LOG,
   logCapUsage,
@@ -1270,10 +1270,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Default follows the OLD coupling whenever this key has never been written,
   // so no being that has these tools today loses them. Resolved at read time;
   // no rewrite of local_data.
-  const resolveConversationToolsSetting = (s: any) =>
-    typeof s?.enableConversationTools === 'boolean'
-      ? s.enableConversationTools
-      : s?.useSummariesForLayer4 === true;
+  //
+  // ⚠ MOVED to lib/agentCapabilities 2026-11-02. It was defined here, and the
+  // runner — which has no components — could not reach it, so it read a key
+  // name that exists in no being's settings and every server-side turn had no
+  // conversation tools. A rule a second caller cannot reach is a rule the
+  // second caller will reinvent, and the reinvention was wrong.
+  const resolveConversationToolsSetting = (s: any) => conversationToolsEnabled(s);
   const [enableConversationTools, setEnableConversationTools] = useState<boolean>(
     () => resolveConversationToolsSetting(folders?.find((f: any) => f.name === folderName)?.settings),
   );

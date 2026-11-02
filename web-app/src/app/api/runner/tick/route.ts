@@ -3,6 +3,7 @@ import { claim, release, abandon, queuedConversations, itemIsForThisInstallation
 import { runTurnForQueue, type RunTurnResult } from '@/lib/runTurnForQueue';
 import { runnerHostStatus, describeRunnerHost, installationId, claimRunnerHostIfUnset, readRunnerHost, type RunnerHostStatus } from '@/lib/runnerHost';
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
+import { conversationToolsEnabled } from '@/lib/agentCapabilities';
 import { onStop } from '@/lib/turnStop';
 import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnBus';
 // Aliased: `endTurn` above closes the RELAY (what watchers read), this one
@@ -251,7 +252,13 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
           saveLog,
           chatPost,
           globalSettings,
-          enableReadConversation: t.settings.enableReadConversation === true,
+          // ⚠ WAS `t.settings.enableReadConversation === true` until 2026-11-02.
+          // No being has that key — it is the name of the REQUEST field, not of
+          // the stored setting, so every runner turn silently had no
+          // conversation tools (トカゲくん measured it on the work PC: the flag
+          // was ticked and the tools were absent). The translating line lived
+          // in the deleted browser turn engine. See conversationToolsEnabled.
+          enableReadConversation: conversationToolsEnabled(t.settings),
           folderDefaults: {
             aiName: String(t.settings.aiName || ''),
             folderName: t.being,
