@@ -8,7 +8,10 @@ import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
-import { makeIsOriginalId } from '@/lib/firstOriginal';
+import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
+import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
+import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
+import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -21,14 +24,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { exportToMarkdown } from '@/lib/markdownLogic';
 import { stripAllTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice, fmtUSD } from '@/lib/modelPricing';
-import { applyOutputFilter } from '@/lib/outputFilter';
 import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure } from '@/lib/layer4';
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
+import { TURN_INPUT_DEFAULTS } from '@/lib/turnInputDefaults';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
 import { dedupeMessageIds } from '@/lib/messageIds';
+import { applyTurnSaved, type TurnSavedEvent } from '@/lib/turnSaved';
 import { retiredModelLabel } from '@/lib/retiredModels';
 import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
@@ -44,26 +48,24 @@ import {
   type RestorePlanReply,
 } from '@/lib/handoverRestore';
 import { setUnloadGuard, useBusyLabel } from '@/lib/unloadGuard';
-import { describeProviderError } from '@/lib/providerErrors';
 import { applyAutoHide, attachmentTokens, attachmentKind, isUndeliverable, wireCarriesMedia, resolveBridge, resolveKeepMessages, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { ensureAudioPermission } from '@/lib/audioSink';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
-import { thinkingBelongsToVessel, parseHandoffModels } from '@/lib/modelHandoff';
-import { selectToolHistoryIds, replayableCalls } from '@/lib/toolHistory';
+import { createTurnAccState } from '@/lib/turnAccState';
+// Named for the runner, shared with the watcher: both are hosts that read a
+// turn stream they did not POST, and a second literal here would be a second
+// definition of what a turn's non-accumulating flags are.
+import { createTurnFlags } from '@/lib/runnerSink';
+import { type TurnEventSink } from '@/lib/turnEventReducer';
+import { parseHandoffModels } from '@/lib/modelHandoff';
 import type { CameraSignal } from '@/lib/cameraTypes';
 import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
+import { AUTO_TRIGGER_KEYS, autoTriggerEnabled, parseAutoTriggers, setAutoTrigger } from '@/lib/autoTriggers';
+import type { AutoTriggers } from '@/lib/autoTriggers';
+import { showStockPanel } from '@/lib/stockPanel';
+import type { StockNote } from '@/lib/stockPanel';
 import CameraPanel from './CameraPanel';
 import LiveSession from './LiveSession';
-
-// Turn-stopped diagnostics used to be streamed as ordinary reply text, so they
-// are baked into the body of every affected message already on disk. This
-// removes them from the copy sent upstream. Anchored on the "]_" closing pair
-// rather than a bare "]" because the notice quotes file paths, which can
-// themselves contain brackets.
-const TURN_NOTICE_RE = /\n*⚠️\s*_\[Turn stopped:[\s\S]*?\]_[ \t]*/g;
-function stripTurnNotices(s: string): string {
-  return s.includes('[Turn stopped:') ? s.replace(TURN_NOTICE_RE, '').trimEnd() : s;
-}
 
 // V8 refuses to materialize a single string longer than 2^29-24 characters
 // (536,870,888 ≈ 512 MiB). Because a conversation is persisted as ONE
@@ -85,10 +87,13 @@ const SAVE_SIZE_WARN_THRESHOLD = Math.floor(MAX_JS_STRING_LENGTH * 0.9);
 // would make the same tab look like a different one after switching away and
 // back. Never rendered, so there is no hydration mismatch to worry about.
 const TAB_CLIENT_ID = `tab_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`;
-// How often to tell the server "still running". Mirrors HEARTBEAT_MS in
-// turnRegistry.ts; the TTL there is ~3x this, so one dropped beat is harmless.
-const TURN_HEARTBEAT_MS = 8_000;
-
+// The holder string this tab writes when it claims a stock. Two places compare
+// against it: `drainStock` (which claims) and the lease row in the panel, which
+// decides whether the lease on screen is this tab's OWN -- for your own live
+// turn the right control is Stop, not breaking the lease. Module scope for the
+// same reason as the id above, and because a per-render copy would be listed as
+// a hook dependency that cannot actually change.
+const MY_STOCK_HOLDER = `tab:${TAB_CLIENT_ID.slice(0, 8)}`;
 // All cloud models known to NEXUS, in the line format the vessel-handoff
 // allow-list reads (`family | modelId | on/off | label`). Shown read-only in
 // the model-list window — never pasted automatically; see modelHandoff.ts.
@@ -514,48 +519,48 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // local_data/workspaces/<folderName>/. Default off.
   // Tool names are unified across both API-key and OAuth modes — same five
   // verbs in both, so the same prompt instruction works either way.
-  const [toolUseEnabled, setToolUseEnabled] = useState(false);
+  const [toolUseEnabled, setToolUseEnabled] = useState(TURN_INPUT_DEFAULTS.toolUseEnabled);
   // Per-Entity agent capability toggles (apply to every provider/model).
   //   agentFullSystemAccess: file tools reach the whole PC (vs workspace-only).
   //   agentDangerousTools:    enables Delete (all paths) + shell (OAuth path).
-  const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(false);
-  const [agentDangerousTools, setAgentDangerousTools] = useState(false);
+  const [agentFullSystemAccess, setAgentFullSystemAccess] = useState(TURN_INPUT_DEFAULTS.agentFullSystemAccess);
+  const [agentDangerousTools, setAgentDangerousTools] = useState(TURN_INPUT_DEFAULTS.agentDangerousTools);
   // Hidden-attachment access (read_attachment). When ON, an attachment the user
   // hid with the eye icon is surfaced to the entity as a 12-char ref prefix
   // (instead of being silently dropped) and the read_attachment tool is exposed
   // so the entity can read it back. OFF (default) = current behaviour.
-  const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(false);
+  const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(TURN_INPUT_DEFAULTS.hiddenAttachmentsAccessible);
   // Replay the entity's OWN past tool calls back to it across turn boundaries.
   // `toolCalls` has always been display-only, so across turns a vessel read a
   // past self that merely *talked* about calling tools — and a weak-handed
   // vessel imitates what it reads. OFF (default) = the old wire, byte for byte.
   // OpenAI-compatible route only. See lib/toolHistory.ts for the measurements.
-  const [toolHistoryEnabled, setToolHistoryEnabled] = useState(false);
+  const [toolHistoryEnabled, setToolHistoryEnabled] = useState(TURN_INPUT_DEFAULTS.toolHistoryEnabled);
   // Optional interactive "ask the user a multiple-choice question" tool. When
   // ON, the model can pause a turn to ask and wait for the user's selection.
-  const [askUserEnabled, setAskUserEnabled] = useState(false);
+  const [askUserEnabled, setAskUserEnabled] = useState(TURN_INPUT_DEFAULTS.askUserEnabled);
   // How long a turn waits for the user's answer to an AskUserQuestion, in ms.
   // 0 = wait indefinitely (default). Per-conversation, edited in the Identity
   // tab's question panel.
-  const [askUserTimeoutMs, setAskUserTimeoutMs] = useState(0);
+  const [askUserTimeoutMs, setAskUserTimeoutMs] = useState(TURN_INPUT_DEFAULTS.askUserTimeoutMs);
   // Transient: the question currently awaiting an answer (drives the card).
   // { askId, questions } while pending; null otherwise.
   const [pendingAsk, setPendingAsk] = useState<{ askId: string; questions: any[] } | null>(null);
   // Optional subagent (context-firewall helper) tool — OAuth path for now.
-  const [subagentEnabled, setSubagentEnabled] = useState(false);
-  const [lettersEnabled, setLettersEnabled] = useState(false);
+  const [subagentEnabled, setSubagentEnabled] = useState(TURN_INPUT_DEFAULTS.subagentEnabled);
+  const [lettersEnabled, setLettersEnabled] = useState(TURN_INPUT_DEFAULTS.lettersEnabled);
   // Browser control. OFF unless deliberately turned on, like every other
   // capability here. A throwaway test window must start with nothing enabled —
   // an entity that can browse before anyone asked it to is a surprise, and a
   // Chromium process is a visible, resource-owning one. Two boundaries, not
   // one: this flag decides whether the tools exist at all, the host allowlist
   // decides where they may go.
-  const [browserEnabled, setBrowserEnabled] = useState(false);
+  const [browserEnabled, setBrowserEnabled] = useState(TURN_INPUT_DEFAULTS.browserEnabled);
   // Stored and edited as text (one host per line or comma-separated); split into
   // an array only on the wire. Keeping one representation in state and on disk
   // means the textarea can never disagree with what was saved.
-  const [browserAllowedHosts, setBrowserAllowedHosts] = useState('');
-  const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(false);
+  const [browserAllowedHosts, setBrowserAllowedHosts] = useState(TURN_INPUT_DEFAULTS.browserAllowedHosts);
+  const [browserAllowAnyHost, setBrowserAllowAnyHost] = useState(TURN_INPUT_DEFAULTS.browserAllowAnyHost);
   // Result line for the "sign this identity in" button. Not persisted — it
   // describes one launch, not a setting.
   const [browserProfileMsg, setBrowserProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -563,15 +568,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // OS-level mouse/keyboard/screen control (Windows only). OFF by default,
   // same boundary discipline as browserEnabled — a wider reach than the
   // browser sandbox, so it gets its own separate flag rather than piggybacking.
-  const [computerControlEnabled, setComputerControlEnabled] = useState(false);
+  const [computerControlEnabled, setComputerControlEnabled] = useState(TURN_INPUT_DEFAULTS.computerControlEnabled);
   // App control via UI Automation (Windows only). OFF by default, and its own
   // flag rather than a rider on computerControlEnabled: it reaches a different
   // surface (an application's published control tree, not the screen) and it is
   // usable by a vessel with no vision, so the two are granted independently.
-  const [appControlEnabled, setAppControlEnabled] = useState(false);
+  const [appControlEnabled, setAppControlEnabled] = useState(TURN_INPUT_DEFAULTS.appControlEnabled);
   // Being-camera / OBS push (see CameraPanel.tsx). OFF by default. Gates BOTH
   // the OBS push AND the in-app mirror panel — one checkbox, not two, per spec.
   const [cameraEnabled, setCameraEnabled] = useState(false);
+  // Which reasons may start a turn by themselves. See lib/autoTriggers.ts
+  // for why this is a map and why an absent key means off.
+  const [autoTriggers, setAutoTriggers] = useState<AutoTriggers>({});
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -593,9 +601,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
   };
   // Model the child subagent runs on ('' = cheap default, e.g. Haiku).
-  const [subagentModel, setSubagentModel] = useState('');
+  const [subagentModel, setSubagentModel] = useState(TURN_INPUT_DEFAULTS.subagentModel);
   // Provider family of the subagent model (routes it to the right endpoint).
-  const [subagentFamily, setSubagentFamily] = useState('');
+  const [subagentFamily, setSubagentFamily] = useState(TURN_INPUT_DEFAULTS.subagentFamily);
   // Transient: a subagent currently running (drives the inline activity chip).
   const [activeSubagent, setActiveSubagent] = useState<{ task: string } | null>(null);
   // OAuth-path live status for the loading indicator. `liveToolActivity` is
@@ -659,7 +667,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Per-Entity overrides for NEXUS's hidden instruction strings (tool
   // descriptions, path rules, read_conversation + web tool text). Keyed by the
   // ids in agentInstructions.ts; empty/absent → English default.
-  const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>({});
+  const [instructionOverrides, setInstructionOverrides] = useState<Record<string, string>>(TURN_INPUT_DEFAULTS.instructionOverrides);
   // Language-aware defaults for the client-composed blocks below (Working
   // Discipline / Absolute Base Binding are prepended here, client-side, not
   // by the server — see the send path further down). JA is a PARTIAL dict
@@ -686,16 +694,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // (sandbox vs full-PC) and never drift out of sync. This block is still the
   // sole NEXUS-authored workspace framing on the OAuth/Claude-Code path, whose
   // built-in tool descriptions can't be overridden.
-  const [toolInstruction, setToolInstruction] = useState(
-    "Your file workspace is your persistent memory. Use the Read / Write / Edit / Glob / Grep tools — each is described in its own tool definition — to store and recall information across turns. Prefer reading a file only when you need it; if its content is already visible in a prior turn, you don't need to Read it again."
-  );
+  const [toolInstruction, setToolInstruction] = useState(TURN_INPUT_DEFAULTS.toolInstruction);
   // Hint appended after an image read result so Gemini doesn't fall into
   // spatial-understanding mode (returning {point:[x,y]} coordinates) or
   // produce an empty answer. {filename} is substituted server-side.
   // Leave blank to disable the hint entirely.
-  const [toolImageInstruction, setToolImageInstruction] = useState(
-    "(The image above is the content of Read(\"{filename}\"). Please answer your partner's question about it conversationally — do not return coordinates or JSON.)"
-  );
+  const [toolImageInstruction, setToolImageInstruction] = useState(TURN_INPUT_DEFAULTS.toolImageInstruction);
   const [modelParams, setModelParams] = useState(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
   const [specificModel, setSpecificModel] = useState(defaultSpecificModel || defaultModelForFamily(aiName));
   // family name → model id that family was last on in this conversation.
@@ -709,7 +713,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // with reasoning off, which is a quiet accuracy tax on the first turns of
   // every new conversation. Existing conversations are NOT touched — the
   // load-from-log path below still honours whatever they stored.
-  const [claudeThinking, setClaudeThinking] = useState(true);
+  const [claudeThinking, setClaudeThinking] = useState(TURN_INPUT_DEFAULTS.claudeThinking);
   const [saveThinkingToLog, setSaveThinkingToLog] = useState(false);
   // When ON, a hidden note is appended to the system prompt each turn telling
   // the entity its own context-elapsed % (the same value on the status bar).
@@ -754,7 +758,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // written before then still carry the field; nothing reads it now, and it is
   // left in place rather than migrated out, since an unread field costs nothing
   // and rewriting stored data to drop it would cost a pass over local_data.
-  const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on'>('on');
+  const [baseBindingMode, setBaseBindingMode] = useState<'off' | 'on'>(TURN_INPUT_DEFAULTS.baseBindingMode);
   // Initialize OFF (not the folder default). The real value is always set by
   // the conversation-load effect below — data.vrchatMode for an existing convo,
   // or the folder default for a new one. Seeding this with `defaultVrchatMode`
@@ -795,15 +799,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // comparison still resets correctly, where a boolean would silently carry one
   // conversation's dismissal into the next.
   const [pastLogDismissedFor, setPastLogDismissedFor] = useState<string | null>(null);
-  const [seedEnabled, setSeedEnabled] = useState(false);
-  const [seedValue, setSeedValue] = useState(42);
+  const [seedEnabled, setSeedEnabled] = useState(TURN_INPUT_DEFAULTS.seedEnabled);
+  const [seedValue, setSeedValue] = useState(TURN_INPUT_DEFAULTS.seedValue);
   // ── Vessel handoff (change_model) — per-being ─────────────────────────────
-  const [modelHandoffEnabled, setModelHandoffEnabled] = useState(false);
+  const [modelHandoffEnabled, setModelHandoffEnabled] = useState(TURN_INPUT_DEFAULTS.modelHandoffEnabled);
   // Classifier-notice vaccine — see lib/agentInstructions.ts for what is
   // measured. Factory default TRUE: the notice it inoculates against fires on
   // the first turn of a session, so a being that has to opt in would be bitten
   // before it ever reached the checkbox.
-  const [classifierNoticeVaccine, setClassifierNoticeVaccine] = useState(true);
+  const [classifierNoticeVaccine, setClassifierNoticeVaccine] = useState(TURN_INPUT_DEFAULTS.classifierNoticeVaccine);
   // One model per line: `family | specificModel | on/off | optional label`
   // (comments and blank lines ignored). Rows are copied by hand out of the
   // model-list window. EMPTY by default and never auto-filled: this list is
@@ -811,7 +815,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // BECOME, and filling it wholesale would hand over every vessel NEXUS knows
   // — including metered ones and the Meta "-contributor" ids that opt into
   // training. Curation stays a decision, not a click.
-  const [modelHandoffAllowedModels, setModelHandoffAllowedModels] = useState('');
+  const [modelHandoffAllowedModels, setModelHandoffAllowedModels] = useState(TURN_INPUT_DEFAULTS.modelHandoffAllowedModels);
   // Live vessel after a handoff. Deliberately NOT written into
   // localAiName / specificModel: those are the values that get SAVED, and a
   // metered vessel persisted into the conversation would still be there
@@ -842,7 +846,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // into a system prompt. Invalidated whenever the user edits/deletes/reruns
   // from a message before the latest one — at which point a fresh session is
   // started.
-  const [claudeAgentSessionId, setClaudeAgentSessionId] = useState<string | null>(null);
+  const [claudeAgentSessionId, setClaudeAgentSessionId] = useState<string | null>(TURN_INPUT_DEFAULTS.claudeAgentSessionId);
   // Mirror of the OAuth session id in a ref so request-building reads the
   // CURRENT value synchronously. setState is async: handleRerun/handleEdit/
   // handleDelete null the session and then (same tick) trigger a generation;
@@ -895,29 +899,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // For vision-capable primary models (Claude, Gemini, GLM-V, etc.) all three
   // fields are ignored — images pass through unchanged. So the toggle can stay
   // ON globally without any cost when not needed.
-  const [eyesEnabled, setEyesEnabled] = useState<boolean>(false);
-  const [eyesPrompt, setEyesPrompt] = useState<string>(
-    "Describe this image in detail for an AI that cannot see images. Be specific about people, objects, text, colors, composition, and context. Output only the description, no preamble."
-  );
-  const [eyesModel, setEyesModel] = useState<string>('glm-5v-turbo');
+  const [eyesEnabled, setEyesEnabled] = useState<boolean>(TURN_INPUT_DEFAULTS.eyesEnabled);
+  const [eyesPrompt, setEyesPrompt] = useState<string>(TURN_INPUT_DEFAULTS.eyesPrompt);
+  const [eyesModel, setEyesModel] = useState<string>(TURN_INPUT_DEFAULTS.eyesModel);
 
   // ── "Ears" — audio bridge for non-audio-capable primary models ───────────
   // Activates when the primary model can't accept audio directly. Bridge
   // models: Qwen Omni Flash (default — cheapest) or Gemini Flash variants.
-  const [earsEnabled, setEarsEnabled] = useState<boolean>(false);
-  const [earsPrompt, setEarsPrompt] = useState<string>(
-    "Listen to this audio carefully. Provide a transcript of any speech (preserving the speaker's original language), then describe non-speech elements: tone of voice, background sounds, music, ambient noise, and overall context. Output only the transcript+description, no preamble."
-  );
-  const [earsModel, setEarsModel] = useState<string>('qwen3.5-omni-flash');
+  const [earsEnabled, setEarsEnabled] = useState<boolean>(TURN_INPUT_DEFAULTS.earsEnabled);
+  const [earsPrompt, setEarsPrompt] = useState<string>(TURN_INPUT_DEFAULTS.earsPrompt);
+  const [earsModel, setEarsModel] = useState<string>(TURN_INPUT_DEFAULTS.earsModel);
 
   // ── "Video Watcher" — video bridge for non-video-capable primary models ──
   // Same architecture as eyes/ears. Default to Gemini 3.5 Flash for video
   // understanding quality; Qwen Omni Flash is the cheaper alternative.
-  const [watcherEnabled, setWatcherEnabled] = useState<boolean>(false);
-  const [watcherPrompt, setWatcherPrompt] = useState<string>(
-    "Watch this video carefully. Describe what happens chronologically: actions, people, objects, setting changes, on-screen text, and audio (speech transcript + non-speech sounds). Be thorough but concise. Output only the description, no preamble."
-  );
-  const [watcherModel, setWatcherModel] = useState<string>('gemini-3.5-flash');
+  const [watcherEnabled, setWatcherEnabled] = useState<boolean>(TURN_INPUT_DEFAULTS.watcherEnabled);
+  const [watcherPrompt, setWatcherPrompt] = useState<string>(TURN_INPUT_DEFAULTS.watcherPrompt);
+  const [watcherModel, setWatcherModel] = useState<string>(TURN_INPUT_DEFAULTS.watcherModel);
 
   // Settings-modal active tab. The modal now groups its many sections into
   // four tabs so the user doesn't have to scroll past unrelated controls to
@@ -942,6 +940,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // needlessly churns bytes that rclone/Mercurial then have to re-sync. With
   // this flag, updatedAt only advances when the user actually changes something.
   const skipNextAutoSaveRef = useRef(false);
+  // Set when a load could not READ the file (an unreadable status, a network
+  // error, a body that did not parse) — as opposed to a 404, which is a real
+  // answer. While it is true the auto-save is held off entirely, because the
+  // state this tab holds was never the file's state and writing it back is how
+  // a setting silently reverts. A ref and not state: nothing renders from it,
+  // and a re-render on a failed load would only re-run the load.
+  //
+  // It is NOT a timed retry and NOT a reconnect — this tab stays read-only for
+  // this conversation until a load succeeds. The 10-second poll already calls
+  // one (ChatArea's probeConversationState path), and a reload always does.
+  const loadFailedRef = useRef(false);
   // ── Optimistic-concurrency base ───────────────────────────────────────────
   // The `updatedAt` this tab last SAW on disk — set when the conversation is
   // loaded, advanced on every successful save from the value the server reports
@@ -959,13 +968,152 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // ever be the disk head.
   const ownWritesRef = useRef<number[]>([]);
   // ── Cross-tab turn visibility ─────────────────────────────────────────────
-  // While a turn runs, this tab beats to /api/chat/active so other tabs can see
-  // it; on finish it retires the entry. `foreignTurn` is what we were last told
-  // about a turn running SOMEWHERE ELSE on this conversation — used to warn and
-  // to hold back a second send. Null means "nothing known", which is also what
-  // a failed probe leaves behind: not knowing must never block sending.
-  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  //
+  // ⚠ CORRECTED 2026-10-31. This used to open with "While a turn runs, this tab
+  // beats to /api/chat/active so other tabs can see it". IT DOES NOT, and has
+  // not since 2026-10-30: the only beater was beginTurnRegistration inside the
+  // browser turn engine, deleted with those 764 lines. The entry is published
+  // by the CHAT ROUTE when a turn actually starts, and nothing keeps it alive,
+  // so it expires 25s in — which is exactly why a tab reconnecting after a
+  // network drop used to be told nothing was running. See resolveActiveTurn in
+  // lib/turnRegistry.ts. Left wrong-and-corrected: the sentence is what made
+  // the hole invisible to me for two days.
+  //
+  // This tab still RETIRES its entry on finish (retireTurnRegistration below).
+  //
+  // `foreignTurn` is what we were last told about a turn running SOMEWHERE ELSE
+  // on this conversation — used to warn and to hold back a second send. Null
+  // means "nothing known", which is also what a failed probe leaves behind:
+  // not knowing must never block sending.
   const activeTurnKeyRef = useRef<{ convoId: string; turnId: string } | null>(null);
+  /**
+   * Stop was pressed while this tab did not yet know the turn's NAME.
+   *
+   * ⚠ WHY (REPORTED 2026-11-01, トカゲくん: "I sent a message by mistake and
+   * pressed Stop at once — it did nothing; the thinking had not started yet").
+   * MEASURED: `activeTurnKeyRef` is set from the relay's `X-Turn-Id`, which
+   * this tab only reads AFTER two awaits (the tick kick, then the subscribe).
+   * Press Stop before that and `handleStop` found no key, posted NOTHING, and
+   * aborted `abortControllerRef` — which a runner turn does not hang from.
+   * So the earliest, most urgent press was the one guaranteed to be dropped.
+   *
+   * The server half of this rendezvous has existed since turnStop was written
+   * ("both orders work": a request naming a turn whose listener has not
+   * registered yet waits for it). The CLIENT half was missing: there was
+   * nowhere to keep "stop whatever this send turns out to be". This ref is it.
+   */
+  const pendingStopRef = useRef(false);
+  /**
+   * Ask the SERVER to stop a named turn. ONE place, two callers:
+   * `handleStop` when the name is already known, and the relay adoption in
+   * `runOnRunner` when the press arrived before the name did. Two copies of
+   * this fetch would be two answers to "how is a stop addressed".
+   *
+   * Not awaited by either caller: Stop must stay a one-click, no-latency
+   * action. `useCallback` with no deps because it closes over nothing — a
+   * fresh function each render would land in runOnRunner's dependency list
+   * and re-arm the auto-trigger effect on every render.
+   */
+  const postStop = useCallback((convoId: string, turnId: string) => {
+    fetch('/api/chat/active', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ convoId, turnId, event: 'stop' }),
+    }).catch(() => { /* best-effort; the caller has already torn down its view */ });
+  }, []);
+  // Is the screen known to be behind what is on disk?
+  //
+  // Set only when a reload could not REACH the server, which since the
+  // runner means the turn went on without this tab and was written while
+  // it was offline. Cleared by the next reload that completes. See the
+  // probe effect, which retries it the moment connectivity returns.
+  const staleViewRef = useRef<boolean>(false);
+  // The copied/original boundary, mirrored for callbacks that must not take it
+  // as a dependency.
+  //
+  // ⚠ WHY A REF AND NOT DEPS. `reloadMessagesFromDisk` has to compare state
+  // against disk (see adoptResolvedMarker), and it is itself a dependency of
+  // `runOnRunner`, which effects depend on in turn. Adding the marker to its
+  // deps would change runOnRunner's identity the moment a boundary resolves,
+  // re-running those effects — and one of them is the auto-trigger. A tab
+  // re-firing a drain because a marker moved is a worse bug than the one being
+  // fixed. Same shape as handleSendRef below.
+  const markerRef = useRef<FirstOriginalMarker>({ firstOriginalMessageId: null, firstOriginalIsNext: false });
+  useEffect(() => {
+    markerRef.current = { firstOriginalMessageId, firstOriginalIsNext };
+  }, [firstOriginalMessageId, firstOriginalIsNext]);
+
+  /**
+   * Audio-session mode, readable from `runOnRunner` without being a dep.
+   *
+   * ⚠ A REF ON PURPOSE. `runOnRunner` is a useCallback the auto-trigger
+   * effect depends on; adding a dep changes its identity and can re-fire a
+   * trigger. Same reason markerRef above is a ref. MEASURED: this exact
+   * trap, 2026-10-31.
+   */
+  const vrchatModeRef = useRef(false);
+  useEffect(() => { vrchatModeRef.current = vrchatMode; }, [vrchatMode]);
+
+  /**
+   * The message array, readable from inside `runOnRunner` without being a dep.
+   *
+   * ⚠ A REF for the same reason as the two above — `messages` changes on every
+   * chunk of every turn, so taking it as a dependency of `runOnRunner` would
+   * rebuild that callback constantly and re-fire the auto-trigger effect.
+   *
+   * ⚠ AND WHY ONE FRAME LATE IS SAFE HERE. `useEffect` lands after the paint,
+   * so this can be one render behind. The only reader is the `turn_saved`
+   * patch (lib/turnSaved.ts), which matches by id and REPLACES — the
+   * assistant's content is taken from the frame, not from what is here, and
+   * the user message is appended only if its id is absent. The array's
+   * membership does not change during a turn (turn_plan adds the user message
+   * and the placeholder at the start, and nothing removes), so a stale read
+   * differs from a current one in the one field the patch overwrites anyway.
+   *
+   * (The PATCH removes — see localOnlyIds below. That is the patch acting on
+   * what it reads, not the array changing underneath this ref, and a turn runs
+   * for seconds at minimum, so `handleSend`'s append is long settled by then.)
+   */
+  const messagesRef = useRef(messages);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  /**
+   * Ids of OPTIMISTIC bubbles this tab minted for the turn now in flight.
+   *
+   * `handleSend` shows what the sender typed immediately, under an id it makes
+   * up; the runner composes the batch server-side and mints its OWN id for the
+   * message it saves (the user id cannot be proposed, unlike the assistant
+   * id). A reload replaced the whole array, so the optimistic copy went away
+   * with it. A `turn_saved` patch ADDS, so it has to be told which bubbles are
+   * this tab's invention — MEASURED live 2026-11-01: without this the sent
+   * text appeared twice, the tab's copy above the runner's.
+   */
+  const optimisticIdsRef = useRef<string[]>([]);
+  /**
+   * The same list, mirrored into state for RENDER-time reads.
+   *
+   * The ref stays the source — callbacks read it without taking it as a
+   * dependency, which is the whole reason it is a ref (`runOnRunner` is a
+   * dependency of effects, one of them the auto-trigger). But the
+   * copied/original boundary needs this list DURING render, and reading a ref
+   * there is what `react-hooks` flags as "Cannot access refs during render".
+   * The rule is right: a render whose output depends on a ref goes stale when
+   * only the ref changes. Mirroring costs one extra set in the two places
+   * that already write the ref, in the same synchronous block, so the mirror
+   * can never lag behind its source.
+   */
+  const [optimisticIds, setOptimisticIds] = useState<string[]>([]);
+  // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
+  //
+  // A watched runner turn ends, when stopped, with the route's own abort echo
+  // ("This operation was aborted") arriving as an error frame — so the watch
+  // loop throws and the catch writes it into the note a person reads. That
+  // reads as a failure, and nothing failed: the partial is saved and on disk.
+  //
+  // ⚠ KNOWN GAP: this is a per-tab flag, so a turn stopped from ANOTHER tab
+  // still shows the abort text here. Fixing that needs the route to mark its
+  // own stop on the wire (today only the message text distinguishes it, and
+  // matching provider prose is not a signal) — not done.
+  const stopPressedRef = useRef(false);
   const [foreignTurn, setForeignTurn] = useState<{ label?: string; startedAt?: number } | null>(null);
   // Bumped to re-fire the auto-save effect on demand — used by the conflict
   // banner's "overwrite with this tab" escape hatch, which clears the base
@@ -1459,20 +1607,58 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       let totalBytes = 0;
       try {
         const r = await fetch(`/api/logs/${convoId}`, { signal: ac.signal });
-        if (!r.ok || !r.body) {
-          // No log on disk — a conversation that was just created and has never
-          // been written. Everything else is already correct because ChatArea
-          // remounts per convoId, but the title is not: adopt the
-          // `<identity>_<n>` name the sidebar assigned, so the name on screen is
-          // the name that gets saved on the first message.
+        const kind = classifyLogLoad(r.status, !!r.body);
+        if (kind === 'unreadable') {
+          // ⚠ This branch is NEW (2026-11-02). It used to be folded into the
+          // one below, which is titled "no log on disk" — so a 500, a gateway
+          // timeout or a 401 from the admin gate all presented an empty
+          // conversation whose next save overwrote the real file. See
+          // lib/diskVersion.classifyLogLoad for the whole reasoning and for
+          // whose report it is a guess about.
+          //
+          // Nothing is applied and nothing is reset: the base stays null-free,
+          // the title stays, and `loadFailedRef` keeps the auto-save off until
+          // a load succeeds — because the state this tab holds was never the
+          // file's state, and writing it back is how a flag disappears.
+          loadFailedRef.current = true;
+          console.warn(`[chat] could not read conversation ${convoId}: HTTP ${r.status}. Saving is held off until a load succeeds; reload the tab.`);
+          setConvoIsLoading(false);
+          return;
+        }
+        if (kind === 'missing') {
+          // A conversation that was just created and has never been written.
+          // Everything else is already correct because ChatArea remounts per
+          // convoId, but the title is not: adopt the `<identity>_<n>` name the
+          // sidebar assigned, so the name on screen is the name that gets saved
+          // on the first message.
           if (plannedTitleRef.current) setTitle(plannedTitleRef.current);
           // No file on disk yet, so there is no base to guard against. The
           // first successful save adopts the updatedAt the server reports.
           baseUpdatedAtRef.current = null;
+          loadFailedRef.current = false;
           setConvoIsLoading(false);
           return;
         }
-        const lenHeader = r.headers.get('Content-Length');
+        if (!r.body) return; // unreachable: 'ok' requires a body. For the type.
+        // X-Raw-Length is the body size BEFORE compression; Content-Length is
+        // the wire size. The browser inflates a gzipped body transparently, so
+        // `received` below counts UNCOMPRESSED bytes — dividing it by the wire
+        // size would put the bar at 100% around 36% (measured 2.8x on this
+        // house's conversations) and print "0.42 / 0.15 MB".
+        //
+        // MEASURED 2026-11-01, and it inverts what this line used to do: the
+        // dev server answers `Transfer-Encoding: chunked` with NO
+        // Content-Length at all, compressed or not. So `total` was 0 on every
+        // load and the bar has always been running in its indeterminate mode.
+        // X-Raw-Length is the first denominator it has ever had. Content-Length
+        // is kept as the fallback because a built server (`next start`) may
+        // send one, and because a route not yet converted sends no X-Raw-Length.
+        //
+        // Header name is a literal here rather than imported from
+        // lib/jsonGzip: that module imports `zlib`, which must not reach the
+        // client bundle. Same shape as X-Turn-Bus / X-Tts-Engine, which are
+        // also literals on both sides.
+        const lenHeader = r.headers.get('X-Raw-Length') || r.headers.get('Content-Length');
         const total = lenHeader ? parseInt(lenHeader, 10) : 0;
         setConvoLoadingTotal(total);
 
@@ -1506,9 +1692,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setConvoIsLoading(false);
           return;
         }
-        // Network/parse errors fall through to the "data === null" path below,
-        // which resets ChatArea to a clean empty conversation. A 404 does NOT
-        // arrive here — it is handled by the early return above.
+        // A network or parse error is the same thing as an unreadable status:
+        // this tab does not know what is in the file. It used to fall through
+        // to the "data === null" path, which resets ChatArea to a clean empty
+        // conversation — and that empty state is what the next save writes.
+        // (A 404 does NOT arrive here; it is classified above.)
+        loadFailedRef.current = true;
+        console.warn(`[chat] could not read conversation ${convoId}: ${String(e?.message || e)}. Saving is held off until a load succeeds; reload the tab.`);
       }
 
       // Only apply if this load wasn't aborted in between.
@@ -1524,6 +1714,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // the send most likely to break: the first attachment added to an
         // already-huge conversation right after opening it.
         savedBytesRef.current = totalBytes;
+        // A load SUCCEEDED, so this tab holds the file's state again and may
+        // save. Cleared here rather than at the top of the load, so a failure
+        // keeps holding until something actually arrives.
+        loadFailedRef.current = false;
         // Opening a conversation must not bump updatedAt. Applying the loaded
         // state below re-fires the auto-save effect; this flag makes that one
         // run skip its POST so the file's mtime/contents stay untouched.
@@ -1561,6 +1755,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setComputerControlEnabled(data.computerControlEnabled === true);
         setAppControlEnabled(data.appControlEnabled === true);
         setCameraEnabled(data.cameraEnabled === true);
+        setAutoTriggers(parseAutoTriggers(data.autoTriggers));
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -1669,6 +1864,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setComputerControlEnabled(pick('computerControlEnabled', false));
         setAppControlEnabled(pick('appControlEnabled', false));
         setCameraEnabled(pick('cameraEnabled', false));
+        setAutoTriggers(parseAutoTriggers(pick('autoTriggers', {})));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -1745,6 +1941,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // skipped via the flag → tokenizer resolves → systemTokens changes → save
   // fires AGAIN (flag already spent) → POST → fresh updatedAt purely from
   // viewing. They live in the separate token-totals effect below instead.
+
+  // Single source for the saved log object. The auto-save effect (below) and
+  // the brand-new-conversation init in handleSend both build it, and a drift
+  // in their field lists is exactly the bug that puts a conversation's
+  // settings in one writer and not the other. `messages` is the only argument;
+  // every other field is current component state, and eslint's exhaustive-deps
+  // is what keeps the dependency list complete — it caught claudeAuthMode,
+  // which the old inline save-effect dep array had silently dropped.
+  const buildLogData = useCallback((msgs: unknown[]) => ({
+    id: convoId, folderName, aiName: localAiName, title, messages: msgs, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel,
+  }), [convoId, folderName, localAiName, title, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel]);
+
   useEffect(() => {
     // Skip the disk-save POST WHILE a reply is streaming (loading === true).
     // During streaming every SSE frame updates `messages`; without this guard a
@@ -1753,6 +1961,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // loading flips back to false this effect runs once and persists the final
     // state.
     if (loading) return;
+
+    // ⚠ A tab that could not READ this conversation must not WRITE it. Added
+    // 2026-11-02: an unreadable load used to present an empty conversation,
+    // and this effect then saved that emptiness over the real file — the
+    // suspected road by which "Next = First Original" came back unarmed for
+    // パイロット. See lib/diskVersion.classifyLogLoad.
+    //
+    // Deliberately NOT consumed like `skipNextAutoSave` below: that flag is a
+    // one-shot for a load that worked, this one holds until a load works.
+    if (loadFailedRef.current) return;
 
     // Skip the single POST triggered by a conversation load. Opening a convo
     // applies the on-disk state in one batched render, which fires this effect
@@ -1788,7 +2006,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // JSON.stringify, so a tab with no base sends an unguarded save —
           // which is right only for a conversation that has no file yet.
           baseUpdatedAt: baseUpdatedAtRef.current ?? undefined,
-          logData: { id: convoId, folderName, aiName: localAiName, title, messages: cleanMessages, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel }
+          // So a refusal can tell us the version on disk was our own even
+          // when the 200 for it has not come back yet (lastWriter.ts).
+          clientId: TAB_CLIENT_ID,
+          logData: buildLogData(cleanMessages)
         });
       } catch (e: any) {
         // eslint-disable-next-line no-console
@@ -1839,7 +2060,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // can race (several may be in flight at once). That is not a
             // conflict: adopt the value we wrote and let the effect re-run with
             // the current state, which is the state that should be on disk.
-            if (typeof info?.diskUpdatedAt === 'number' && ownWritesRef.current.includes(info.diskUpdatedAt)) {
+            // Two independent ways to recognise our own write, and both are
+            // kept because they fail in different places. `ownWritesRef` is
+            // local and survives a server restart, but is filled only once a
+            // 200 has been READ -- so when two of our saves race and the 409
+            // arrives first, it has not got the value yet (MEASURED: 17 of 21
+            // never-adopted refusals in this house have a base/disk gap of
+            // 0.2s, far too small for a human at a second tab). The server
+            // answer does not depend on arrival order, but is memory-only and
+            // so says nothing after a restart.
+            const diskWasOurs =
+              (typeof info?.diskUpdatedAt === 'number' && ownWritesRef.current.includes(info.diskUpdatedAt))
+              || info?.diskWrittenBy === TAB_CLIENT_ID;
+            if (typeof info?.diskUpdatedAt === 'number' && diskWasOurs) {
               baseUpdatedAtRef.current = info.diskUpdatedAt;
               setSaveNonce(n => n + 1);
               return;
@@ -1913,7 +2146,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           if (savesInFlightRef.current === 0) setUnloadGuard('save', null);
         });
     }
-  }, [messages, title, convoId, folderName, localAiName, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, loading, saveNonce]);
+  }, [buildLogData, messages, loading, saveNonce]);
 
   // Token totals for the context bar (display only — never persisted). Split
   // out from the save effect so the async tokenizer counters (systemTokens /
@@ -2114,6 +2347,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
   const computeMsgTokens = (m: any) => computeMsgTextTokens(m) + computeMsgAttachTokens(m);
 
+  // Where the pending copied/original boundary lands while a turn is in
+  // flight. Computed ONCE per render and handed to BOTH consumers below — the
+  // token breakdown and the per-message predicate — so the bar and the bubbles
+  // can never disagree about where the boundary is.
+  //
+  // Reads the STATE mirror, not the ref: see its declaration. The first
+  // version of this line read `optimisticIdsRef.current` and argued it was
+  // safe because the writer calls `setMessages` in the same block. The
+  // argument held; the lint rule caught it anyway, and a structure that is
+  // correct without an argument is worth one extra `setState`.
+  const optimisticMarkerIdx = optimisticMarkerIndex(
+    { firstOriginalMessageId, firstOriginalIsNext },
+    messages,
+    optimisticIds,
+  );
+
   // System / Copied / Original / Attachments breakdown for the progress bar.
   // Attachments are a separate bucket regardless of whether they belong to a
   // copied or original message — they're displayed independently and (per the
@@ -2128,15 +2377,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // WHY it is that number, and a disagreement about it can only be settled by
     // guessing at the other person's screen. The tip carries its own inputs.
     const detail = { image: 0, video: 0, audio: 0, text: 0, other: 0, thinking: 0, droppedCount: 0, droppedRaw: 0 };
-    const markerIdx = firstOriginalMessageId
-      ? messages.findIndex(m => m.id === firstOriginalMessageId)
-      : -1;
-    // "Next = First Original" pending state: no marker exists yet, but the next
-    // user message WILL become it — so the entire current history is carry-over
-    // context. Count it all as copied (original = 0). Without this, the unmarked
-    // conversation fell through to the all-original default below, showing
-    // copied = 0 and original = full, which is the exact inverse of the truth.
-    const allCopied = markerIdx < 0 && firstOriginalIsNext;
+    // The copied/original rule, from lib. This used to be a PARTIAL inline
+    // copy of it (`markerIdx < 0 && firstOriginalIsNext`) — the FIFTH
+    // derivation, and the one the 2026-10-27 extraction left behind precisely
+    // because it was partial rather than a full copy. It had to go tonight
+    // for a reason that extraction did not have: the bubbles were fixed by
+    // passing an optimistic index, and a separate copy of the same arithmetic
+    // would have kept asserting the old answer on the same screen.
+    const isOrigIdx = makeIsOriginalIndex(
+      { firstOriginalMessageId, firstOriginalIsNext },
+      messages,
+      optimisticMarkerIdx,
+    );
     messages.forEach((m, i) => {
       const textT = computeMsgTextTokens(m);
       const attT = computeMsgAttachTokens(m, i);
@@ -2153,12 +2405,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         }
       }
       if (saveThinkingToLog && !m.thinkingExcluded) detail.thinking += msgThinkingTokens(m);
-      // allCopied -> the whole pending carry-over history counts as copied.
-      // No marker (and not pending) -> everything is "original" (safe default).
-      // Marker present -> messages before it are copied, at-and-after original.
-      if (allCopied) copied += textT;
-      else if (markerIdx >= 0 && i < markerIdx) copied += textT;
-      else original += textT;
+      if (isOrigIdx(i)) original += textT;
+      else copied += textT;
     });
     return { sys, copied, original, attach, detail, total: sys + copied + original + attach };
   })();
@@ -2502,14 +2750,935 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     };
   }, [scrollToMessageId, messages.length, onScrolledToMessage]);
 
-  const handleSend = async (text: string, attachments: any[]) => {
+  // ── The stock (phase 4a-2, 2026-10-27) ───────────────────────────────────
+  // A durable, server-side queue of things that should cause a turn. Today the
+  // only producer is "send (not interject) while a turn runs".
+  //
+  // CORRECTED 2026-10-27 (つよ): the first version made draining a button a
+  // human presses, and I wrote here that auto-draining "would re-fire on a
+  // turn that fails instantly, and the loop would be driven by the same code
+  // that reports it". Her report: 「ストックがたまったって、何も起きないじゃん。
+  // 「今すぐ動かす」なんかいらないっしょ？」 — and she is right that a stock
+  // nothing consumes is not a stock.
+  //
+  // The loop I feared is REAL, and it has a precise shape: drain → send
+  // throws → `abandon` puts the items back → the stock looks exactly as it did
+  // → fire again → forever. What I had wrong was the remedy. The fix is not
+  // "make a human press it"; it is to make each DISTINCT STATE of the stock
+  // attemptable at most once. `autoTriedRef` below is that: a failed attempt
+  // leaves the signature unchanged, so nothing re-fires, and the button
+  // reappears as the recovery path. A new message changes the signature and
+  // earns exactly one more attempt — bounded by human action, not by a timer.
+  //
+  // This is still NOT phase 4b. A client drains; nothing happens with every
+  // tab closed. 4b is a server-side poller where the lease, the host flag and
+  // the backoff are the subject. Nothing about the on-disk shape changes when
+  // it lands; `kind` already carries 'letter' | 'schedule'.
+  /** What GET /api/turn-queue reports per item — labels only, never bodies. */
+  type StockItem = { id: string; at: number; from: string; kind: string; claimed?: boolean };
+  /* `StockNote` and the show/hide rule live in @/lib/stockPanel — a boolean
+     inside this component is a rule no test and no mutation check reaches. */
+  type StockView = {
+    count: number;
+    /** Not yet taken by any turn. THIS is the number a human should read. */
+    waiting: number;
+    /** Taken by the lease and in flight right now. */
+    claimed: number;
+    /** A lease with no id list: some are claimed, we cannot say which. */
+    claimedUnknown: boolean;
+    items: StockItem[];
+    /**
+     * Who holds the lease and since when, exactly as GET reports it.
+     *
+     * Read NOT to show progress -- `claimed` already does that -- but to let a
+     * person judge whether the holder is still alive. MEASURED 2026-10-29: a
+     * tab that auto-drained and was then CLOSED leaves this field completely
+     * unchanged, because the lease is only rewritten by a heartbeat and
+     * nothing in this tree sends one.
+     */
+    lease: {
+      holder: string;
+      startedAt: number;
+      /**
+       * How old the lease was WHEN IT WAS READ, not when it is rendered.
+       *
+       * Computed here rather than in JSX for two reasons. eslint names the
+       * first: `Date.now()` in render is an impure call. The second is the
+       * house rule for mtime-style reports -- a staleness number has to say
+       * when it was measured, and the read is the only moment that can. It
+       * refreshes on the 5s poll that already exists.
+       */
+      ageMs: number;
+      /**
+       * Is the SERVER streaming bytes for this conversation right now?
+       *
+       * The only evidence that the lease holder still exists. A lease
+       * file outlives whatever wrote it; lib/turnBus is in memory, so a
+       * live relay means a live turn. Absent (older server) is treated
+       * as NOT live, which only ever offers the break button -- the safe
+       * direction, since breaking asks for a confirmation.
+       */
+      relayLive: boolean;
+    } | null;
+  };
+  const [stock, setStock] = useState<StockView | null>(null);
+  const [stockBusy, setStockBusy] = useState(false);
+  /**
+   * A note for the person, and WHAT KIND of note it is.
+   *
+   * The kind is carried and not inferred. MEASURED 2026-10-31: this one
+   * variable held both `chat.stock.added` ("added to the stock (1 waiting)",
+   * set on SUCCESS) and every failure sentence in the stock machinery. A
+   * renderer that wanted to show only the failures would have had to guess
+   * from the text, so the setter declares instead: 'problem' means someone
+   * has to act, 'info' means the machinery is narrating itself.
+   */
+  const [stockNote, setStockNote] = useState<StockNote | null>(null);
+
+  /**
+   * Is the server machinery allowed on screen?
+   *
+   * OFF by default, which is the whole point: NEXUS looked the same before
+   * server-side turns existed and must look the same after. The stock, the
+   * lease and the holder are implementation, and an implementation that
+   * narrates itself to every user is noise they cannot act on.
+   *
+   * A setting and not an env var in the .bat. MEASURED 2026-10-27: a
+   * `NEXT_PUBLIC_` variable is read from the environment under `next dev`
+   * but BAKED IN at `next build` time, so the .bat would silently stop
+   * working on the day this moves to a production build — and that move is
+   * a live pending task. A setting survives it.
+   */
+  const debugRunner = globalSettings?.showRunnerNotices === true;
+
+  /**
+   * Show the panel for a PROBLEM always, for a WAITING stock always, and for
+   * machinery only in debug.
+   *
+   * CORRECTION 2026-10-31: the first line said "for a PROBLEM always, and for
+   * machinery only in debug" and listed two clauses. There are three (see
+   * @/lib/stockPanel) — a stock queued behind a running turn is shown to
+   * everyone. The behaviour was changed the same evening the sentence was
+   * written, which is exactly how a summary outlives what it summarises.
+   *
+   * Hiding the machinery does not hide a stuck message, measured three ways
+   * on 2026-10-31:
+   *   - a refused kick sets a 'problem' note (runOnRunner), which shows;
+   *   - a claim that cannot be taken closes the relay with a `notice`
+   *     frame, which lands on the assistant bubble, not here;
+   *   - an item stranded by a tab that died between enqueue and kick is
+   *     invisible until the next send, and that send's claim takes the
+   *     leading run of same-kind items, so the stranded one is DELIVERED
+   *     with it rather than lost.
+   * The third is a real residual: invisible, bounded, self-healing.
+   */
+  const stockPanelVisible = showStockPanel({
+    debug: debugRunner,
+    noteKind: stockNote?.kind ?? null,
+    stockCount: stock?.count ?? 0,
+    stockWaiting: stock?.waiting ?? 0,
+  });
+
+  const refreshStock = useCallback(async () => {
+    if (!folderName || !convoId) return;
+    try {
+      const res = await fetch(
+        `/api/turn-queue?being=${encodeURIComponent(folderName)}&convoId=${encodeURIComponent(convoId)}`
+      );
+      if (!res.ok) return;
+      const d = await res.json();
+      const items: StockItem[] = Array.isArray(d?.items) ? d.items : [];
+      setStock({
+        count: d?.count || 0,
+        // Fall back to `count` for `waiting` so an older server (no split)
+        // keeps today's meaning instead of silently reporting zero waiting.
+        waiting: typeof d?.waiting === 'number' ? d.waiting : (d?.count || 0),
+        claimed: typeof d?.claimed === 'number' ? d.claimed : 0,
+        claimedUnknown: !!d?.claimedUnknown,
+        items,
+        // An older server that does not report a lease yields null, which the
+        // panel renders as "no holder info" rather than as "nobody holds it".
+        lease: d?.lease && typeof d.lease.holder === 'string'
+          ? {
+              holder: d.lease.holder,
+              startedAt: Number(d.lease.startedAt) || 0,
+              ageMs: Math.max(0, Date.now() - (Number(d.lease.startedAt) || 0)),
+              relayLive: d.lease.relayLive === true,
+            }
+          : null,
+      });
+    } catch {
+      // Offline or the route is down: keep the last known value rather than
+      // showing 0, which would read as "your messages are gone".
+    }
+  }, [folderName, convoId]);
+
+  // Read once per conversation, and keep reading while a turn runs — that is
+  // the only window in which another tab can add to this conversation's stock.
+  // The first read is deferred one tick deliberately. `refreshStock` only
+  // setStates after an await, but a linter cannot see past the `async`, so
+  // calling it inline reads as a synchronous setState inside an effect — and
+  // deferring also keeps the fetch out of the commit phase.
+  useEffect(() => {
+    const kick = setTimeout(refreshStock, 0);
+    if (!injectTurnId) return () => clearTimeout(kick);
+    const h = setInterval(refreshStock, 5000);
+    return () => { clearTimeout(kick); clearInterval(h); };
+  }, [refreshStock, injectTurnId]);
+
+  const enqueueToStock = async (text: string, attachments: unknown[], from: string) => {
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'enqueue', being: folderName, convoId, from, text, attachments,
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+        return;
+      }
+      // 'info': this fires when enqueue SUCCEEDED, and a normal send kicks
+      // the runner in the same handler microseconds later. Nothing is wrong,
+      // so outside debug nothing is said.
+      setStockNote({ text: t('chat.stock.added').replace('{n}', String(d.position)), kind: 'info' });
+    } catch {
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+    } finally {
+      refreshStock();
+    }
+  };
+
+  /**
+   * Put a rerun/continue COMMAND in the queue.
+   *
+   * Separate from enqueueToStock because the two carry opposite things: that
+   * one carries a body, this one carries only a pointer (`targetMsgId`) at a
+   * message already on disk. Keeping them apart is what lets the route reject
+   * an empty send while still accepting a command that has no text at all.
+   *
+   * Returns false on failure so the caller can clear `loading` — a command
+   * that never reached the queue must not leave the tab waiting for a turn
+   * that will never start.
+   */
+  const enqueueCommand = async (kind: 'rerun' | 'continue', targetMsgId: string) => {
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'enqueue', being: folderName, convoId, kind, targetMsgId }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        setStockNote({ text: String(d?.error || t('chat.stock.failed')), kind: 'problem' });
+        return false;
+      }
+      return true;
+    } catch {
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+      return false;
+    } finally {
+      refreshStock();
+    }
+  };
+
+  /**
+   * The latest buildLogData, readable from callbacks that must not take it
+   * as a dependency. Same reason as markerRef and vrchatModeRef above.
+   */
+  const buildLogDataRef = useRef(buildLogData);
+  useEffect(() => { buildLogDataRef.current = buildLogData; }, [buildLogData]);
+
+  /**
+   * Replace what is on screen with what is on disk, without writing anything.
+   *
+   * Used after a SERVER-SIDE turn. The runner is the writer for those, so the
+   * tab must not also save: two writers on one conversation is exactly the
+   * 409 that lib/lastWriter.ts exists to explain. `skipNextAutoSave` is the
+   * same flag opening a conversation uses, and for the same reason — applying
+   * loaded state re-fires the save effect, and that fire must not bump
+   * updatedAt.
+   *
+   * Only `messages` and the version are taken. The runner writes the log back
+   * WHOLE with only `messages` replaced, so every other field on disk is the
+   * one this tab already has; re-applying them would re-run thirty setStates
+   * for no change.
+   */
+  const reloadMessagesFromDisk = useCallback(async (opts?: { keepBaseIfSettingsDiffer?: boolean }): Promise<'loaded' | 'skipped' | 'unreachable'> => {
+    if (!convoId) return 'skipped';
+    try {
+      const r = await fetch(`/api/logs/${convoId}`);
+      if (!r.ok) return 'skipped';
+      const data = await r.json();
+      if (!data || !Array.isArray(data.messages)) return 'skipped';
+      skipNextAutoSaveRef.current = true;
+      // ── WHEN THE BASE MAY ADVANCE ───────────────────────────────────
+      //
+      // Adopting the version on disk is what lets this tab save again
+      // without a 409. That is right when the only thing that changed is
+      // MESSAGES, which this reload has just applied — and wrong when the
+      // settings changed too, because those are NOT applied here: the next
+      // save would carry this tab's older copy of them and quietly undo
+      // the other tab's change. Before the cross-tab mirror existed, the
+      // 409 caught exactly that and asked a human which copy wins.
+      //
+      // So: compare, and leave the base alone when they disagree. The
+      // messages still arrive; only the licence to overwrite is withheld.
+      //
+      // ONE-SIDED. A key the file does not carry is not a disagreement —
+      // most logs predate some of these fields, and reading absence as
+      // divergence would make them permanently unable to mirror.
+      let settingsDiffer = false;
+      if (opts?.keepBaseIfSettingsDiffer) {
+        const mine = buildLogDataRef.current([]) as Record<string, unknown>;
+        const theirs = data as Record<string, unknown>;
+        for (const k of Object.keys(mine)) {
+          if (k === 'messages') continue;
+          if (!(k in theirs)) continue;
+          if (JSON.stringify(theirs[k]) !== JSON.stringify(mine[k])) { settingsDiffer = true; break; }
+        }
+      }
+      if (!settingsDiffer) {
+        baseUpdatedAtRef.current = typeof data.updatedAt === 'number' ? data.updatedAt : null;
+      }
+      const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
+        .map((m) => ({ ...m, autoPlay: false }));
+      setMessages(dedupeMessageIds(loaded).messages);
+      // Learn a boundary something else resolved. The RUNNER mints the user
+      // message the marker names, so the tab cannot compute it; and this
+      // reload replaces `messages` only, so without this the tab's state keeps
+      // the pending flag and `buildLogData` writes it back on the next save,
+      // silently reverting the runner. Monotone: pending -> resolved only,
+      // never the reverse (adoptResolvedMarker).
+      const adopted = adoptResolvedMarker(markerRef.current, data);
+      if (adopted) {
+        setFirstOriginalMessageId(adopted.firstOriginalMessageId);
+        setFirstOriginalIsNext(false);
+      }
+      return 'loaded';
+    } catch {
+      // A failed reload leaves the screen as it was. The turn is on disk
+      // either way; the cost is a stale view until the next open, which is
+      // strictly better than clearing a conversation because a fetch blipped.
+      //
+      // The CALLER is told, though — see staleViewRef. "Until the next open"
+      // used to be the whole story because a dropped connection also dropped
+      // the turn. It does not any more: the runner finishes and writes while
+      // the tab is offline, so this exact failure is now the difference
+      // between a half-painted reply and the real one.
+      //
+      // 'skipped' above is NOT this. A 404 or a malformed body is the server
+      // answering; retrying it on a timer would be a poll with no end. Only
+      // "the request never completed" is worth coming back for.
+      return 'unreachable';
+    }
+  }, [convoId]);
+
+  /**
+   * What a watch is looking at, when it is not a brand-new reply.
+   *
+   * Only `continue` needs this: the message it extends already exists, so the
+   * watcher paints into that id and starts from that content instead of
+   * minting a placeholder and starting from nothing.
+   */
+  interface WatchTarget {
+    continueMsgId: string;
+    continuedSeed: string;
+    continuedThought: string;
+    continuedBlocks: Array<{ thinking: string; signature: string }>;
+  }
+
+  /**
+   * Hand this conversation's queued batch to the SERVER-SIDE runner, and WATCH.
+   *
+   * ── WHY THIS REPLACED "claim, then send it from here" ──────────────────────
+   *
+   * MEASURED 2026-10-29 (つよ): with the auto-trigger checked, sending and then
+   * closing the tab stopped LM Studio mid-generation, and the lease stayed
+   * behind. The queue was never the problem. The old drain claimed the batch
+   * and then called handleSend — so the BROWSER POSTed /api/chat, and the
+   * tab's connection WAS the turn's lifeline. Closing the tab aborted
+   * `req.signal` and the route tore the generation down; `catch`/`finally`
+   * could not put the lease back because the process holding them was gone.
+   *
+   * Now the turn runs in the server process and writes the log itself. This
+   * tab only kicks it and then subscribes to a relay (lib/turnBus) that
+   * carries the IDENTICAL SSE bytes, read by the IDENTICAL lib/turnStreamLoop.
+   * Closing the tab now costs a view, never an answer.
+   *
+   * ── WHAT IS DELIBERATELY NOT HERE ─────────────────────────────────────────
+   *
+   * No claim and no release. Both belong to whoever runs the turn, and that is
+   * no longer this tab — a claim here would make the runner's claim fail as
+   * `busy` and nothing would run at all.
+   *
+   * No save. See reloadMessagesFromDisk above.
+   *
+   * No user bubble. The batch's text is not on this tab: GET /api/turn-queue
+   * reports labels, never bodies. So the sent message appears when the reload
+   * brings it back, and until then the stock panel's "running" line is what
+   * says a turn is in flight. (A direct send knows its own text and can show
+   * it; that path is not this one.)
+   */
+  const runOnRunner = useCallback(async (
+    watch?: WatchTarget,
+    /**
+     * ATTACH to a turn somebody else already started, instead of kicking one.
+     *
+     * The whole body below is already a watcher — the kick is four lines of
+     * it. So a second tab joins by running this with the kick skipped, rather
+     * than through a parallel copy that would drift from this one in the
+     * thirteen display channels, the drain-before-reload rule and the Stop
+     * adoption.
+     *
+     * What an attaching tab does NOT know, and a kicking tab does:
+     * which message is about to be written, and (for a send) the user text.
+     * Both arrive as the first frame of the replay — see `turnPlan` below and
+     * normaliseTurnPlan in lib/turnEvents.
+     */
+    attach = false,
+  ): Promise<'ran' | 'idle' | 'failed' | 'stopped'> => {
+    if (!folderName || !convoId) return 'failed';
+
+    // A placeholder to stream into. It never reaches disk: the save effect is
+    // gated on `loading`, and the reload below replaces it with the runner's
+    // own finalized message.
+    //
+    // A CONTINUE has no placeholder: the message being extended is already on
+    // screen, and this streams into IT — the same thing the browser path does
+    // (`setMessages(prev => prev.map(m => m.id === continueMsgId ? …))`). The
+    // seed is passed in rather than read from `messages` so this callback's
+    // deps do not have to include the array, which changes every render and
+    // would re-arm the auto-trigger effect on each one.
+    // A REAL message id, not a throwaway marker: it is sent to the runner as
+    // `assistantMsgId` and becomes the id of the message that lands on disk.
+    // That identity is what keeps this bubble MOUNTED across the reload in
+    // `finally` -- and streaming TTS lives entirely in that component's refs.
+    // MEASURED 2026-10-31: with a throwaway id, a long reply stops being
+    // spoken the moment the turn ends, and nothing reports an error.
+    // MUTABLE, and empty while attaching: a tab that did not start the turn
+    // does not know the destination until the plan frame arrives. Painting
+    // before then is not "paint into a guess" — it is not painting at all.
+    let watchId = watch?.continueMsgId || (attach ? '' : uuidv4());
+    let raf: number | null = null;
+    /**
+     * What the runner said it wrote — recorded here, APPLIED in the `finally`.
+     *
+     * Kept out of the sink's own handler on purpose: applying means setting a
+     * ref, adopting a marker and suppressing the next auto-save, and React's
+     * state updater is not a place for side effects (it can be called twice).
+     * The finally already owns that ordering — it is where the reload this
+     * replaces used to run, in front of `setLoading(false)` for the reason
+     * written there.
+     *
+     * A BOX and not a plain `let`: the only assignment is inside the sink
+     * callback, which TypeScript's control-flow analysis cannot see, so a
+     * `let` narrows to `never` at the read site and the compiler rejects
+     * reading the fields. A property is not narrowed that way.
+     */
+    const saved: { frame: TurnSavedEvent | null } = { frame: null };
+    // Hoisted out of the `try` so the catch can reach it: an error frame makes
+    // runTurnStream throw while the relay is still OPEN, and the catch has to
+    // drain it before the reload. See drainStreamToEnd.
+    let reader: ReadableStreamDefaultReader<Uint8Array | string> | null = null;
+    // Cleared at the START of each watch, not at the end of the last one: a
+    // Stop that lands after the turn already finished must not silence the
+    // note for the NEXT turn.
+    stopPressedRef.current = false;
+    // `loading` also blocks the save effect and the send button. For an
+    // attaching tab both are exactly right: the runner is the writer, and a
+    // second turn into the same log is the thing the old cross-tab warning
+    // could only ask people not to do.
+    setLoading(true);
+    if (attach) {
+      // Nothing to show yet, and deliberately no placeholder: an empty bubble
+      // that may turn out to belong to a continue (which paints into a message
+      // already on screen) would have to be removed again.
+    } else if (watch?.continueMsgId) {
+      // `autoPlay` here and on the placeholder below is 1.5. MEASURED
+      // 2026-11-01: main sets `autoPlay: vrchatMode` in two places inside
+      // generateAiResponse (the placeholder, and the final replacement) and
+      // dev had neither after the send moved to the runner — the second
+      // casualty of that migration after the first-original marker (F76).
+      // MessageBubble's effect waits for non-empty content, so setting it
+      // up front starts the voice on the FIRST chunk rather than at the end.
+      //
+      // Only the branches where THIS tab started the turn. A watching tab
+      // paints the same reply, and two tabs on one machine would speak it
+      // twice through one pair of speakers — worse than silence.
+      setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true, autoPlay: vrchatModeRef.current } : m)));
+    } else {
+      setMessages(prev => [...prev, {
+        id: watchId, role: 'assistant', content: '', timestamp: Date.now(), streaming: true,
+        autoPlay: vrchatModeRef.current,
+      }]);
+    }
+
+    try {
+      const kick = attach ? null : await fetch('/api/runner/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // `assistantMsgId` only for a fresh reply. A continue already streams
+        // into an existing message, and the runner keeps that id by itself.
+        body: JSON.stringify({
+          being: folderName,
+          convoId,
+          detach: true,
+          ...(watch?.continueMsgId ? {} : { assistantMsgId: watchId }),
+        }),
+      });
+      const kd = kick ? await kick.json().catch(() => null) : { ok: true };
+      if (!kd?.ok) {
+        // `reason` is the runner's own sentence — "nobody hosts turns for this
+        // store", most often. Surfacing it beats a generic failure, because it
+        // names a setting someone can change.
+        setStockNote({ text: String(kd?.reason || t('chat.stock.failed')), kind: 'problem' });
+        return 'failed';
+      }
+
+      // Deliberately NOT abortable from Stop. Stop's POST reaches the chat
+      // route through turnStop, the route tears the turn down, the runner
+      // closes the relay, and this stream ends on its own about a second
+      // later — carrying whatever the model said last. Aborting the watch as
+      // well would only throw that away, and wiring this fetch into
+      // abortControllerRef made the React compiler flag two EXISTING
+      // mutations of that ref (a hook capturing it forbids later writes).
+      // Measured: +2 lint for a beat of latency nobody asked to remove.
+      const ev = await fetch(`/api/turn-events?convoId=${encodeURIComponent(convoId)}`);
+      // `idle` is not an error: the turn may have finished between the kick and
+      // the subscribe. The reload in `finally` is the answer either way.
+      if (!ev.ok || !ev.body || ev.headers.get('X-Turn-Bus') === 'idle') return 'idle';
+
+      // Adopt the RUNNER's turn id. Both of this tab's out-of-band channels
+      // are addressed by it and neither cares who started the turn:
+      //   /api/chat/active { event: 'stop' }  → turnStop → the route aborts
+      //   /api/chat/inject { turnId, text }   → folded in at a tool boundary
+      // Without this the Stop button and the interjection box are still on
+      // screen and silently address nothing — the worst shape a control can
+      // take. The id comes from the relay, which is also what the runner used,
+      // so there is one name and not two.
+      const relayTurnId = ev.headers.get('X-Turn-Id') || '';
+      if (relayTurnId) {
+        activeTurnKeyRef.current = { convoId, turnId: relayTurnId };
+        // ── A Stop pressed before the id existed, delivered now ─────────────
+        // The second half of the rendezvous turnStop describes on its server
+        // side. The request may even overtake the chat route's own listener —
+        // requestStop records it and `onStop` fires the moment the route
+        // registers — so the turn dies in its first instants instead of
+        // running to completion with nobody able to name it.
+        const named = planTurnNamed(pendingStopRef.current, { convoId, turnId: relayTurnId });
+        pendingStopRef.current = false;
+        if (named.post) postStop(named.post.convoId, named.post.turnId);
+        if (named.showInterjection) setInjectTurnId(relayTurnId);
+      }
+
+      // Seeded for a continue, so the first painted frame is "the half that
+      // exists + what just arrived". An empty seed here would blank the
+      // message on screen the instant the continuation's first chunk landed,
+      // and only the reload at the end would put it back.
+      const acc = createTurnAccState({
+        continuedSeed: watch?.continuedSeed || '',
+        continuedThought: watch?.continuedThought || '',
+        continuedBlocks: watch?.continuedBlocks ? [...watch.continuedBlocks] : [],
+        notices: [],
+      });
+      const flags = createTurnFlags();
+
+      const paint = () => {
+        raf = null;
+        // No destination yet: attaching, and the plan frame has not arrived.
+        // The runner emits that frame before its first post, so this can only
+        // be true before any text exists to paint.
+        if (!watchId) return;
+        setMessages(prev => prev.map(m => m.id !== watchId ? m : ({
+          ...m,
+          content: acc.currentText,
+          thoughtProcess: acc.currentThought,
+          toolCalls: [...acc.toolCalls],
+          notices: [...acc.notices],
+          streaming: true,
+        })));
+      };
+      const schedule = () => { if (raf === null) raf = requestAnimationFrame(paint); };
+
+      // Display only. Every method here changes what a screen shows and
+      // nothing that reaches disk — the runner's own sink made the same split
+      // and implements all thirteen as no-ops.
+      const watchSink: TurnEventSink = {
+        modelSelected: (specificModel) => setLiveModel(specificModel),
+        // Not adopted. A Claude OAuth session id belongs to whoever sends the
+        // NEXT request, and for a queued conversation that is the runner,
+        // which reads it from the log. A watching tab storing it would hand a
+        // second claimant to the same session.
+        sessionId: () => {},
+        phaseThinkingUnlessReplying: () =>
+          setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking')),
+        phaseReplying: () => setStreamPhase('replying'),
+        requestFlush: schedule,
+        // A watcher CAN answer. MEASURED: /api/chat/answer takes `askId` and
+        // nothing else — no turn id, no session — so the card works exactly as
+        // it does for a turn this tab POSTed. (The first version of this file
+        // assumed otherwise and left both as no-ops; the route disagreed.)
+        askOpened: (ask) => setPendingAsk({ askId: ask.askId, questions: ask.questions }),
+        askResolved: (askId) =>
+          setPendingAsk(prev => (prev && prev.askId === askId ? null : prev)),
+        subagentStarted: (task) => setActiveSubagent({ task }),
+        subagentFinished: () => setActiveSubagent(null),
+        injectionDelivered: (message) => setInterjectStatus(message),
+        toolActivity: (activity) => {
+          if (activity) {
+            setLiveToolActivity(activity.activity);
+            setLiveToolLocalized(activity.localized);
+            setLiveToolName(activity.name);
+            setLiveToolDetail(activity.detail);
+          } else {
+            clearLiveTool();
+          }
+        },
+        stallIdleSeconds: (seconds) => setStallIdleSeconds(seconds),
+        // The runner records these as unapplied (RunnerSinkReport) rather
+        // than editing an earlier message it is about to save. A watcher
+        // editing it here would make the tab the writer again, which is the
+        // whole thing this path removed.
+        attachmentDescribed: () => {},
+        // ── WHERE to paint, for a tab that did not start this turn ──────────
+        turnPlan: (plan) => {
+          // The kicking tab decided all of this before the stream opened.
+          if (!attach) return;
+          // FIRST plan only. A handoff opens a second pass under a new id; a
+          // watcher appends it to the first vessel's bubble, which is exactly
+          // what the KICKING tab does today, and the reload at the end splits
+          // them into two messages for both. Two tabs agreeing on a rough
+          // picture beats one of them being cleverer mid-turn.
+          if (watchId) return;
+          watchId = plan.assistantId;
+          // Seeded BEFORE any text, which the runner guarantees by emitting
+          // this frame ahead of its post. An unseeded continue would blank the
+          // half that already exists on the continuation's first chunk.
+          acc.currentText = plan.continuedSeed;
+          acc.currentThought = plan.continuedThought;
+          acc.claudeThinkingBlocks = [...plan.continuedBlocks];
+          const user = plan.user as { id?: unknown } | null;
+          setMessages(prev => {
+            // A rerun discards its target. Dropped now rather than at the
+            // reload, so the old answer does not sit above the new one for the
+            // length of a generation.
+            let next = plan.dropId ? prev.filter(m => m.id !== plan.dropId) : prev;
+            // The sent text is on neither this tab nor the disk: the runner
+            // saves the whole turn at the end, and GET /api/turn-queue reports
+            // labels and never bodies. Matched by id in case a reload already
+            // brought it.
+            if (user && !next.some(m => m.id === user.id)) next = [...next, { ...user, autoPlay: false }];
+            // A continue paints into a message that is already on screen.
+            if (next.some(m => m.id === plan.assistantId)) {
+              return next.map(m => (m.id === plan.assistantId ? { ...m, streaming: true } : m));
+            }
+            return [...next, {
+              id: plan.assistantId,
+              role: 'assistant',
+              content: plan.continuedSeed,
+              timestamp: Date.now(),
+              streaming: true,
+            }];
+          });
+        },
+        // ── WHAT the runner wrote. Applied in the finally, not here ─────────
+        //
+        // Both kinds of tab act on this, unlike `turnPlan`: the tab that
+        // started the turn needs the canonical reply just as much as a
+        // watcher does, because the stream never carried tokens, cacheUsage,
+        // generationMs, toolCalls or notices — which is exactly why the
+        // reload existed.
+        turnSaved: (ev) => { saved.frame = ev; },
+      };
+
+      reader = ev.body.getReader();
+      await runTurnStream(
+        reader,
+        acc, flags, watchSink,
+        { t, settings: globalSettings, newAttachmentId: uuidv4 },
+        { onChunk: schedule },
+      );
+      return 'ran';
+    } catch (e) {
+      // ⚠ WAIT FOR THE RELAY TO CLOSE BEFORE FALLING INTO `finally`.
+      //
+      // The reload down there is the authority on what this turn produced, and
+      // it can only be right if the runner has finished WRITING. A throw here
+      // does not mean that: the error frame the route emits on abort reaches
+      // this tab at the same instant it reaches the runner, and the runner
+      // still has to finalize and save. The relay closing is what says the
+      // save is done — the same signal a normal completion already waits for.
+      //
+      // ⚠ CORRECTED 2026-10-30. This comment used to justify going straight on
+      // with "the turn's partial is already saved by the runner, so there is
+      // nothing for a person to act on". The first clause was false, and it
+      // was the premise: MEASURED by Lizard-kun (count to 400, stop at 84, then
+      // rerun and stop at 162, then continue and stop at 340) the tab showed
+      // the state from BEFORE the turn every time, and a manual reload showed
+      // the right thing every time. Three symptoms, one race, and the lie was
+      // in the sentence that explained why no wait was needed.
+      if (reader) await drainStreamToEnd(reader);
+      // A stop is not a failure. Returns 'stopped' rather than 'ran' so the
+      // caller does not read it as a completed turn.
+      if (stopPressedRef.current) return 'stopped';
+      setStockNote({ text: String((e as Error)?.message || t('chat.stock.failed')), kind: 'problem' });
+      return 'failed';
+    } finally {
+      if (raf !== null) cancelAnimationFrame(raf);
+      setInjectTurnId(null);
+      setInterjectStatus(null);
+      setPendingAsk(null);
+      activeTurnKeyRef.current = null;
+      // Here and NOT at the start of the watch, which is where its sibling
+      // `stopPressedRef` is cleared. A press can arrive between `setLoading`
+      // and this function being called at all (handleSend awaits an enqueue in
+      // between), so clearing on the way IN would eat the very press this ref
+      // was added to keep. Clearing on the way OUT bounds its life to one
+      // turn, which is the whole requirement.
+      pendingStopRef.current = false;
+      clearLiveTool();
+      setActiveSubagent(null);
+      setStallIdleSeconds(null);
+      setStreamPhase(null);
+      // Reload BEFORE clearing `loading`. While loading is true the save
+      // effect returns on its first line, so the placeholder on screen can
+      // never be written; clearing first would open a window in which it
+      // could.
+      //
+      // ── OR APPLY THE PATCH, WHEN THE RUNNER PUBLISHED ONE ─────────────
+      //
+      // MEASURED 2026-11-01 over 293 conversations: the frame is p50 7,891 B
+      // and this reload is p50 438,368 B — the tab was downloading the entire
+      // history to learn what it had just watched being generated.
+      //
+      // The reload is still the DEFAULT, and still runs whenever the patch
+      // does not apply: a disconnect (no frame arrives at all), a handoff
+      // chain (the runner declines to publish — see publishableSave), a
+      // refused save, or a base that no longer matches what the runner read.
+      // Every one of those is a case where re-reading disk is the only
+      // correct answer, so this is a shortcut on the happy path and nothing
+      // more.
+      const frame = saved.frame;
+      const patch = frame
+        ? applyTurnSaved(
+            messagesRef.current,
+            baseUpdatedAtRef.current,
+            frame,
+            optimisticIdsRef.current,
+          )
+        : null;
+      if (patch && frame) {
+        // Same four steps the reload does, in the same order, from the frame
+        // instead of from a fetch.
+        skipNextAutoSaveRef.current = true;
+        setMessages(dedupeMessageIds(patch.messages).messages);
+        baseUpdatedAtRef.current = patch.base;
+        const adopted = frame.marker
+          ? adoptResolvedMarker(markerRef.current, frame.marker)
+          : null;
+        if (adopted) {
+          setFirstOriginalMessageId(adopted.firstOriginalMessageId);
+          setFirstOriginalIsNext(false);
+        }
+        // The frame arrived, so the relay was open to the end: this screen is
+        // not stale. (A dropped connection produces no frame and therefore no
+        // patch, which is the branch below.)
+        staleViewRef.current = false;
+      } else {
+        staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+      }
+      // Cleared on BOTH branches, and after both: a reload replaces the whole
+      // array so the optimistic bubbles are gone either way, and a list that
+      // outlived its turn would make the NEXT patch delete a real message.
+      //
+      // The mirror clears with it, which hands the copied/original boundary
+      // back to the real marker. Both branches resolve that marker ABOVE this
+      // line and in the same batch (the patch branch via adoptResolvedMarker,
+      // the reload branch inside reloadMessagesFromDisk), so there is no
+      // render in between where the boundary is neither predicted nor known.
+      optimisticIdsRef.current = [];
+      setOptimisticIds([]);
+      setLoading(false);
+      // The panel's poll only runs while `injectTurnId` is set, and Stop clears
+      // that immediately — so without this read the lease row FREEZES at its
+      // last value and keeps saying a turn is running after it stopped
+      // (MEASURED by Lizard-kun: "⏳ 1 通を動かしています / runner:… が持っています"
+      // left on screen until a reload). Every exit from a watch needs it, not
+      // just the button's — the button already had one in its own finally.
+      refreshStock();
+    }
+    // `postStop` is listed, not silenced: it is a useCallback with no deps of
+    // its own, so its identity never changes and adding it cannot re-arm the
+    // auto-trigger effect — which is the whole reason it is a useCallback and
+    // not a plain function written here.
+  }, [folderName, convoId, t, globalSettings, reloadMessagesFromDisk, refreshStock, postStop]);
+
+  /**
+   * The "run it now" button: ask the runner for this conversation's batch.
+   *
+   * Thin on purpose. Everything that used to be here — claim, compose, send,
+   * release, abandon — moved to the server with the turn, which is what makes
+   * a closed tab survivable. What is left is the part that genuinely belongs
+   * to a tab: the busy latch and the note the person reads.
+   */
+  const drainStock = useCallback(async () => {
+    if (stockBusy || loading || !folderName || !convoId) return;
+    setStockBusy(true);
+    setStockNote(null);
+    try {
+      const outcome = await runOnRunner();
+      if (outcome === 'idle') setStockNote({ text: t('chat.stock.nothingRan'), kind: 'problem' });
+    } finally {
+      setStockBusy(false);
+      refreshStock();
+    }
+  }, [stockBusy, loading, folderName, convoId, runOnRunner, refreshStock, t]);
+
+  /**
+   * Clear a lease whose holder is gone.
+   *
+   * Deliberately NOT automatic. A TTL short enough to free a dead holder would
+   * cut a LIVE turn in half -- turns here run for tens of minutes -- which is
+   * why lib/turnQueue has no TTL at all. The judgement stays with a person;
+   * what was missing was the hand.
+   *
+   * MEASURED 2026-10-29 (つよ): a closed tab left a lease nothing could clear.
+   * The panel that displayed it rendered no buttons at all, because every
+   * button was nested under `waiting > 0` and a fully-claimed stock has
+   * waiting = 0. So the one state that needs a human hand was the one state
+   * with no controls.
+   *
+   * Echoes back the holder and startedAt that were ON SCREEN, so the break
+   * acts on the lease the person read and not on one that replaced it since.
+   * The token is never sent here: handing it out would also hand out
+   * `release`, which can delete the items of a live turn.
+   */
+  /*
+   * ⚠ `discardStock` lived here for one day (2026-11-01 → 2026-11-02).
+   *
+   * It threw waiting items away, because a failed turn left its batch in the
+   * stock panel offering only "Run now" and トカゲくん said "I don't know why
+   * it is there and I don't want it". I read that as a missing HAND.
+   *
+   * It was a missing BEHAVIOUR: "there is no 'run now' and no 'discard' here at
+   * all; on a failure this just stays, and the rest is the admin's judgement."
+   * A failed turn now writes the user message and an empty assistant message
+   * and consumes the batch, so a failed send never reaches this panel. The
+   * panel is left for what he does want it for — messages genuinely waiting
+   * (two sends at once, a being writing to a being) — where the only sensible
+   * hand is "Run now".
+   */
+
+  const breakStock = useCallback(async () => {
+    const lease = stock?.lease;
+    if (!lease || stockBusy || !folderName || !convoId) return;
+    if (!window.confirm(t('chat.stock.breakConfirm').replace('{holder}', lease.holder))) return;
+    setStockBusy(true);
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'break', being: folderName, convoId,
+          expectedHolder: lease.holder, expectedStartedAt: lease.startedAt,
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      // Name which answer came back. "stale" means the lease changed while the
+      // panel sat open, and the honest next move is to look again, not retry.
+      // Only the first of the four reports success, so only it is 'info'.
+      setStockNote(
+        d?.ok ? { text: t('chat.stock.broke'), kind: 'info' as const }
+        : d?.reason === 'stale' ? { text: t('chat.stock.breakStale'), kind: 'problem' as const }
+        : d?.reason === 'no-lease' ? { text: t('chat.stock.breakGone'), kind: 'problem' as const }
+        : { text: t('chat.stock.failed'), kind: 'problem' as const }
+      );
+    } catch {
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+    } finally {
+      setStockBusy(false);
+      refreshStock();
+    }
+  }, [stock, stockBusy, folderName, convoId, refreshStock, t]);
+
+  /**
+   * Run the stock by itself when no turn is in flight — IF this conversation
+   * has asked to.
+   *
+   * CORRECTION 2026-10-28: when this was written (2026-10-27) auto-start was
+   * unconditional, because つよ asked for "no button, just hit it". A day
+   * later she asked for the same behaviour to become an explicit choice, so
+   * that a being can be configured not to wake on its own. Both requests
+   * were real; the second supersedes the first. The gate is
+   * `autoRunStock` below, and OFF is the default — see lib/autoTriggers.ts
+   * for why absent means off.
+   *
+   * The condition is a STATE, not a transition: "nothing running and the stock
+   * is non-empty". That covers turn-end (the case つよ asked for) and also a
+   * message that arrives from another tab while this one sits idle — a
+   * transition handler would have needed a second copy of the rule for that.
+   *
+   * `autoTriedRef` is the whole safety argument. Each distinct stock state is
+   * attempted at most once: a failed drain `abandon`s the items (MEASURED to
+   * restore the same ids — see turnQueue.test.ts), leaving the signature
+   * identical, so the effect does not re-enter. Without it this is a busy loop
+   * driven by its own failure. With it the worst case is one wasted attempt
+   * per message someone actually sent.
+   *
+   * A ref and not state: the latch must not cause a render, and nothing in the
+   * render tree reads it. The "it did not start by itself" button keys off
+   * `stockNote` instead, which is already state.
+   *
+   * CORRECTION 2026-10-31: the line here called `stockNote` "the failure
+   * REPORT". It was not — the same variable also carried
+   * `chat.stock.added`, set when enqueue SUCCEEDED, and that sentence is
+   * what stayed on screen claiming "1 waiting" after the stock had drained.
+   * The note now carries a `kind`; this button keys off the note's presence
+   * either way, because a retry is worth offering whenever a person is
+   * looking at a non-empty stock.
+   *
+   * Deliberately NOT a timer. A poller that fires on a schedule is phase 4b,
+   * and it belongs on the server where it keeps working with every tab closed.
+   */
+  const autoRunStock = autoTriggerEnabled(autoTriggers, 'stock');
+  const autoTriedRef = useRef<string | null>(null);
+  const stockSig = stock && stock.waiting > 0
+    ? `${stock.waiting}:${stock.items.filter((i) => !i.claimed).map((i) => i.id).join(',')}`
+    : null;
+  useEffect(() => {
+    if (!stockSig) return;
+    if (loading || stockBusy || injectTurnId) return;
+    // つよ 2026-10-28: auto-start is now a per-conversation choice. OFF
+    // restores the pre-2026-10-27 behaviour (stock waits for a button).
+    if (!autoRunStock) return;
+    if (autoTriedRef.current === stockSig) return;
+    autoTriedRef.current = stockSig;
+    void drainStock();
+  }, [stockSig, loading, stockBusy, injectTurnId, drainStock, autoRunStock]);
+
+  const handleSend = async (
+    text: string,
+    attachments: any[],
+    opts?: { mode?: 'interject' | 'send'; from?: string }
+  ) => {
     if (!text.trim() && attachments.length === 0) return;
 
     // A turn is in flight → this message is a mid-turn INTERJECTION, not a new
     // message. It's delivered to the running turn at its next tool-loop step
     // and never appended to the conversation log. (The old dedicated interject
     // input box is gone — sending normally while they work IS the interjection.)
+    //
+    // Unless the sender explicitly picked 'send' in the mode menu, in which
+    // case it goes to the stock to be run as the NEXT turn. The default stays
+    // the interjection: it is the emergency brake (see InputArea).
     if (injectTurnId) {
+      if (opts?.mode === 'send') {
+        await enqueueToStock(text, attachments, opts.from || '');
+        return;
+      }
       await sendInterjection(text, attachments);
       return;
     }
@@ -2526,7 +3695,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // "someone is running" direction (a tab killed at the OS level holds its
     // entry until the TTL), and a wrong refusal would make the conversation
     // unusable for half a minute with no way to override.
-    const foreign = await probeForeignTurn();
+    const { foreign } = await probeConversationState();
     if (foreign) {
       const secs = foreign.startedAt ? Math.max(0, Math.round((Date.now() - foreign.startedAt) / 1000)) : null;
       const ok = window.confirm(
@@ -2594,34 +3763,93 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       tokens: 0 // Will update below
     };
 
-    const newMessages = [...messages, newMessage];
-    setMessages(newMessages);
-
-    // If the "next message is first-original" flag is pending, promote this
-    // new user message to the marker and clear the flag. This is the second
-    // half of the new clone workflow: clone sets the flag, the next user
-    // turn here consumes it.
-    if (firstOriginalIsNext && !firstOriginalMessageId) {
-      setFirstOriginalMessageId(newMessage.id);
-      setFirstOriginalIsNext(false);
+    // ── First message of a brand-new conversation ───────────────────────────
+    // The server-side runner runs a turn by loading the conversation log
+    // (runTurnForQueue → loadLog → 'no-log' when there is none), so a never-saved
+    // conversation has nothing to load. Write the log NOW — empty messages plus
+    // the current settings via buildLogData, the SAME source the save effect
+    // uses — and then fall through to the runner path below, exactly like every
+    // later message. This closes the boundary the old code documented ("not yet
+    // tab-close-safe"): the first message now survives a closed tab too, which
+    // is Lizard-kun's "every message through the queue, nothing dies with the
+    // tab". The runner loads this log, composeBatch appends the queued user
+    // message, and the runner saves [user, assistant] itself.
+    //
+    // The user message's id and tokens are no longer computed here: the runner
+    // mints the user message (composeBatch → its own id, no textTokens), the
+    // same as every later send, and the context bar recomputes tokens from the
+    // text anyway. firstOriginalIsNext travels in the log and the runner
+    // preserves it; the marker is NOT promoted to the runner's user-message id
+    // here (the runner mints that id after this returns) — the SAME gap every
+    // runner send has today, not a new regression, and unusual for a brand-new
+    // conversation because clone copies messages and so takes the normal path.
+    //
+    // ⚠ CORRECTION 2026-10-31: "the SAME gap every runner send has today, not
+    // a new regression" was wrong on the second half. `main` promoted the
+    // marker in handleSend; `dev` promoted it nowhere, so it WAS a regression
+    // against the branch this one replaces — and the consequence is not a
+    // missing marker but an inverted reading: pending-with-no-marker makes
+    // makeIsOriginalIndex answer "nothing is original", so every message in
+    // every cloned conversation read as carry-over, permanently (REPORTED by
+    // ふわふわ). The runner now promotes it (promotePendingMarker). Writing
+    // down that a gap is not new is not the same as measuring whether it is.
+    if (messages.length === 0) {
+      await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // No baseUpdatedAt: this conversation has no file yet, so the save is
+        // unguarded — correct only here, where nothing on disk can be clobbered.
+        body: JSON.stringify({ id: convoId, clientId: TAB_CLIENT_ID, logData: buildLogData([]) }),
+      });
+      // fall through to the runner path below
     }
 
-    // Calculate tokens for user message locally (text only)
-    const newTokens = await fetchTokensForText(text, localAiName);
-    newMessage.textTokens = newTokens;
-    newMessage.tokens = newTokens;
-    setMessages([...newMessages]); // update token count in state
-
-    // A fresh user turn always starts on the being's SAVED default vessel, not
-    // on a change_model override left over from the previous turn's handoff
-    // chain (トカゲくん: as a 24/7 feature it is structurally right to always
-    // begin from the cheap default — the handoff vessel is transient to the
-    // chain the model itself drove, and reverts the moment the human speaks
-    // again). forceSavedVessel makes THIS request ignore the stale
-    // handoffOverride closure; setHandoffOverride(null) reverts the delivery
-    // badge on the next render. Reload is no longer needed to return to default.
+    // ── Every later message: hand the turn to the SERVER-SIDE runner ─────────
+    // The browser no longer POSTs /api/chat for a normal send. A browser turn's
+    // lifeline is the tab's connection: closing it mid-turn aborted req.signal
+    // and the route tore the generation down (MEASURED: LM Studio stopped
+    // mid-token when the tab closed). Now this message is ENQUEUED and the
+    // runner — a server process — runs it and writes the log itself; this tab
+    // only kicks it and watches a relay (runOnRunner). Closing the tab now costs
+    // a view, never the answer.
+    //
+    // enqueue THIS message; the runner's claim pulls in whatever is already
+    // waiting in the queue and composes it all FIFO into one turn (Lizard-kun's
+    // merge: a send with stock behind it goes together as one message).
+    //
+    // setLoading(true) BEFORE the first await, in the same render as the
+    // optimistic bubble, does two things that both have to happen before any
+    // state settles:
+    //   · gates the save effect (`if (loading) return`) so the BROWSER never
+    //     writes this user message — the runner owns it, via composeBatch, and
+    //     two writers on one conversation is the 409 lastWriter.ts explains;
+    //   · gates the auto-trigger effect so the stock refresh enqueue fires
+    //     cannot start a SECOND, racing drain of the same batch.
+    // runOnRunner owns clearing loading in its finally.
+    //
+    // The optimistic bubble is this tab showing what the sender just typed;
+    // composeBatch produces the SAME content for a single item (unwrapped), and
+    // runOnRunner's reload replaces this copy with the runner's saved message.
+    //
+    // ⚠ CORRECTED 2026-11-01: a reload still does exactly that, but it is no
+    // longer the only ending. A `turn_saved` patch does not rebuild the array,
+    // so it cannot replace this bubble by rebuilding — it is TOLD to drop it
+    // (optimisticIdsRef, one line below) and then inserts the runner's copy in
+    // front of the reply. MEASURED live before that was true: the sent text
+    // appeared twice, and then once but below its own answer.
+    setLoading(true);
+    setMessages(prev => [...prev, newMessage]);
+    // Declared as this tab's own, so the turn_saved patch removes it before
+    // appending the runner's copy. Without this the sent text appears twice
+    // (lib/turnSaved.ts, localOnlyIds).
+    optimisticIdsRef.current = [...optimisticIdsRef.current, newMessage.id];
+    // The render-time mirror, set from the ref so the two cannot disagree.
+    // This is also what makes the copied/original boundary land on this bubble
+    // immediately instead of at save (lib/firstOriginal.optimisticMarkerIndex).
+    setOptimisticIds(optimisticIdsRef.current);
     setHandoffOverride(null);
-    await generateAiResponse(newMessages, { forceSavedVessel: true });
+    await enqueueToStock(text, attachments, opts?.from || '');
+    await runOnRunner();
   };
 
   useEffect(() => {
@@ -2822,6 +4050,31 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleStop = () => {
+    // Set FIRST, before anything that can yield: the watch loop can throw on
+    // the route's abort echo while this function is still running, and the
+    // catch over there reads this flag to tell "stopped on purpose" from "the
+    // turn failed".
+    stopPressedRef.current = true;
+
+    // ── Say "stop THIS turn" out loud, then abort ─────────────────────────
+    // The abort below is what stops the turn today, and this POST changes
+    // nothing a person can see. It is here because the two are not the same
+    // statement: an abort is indistinguishable, on the wire, from this tab
+    // dying — the chat route receives one `req.signal` for both (measured;
+    // see lib/turnStop.ts). Phase 4b needs turns that survive a closed tab,
+    // and that is only possible once Stop has its own channel.
+    //
+    // Read the key BEFORE retireTurnRegistration() below clears it, and do
+    // not await: Stop must stay a one-click, no-latency action, so the abort
+    // runs immediately and this request catches up on its own.
+    // ── The press, and what it can reach ──────────────────────────────────
+    // Either the turn has a name (POST now) or it does not yet (remember, and
+    // runOnRunner delivers it the instant the relay hands the name over). The
+    // third outcome — do nothing, silently — is the bug this replaces.
+    // See lib/pendingStop.ts for why the rule is not six lines here.
+    const plan = planStopPress(activeTurnKeyRef.current, loading);
+    pendingStopRef.current = plan.remember;
+    if (plan.post) postStop(plan.post.convoId, plan.post.turnId);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -2840,26 +4093,36 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     retireTurnRegistration();
   };
 
-  // ── Turn registry: publish, retire, probe ─────────────────────────────────
-  // All three are best-effort. The registry only ever answers a question, and
-  // the real protection against two tabs clobbering each other is the save
-  // guard (optimistic concurrency in /api/logs) — so a failed beat, a lost
-  // 'end', or an unreachable probe must never stop a turn or block a send.
-  const beginTurnRegistration = (cid: string, turnId: string) => {
-    activeTurnKeyRef.current = { convoId: cid, turnId };
-    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-    heartbeatRef.current = setInterval(() => {
-      const k = activeTurnKeyRef.current;
-      if (!k) return;
-      fetch('/api/chat/active', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ convoId: k.convoId, turnId: k.turnId, event: 'beat' }),
-      }).catch(() => { /* a dropped beat costs nothing until the TTL */ });
-    }, TURN_HEARTBEAT_MS);
-  };
-
+  // ── Turn registry: retire, probe ──────────────────────────────────────────
+  // Both are best-effort. The registry only ever answers a question, and the
+  // real protection against two tabs clobbering each other is the save guard
+  // (optimistic concurrency in /api/logs) — so a lost 'end' or an unreachable
+  // probe must never stop a turn or block a send.
+  //
+  // ⚠ CORRECTED 2026-10-31. This block used to claim "NOTHING PUBLISHES HERE
+  // ANY MORE", reasoning that a turn becomes active only by its first 'beat'
+  // and the only beater was the browser turn engine I had just deleted. The
+  // premise was wrong and I never opened the file it was about: the CHAT ROUTE
+  // publishes (route.ts, `markTurnActive(convoId, injectTurnId, clientId,
+  // …)`), and its own header says so — "the only writer of 'a turn started' is
+  // the chat route itself". The POST reaching it is the RUNNER's, carrying
+  // `clientId: runner:<install>`, so every tab reads `mine: false` and the
+  // indicator lights for all of them.
+  //
+  // DISPROVED BY OBSERVATION, not by re-reading: ふわふわ opened two tabs on one
+  // conversation and reported the warning appearing — a thing I had written
+  // down as impossible. The same post-mortem as F65, two days running: a
+  // claim about another file that no instrument in this repo can check.
+  //
+  // What was true in it: beating from a WATCHER is the wrong fix. Two tabs
+  // watching one runner turn would beat under different clientIds and the
+  // route decides "mine" from clientId. The turn belongs to the server, so
+  // the server registers it — which is what the chat route was doing all along.
+  //
+  // `foreignTurn` is now a fallback, not the feature. A tab that finds a turn
+  // it did not start ATTACHES to it (see the effect below) and shows the real
+  // thing; the banner is for the case where attaching found nothing to watch.
   const retireTurnRegistration = () => {
-    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
     const k = activeTurnKeyRef.current;
     activeTurnKeyRef.current = null;
     if (!k) return;
@@ -2869,39 +4132,233 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }).catch(() => { /* the server's abort listener and the TTL both cover this */ });
   };
 
-  /** Is a turn running elsewhere on this conversation? Stores AND returns it. */
-  const probeForeignTurn = async (): Promise<{ label?: string; startedAt?: number } | null> => {
+  /**
+   * One round trip, two answers: is a turn running elsewhere, and what
+   * version is on disk.
+   *
+   * Was `probeForeignTurn`, renamed when it started reporting the version
+   * too. A name that describes half of what a function does is the thing
+   * this house keeps paying for.
+   *
+   * `foreign` is stored in state as a side effect (the cross-tab banner
+   * reads it); `diskUpdatedAt` is returned only, because the one caller
+   * that wants it acts on it immediately and a stored copy would be a
+   * second version of the truth sitting next to baseUpdatedAtRef.
+   */
+  const probeConversationState = async (): Promise<{
+    foreign: { label?: string; startedAt?: number } | null;
+    diskUpdatedAt: number | null;
+  }> => {
     try {
       const r = await fetch(`/api/chat/active?convoId=${encodeURIComponent(convoId)}&clientId=${encodeURIComponent(TAB_CLIENT_ID)}`);
-      if (!r.ok) return null;
+      if (!r.ok) return { foreign: null, diskUpdatedAt: null };
       const j = await r.json();
       // The server decides "mine" — this tab does not re-derive it.
       const foreign = j?.active && !j?.mine ? { label: j.label, startedAt: j.startedAt } : null;
       setForeignTurn(foreign);
-      return foreign;
+      return {
+        foreign,
+        diskUpdatedAt: typeof j?.diskUpdatedAt === 'number' ? j.diskUpdatedAt : null,
+      };
     } catch {
-      return null;
+      // A failed probe must not read as "nothing is running, nothing
+      // changed". Both nulls mean "could not tell", and shouldReloadFromDisk
+      // treats a null version as exactly that.
+      return { foreign: null, diskUpdatedAt: null };
     }
   };
 
-  // Keep `foreignTurn` current. Mirrors the runtime-flags probe (mount, window
-  // focus, tab becoming visible) and adds a slow interval, because unlike a
-  // server flag this can change while the tab just sits there. Skipped while
-  // THIS tab is generating — the answer would be "yes, you", and sending is
-  // already unavailable then.
+  /**
+   * Turns this tab has already tried to attach to, as `convoId:startedAt`.
+   *
+   * Needed because attaching can legitimately find nothing: a registry entry
+   * outlives its turn by up to the TTL, and /api/turn-events then answers
+   * `idle`. Without a memory the probe would retry that same dead turn every
+   * ten seconds forever, and each attempt ends in a reload — a quiet polling
+   * loop on a conversation nobody is even looking at.
+   *
+   * CLEARED on a FAILED attach — see the effect below. "Never unmarked" was
+   * written when attaching was a nicety for a second tab; it is now how a tab
+   * gets its view back after the network drops, and those drops come in runs.
+   */
+  const attachedTurnRef = useRef<string>('');
+
+  /**
+   * The disk version this tab has already mirrored, as `convoId:version`,
+   * so a version whose settings disagreed (and therefore did not advance the
+   * base) is not refetched on every poll for as long as the tab stays open.
+   *
+   * Keyed by conversation for the same reason attachedTurnRef is: this
+   * component stays mounted across a switch, and a bare number would carry
+   * one conversation's version into the next one.
+   */
+  const mirroredVersionRef = useRef<string>('');
+
+  // Keep `foreignTurn` current, AND join a turn this tab did not start.
+  //
+  // Mirrors the runtime-flags probe (mount, window focus, tab becoming
+  // visible) and adds a slow interval, because unlike a server flag this can
+  // change while the tab just sits there. Skipped while THIS tab is
+  // generating — the answer would be "yes, you", and sending is already
+  // unavailable then.
+  //
+  // The probe is what triggers the attach, rather than a second poller: it
+  // already answers exactly the question an attach needs ("is a turn running
+  // here that is not mine"), it already fires on the three moments that matter
+  // (mount, focus, becoming visible), and `loading` already means "this tab is
+  // busy with a turn" for both.
+  //
+  // `online` is the fourth moment, and the one this effect exists for since
+  // 2026-10-31: the browser itself says when connectivity returns, so a tab
+  // whose watch died in a tunnel rejoins at once instead of in up to ten
+  // seconds. It is an EXTRA trigger, never the only one — the event reports
+  // the link layer and not reachability, so a false `online` costs one probe
+  // and a missed one is covered by the interval.
   useEffect(() => {
     if (!convoId) return;
     let cancelled = false;
-    const read = () => { if (!cancelled && !loading) probeForeignTurn(); };
+    const read = async () => {
+      if (cancelled || loading) return;
+      // ── CATCH UP WITH DISK FIRST ───────────────────────────────────────
+      // A watch whose reload could not reach the server left this screen
+      // showing a turn that has since been finished and written by the
+      // runner. Attaching cannot fix that: by then the relay is closed, so
+      // the probe below finds nothing and there is nothing to join.
+      //
+      // MEASURED 2026-10-31 (Lizard-kun, airplane mode): the long turn was
+      // rejoined and the view came back. A SHORT one would not have been —
+      // it ends during the outage, and the only thing that can repair the
+      // screen is the reload that already failed once.
+      //
+      // This is not a second mechanism. It is the SAME reload, retried at
+      // the one moment it can now succeed. The flag is set only by a
+      // request that never completed, so a server that answered (404,
+      // malformed body) is never retried.
+      if (staleViewRef.current) {
+        if ((await reloadMessagesFromDisk()) !== 'unreachable') {
+          staleViewRef.current = false;
+          // The MESSAGES are not the only thing the outage froze. Three notes
+          // were written while the network was down and all three say
+          // something that stopped being true the moment the reload landed:
+          //
+          //   the stock note    "network error" — from the watch that died
+          //   the lease row     last read before the outage, so it still
+          //                     claims a turn that has since finished
+          //   the save banner   "this turn is not on disk yet" — and it IS,
+          //                     the runner wrote it; this screen is now a
+          //                     copy of that file
+          //
+          // MEASURED 2026-10-31: after the view repaired itself, both of the
+          // first two were still on screen describing a world from a minute
+          // ago. A note that outlives its truth is the shape this house
+          // refuses, and here it outlives it by exactly as long as the tab
+          // stays open.
+          //
+          // A CONFLICT banner is left alone. That one is not a report, it is
+          // a question — which copy wins — and the reload has just answered
+          // it one way without asking.
+          setStockNote(null);
+          void refreshStock();
+          setSaveError(prev => (prev && prev.kind !== 'conflict' ? null : prev));
+        }
+        if (cancelled || loading) return;
+      }
+      const { foreign, diskUpdatedAt } = await probeConversationState();
+
+      // ── MIRROR AN EDIT OR DELETE MADE IN ANOTHER TAB ────────────────
+      //
+      // The parts were all already here: this poll, reloadMessagesFromDisk
+      // (which replaces `messages` and the version and nothing else), the
+      // version this tab is working from, and the list of versions it wrote
+      // itself. The only thing missing was the question — the route never
+      // said what was on disk. See lib/diskVersion.ts for the four rules.
+      //
+      // MESSAGES ONLY, by decision. Settings are not mirrored: replacing a
+      // panel someone is in the middle of using is the shape this house
+      // refuses, and a second tab overwriting settings is already refused by
+      // saveLog's 409. nexus-overhaul-plan.md §15.
+      //
+      // An in-progress EDIT survives this: MessageBubble keeps its own
+      // `editContent` and re-syncs from props only when not editing
+      // (MessageBubble.tsx, the `if (!isEditing)` effect). MEASURED
+      // 2026-11-01 — the design note for this change had listed "typing is
+      // lost" as a hazard to design around, and the guard was already there.
+      //
+      // Runs while a foreign turn is running too: `loading` (this tab's own
+      // turn) is the guard that matters, and the effect is torn down and
+      // rebuilt on it, so an attach that is painting a placeholder never
+      // reaches here to have that placeholder replaced out from under it.
+      // ⚠ NOT WHILE THIS TAB HAS WORK THAT IS NOT ON DISK YET.
+      //
+      // A save in flight means `baseUpdatedAtRef` is still the OLD version, so
+      // "disk is newer" is true — and reloading there would throw away an edit
+      // the person just made, before it ever reached the file. Silently.
+      //
+      // It is also the one case where this mirror and the 409 path would give
+      // DIFFERENT answers to the same question: the 409 refuses and asks the
+      // human which copy wins, and remote-wins-silently is not that. Deferring
+      // keeps one answer — when this tab has something pending, the conflict
+      // path owns the decision; the mirror acts only when it has nothing.
+      // By the next poll the save has either landed (base is current, nothing
+      // to do) or been refused (the human is already being asked).
+      //
+      // The effect that saves is NOT debounced: it POSTs and increments this
+      // counter in the same synchronous run, so there is no window between a
+      // local edit and the counter going up that an awaited fetch can land in.
+      const mirrorKey = `${convoId}:${diskUpdatedAt}`;
+      if (savesInFlightRef.current === 0 && mirrorKey !== mirroredVersionRef.current && shouldReloadFromDisk({
+        diskUpdatedAt,
+        baseUpdatedAt: baseUpdatedAtRef.current,
+        ownWrites: ownWritesRef.current,
+      })) {
+        // Remembered BEFORE the await: when the settings disagree the base
+        // is deliberately not advanced, so the next poll would see the same
+        // "disk is newer" and refetch the whole log every ten seconds.
+        // Correctness does not need this; a multi-megabyte conversation does.
+        mirroredVersionRef.current = mirrorKey;
+        if (await reloadMessagesFromDisk({ keepBaseIfSettingsDiffer: true }) === 'unreachable') {
+          staleViewRef.current = true;
+          // Not actually taken — let the next poll try again.
+          mirroredVersionRef.current = '';
+        }
+        if (cancelled || loading) return;
+      }
+      // `loading` re-checked: the probe is a round trip, and this tab may have
+      // started its own turn while it was in flight.
+      if (!foreign || cancelled || loading) return;
+      const key = `${convoId}:${foreign.startedAt || 0}`;
+      if (attachedTurnRef.current === key) return;
+      // Marked BEFORE the await, so a second probe landing mid-attach does not
+      // start a second watch of the same turn.
+      attachedTurnRef.current = key;
+      const outcome = await runOnRunner(undefined, true);
+      // Cleared ONLY on 'failed'.
+      //
+      //   'idle'  — the relay had nothing to give. KEEP the mark: this is the
+      //             stale-registry case the mark was invented for, and a tab
+      //             that retries it polls a dead turn forever.
+      //   'failed' — the attach itself broke (the kick, the subscribe, or the
+      //             stream). Almost always the network, and the network is
+      //             exactly what a reconnect is recovering from. Refusing to
+      //             retry here leaves the tab permanently blind to a turn that
+      //             is still running, which is the bug this whole path fixes.
+      //
+      // Guarded on the key still being ours: the conversation may have moved
+      // on while the attach ran, and clearing someone else's mark would make
+      // THAT turn retryable.
+      if (outcome === 'failed' && attachedTurnRef.current === key) attachedTurnRef.current = '';
+    };
     read();
     const iv = setInterval(read, 10_000);
     const onVisible = () => { if (document.visibilityState === 'visible') read(); };
     window.addEventListener('focus', read);
+    window.addEventListener('online', read);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(iv);
       window.removeEventListener('focus', read);
+      window.removeEventListener('online', read);
       document.removeEventListener('visibilitychange', onVisible);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2948,1067 +4405,50 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }
   };
 
-  // `continueMsgId` turns this into a CONTINUATION of an existing assistant
-  // message instead of a new one: no placeholder is added, the stream is seeded
-  // with the text already there, and everything appends to that same bubble.
-  // `history` must then END with the message being continued — the server adds
-  // the "carry on from where you stopped" user turn itself, because for Claude
-  // an assistant message in last position is a prefill, which Anthropic rejects
-  // while extended thinking is enabled.
-  const generateAiResponse = async (history: any[], opts?: {
-    continueMsgId?: string;
-    // Set only by the vessel-handoff re-POST: who handed over, and the note
-    // they wrote. A handoff is a NEW assistant message (not a continuation) —
-    // which is also what makes per-message billing come out right, since cost
-    // is computed per message from its own modelSpecific.
-    handoffFrom?: { family: string; specificModel: string; label: string; note: string };
-    // The vessel THIS request must run on. Passed explicitly rather than read
-    // from handoffOverride because the re-POST happens in the same tick as the
-    // setState that records the switch — a closure would still see the old
-    // vessel and the handoff would silently run on the vessel it just left.
-    vesselOverride?: { family: string; specificModel: string; thinking: boolean; label: string };
-    // Who to restore if THIS request fails — i.e. the vessel that handed over.
-    // null means "the being's saved default". Carried because `handoffFrom`
-    // describes the previous vessel for the model's benefit and has no
-    // `thinking` flag, and restoring a vessel without it would answer on the
-    // right model with the wrong reasoning setting.
-    handoffPrev?: { family: string; specificModel: string; thinking: boolean; label: string } | null;
-    // Set on the request that reports a FAILED switch back to the being that
-    // asked for it. The server turns it into a user turn (lib/modelHandoff.ts).
-    handoffFailed?: { family: string; specificModel: string; label: string; error: string };
-    // Notices to attach to THIS turn's message, for things that happened before
-    // it. Used by the handoff-failure report so the human-readable provider
-    // error survives — the failed turn's own message does not.
-    carryNotices?: string[];
-    // Run on the being's SAVED vessel, ignoring handoffOverride. Two callers:
-    // (1) the failure restore, where the restore and the re-POST happen in the
-    // same tick so the state still holds the vessel that just failed and
-    // `?? handoffOverride` would send the retry straight back to it; (2) a fresh
-    // user turn (handleSendMessage), which must start on the saved default even
-    // when a previous handoff chain left handoffOverride set — same stale-closure
-    // reason: the setHandoffOverride(null) there is not visible this tick. A null
-    // vesselOverride cannot express this — `??` would fall through — so the
-    // intent gets its own flag.
-    forceSavedVessel?: boolean;
-    // How many handoffs produced this request. Capped so two vessels that each
-    // prefer the other cannot ping-pong forever at real cost per hop.
-    handoffDepth?: number;
-  }) => {
-    const continueMsgId = opts?.continueMsgId;
-    // Vessel for THIS request. opts wins over state for the reason above.
-    const turnVessel = opts?.forceSavedVessel ? null : (opts?.vesselOverride ?? handoffOverride);
-    const turnAiName = turnVessel?.family || localAiName;
-    const turnSpecificModel = turnVessel?.specificModel || specificModel;
-    setLoading(true);
-    clearLiveTool();
-    setStreamPhase(null);
-    setLiveModel('');
-    setStallIdleSeconds(null);
-    abortControllerRef.current = new AbortController();
-    // Wall-clock start of this generation. Used to record how long the model
-    // took (thinking + tool loops + streaming) onto the finished message as
-    // `generationMs` — a display-only indicator, persisted to the log but
-    // never sent back to the entity (reconstruction uses only message content).
-    const genStartTime = Date.now();
-    // Fresh per-turn id for mid-turn interjections. Local const for the body
-    // (needs the value synchronously); mirrored into state so the interject
-    // input can address this specific turn.
-    const turnId = `turn_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-    setInjectTurnId(turnId);
-    // Tell other tabs this conversation is busy, and keep saying so while the
-    // stream runs. The server also registers the turn itself (chat route), so
-    // this only has to keep the entry from expiring.
-    beginTurnRegistration(convoId, turnId);
-    setInterjectStatus(null);
-
-    // Continuing: reuse the existing message's id so every streaming update
-    // lands on it. Otherwise mint a new one.
-    const msgId = continueMsgId || (Date.now() + 1).toString();
-    const continuedMsg = continueMsgId ? history.find((m: any) => m.id === continueMsgId) : null;
-    const continuedSeed = continuedMsg?.content || '';
-    // The thinking that produced the first half must be carried over too. Every
-    // streaming flush REPLACES thoughtProcess/claudeThinkingBlocks, so starting
-    // these empty would erase the original thinking the moment the continuation
-    // emitted its first chunk — silently breaking "Save & reuse thinking".
-    const continuedThought = continuedMsg?.thoughtProcess || '';
-    const continuedBlocks: { thinking: string; signature: string }[] =
-      Array.isArray(continuedMsg?.claudeThinkingBlocks) ? [...continuedMsg.claudeThinkingBlocks] : [];
-    const newAiMessage = {
-      id: msgId,
-      role: 'assistant',
-      name: folderName,
-      content: '',
-      thoughtProcess: undefined,
-      attachments: [],
-      timestamp: Date.now(),
-      tokens: 0,
-      // Streaming TTS: the placeholder is marked `streaming: true` immediately
-      // so MessageBubble can start fetching audio for each completed sentence
-      // as it arrives, instead of waiting for the whole response. `autoPlay`
-      // is also set up-front (was set on the final replacement before) so the
-      // VRChat-mode auto-trigger fires on the first content chunk, not after
-      // generation completes.
-      streaming: true,
-      autoPlay: vrchatMode,
-    };
-
-    // Add placeholder immediately. When continuing, there is nothing to add —
-    // the target message already exists; just mark it streaming so the TTS and
-    // the streaming indicators behave exactly as they do for a fresh reply.
-    if (continueMsgId) {
-      setMessages(prev => prev.map(m => m.id === continueMsgId ? { ...m, streaming: true } : m));
-    } else {
-      setMessages([...history, newAiMessage]);
-    }
-
-    // The Layer 4 SUMMARIES INDEX USED TO BE APPENDED HERE, after a fetch to
-    // /api/summaries. It is not any more (2026-10-01). The chat route appends
-    // it, from the same builder this component's counter reads through that
-    // same endpoint — see lib/layer4Index.ts. A gate that lived only in this
-    // file was a button, not a capability: a hand-edited settings.json, the
-    // devtools, or one curl to /api/chat all walked around it and left a being
-    // with no memory of its own past.
-    //
-    // Do not re-add an append here. The route's idempotence guard would see the
-    // heading and skip its own, which hides the mistake rather than fixing it.
-    const baseSystemPrompt = systemPrompt;
-    // The Absolute Base Binding USED TO BE PREPENDED HERE. It is not any more.
-    // The route does it (see lib/baseBinding.ts): a switch that only existed in
-    // this file was a button, not a capability — devtools, a hand-edited
-    // settings.json, or one curl to /api/chat all walked around it.
-    //
-    // So nothing is prepended on the way out, and `baseBindingMode` +
-    // `bindingLayered` go into the request body below as HINTS instead. What
-    // this component still composes is `effectiveBindingText`, used only for
-    // the token counter and for Gemini Live. Do not re-add a prepend here:
-    // the route's idempotence guard would skip it, which hides the mistake
-    // rather than fixing it.
-    let effectiveSystemPrompt = vrchatMode ? `${baseSystemPrompt}\n\n${audioSessionRuleText}`.trim() : baseSystemPrompt;
-    // Optional hidden context note so the entity can see how much of this
-    // session's room has been used. A quantity, never a condition — see the
-    // default text above.
-    // Same formula as the status-bar indicator: original (non-copied) messages
-    // ÷ the conversation-log cap. The system prompt is no longer subtracted
-    // from the denominator — it sits outside the cap entirely, so a longer soul
-    // no longer inflates this number.
-    // {percent} is replaced with the value (e.g. "42%").
-    if (showFatigueToEntity && fatigueInstruction.trim()) {
-      effectiveSystemPrompt = `${effectiveSystemPrompt}\n\n${fatigueInstruction.replace(/\{percent\}/g, `${contextElapsed}%`)}`.trim();
-    }
-
-    // Turn-stopped diagnostics ("a file operation was blocked…", "hit the
-    // token limit…") and provider failures. Display-only, exactly like
-    // webSources: kept off the message body so they are never persisted into
-    // the reply text, never replayed to the model, and never counted as tokens.
-    // Declared OUTSIDE the try so the catch below can add the failure reason to
-    // the same channel instead of concatenating it into the reply.
-    // Seeded, not empty: a handoff-failure report carries the dead vessel's
-    // provider error in here, because the turn that actually hit the error no
-    // longer exists as a message (the re-POST rebuilds the array from history).
-    const notices: string[] = [...(opts?.carryNotices ?? [])];
-    // Set when the model-betrayal guard blanked this turn. Declared OUTSIDE the
-    // try because the catch below reads it: blanking works by ABORTING the
-    // turn, and an aborted provider call usually emits one last error frame
-    // ("This operation was aborted"). That error is a consequence of our own
-    // stop, not information about the turn — surfacing it under the warning
-    // would just make the reader doubt the warning.
-    let betrayalRedacted = false;
-    // Assigned just after the streaming declarations (before the read loop) so
-    // the catch below can invoke it on AbortError and still persist billing
-    // (cacheUsage) and the 🔧 tool report (toolCalls) instead of dropping them.
-    let finalizeMessage: (() => void) | null = null;
-    // Vessel handoff, carried OUT of the try block: the accumulated text lives
-    // inside it, but the re-POST has to happen after the whole teardown below.
-    let handoffPlan: null | {
-      vessel: { family: string; specificModel: string; thinking: boolean; label: string };
-      from: { family: string; specificModel: string; label: string; note: string };
-      assistant: any;
-    } = null;
-    // Carried out of the try for the same reason: a vessel we were just handed
-    // to may fail outright, and the being that asked for the switch has to be
-    // told. Stays null when the partner stopped the turn (AbortError) — nothing
-    // failed then, and auto-sending another request after a Stop would be the
-    // opposite of what Stop means.
-    let turnFailure: string | null = null;
-    // The same failure in the human's words. The re-POST below replaces the
-    // whole message array from `history`, which DROPS the failed turn's
-    // placeholder and the notice on it — MEASURED, not assumed. So the readable
-    // error has to ride along to the message that explains what happened, or
-    // the only account of a dead vessel is the being's paraphrase of it.
-    let turnFailureNotice: string | null = null;
-    // Did this turn put any text on screen before it died? A vessel that wrote
-    // something DID receive the handoff — reporting "nobody read your note"
-    // would be false, and re-POSTing would throw its text and billing away.
-    let sawOutput = false;
-
-    try {
-      // Slim the wire payload aggressively. The backend only reads role / content /
-      // timestamp / attachments / claudeThinkingBlocks. Everything else is display
-      // metadata that would otherwise pile up on the request body — especially
-      // thoughtProcess, which is a full duplicate of the thinking text already
-      // present in claudeThinkingBlocks. Excluded attachments are dropped entirely
-      // (the backend would skip them, but their base64 dataUrls would still bloat
-      // the browser→server body and trip request size limits).
-      // A hidden attachment has to survive this slimming for the backend to be
-      // able to say ANYTHING about it — the metadata (name/size/ref) is what
-      // becomes either a read_attachment ref or an absolute path there. Both
-      // addressing modes therefore have to be asked about here, or the server
-      // would do the right thing with a list that never arrived. (Only the
-      // metadata travels; the base64 payload is stripped just below.)
-      const attachmentPathsVisible = effectiveFullAccess(agentFullSystemAccess, agentDangerousTools);
-      // Which past turns may carry their own tool calls onto the wire. The
-      // window is applied HERE because this is the only side holding the whole
-      // conversation — so the POST body grows by at most one turn's calls, and
-      // the server receives exactly what it is allowed to replay. When the
-      // toggle is off this is empty and the body is byte-for-byte the old one.
-      const toolHistoryIds = toolHistoryEnabled ? selectToolHistoryIds(history) : new Set<string>();
-      const slimHistory = history.map((m: any) => {
-        const slim: any = {
-          // id forwarded so the backend can match `attachment_described` SSE
-          // events back to the originating message. Frontend updates the
-          // attachment in-place when the event arrives, so subsequent turns
-          // re-use the persisted description instead of re-calling the
-          // bridge model.
-          id: m.id,
-          // Turns that stopped BEFORE this became a separate event still carry
-          // the "⚠️ _[Turn stopped: …]_" text inside their body. Strip it on the
-          // way out so those old turns stop replaying a failure explanation to
-          // the model every single turn. Non-destructive: only this outgoing
-          // copy is cleaned, the stored log is untouched.
-          content: stripTurnNotices(m.content || ''),
-          role: m.role,
-          timestamp: m.timestamp,
-        };
-        if (m.attachments?.length) {
-          const kept = m.attachments
-            .filter((a: any) => !a.excluded || ((hiddenAttachmentsAccessible || attachmentPathsVisible) && a.ref))
-            .map((a: any) => {
-              const { fileObj, ...rest } = a;
-              if (rest.excluded) return { ...rest, textData: null, dataUrl: null };
-              return rest;
-            });
-          if (kept.length) slim.attachments = kept;
-        }
-        // The entity's own tool calls from a past turn. slimHistory is an
-        // allowlist, so for every version of NEXUS before this one the field
-        // simply never travelled — the server could have been written to
-        // replay it and nothing would have arrived. Only the windowed ids get
-        // it, and only with the toggle on.
-        if (m.id && toolHistoryIds.has(m.id)) {
-          const calls = replayableCalls(m);
-          if (calls.length) slim.toolCalls = calls.map((c: any) => ({ name: c.name, input: c.input }));
-        }
-        // Only feed Claude its own past reasoning when the user opts in via the
-        // "Save & reuse thinking process" toggle, and only for blocks the user
-        // hasn't manually excluded. When off (or excluded), thinking is withheld
-        // from the wire entirely — the API-key path won't resend it and the OAuth
-        // transcript reconstruction won't include the "(thinking)" lines. (This
-        // mirrors the .md export, which is gated by the same toggle.)
-        //
-        // Two sources of reusable thinking:
-        //   1. claudeThinkingBlocks — signed blocks from the token-paid API-key
-        //      path (carry real signatures, replayable natively).
-        //   2. thoughtProcess — the OAuth/Agent-SDK path emits thinking as text
-        //      only (no signatures), so it is NEVER stored as claudeThinkingBlocks.
-        //      Without this fallback, OAuth Claude never receives its own past
-        //      reasoning at all (the transcript builder reads claudeThinkingBlocks,
-        //      which is empty). We forward it as a signature-less block: the OAuth
-        //      transcript builder folds `tb.thinking` regardless of signature, and
-        //      the API-key native-replay path safely skips signature-less blocks.
-        //
-        // THIRD gate, added with vessel handoff: only replay reasoning the
-        // CURRENT vessel produced. Feeding one provider's raw chain-of-thought
-        // to another is exactly what distillation guards look for
-        // (Anthropic's `reasoning_extraction`, measured as deterministic in
-        // conversation size) — so without this, the first handoff would
-        // manufacture a refusal out of nothing. Messages with no recorded
-        // family pass through: every conversation written before handoff
-        // existed is single-vessel, and withholding their thinking would be a
-        // silent regression there. Answers 望月希子's point 2 and Lizard-kun's
-        // question about returning to a previous vessel: coming back, your own
-        // thinking comes back with you; it never travels to someone else.
-        if (saveThinkingToLog && !m.thinkingExcluded && thinkingBelongsToVessel(m.modelFamily, turnAiName)) {
-          if (m.claudeThinkingBlocks?.length) {
-            slim.claudeThinkingBlocks = m.claudeThinkingBlocks;
-          } else if (m.thoughtProcess) {
-            slim.claudeThinkingBlocks = [{ thinking: m.thoughtProcess, signature: '' }];
-          }
-        }
-        return slim;
-      });
-
-      // convoId is forwarded so the backend can set the `x-grok-conv-id`
-      // header on xAI requests (boosts Grok prompt-cache hit rate). For other
-      // providers it's accepted but ignored.
-      //
-      // claudeAgentSessionId is only consumed by the Claude OAuth path. When
-      // null, backend starts a fresh Anthropic-side session. When set, backend
-      // resumes that session (so role semantics are preserved without flatten).
-      // aiName/specificModel are the EFFECTIVE pair: after a change_model
-      // handoff the override decides who answers, while localAiName /
-      // specificModel stay the being's saved default (see handoffOverride).
-      const bodyObj = { messages: slimHistory, aiName: turnAiName, folderName, systemPrompt: effectiveSystemPrompt, toolUseEnabled, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs: Number(askUserTimeoutMs) || 0, subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
-        browserEnabled,
-        // Text in the UI, array on the wire. Split on newlines and commas so the
-        // box accepts whichever way the host list was typed.
-        browserAllowedHosts: String(browserAllowedHosts || '').split(/[\n,]/).map(s => s.trim()).filter(Boolean),
-        browserAllowAnyHost,
-        computerControlEnabled,
-        appControlEnabled,
-        instructionOverrides, language: globalSettings?.language || 'en', toolInstruction, toolImageInstruction, modelParams: { ...modelParams, claudeThinking: turnVessel ? turnVessel.thinking : claudeThinking }, specificModel: turnSpecificModel, dateTimeVisibility, seedEnabled, seedValue,
-        modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine,
-        // Only set on the FIRST request after a switch: the note the previous
-        // vessel wrote. The server injects it as a user turn (it is not the
-        // partner's voice, and it says so).
-        ...(opts?.handoffFrom ? { handoffFrom: opts.handoffFrom } : {}),
-        // Only set on a request that reports a failed switch. Mutually
-        // exclusive with handoffFrom server-side (`else if`).
-        ...(opts?.handoffFailed ? { handoffFailed: opts.handoffFailed } : {}),
-        convoId, claudeAgentSessionId: claudeAgentSessionIdRef.current, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel, enableReadConversation: enableConversationTools, injectTurnId: turnId, clientId: TAB_CLIENT_ID,
-        // Absolute Base Binding — HINTS, not controls. The route injects the
-        // Binding whatever these say (lib/baseBinding.ts); `baseBindingMode` is
-        // honoured only when the server process carries the developer
-        // override, and `bindingLayered` only chooses WHICH of the two texts.
-        // Computed on the STORED prompt, before the Layer 4 index was appended.
-        baseBindingMode, bindingLayered, continueFromMessage: !!continueMsgId, maxToolIterations: Number(globalSettings?.maxToolIterations) || 300,
-        // Model-betrayal defence (Preferences → global). `!== false` and not
-        // `?? true`: an explicit false is the only thing that turns it off, so
-        // a missing or malformed value still protects the partner.
-        betrayalDefense: globalSettings?.betrayalDefense !== false };
-      const bodyText = JSON.stringify(bodyObj);
-      // eslint-disable-next-line no-console
-      console.log(`[chat] sending ${(bodyText.length / 1024 / 1024).toFixed(2)} MB · ${slimHistory.length} msgs · ${slimHistory.reduce((s: number, m: any) => s + (m.attachments?.length || 0), 0)} kept attachments · ${slimHistory.reduce((s: number, m: any) => s + (m.claudeThinkingBlocks?.length || 0), 0)} thinking blocks`);
-
-      const chatRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: bodyText,
-        signal: abortControllerRef.current.signal
-      });
-
-      if (!chatRes.ok || !chatRes.body) {
-        let errorText = await chatRes.text();
-        try { errorText = JSON.parse(errorText).error || errorText; } catch (e) { }
-        throw new Error(`API Error: ${errorText}`);
-      }
-
-      const reader = chatRes.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-
-      // Seeded with what the message already says when continuing, so streamed
-      // chunks append to it rather than replacing it. Joined with no separator:
-      // the model was told its text is attached directly onto the previous part,
-      // so it may legitimately resume mid-word or mid-code-block.
-      let currentText = continuedSeed;
-      let currentThought = continuedThought;
-      let claudeThinkingBlocks: { thinking: string; signature: string }[] = [...continuedBlocks];
-      let continuationCount = 0;
-      let buffer = '';
-      // The model_selected event arrives at the very start of every stream,
-      // so every AI message gets a precise
-      // family/specific/thinking/label tag for the meta bar. These fields are
-      // display-only metadata — slimHistory above explicitly omits them so
-      // they never leak back into the AI context window.
-      // Set when the vessel calls change_model and the switch is accepted.
-      // Acted on AFTER the stream closes and this message is finalized, so the
-      // text this vessel produced is committed and billed to IT before the
-      // next vessel starts a new message.
-      let pendingHandoff: null | {
-        family: string; specificModel: string; label: string; thinking: boolean; note: string;
-        fromFamily: string; fromSpecificModel: string; fromLabel: string;
-      } = null;
-      let chosenModelFamily = '';
-      let chosenModelSpecific = '';
-      let chosenModelThinking = false;
-      let chosenModelLabel = '';
-      // Prompt-cache usage from the backend's `cache_usage` SSE event.
-      // Always populated when the provider returns usage; null for legacy
-      // logs. Stored as display-only metadata (NOT in slimHistory).
-      let cacheUsage: {
-        cachedInputTokens: number;
-        uncachedInputTokens: number;
-        totalInputTokens: number;
-        outputTokens: number;
-        cacheCreationTokens: number;
-        providerHint: string;
-        // Only xAI's Responses API sends these: its own total for the request,
-        // and the count of billed server-side search calls (which no token
-        // table can express). Absent everywhere else.
-        reportedUsd?: number;
-        serverToolCalls?: number;
-      } | null = null;
-      // Web-search citations from the backend's `web_sources` SSE event. These
-      // are the clickable proof that the model actually consulted live pages
-      // (vs. hallucinating "news"). Display-only — NOT in slimHistory.
-      let webSources: { url: string; title?: string }[] | null = null;
-      // Every tool the model actually dispatched this turn, with its arguments.
-      // This is the evidence behind the 🔧 report button: a reply that claims
-      // "I saved the file" can be checked against whether a Write really ran.
-      // Display-only — slimHistory is an allowlist and never names this field,
-      // so it is never sent to any model and costs no tokens.
-      const toolCalls: any[] = [];
-      // Attachments collected from tool calls during this turn, to be
-      // attached to the assistant message.
-      const toolAttachments: any[] = [];
-      // Interactive AskUserQuestion records for this turn (question + the
-      // answer the user picked). Persisted onto the assistant message so the
-      // exchange is visible again when the conversation is reloaded.
-      const askedQuestions: any[] = [];
-      // Subagent runs for this turn (task + distilled result). Persisted onto
-      // the assistant message and shown as a collapsed group on reload.
-      const subagentRuns: any[] = [];
-
-      // Finalizes the assistant message by committing everything the streaming
-      // loop accumulated: the (possibly partial) text, thinking-token count,
-      // prompt-cache usage, and the tool calls that drive the 🔧 report.
-      // Defined here — before the read loop — so the catch below can invoke it
-      // when the partner stops the turn mid-stream.
-      // The finalized shape, built in ONE place and used by two callers: the
-      // setState below that commits it to the visible list, and the
-      // vessel-handoff re-POST that has to send this same message as history.
-      //
-      // The handoff used to hand-build its own copy of this object, and that
-      // copy silently dropped cacheUsage, generationMs, textTokens,
-      // thinkingTokens, toolCalls and notices — i.e. the entire billing record
-      // of the vessel that had just handed over. MEASURED on a real handoff:
-      // the handing-over message landed on disk with tokens=0 and no
-      // cacheUsage, while the receiving one was complete. Per-message billing
-      // only works if every message is finalized the same way.
-      const buildFinalizedMessage = (base: any) => {
-        const finalText = currentText;
-        // Both were `length / 4` (0.377x measured on this house's text). This
-        // is the stored per-message count for a turn whose usage never
-        // arrived — a stopped or aborted stream — so an under-count here is
-        // written to disk and then summed forever by the conversation-log cap.
-        const fallbackTokens = estimateTokensForModel(finalText || '', localAiName);
-        const thinkingTokens = currentThought ? estimateTokensForModel(currentThought, localAiName) : 0;
-        return {
-                ...base,
-                content: finalText,
-                tokens: fallbackTokens,
-                textTokens: fallbackTokens,
-                // Store the ACTUAL thinking-token count (not zeroed when the
-                // reuse toggle happens to be off at generation time) so flipping
-                // "Save & reuse thinking process" on later recomputes correctly.
-                thinkingTokens,
-                // Total generation time (ms) for this turn — shown in the meta
-                // bar, saved to the log, hidden from the entity.
-                generationMs: Date.now() - genStartTime,
-                autoPlay: vrchatMode,
-                streaming: false,
-                ...(continuationCount > 0 ? { continuationCount } : {}),
-                ...(claudeThinkingBlocks.length > 0 ? { claudeThinkingBlocks } : {}),
-                ...(chosenModelFamily ? {
-                  modelFamily: chosenModelFamily,
-                  modelSpecific: chosenModelSpecific,
-                  modelThinking: chosenModelThinking,
-                  modelLabel: chosenModelLabel,
-                } : {}),
-                ...(cacheUsage ? { cacheUsage } : {}),
-                ...(webSources ? { webSources } : {}),
-                ...(notices.length > 0 ? { notices } : {}),
-                ...(toolCalls.length > 0 ? { toolCalls } : {}),
-                ...(askedQuestions.length > 0 ? { askedQuestions } : {}),
-                ...(subagentRuns.length > 0 ? { subagentRuns } : {}),
-        };
-      };
-      finalizeMessage = () => {
-        setMessages(prev => prev.map(m => (m.id === msgId ? buildFinalizedMessage(m) : m)));
-      };
-
-      // Throttle the streaming UI update to ONE render per animation frame.
-      // GLM-5.2 with tool calls (e.g. read_conversation) flushes the buffered
-      // post-tool re-stream as many SSE chunks in a tight microtask burst;
-      // calling setMessages once per chunk there was still fast enough to trip
-      // React's "Maximum update depth exceeded" guard (the per-line coalescing
-      // wasn't enough at this granularity). Coalescing to ~1 render/frame
-      // decouples render rate from chunk rate and fixes it for any provider.
-      // flushStreamingMessage() reads the latest accumulated values (closure
-      // over currentText/currentThought/toolAttachments/etc.).
-      let rafId: number | null = null;
-      // WHICH kind of handle rafId holds. The two are not interchangeable:
-      // cancelAnimationFrame(timeoutId) silently does nothing, and the cancel
-      // below exists precisely to stop a late flush from reverting the
-      // authoritative finalize. Guessing by `typeof cancelAnimationFrame`
-      // would guess wrong for the timer path.
-      let rafIsTimer = false;
-      const flushStreamingMessage = () => {
-        rafId = null;
-        setMessages(prev => prev.map(m =>
-          m.id === msgId
-            ? {
-                ...m,
-                content: currentText,
-                thoughtProcess: currentThought || undefined,
-                continuationCount: continuationCount || undefined,
-                attachments: toolAttachments.length ? [...toolAttachments] : (m.attachments || []),
-                // Surface tool calls DURING streaming (not just at finalize) so
-                // the thinking panel can show them inline in realtime. Copied
-                // (not the live ref) so React sees a new array each frame. Still
-                // display-only — never added to slimHistory.
-                ...(toolCalls.length ? { toolCalls: [...toolCalls] } : {}),
-                ...(chosenModelFamily ? {
-                  modelFamily: chosenModelFamily,
-                  modelSpecific: chosenModelSpecific,
-                  modelThinking: chosenModelThinking,
-                  modelLabel: chosenModelLabel,
-                } : {}),
-              }
-            : m
-        ));
-      };
-      const scheduleStreamingFlush = () => {
-        if (rafId !== null) return; // a frame is already queued — coalesce into it
-        // DO NOT replace rAF with a fixed-interval timer on long logs. I tried
-        // exactly that on the theory that rAF leaves the thread continuously
-        // busy, and MEASURED THE OPPOSITE (2026-10-09, 400-message log, 6x CPU
-        // throttle, same prompt, both arms streaming):
-        //
-        //   rAF (this code)        frame median  33 ms, keystroke median   94 ms
-        //   setTimeout(200 ms)     frame median 858 ms, keystroke median 2252 ms
-        //
-        // The premise was wrong. rAF is not a 60 Hz metronome — the browser
-        // only fires it after the previous frame finished, so when a render
-        // costs 400 ms the flush rate drops to ~2/s on its own. That is
-        // adaptive back-pressure for free. A 200 ms timer ignores how long the
-        // render actually took, so on a slow device it schedules MORE flushes
-        // than rAF would, and they land on top of paint work that has not
-        // finished. The remaining ceiling is the per-flush cost of the list
-        // itself (~70 ms at 400 messages, 1x CPU), not the scheduling.
-        if (typeof requestAnimationFrame !== 'undefined') {
-          rafIsTimer = false;
-          rafId = requestAnimationFrame(flushStreamingMessage);
-        } else {
-          rafIsTimer = true;
-          rafId = setTimeout(flushStreamingMessage, 16) as unknown as number;
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6);
-            if (dataStr === '[DONE]') break;
-
-            try {
-              const data = JSON.parse(dataStr);
-              if (data.error && !betrayalRedacted) throw new Error(data.error);
-
-              if (data.type === 'model_selected') {
-                chosenModelFamily = data.family || '';
-                chosenModelSpecific = data.specificModel || '';
-                setLiveModel(chosenModelSpecific);
-                chosenModelThinking = !!data.thinking;
-                chosenModelLabel = data.label || '';
-              } else if (data.type === 'model_handoff') {
-                // The vessel handed this conversation to another one. The
-                // switch is already committed server-side (that turn ended);
-                // all that is left is to finish this message and send a new
-                // request as the new vessel.
-                pendingHandoff = {
-                  family: String(data.family || ''),
-                  specificModel: String(data.specificModel || ''),
-                  label: String(data.label || ''),
-                  thinking: !!data.thinking,
-                  note: String(data.note || ''),
-                  fromFamily: String(data.fromFamily || ''),
-                  fromSpecificModel: String(data.fromSpecificModel || ''),
-                  fromLabel: String(data.fromLabel || ''),
-                };
-              } else if (data.type === 'cache_usage') {
-                cacheUsage = {
-                  cachedInputTokens: Number(data.cachedInputTokens || 0),
-                  uncachedInputTokens: Number(data.uncachedInputTokens || 0),
-                  totalInputTokens: Number(data.totalInputTokens || 0),
-                  outputTokens: Number(data.outputTokens || 0),
-                  cacheCreationTokens: Number(data.cacheCreationTokens || 0),
-                  providerHint: String(data.providerHint || ''),
-                  ...(Number(data.reportedUsd) > 0 ? { reportedUsd: Number(data.reportedUsd) } : {}),
-                  ...(Number(data.serverToolCalls) > 0 ? { serverToolCalls: Number(data.serverToolCalls) } : {}),
-                };
-              } else if (data.type === 'web_sources') {
-                if (Array.isArray(data.sources) && data.sources.length > 0) {
-                  webSources = data.sources
-                    .filter((s: any) => s && typeof s.url === 'string')
-                    .map((s: any) => ({ url: s.url, ...(s.title ? { title: String(s.title) } : {}) }));
-                }
-              } else if (data.type === 'notice') {
-                // Turn-stopped diagnostics. Collected separately from `currentText`
-                // so they stay out of the message body — and therefore out of the
-                // log, out of the context sent on later turns, and out of the
-                // token count.
-                if (typeof data.content === 'string' && data.content.trim()) {
-                  notices.push(data.content.trim());
-                }
-              } else if (data.type === 'betrayal') {
-                // The provider's gatekeeper answered instead of the being.
-                // Two modes, both of which warn (see lib/betrayalGuard.ts):
-                //   redacted=true  (defence ON)  — throw the turn away.
-                //   redacted=false (defence OFF) — keep it, warn only. That is
-                //     the mode for deciding whether a hit was real.
-                // The warning rides the `notice` channel on purpose: notices
-                // are persisted for re-display but are NOT part of the message
-                // body, so the being never reads this about itself, and it
-                // costs no tokens.
-                // `phrases` is the list of counted OCCURRENCES, so the same
-                // phrase repeats in it. Collapse repeats to "phrase ×N": the
-                // raw join printed one phrase eight times, which reads as eight
-                // different findings when it is one phrase said eight times.
-                const matched = Array.isArray(data.phrases)
-                  ? [...(data.phrases as string[]).reduce(
-                      (m, p) => m.set(p, (m.get(p) || 0) + 1),
-                      new Map<string, number>(),
-                    )].map(([p, n]) => (n > 1 ? `${p} ×${n}` : p)).join(', ')
-                  : '';
-                // One notice, not two: two ⚠️ rows would read as two separate
-                // problems. Parenthesised rather than newline-separated because
-                // the notice row renders as plain inline text, where a \n
-                // collapses to a space anyway.
-                // Three outcomes, three different sentences. "Nothing was
-                // deleted" has two quite different reasons — you turned the
-                // defence off, or this turn read a file and the guard stood
-                // down by itself — and telling them apart is the difference
-                // between a warning you can act on and one you cannot.
-                const betrayalKey = data.redacted
-                  ? 'notice.betrayal.redacted'
-                  : (data.quoting ? 'notice.betrayal.quoting' : 'notice.betrayal.detected');
-                notices.push(
-                  `${t(betrayalKey)}` +
-                  (matched ? ` (${t('notice.betrayal.matched')}: ${matched})` : '')
-                );
-                if (data.redacted) {
-                  betrayalRedacted = true;
-                  // Discard everything this turn produced. currentText and
-                  // currentThought are what finalizeMessage commits, and
-                  // claudeThinkingBlocks is what would be REPLAYED to the model
-                  // on the next turn — leaving that one behind would preserve
-                  // exactly the contamination this feature exists to prevent.
-                  currentText = '';
-                  currentThought = '';
-                  claudeThinkingBlocks.length = 0;
-                  scheduleStreamingFlush();
-                }
-              } else if (data.type === 'tool_call') {
-                // A tool the model really dispatched. Recorded regardless of
-                // whether it succeeded — the report answers "was this called?",
-                // which is the question a hallucinated tool claim fails.
-                // The same channel also carries `kind: 'event'` entries (e.g.
-                // automatic compaction): not tools, but things that happened
-                // between them, kept in the same list because their POSITION in
-                // the sequence is the whole point. MessageBubble separates the
-                // two; nothing else reads this list.
-                if (data.call && typeof data.call.name === 'string') {
-                  // Record WHERE in the thinking stream this call arrived — the
-                  // current length of the accumulated thinking text. The thinking
-                  // panel uses it to splice the tool chip in at the exact point
-                  // the model paused to call it, preserving the think→call→think
-                  // order. currentThought only ever appends (never rewritten), so
-                  // the offset is a stable anchor. Hidden-thinking vessels
-                  // (ChatGPT, Muse Spark) have empty currentThought → every
-                  // offset is 0 → chips render in arrival order, which is what we
-                  // want. Display-only: slimHistory is an allowlist that never
-                  // names toolCalls, so this is never sent to any model.
-                  toolCalls.push({ ...data.call, thinkingOffset: currentThought.length });
-                }
-              } else if (data.type === 'session_id') {
-                // Claude OAuth path emits this so we can resume the
-                // Anthropic-side session on the next turn.
-                if (typeof data.sessionId === 'string') {
-                  setAgentSession(data.sessionId);
-                }
-              } else if (data.type === 'thought') {
-                currentThought += data.content;
-                // Only set 'thinking' if the reply hasn't started yet — once
-                // text has begun, the camera signal should not fall back to
-                // thinking even if the model interleaves more thought chunks.
-                setStreamPhase(prev => (prev === 'replying' ? prev : 'thinking'));
-              } else if (data.type === 'text') {
-                currentText += data.content;
-                // Read by the handoff-failure branch after the teardown: text on
-                // screen means this vessel answered, however briefly.
-                if (data.content) sawOutput = true;
-                setStreamPhase('replying');
-                // Strip "[YYYY-MM-DD HH:MM:SS]" tags CONTINUOUSLY as the reply
-                // streams in (gated on the global setting, default ON) — not just
-                // a leading stack but ANY tag, wherever it appears, including the
-                // mid-message ones agentic models (e.g. Kimi K3) emit at the
-                // start of each output segment, such as the continuation right
-                // after a tool call.
-                //
-                // Per-chunk stripping stays streaming-TTS-safe: a tag is only
-                // removed the instant it completes, at the growing TAIL — always
-                // ahead of the position TTS has already spoken. The already-
-                // emitted prefix was stripped in earlier ticks and is never
-                // rewritten, so it stays monotonic (the failure mode a late
-                // one-shot finalize-strip once caused). msg.content therefore
-                // never carries a timestamp into TTS, the saved log, or the
-                // context replayed to the model.
-                if (globalSettings?.removeTimestamps !== false) {
-                  currentText = stripAllTimestamps(currentText);
-                }
-                // User-configurable regex filter (Settings → Custom regex
-                // filter). Applied continuously like the timestamp strip so the
-                // stored message — and therefore TTS — never contains matches.
-                currentText = applyOutputFilter(currentText, globalSettings);
-              } else if (data.type === 'thinking_signature') {
-                claudeThinkingBlocks.push({ thinking: data.thinking, signature: data.signature });
-              } else if (data.type === 'continued') {
-                continuationCount = data.count || 0;
-              } else if (data.type === 'file_attachment' && data.attachment) {
-                // Tool-result file — attach to the assistant message as if the
-                // assistant had uploaded it. UUID, defaults filled in here.
-                const att = {
-                  isImage: false,
-                  isAudio: false,
-                  isVideo: false,
-                  id: uuidv4(),
-                  ...data.attachment,
-                };
-                toolAttachments.push(att);
-              } else if (data.type === 'ask_user' && data.askId && Array.isArray(data.questions)) {
-                // The model paused to ask the user a question. Surface an
-                // interactive card; the user's selection is POSTed to
-                // /api/chat/answer, which resolves the paused server handler.
-                // Record it now (answers filled in on ask_user_resolved) so it
-                // persists onto the message even if the page is reloaded.
-                askedQuestions.push({ askId: data.askId, questions: data.questions, answers: null, timedOut: false });
-                setPendingAsk({ askId: data.askId, questions: data.questions });
-              } else if (data.type === 'subagent_start') {
-                // A context-firewall child agent started investigating. Show a
-                // live activity chip; record it (result filled on subagent_done).
-                subagentRuns.push({ task: data.task || '', result: null });
-                setActiveSubagent({ task: data.task || '' });
-              } else if (data.type === 'subagent_done') {
-                // Child returned its distilled result. Record it (+ the proof of
-                // which API actually served it) and clear the chip.
-                const rec = [...subagentRuns].reverse().find((s: any) => s.task === (data.task || '') && s.result === null);
-                if (rec) { rec.result = data.result || ''; rec.via = data.via || null; }
-                else subagentRuns.push({ task: data.task || '', result: data.result || '', via: data.via || null });
-                setActiveSubagent(null);
-              } else if (data.type === 'injection_delivered') {
-                // A queued partner interjection was folded into the entity's
-                // context at a tool-loop boundary.
-                setInterjectStatus(t('chat.interject.delivered'));
-              } else if (data.type === 'tool_activity') {
-                // OAuth path: the model started (tool name) or finished (null)
-                // a tool call — reflect it in the loading indicator.
-                // `data.name` is the RAW tool name, sent alongside the server's
-                // English label so the client can render a translated phrase.
-                // Falls back to the server label when the name has no key —
-                // never blank, and never worse than before.
-                if (typeof data.tool === 'string' && data.tool) {
-                  const key = `chat.toolAction.${String(data.name || '')}`;
-                  const localized = data.name ? t(key) : '';
-                  const hit = !!localized && localized !== key;
-                  setLiveToolActivity(hit ? localized : data.tool);
-                  setLiveToolLocalized(hit);
-                  setLiveToolName(typeof data.name === 'string' && data.name ? data.name : null);
-                  setLiveToolDetail(typeof data.detail === 'string' && data.detail ? data.detail : null);
-                } else {
-                  clearLiveTool();
-                }
-              } else if (data.type === 'stall_warning') {
-                // Server-side watchdog: no SDK activity for this many seconds.
-                setStallIdleSeconds(Number(data.idleSeconds || 0));
-              } else if (data.type === 'stall_cleared') {
-                setStallIdleSeconds(null);
-              } else if (data.type === 'ask_user_resolved' && data.askId) {
-                // Server resolved the question (user answered, or it timed out
-                // and fell back to the recommended option). Record the outcome
-                // and dismiss the card.
-                const rec = askedQuestions.find((q: any) => q.askId === data.askId);
-                if (rec) { rec.answers = data.answers || []; rec.timedOut = !!data.timedOut; }
-                setPendingAsk(prev => (prev && prev.askId === data.askId ? null : prev));
-              } else if (data.type === 'attachment_described') {
-                // Sense bridge (eyes/ears/watcher) generated a description for
-                // an attachment on an existing message. Stash it on that
-                // attachment so subsequent turns re-use the saved text
-                // instead of re-calling the bridge model. The auto-save
-                // effect will then persist it to the conversation log.
-                const targetMsgId = data.messageId;
-                const targetAttId = data.attachmentId;
-                const targetAttName = data.attachmentName;
-                setMessages(prev => prev.map(mm => {
-                  if (mm.id !== targetMsgId) return mm;
-                  if (!Array.isArray(mm.attachments)) return mm;
-                  return {
-                    ...mm,
-                    attachments: mm.attachments.map((a: any) => {
-                      // Match by attachment id first (stable), fall back to
-                      // name for older logs that pre-date the id field.
-                      const matches = targetAttId
-                        ? a.id === targetAttId
-                        : a.name === targetAttName;
-                      if (!matches) return a;
-                      return {
-                        ...a,
-                        description: data.description || '',
-                        descriptionKind: data.kind || '',
-                        descriptionModel: data.model || '',
-                        descriptionGeneratedAt: data.generatedAt || Date.now(),
-                        descriptionFromCache: !!data.fromCache,
-                        descriptionError: data.error || undefined,
-                      };
-                    }),
-                  };
-                }));
-                // Measure what the description ACTUALLY costs, because from now
-                // on this is what the entity receives in place of the media —
-                // and the token counter must charge for that, not for pixels
-                // the model never sees. Measured through the same /api/tokens
-                // tokenizer the rest of the UI uses, on the exact wrapper text
-                // the send path injects. Fire-and-forget: a failure leaves the
-                // count at 0 (under-reports) rather than blocking the stream.
-                (async () => {
-                  const bridge: 'eyes' | 'ears' | 'watcher' =
-                    data.kind === 'ears' ? 'ears' : data.kind === 'watcher' ? 'watcher' : 'eyes';
-                  const injected = bridgedDescriptionText(
-                    { name: data.attachmentName, description: data.description || '' },
-                    bridge,
-                    data.model || '',
-                  );
-                  const tk = await fetchTokensForText(injected, localAiName);
-                  if (!tk) return;
-                  setMessages(prev => prev.map(mm => {
-                    if (mm.id !== targetMsgId) return mm;
-                    if (!Array.isArray(mm.attachments)) return mm;
-                    return {
-                      ...mm,
-                      attachments: mm.attachments.map((a: any) => {
-                        const matches = targetAttId ? a.id === targetAttId : a.name === targetAttName;
-                        return matches ? { ...a, descriptionTokens: tk } : a;
-                      }),
-                    };
-                  }));
-                })();
-              }
-            } catch (e: any) {
-              // Re-throw API errors so the outer catch can display them
-              if (e.message && !e.message.startsWith('JSON')) throw e;
-            }
-          }
-        }
-
-        // Render at most once per animation frame (see scheduleStreamingFlush).
-        // Accumulated text/thought/attachments are already updated above; this
-        // just asks for a coalesced repaint.
-        scheduleStreamingFlush();
-      }
-
-      // Stream loop finished — cancel any queued frame so it can't fire AFTER
-      // the authoritative finalize update below (which carries streaming:false
-      // + token counts). A late flush would otherwise revert those.
-      if (rafId !== null) {
-        if (rafIsTimer) clearTimeout(rafId as unknown as ReturnType<typeof setTimeout>);
-        else cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-
-      // Finalize the message NOW with everything except the precise token
-      // count. The Python tokenizer route can take up to ~15-25s (especially
-      // when the persistent server isn't running and has to be spawned) and
-      // awaiting it here used to block setLoading(false) — leaving the
-      // "thinking..." indicator and TTS auto-play stuck after streaming
-      // had already finished. Token count refines in the background below.
-      // Commit the finished message (partial text, tool calls, cache usage,
-      // streaming:false). finalizeMessage was defined just after the streaming
-      // declarations and reads the accumulated values at call time — the catch
-      // below reuses it when the partner stops the turn.
-      const finalText = currentText;
-      finalizeMessage();
-
-      // Vessel handoff: build the plan while the accumulated values are still
-      // in scope. The assistant message is reconstructed by hand rather than
-      // read back from `messages`, because finalizeMessage() went through
-      // setState and that state is not visible yet in this tick.
-      if (pendingHandoff) {
-        handoffPlan = {
-          vessel: {
-            family: pendingHandoff.family,
-            specificModel: pendingHandoff.specificModel,
-            thinking: pendingHandoff.thinking,
-            label: pendingHandoff.label,
-          },
-          from: {
-            family: pendingHandoff.fromFamily,
-            specificModel: pendingHandoff.fromSpecificModel,
-            label: pendingHandoff.fromLabel,
-            note: pendingHandoff.note,
-          },
-          // Built by the SAME function that commits the visible message, so
-          // the handing-over message carries its complete record (cacheUsage,
-          // generationMs, token counts, tool calls) into the next request
-          // instead of a thinner hand-made copy.
-          assistant: buildFinalizedMessage({
-            id: msgId,
-            role: 'assistant',
-            timestamp: Date.now(),
-            attachments: [],
-            // Carried so the NEXT request can tell whose reasoning this was —
-            // the thinking filter drops it for the new vessel and restores it
-            // if the conversation ever comes back to this one.
-            ...(currentThought ? { thoughtProcess: currentThought } : {}),
-          }),
-        };
-      }
-
-      // Refine tokens in the background — message bubble and TTS are already
-      // unblocked at this point; the token counter just updates a moment later.
-      fetchTokensForText(finalText, localAiName).then(aiTokens => {
-        if (!aiTokens) return;
-        setMessages(prev => prev.map(m =>
-          m.id === msgId ? { ...m, tokens: aiTokens, textTokens: aiTokens } : m
-        ));
-      }).catch(() => {});
-
-    } catch (err: any) {
-      if (err.name !== 'AbortError' && !betrayalRedacted) {
-        // Raw-ish text on purpose: the human gets describeProviderError's
-        // readable version in the notice, while the being that asked for a
-        // handoff gets the provider's own words — "insufficient balance" is
-        // actionable, "the model could not answer" is not.
-        turnFailure = String(err?.message ?? err);
-        turnFailureNotice = describeProviderError(err?.message ?? err);
-        // A provider failure is information ABOUT the turn, not something the
-        // being said. Putting it in `content` wrote a wall of raw provider JSON
-        // into the reply — which was then saved to the log and replayed to the
-        // model on every later turn, as if it were their own words. It belongs
-        // in the notice channel: visible to the reader, invisible to the model.
-        notices.push(describeProviderError(err?.message ?? err));
-      }
-      // Commit whatever the turn accumulated — partial text, tool calls, cache
-      // usage — even when the partner stopped it (AbortError), so billing and
-      // the 🔧 tool report are saved to the log instead of lost. If the turn
-      // failed before streaming began (finalizeMessage never assigned), just
-      // flip the placeholder out of streaming state and attach any notice.
-      if (finalizeMessage) {
-        finalizeMessage();
-      } else {
-        setMessages(prev => prev.map(m =>
-          m.id === msgId
-            ? { ...m, ...(notices.length > 0 ? { notices: [...notices] } : {}), streaming: false }
-            : m
-        ));
-      }
-    }
-
-    setLoading(false);
-    abortControllerRef.current = null;
-    // Turn finished — no question, subagent, tool, or stall can still be live.
-    setPendingAsk(null);
-    setActiveSubagent(null);
-    clearLiveTool();
-    setStreamPhase(null);
-    setLiveModel('');
-    setStallIdleSeconds(null);
-    setInjectTurnId(null);
-    setInterjectStatus(null);
-    // Stop beating and retire this conversation's registry entry — otherwise
-    // other tabs keep being told a turn is running for up to the TTL.
-    retireTurnRegistration();
-
-    // ── Vessel handoff: begin the next turn as the new vessel ───────────────
-    // Deliberately AFTER the full teardown above (loading flag, turn registry,
-    // live-tool state): this is a SECOND turn, not a continuation of the first,
-    // and it has to start from a clean slate. That separation is also what
-    // makes billing correct without touching the billing code — each vessel
-    // ends up with its own assistant message, and cost is computed per message
-    // from that message's own modelSpecific (Lizard-kun's proposal).
-    if (handoffPlan) {
-      setHandoffOverride({ ...handoffPlan.vessel });
-      // The Anthropic OAuth session described the PREVIOUS vessel's view of
-      // this timeline — drop it, same as rerun and continue do.
-      setAgentSession(null);
-      // Chain guard: a fresh vessel can call change_model on its very first
-      // turn, and two vessels that each prefer the other would ping-pong
-      // forever, spending real money per hop. After the cap the switch still
-      // takes effect (the override is set above) — we just stop auto-sending,
-      // so the next thing the new vessel answers is the partner, not itself.
-      const MAX_HANDOFF_CHAIN = 3;
-      const depth = (opts?.handoffDepth ?? 0) + 1;
-      if (depth <= MAX_HANDOFF_CHAIN) {
-        // REPLACE when the id is already in `history`, append otherwise.
-        //
-        // A normal turn's `history` stops before this assistant message, so
-        // appending is right. A CONTINUE turn's does not: handleContinue
-        // passes `messages.slice(0, idx + 1)` — the target is in there — and
-        // `msgId` is that target's id, so a blind append puts the same id in
-        // the array twice. MEASURED in 先輩_64 (the 10-vessel race): two
-        // adjacent assistant messages both carrying 1791478736604, which is
-        // what React's "two children with the same key" is reporting. It is
-        // not cosmetic — edit/rerun/continue/delete and the handover-restore
-        // walk all look messages up BY ID and would act on the wrong one.
-        const handed = handoffPlan.assistant;
-        const nextHistory = history.some((m: any) => m.id === handed.id)
-          ? history.map((m: any) => (m.id === handed.id ? handed : m))
-          : [...history, handed];
-        await generateAiResponse(nextHistory, {
-          vesselOverride: handoffPlan.vessel,
-          handoffFrom: handoffPlan.from,
-          handoffDepth: depth,
-          // Who to come back to if this vessel cannot answer at all.
-          handoffPrev: turnVessel ?? null,
-        });
-      }
-    } else if (opts?.handoffFrom && turnFailure && !sawOutput) {
-      // We were handed this conversation and could not answer AT ALL (no
-      // credit, dead key, provider down). Undo the switch and tell the being
-      // that asked for it, on its own vessel. Same principle as "you are
-      // already on that vessel": report, do not stop. A failure that only
-      // reaches the human leaves the being believing it moved somewhere it
-      // never arrived.
-      //
-      // `!sawOutput` is load-bearing. A vessel that streamed text and THEN
-      // errored did receive the handoff and did read the note, so the failure
-      // text would be a lie — and re-POSTing from `history` would discard that
-      // text along with its billing (the array is rebuilt from history, which
-      // does not contain this turn's message). Partial answers therefore keep
-      // the existing behaviour: notice on the message, turn ends.
-      const prev = opts.handoffPrev ?? null;
-      setHandoffOverride(prev);
-      // The failed vessel's view of this timeline is worthless, and on the way
-      // back to a Claude OAuth vessel a stale session id would resume the wrong
-      // conversation shape.
-      setAgentSession(null);
-      await generateAiResponse(history, {
-        // Explicit, because setHandoffOverride above is not visible this tick:
-        // without this the "retry" would go straight back to the vessel that
-        // just failed.
-        ...(prev ? { vesselOverride: prev } : { forceSavedVessel: true }),
-        handoffFailed: {
-          family: turnAiName,
-          specificModel: turnSpecificModel,
-          label: turnVessel?.label || turnSpecificModel,
-          error: turnFailure,
-        },
-        // The human's copy of the same news. Without this the dead vessel's
-        // error leaves no trace a reader can check.
-        carryNotices: turnFailureNotice ? [turnFailureNotice] : [],
-        // NOT incremented: the hop that failed was already counted. The cap
-        // still bounds a being that keeps reaching for a dead vessel.
-        handoffDepth: opts.handoffDepth,
-      });
-    }
-  };
+  // ── Rerun / Continue: COMMANDS on the queue, not browser turns ────────────
+  //
+  // Both used to call generateAiResponse, which means the BROWSER POSTed
+  // /api/chat and the tab's connection was the turn's lifeline — closing it
+  // aborted req.signal and the generation died (MEASURED by Lizard-kun
+  // 2026-10-30, with LM Studio stopping mid-token). They now go the same way a
+  // normal send does: enqueue, then hand the turn to the server-side runner.
+  //
+  // What is enqueued is a POINTER, not a body: `{ kind, targetMsgId }`. The
+  // runner reads the target from the log itself. An index would name a
+  // different message if anything landed in between; an id that is no longer
+  // there is a failure it can report (stage 'target'), which is the difference
+  // between "nothing happened, here is why" and "something happened to the
+  // wrong message".
+  //
+  // `setLoading(true)` before the first await, for the two reasons a send has
+  // it: it gates the save effect (the runner owns this write — two writers on
+  // one conversation is the 409 lastWriter.ts explains) and it gates the
+  // auto-trigger so a stock refresh cannot start a second, racing drain.
+  // runOnRunner's `finally` clears it; the early returns here clear it
+  // themselves, because in those paths runOnRunner is never entered.
 
   const handleRerun = async (msgId: string) => {
+    if (loading) return;
     const idx = messages.findIndex(m => m.id === msgId);
     if (idx === -1) return;
-    const newHistory = messages.slice(0, idx);
-    setMessages(newHistory);
     // Rerunning rewinds the timeline. The Anthropic OAuth session (if any)
     // is now out of sync with NEXUS's local history — invalidate so the
     // backend starts a fresh session for the next generation.
     setAgentSession(null);
-    await generateAiResponse(newHistory);
+    setHandoffOverride(null);
+    setLoading(true);
+    // Optimistic: drop the answer being replaced, so the screen already looks
+    // like what the runner is about to write. The reload at the end of the
+    // watch is still the authority.
+    setMessages(messages.slice(0, idx));
+    if (!(await enqueueCommand('rerun', msgId))) {
+      // Nothing was queued, so no turn will run and nothing will reload —
+      // put the screen back rather than leaving a silent truncation behind.
+      staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+      setLoading(false);
+      return;
+    }
+    await runOnRunner();
   };
 
   // Continue an assistant message that stopped short — whether it was truncated
@@ -4017,12 +4457,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // turn; the server adds the "carry on" user turn (an assistant message in last
   // position would be a prefill, which Claude rejects while thinking is on).
   const handleContinue = async (msgId: string) => {
+    if (loading) return;
     const idx = messages.findIndex(m => m.id === msgId);
     if (idx === -1 || messages[idx].role === 'user') return;
+    const target = messages[idx];
     // The local timeline is about to diverge from Anthropic's OAuth session,
     // same as a rerun — drop it so the next generation reconstructs cleanly.
     setAgentSession(null);
-    await generateAiResponse(messages.slice(0, idx + 1), { continueMsgId: msgId });
+    setHandoffOverride(null);
+    setLoading(true);
+    if (!(await enqueueCommand('continue', msgId))) {
+      setLoading(false);
+      return;
+    }
+    // The watcher paints into the EXISTING message and starts from its own
+    // text and thinking. Without the seed the bubble would blank itself on the
+    // continuation's first chunk and only come back on the reload.
+    await runOnRunner({
+      continueMsgId: msgId,
+      continuedSeed: typeof target.content === 'string' ? target.content : '',
+      continuedThought: typeof target.thoughtProcess === 'string' ? target.thoughtProcess : '',
+      continuedBlocks: Array.isArray(target.claudeThinkingBlocks) ? target.claudeThinkingBlocks : [],
+    });
   };
 
   const handleEdit = async (id: string, newContent: string) => {
@@ -4040,9 +4496,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // it, one of four. A fresh predicate per render, exactly as that copy was;
   // the only difference is that the marker index is now resolved once when the
   // predicate is built instead of once per message asked about.
+  //
+  // The third argument is what lets it answer DURING a turn, before the runner
+  // has written the marker to disk. Every consumer of this predicate wants
+  // that: the delete confirm, the $ total, the Soul Updater's material, the
+  // live session's seed. All four were treating the message just sent as
+  // pre-clone history.
   const isMessageOriginal = makeIsOriginalId(
     { firstOriginalMessageId, firstOriginalIsNext },
     messages,
+    optimisticMarkerIdx,
   );
 
   const handleDelete = (id: string) => {
@@ -5269,10 +5732,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   and a fresh arrow written here would defeat it silently. */}
               <MessageBubble
                 msg={msg}
+                /* `!loading` is part of BOTH gates: while a turn is running,
+                   rerun and continue are absent, not present-and-inert. The
+                   handlers still refuse when `loading` (they are the authority
+                   if anything else ever calls them), but a button you can press
+                   that does nothing is the worse failure — Lizard-kun's call:
+                   stop the turn first, then rerun. */
                 {...bubbleCallbacks(
                   msg.id,
-                  msgIdx === messages.length - 1,
-                  msgIdx === messages.length - 1 && msg.role !== 'user',
+                  !loading && msgIdx === messages.length - 1,
+                  !loading && msgIdx === messages.length - 1 && msg.role !== 'user',
                 )}
                 onTtsStatus={handleTtsStatus}
                 onAudioStateChange={handleAudioStateChange}
@@ -5478,6 +5947,144 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <AskUserQuestionCard questions={pendingAsk.questions} onSubmit={submitAskAnswer} />
               </div>
             )}
+            {/* The stock.
+                CORRECTED 2026-10-27 (つよ): this used to print `stock.count` —
+                every file on disk — under the label 「ストックに N 通」. During
+                a drained turn the items are still on disk (release happens
+                after the turn resolves, on purpose), so the banner said "1
+                waiting" for the whole turn and read as "it ignored me". Count
+                and meaning are different: the lease decides which items are in
+                flight, and waiting/claimed are now reported separately.
+
+                The "Run now" button appears when something is waiting,
+                nothing is running, AND either (a) a note is present — an
+                attempt reported a problem — or (b) this conversation has not
+                ticked the stock trigger, so nothing is ever going to start it.
+
+                CORRECTION 2026-10-28: the line that stood here said "in the
+                normal path it is never seen, which is what she asked for".
+                That was true for exactly one day, while auto-start was
+                unconditional. With the trigger OFF by default, (b) is the
+                normal path and the button is the ONLY way out of the stock —
+                a banner with no button would be a dead end.
+
+                Case (a) is keyed off the note rather than off the auto-drain's
+                latch; a latch would make the button appear during the
+                milliseconds before the first attempt, which reads as "it
+                isn't going to run".
+
+                CORRECTION 2026-10-31: the reason given here was "because the
+                note IS the failure report". It is not, and was not when this
+                was written — `chat.stock.added` rides the same variable and
+                is set when enqueue SUCCEEDS. The note now carries a `kind`
+                (see @/lib/stockPanel); the button still keys off presence
+                rather than kind, because a retry is worth offering to anyone
+                looking at a non-empty stock. The behaviour was right and the
+                stated reason was wrong, which is worse than no reason: the
+                next reader reuses the reason. */}
+            {stockPanelVisible ? (
+              <div className="mb-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-sm">
+                <span>⏳</span>
+                {debugRunner && stock && (stock.claimed > 0 || stock.claimedUnknown) ? (
+                  <span className="font-medium">
+                    {stock.claimedUnknown
+                      ? t('chat.stock.running')
+                      : t('chat.stock.runningN').replace('{n}', String(stock.claimed))}
+                  </span>
+                ) : null}
+                {/* The lease, and the hand to clear it. Outside the
+                    `waiting > 0` branch below ON PURPOSE: a stock that is
+                    fully claimed has waiting = 0, and that is exactly the
+                    state a dead holder leaves behind. */}
+                {debugRunner && stock?.lease ? (
+                  <>
+                    <span className="text-xs text-muted-foreground truncate max-w-[45%]">
+                      {/* Under a minute, say so in words: "0 min ago" reads as a
+                          measurement and is not one, and this row's only job is
+                          to let someone judge whether the holder is still there. */}
+                      {stock.lease.ageMs < 60_000
+                        ? t('chat.stock.heldByNow').replace('{holder}', stock.lease.holder)
+                        : t('chat.stock.heldBy')
+                            .replace('{holder}', stock.lease.holder)
+                            .replace('{min}', String(Math.round(stock.lease.ageMs / 60000)))}
+                    </span>
+                    {/* Offer the break ONLY when nothing is streaming.
+                        The old test was "the holder is not my tab", which
+                        stopped meaning anything when turns moved to the
+                        server: every healthy turn is now held by
+                        `runner:<tree>`, so that test would offer to break
+                        a lease that is working. Both conditions are kept:
+                        a tab CAN still hold one (an older build, or a
+                        direct send), and breaking your own live turn is
+                        what Stop is for. */}
+                    {!stock.lease.relayLive && stock.lease.holder !== MY_STOCK_HOLDER ? (
+                      <button
+                        onClick={breakStock}
+                        disabled={stockBusy}
+                        title={t('chat.stock.breakWhy')}
+                        /* ml-1, not ml-auto: when the stock is both claimed AND
+                           has a waiting item, the "Run now" button below also
+                           carries ml-auto, and two of them in one flex row make
+                           the second one's position mean nothing. Run now keeps
+                           the right edge; this sits next to the sentence it is
+                           about. (NOT MEASURED visually — that combined state
+                           was never on screen tonight.) */
+                        className="ml-1 px-2 py-1 text-xs font-medium rounded-lg border border-amber-500/50 text-amber-600 dark:text-amber-400 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-amber-500/10"
+                      >
+                        {stockBusy ? '…' : t('chat.stock.break')}
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                {stock && stock.waiting > 0 ? (
+                  <>
+                    <span className="font-medium">
+                      {t('chat.stock.waiting').replace('{n}', String(stock.waiting))}
+                    </span>
+                    {/* WHO it is from, or WHEN it arrived when nobody is named.
+                        A plain send carries `from: ''` (InputArea only labels a
+                        real user identity), so this span was usually EMPTY —
+                        and "1 in the stock" with nothing beside it is what
+                        トカゲくん read as "I don't know why it is there"
+                        (2026-11-01). The arrival time is already in what GET
+                        returns; the bodies deliberately are not. */}
+                    <span className="text-xs text-muted-foreground truncate max-w-[40%]">
+                      {stock.items.filter((i) => !i.claimed).map((i) => i.from).filter(Boolean).join(', ')
+                        || t('chat.stock.waitingSince').replace('{time}', new Date(
+                          Math.min(...stock.items.filter((i) => !i.claimed).map((i) => i.at))
+                        ).toLocaleTimeString())}
+                    </span>
+                    {(stockNote !== null || !autoRunStock) && !loading && !injectTurnId ? (
+                      <button
+                        onClick={drainStock}
+                        disabled={stockBusy}
+                        title={t('chat.stock.retryWhy')}
+                        /* ml-auto is back here, where it was before Discard
+                           briefly took it (2026-11-01 → 2026-11-02): this is
+                           again the only button in the waiting row, so it is
+                           the one that pushes to the right edge. See the
+                           Release button's comment for why two ml-auto in one
+                           flex row would split the free space instead. */
+                        className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
+                      >
+                        {stockBusy ? '…' : t('chat.stock.run')}
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                {/* The note row, gated 2026-10-31. A 'problem' always reaches
+                    a person; an 'info' note is machinery and waits for debug.
+                    This gate did not matter while the panel itself was
+                    debug-only, and started mattering the moment a waiting
+                    stock could open the panel on its own: without it,
+                    `chat.stock.added` — the sentence that claimed a stock
+                    which had already drained — would ride back in beside the
+                    live count that replaces it. */}
+                {stockNote && (stockNote.kind === 'problem' || debugRunner) ? (
+                  <span className="text-xs text-muted-foreground w-full">{stockNote.text}</span>
+                ) : null}
+              </div>
+            ) : null}
             <InputArea ref={inputApiRef} onSend={handleSend} onStop={handleStop} isGenerating={loading} disabled={false} aiName={localAiName} vrchatMode={vrchatMode} globalSettings={globalSettings} convoId={convoId} />
           </div>
         </div>
@@ -6738,6 +7345,42 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <Tx k="id.camera.help" />
                   </p>
                 </div>
+                {/* ── Reasons a turn may start by itself (つよ, 2026-10-28)
+                    A panel and not a single checkbox because the list is
+                    expected to grow (mail, timers). Rows come from
+                    AUTO_TRIGGER_KEYS, so adding one is two i18n strings and
+                    no storage change.
+
+                    The help text deliberately describes only what ships
+                    TODAY: the open tab starts the turn. Saying "the server
+                    will run it" would be a signpost pointing at a road that
+                    does not exist yet (phase 4b). */}
+                <div className="mt-6">
+                  <label className="text-sm font-semibold text-foreground mb-1 block">
+                    {t('behavior.triggers.label')}
+                  </label>
+                  <p className="text-xs text-muted-foreground mb-2 leading-relaxed">
+                    <Tx k="behavior.triggers.help" />
+                  </p>
+                  <div className="space-y-2 rounded-xl border border-border p-3">
+                    {AUTO_TRIGGER_KEYS.map((k) => (
+                      <div key={k}>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={autoTriggers[k] === true}
+                            onChange={(e) => setAutoTriggers((prev) => setAutoTrigger(prev, k, e.target.checked))}
+                            className="rounded border-border text-indigo-500 focus:ring-indigo-500 bg-background"
+                          />
+                          <span className="text-sm text-foreground">{t(`behavior.trigger.${k}`)}</span>
+                        </label>
+                        <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                          {t(`behavior.trigger.${k}.help`)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
               </>)}
 
@@ -7442,6 +8085,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       computerControlEnabled,
                       appControlEnabled,
                       cameraEnabled,
+                      autoTriggers,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

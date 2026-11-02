@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users, DownloadCloud, Loader2 } from 'lucide-react';
+import { X, Save, KeyRound, Volume2, SlidersHorizontal, Users, DownloadCloud, Loader2, Server } from 'lucide-react';
 import VoiceSelector from './VoiceSelector';
 import UserIdentityEditor from './UserIdentityEditor';
 import AdminLoginEditor from './AdminLoginEditor';
@@ -23,6 +23,14 @@ const TABS = [
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
+
+/** What /api/runner-host returns. The rule lives in lib/runnerHost.ts. */
+type RunnerHostView = {
+  self: string;
+  host: string | null;
+  status: 'host' | 'not-host' | 'unset' | 'unreadable';
+  setAt?: string;
+};
 
 // The single-field providers all render identically, so they're a list rather
 // than twelve copies of the same block. Anthropic stays hand-written below —
@@ -61,6 +69,88 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   // icon — the whole point is that it can be copied into a message.
   const [buildLabel, setBuildLabel] = React.useState<string>(buildTag());
   React.useEffect(() => { loadBuildTag().then(setBuildLabel); }, []);
+
+  // ── Which installation may run server-side turns for this store ───────
+  // Measured by realpath 2026-10-28: two independent clones share ONE
+  // local_data here by junction (C:/dev/nexus and C:/dev/nexus-cairn). The
+  // lease in turnQueue stops double execution; nothing stops WHICH install
+  // hosted a turn from changing on every restart, and nothing on screen
+  // would say which. lib/runnerHost.ts is the rule; this is the only place
+  // a person can see or change the answer.
+  const [runnerHost, setRunnerHostView] = React.useState<RunnerHostView | null>(null);
+  const [runnerOpen, setRunnerOpen] = React.useState(false);
+  const [runnerBusy, setRunnerBusy] = React.useState(false);
+  const [runnerError, setRunnerError] = React.useState<string>('');
+  const loadRunnerHost = React.useCallback(async () => {
+    try {
+      const r = await fetch('/api/runner-host');
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+      setRunnerHostView(d as RunnerHostView);
+      setRunnerError('');
+    } catch (e: unknown) {
+      // Keep the reason. A badge that vanishes on failure says the same
+      // thing as a store with no flag, and those are different states.
+      setRunnerHostView(null);
+      setRunnerError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+  React.useEffect(() => { void loadRunnerHost(); }, [loadRunnerHost]);
+  // One pass of the server-side runner. The POST returns after the turn has
+  // been written to disk, so this button is also the measurement for "the
+  // turn survives the tab": close it mid-request and the turn still lands.
+  const [tickResult, setTickResult] = React.useState<string>('');
+  const runTick = async () => {
+    setRunnerBusy(true);
+    setTickResult('');
+    try {
+      const r = await fetch('/api/runner/tick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const d = await r.json();
+      // The whole answer, not a tidy summary: every outcome names why nothing
+      // ran when nothing ran, and that is the only thing worth reading here.
+      setTickResult(JSON.stringify(d, null, 1));
+    } catch (e: unknown) {
+      setTickResult(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunnerBusy(false);
+    }
+  };
+  const applyRunnerHost = async (body: Record<string, unknown>) => {
+    setRunnerBusy(true);
+    try {
+      const r = await fetch('/api/runner-host', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d?.error || `HTTP ${r.status}`);
+      setRunnerHostView(d as RunnerHostView);
+      setRunnerError('');
+    } catch (e: unknown) {
+      setRunnerError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunnerBusy(false);
+    }
+  };
+  // Four statuses, four sentences, written out rather than built from the
+  // status string: a dynamic i18n key cannot be checked by the parity test
+  // in tests/source, and this house has already shipped a raw key name to
+  // the screen once (`useridentity.err.emptyName`, fixed 2026-10-27).
+  const runnerBadge = (s: RunnerHostView['status']) =>
+    s === 'host' ? t('settings.runner.badge.host')
+    : s === 'not-host' ? t('settings.runner.badge.notHost')
+    : s === 'unset' ? t('settings.runner.badge.unset')
+    : t('settings.runner.badge.unreadable');
+  const runnerSentence = (s: RunnerHostView['status']) =>
+    s === 'host' ? t('settings.runner.status.host')
+    : s === 'not-host' ? t('settings.runner.status.notHost')
+    : s === 'unset' ? t('settings.runner.status.unset')
+    : t('settings.runner.status.unreadable');
 
   // ── Update this install (git pull --ff-only) ───────────────────────────
   // Lives in the TITLE BAR, not in a tab: it is about the install, not about
@@ -430,15 +520,47 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-secondary/30 shrink-0">
-          <div className="flex items-baseline gap-2 min-w-0">
+          {/* Title on its own line, build label and runner badge below it.
+              They were all one `items-baseline` row, with the label set to
+              `truncate`. At a large --ui-font-scale that row could not hold
+              them: the screenshot トカゲくん sent on 2026-11-01 showed the
+              label cut to `cfc9104 dev 2026-10-31 2…` AND the two characters
+              of the title itself broken over two lines.
+
+              The label WRAPS now instead of truncating. It is space-separated
+              by construction (buildInfo.ts: `[commit, branch, stamp].join(' ')`),
+              so ordinary word wrap breaks it between those three parts and
+              never inside the sha. Truncation hid the timestamp, which is the
+              part that answers "is this checkout the one I just pulled". */}
+          <div className="flex flex-col gap-1 min-w-0">
             <h2 className="text-lg font-bold">{t('settings.title')}</h2>
-            {buildLabel && (
-              <span
-                className="text-[10px] font-mono text-muted-foreground truncate select-all"
-                title={t('settings.build.title')}
-              >
-                {buildLabel}
-              </span>
+            {(buildLabel || runnerHost || runnerError) && (
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                {buildLabel && (
+                  <span
+                    className="text-[10px] font-mono text-muted-foreground select-all break-words"
+                    title={t('settings.build.title')}
+                  >
+                    {buildLabel}
+                  </span>
+                )}
+                {(runnerHost || runnerError) && (
+                  <button
+                    onClick={() => setRunnerOpen(o => !o)}
+                    title={t('settings.runner.title')}
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 flex items-center gap-1 transition-colors ${
+                      runnerHost?.status === 'host'
+                        ? 'border-indigo-500/40 text-indigo-400 hover:bg-indigo-500/10'
+                        : runnerHost?.status === 'unreadable' || !runnerHost
+                        ? 'border-destructive/40 text-destructive hover:bg-destructive/10'
+                        : 'border-border text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    <Server size={10} />
+                    {runnerHost ? runnerBadge(runnerHost.status) : t('settings.runner.badge.unreadable')}
+                  </button>
+                )}
+              </div>
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
@@ -462,6 +584,80 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
             </button>
           </div>
         </div>
+
+        {/* Which installation runs server-side turns. Between the title bar
+            and the tabs for the same reason as the update button: it is
+            about this INSTALL, not about one group of settings. */}
+        {runnerOpen && (
+          <div className="px-6 py-3 text-xs border-b border-border shrink-0 bg-secondary/20 space-y-2">
+            <div className="text-muted-foreground">
+              {runnerHost ? runnerSentence(runnerHost.status) : t('settings.runner.unreachable')}
+            </div>
+            <div className="text-muted-foreground">{t('settings.runner.caveat')}</div>
+
+            {/* The debug toggle lives INSIDE the debug panel.
+                Not in Preferences: a person who has never clicked this badge
+                has no use for it, and a checkbox in Preferences would be the
+                machinery narrating itself one level up. OFF by default — see
+                `debugRunner` in ChatArea for why a setting and not an env
+                var in the .bat. */}
+            <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
+              <input
+                type="checkbox"
+                checked={globalSettings.showRunnerNotices === true}
+                onChange={e => setGlobalSettings({ ...globalSettings, showRunnerNotices: e.target.checked })}
+                className="w-4 h-4 accent-indigo-500"
+              />
+              <span className="text-foreground">{t('settings.runner.notices')}</span>
+            </label>
+            <p className="text-muted-foreground ml-6">{t('settings.runner.noticesHelp')}</p>
+            <div className="font-mono text-[11px] space-y-0.5">
+              <div className="truncate">
+                <span className="text-muted-foreground">{t('settings.runner.self')}</span>{' '}
+                {runnerHost?.self || '-'}
+              </div>
+              <div className="truncate">
+                <span className="text-muted-foreground">{t('settings.runner.host')}</span>{' '}
+                {runnerHost?.host || t('settings.runner.none')}
+              </div>
+            </div>
+            {runnerError && (
+              <pre className="whitespace-pre-wrap text-destructive text-[11px]">{runnerError}</pre>
+            )}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => applyRunnerHost({ host: 'self' })}
+                disabled={runnerBusy || runnerHost?.status === 'host'}
+                className="px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground
+                           hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t('settings.runner.setSelf')}
+              </button>
+              <button
+                onClick={() => applyRunnerHost({ clear: true })}
+                disabled={runnerBusy}
+                className="px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground
+                           hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t('settings.runner.clear')}
+              </button>
+              <button
+                onClick={() => void runTick()}
+                disabled={runnerBusy || runnerHost?.status !== 'host'}
+                className="px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground
+                           hover:bg-muted transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={t('settings.runner.tickHelp')}
+              >
+                {t('settings.runner.tick')}
+              </button>
+              {runnerBusy && <Loader2 size={12} className="animate-spin" />}
+            </div>
+            {tickResult && (
+              <pre className="whitespace-pre-wrap text-[11px] max-h-48 overflow-auto
+                              border border-border rounded p-2">{tickResult}</pre>
+            )}
+          </div>
+        )}
 
         {/* Result of the last update, if any. Rendered between the title bar
             and the tabs because it belongs to neither tab, and dismissible

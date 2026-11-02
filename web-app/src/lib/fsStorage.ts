@@ -6,6 +6,7 @@ import { atomicWriteFile } from './atomicWrite';
 import { putDataUrl } from './attachmentStore';
 import { retitleForRenamedIdentity } from './convoNaming';
 import { summaryKey } from './summaryStorage';
+import { recordWrite, whoWrote } from './lastWriter';
 import {
   DATA_DIR,
   BEINGS_DIR,
@@ -969,7 +970,18 @@ async function externalizeInlineAttachments(logData: any): Promise<number> {
 export interface SaveLogResult {
   ok: boolean;
   /** Present only when the save was REFUSED because disk moved underneath. */
-  conflict?: { diskUpdatedAt: number; title?: string; messageCount?: number };
+  conflict?: {
+    diskUpdatedAt: number;
+    title?: string;
+    messageCount?: number;
+    /**
+     * Who wrote the version on disk, when we can prove it (lastWriter.ts).
+     * null means UNKNOWN, which the client must treat exactly as it treated
+     * every refusal before this field existed. A wrong id here would make a
+     * client adopt somebody else's version and overwrite their work.
+     */
+    diskWrittenBy?: string | null;
+  };
   /**
    * The `updatedAt` actually written. The client needs this as the base for its
    * NEXT save — without it, the first successful guarded save would make every
@@ -1009,7 +1021,18 @@ async function readHeaderWindow(filePath: string): Promise<{ updatedAt: number |
   return out;
 }
 
-export async function saveLog(convoId: string, logData: any, opts?: { expectedUpdatedAt?: number }): Promise<SaveLogResult> {
+export async function saveLog(
+  convoId: string,
+  logData: any,
+  /**
+   * `clientId` identifies the writer so a REFUSED save can be told whether
+   * the version on disk was its own (see lastWriter.ts). Optional: the
+   * callers that write a brand-new id (backup restore, import, duplicate)
+   * have no tab to name, and a write with no id is deliberately not
+   * recorded rather than recorded as null.
+   */
+  opts?: { expectedUpdatedAt?: number; clientId?: unknown },
+): Promise<SaveLogResult> {
   await ensureDirs();
   const folderName = logData.folderName || 'Default';
 
@@ -1045,8 +1068,35 @@ export async function saveLog(convoId: string, logData: any, opts?: { expectedUp
           // Counting is a courtesy for the warning text; failing to count must
           // not turn a clean refusal into an error.
         }
-        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}`);
-        return { ok: false, conflict: { diskUpdatedAt: head.updatedAt, title: head.title ?? undefined, messageCount } };
+        // `by` is in the log line because the answer is only in the RESPONSE
+        // otherwise, and the response is read by a browser tab -- so a refusal
+        // investigated later from the server side could not tell "our own
+        // racing save" from "a real second tab". MEASURED 2026-10-28: with
+        // 52 refusals in this log I had to infer that split from base/disk
+        // timestamps instead of reading it. A diagnostic that does not reach
+        // the place it is read from is the same as not having it.
+        // BOTH ids, because one of them answers nothing on its own. `by` is
+        // who wrote the version ON DISK; `from` is who is being refused right
+        // now. MEASURED 2026-10-28, hours after shipping `by` alone: two
+        // refusals carried `by tab_…` and I still could not classify the
+        // second one, because a racing save of OUR OWN and a real second tab
+        // both show the same `by`. The pair is the test:
+        //   from X, by X  -> our own two saves raced (absorbed, not a conflict)
+        //   from X, by Y  -> a genuinely different writer holds the disk
+        // It also survives the runner: a runner's id in either slot says
+        // which side of the house the write came from.
+        const writtenBy = whoWrote(convoId, head.updatedAt);
+        const refusedFrom = typeof opts.clientId === 'string' && opts.clientId ? opts.clientId : 'unknown';
+        console.warn(`[saveLog] refused stale write to ${convoId} — base ${opts.expectedUpdatedAt}, disk ${head.updatedAt}, from ${refusedFrom}, by ${writtenBy ?? 'unknown'}`);
+        return {
+          ok: false,
+          conflict: {
+            diskUpdatedAt: head.updatedAt,
+            title: head.title ?? undefined,
+            messageCount,
+            diskWrittenBy: writtenBy,
+          },
+        };
       }
       // head.updatedAt === null means the file is absent (new conversation) or
       // the field fell outside the header window. Both PASS: a guard that
@@ -1153,8 +1203,57 @@ export async function saveLog(convoId: string, logData: any, opts?: { expectedUp
     // Best-effort and de-duplicated — see backupFooterIfChanged.
     await backupFooterIfChanged(folderName);
 
+    // Recorded only now, with the bytes on disk. Recording the attempt would
+    // let a failed save claim a version it never wrote, and the next refusal
+    // would be adopted against a file that does not contain it.
+    recordWrite(convoId, logData.updatedAt, opts?.clientId);
     return { ok: true, writtenUpdatedAt: logData.updatedAt };
   });
+}
+
+/**
+ * The `updatedAt` on disk for one conversation, without parsing the file.
+ *
+ * Exists so a tab can ask "did something change while I was not looking?" on
+ * its existing ten-second poll without pulling a whole log down. One 4 KB
+ * read, not the 6 MB an image-heavy conversation can be.
+ *
+ * Returns null for "cannot tell" — file absent, or updatedAt outside the
+ * header window. Callers must not read null as "unchanged"; lib/diskVersion.ts
+ * is where that distinction is enforced.
+ *
+ * ⚠ The folder scan below is the FIFTH copy of
+ *   path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`)
+ * in this module. The other four live in saveLog (twice), loadLog and
+ * deleteLog — named rather than numbered, because a line number is a claim
+ * that stops being true the next time anything above it is edited.
+ * Deliberately not refactored in the same change that adds a new read path:
+ * loadLog's copy carries BOM stripping and parse-failure reporting that
+ * nothing tests, and a shared helper would have to preserve both.
+ */
+export async function readLogUpdatedAt(convoId: string): Promise<number | null> {
+  await ensureDirs();
+  // Inferred, not annotated. The four older copies of this scan all declare
+  // `any[]`, and reusing that here would have been one more `no-explicit-any`
+  // on the house's count — "the rule that forgives existing debt turning into
+  // the rule that permits new debt". Leaving it off lets TS infer Dirent[]
+  // without importing the type.
+  let beingDirs;
+  try { beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const dir of beingDirs) {
+    if (!dir.isDirectory()) continue;
+    const filePath = path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`);
+    try {
+      // stat first: readHeaderWindow swallows every error, so without this a
+      // missing file and an unreadable one would both say "keep scanning".
+      if (!(await fs.stat(filePath)).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const head = await readHeaderWindow(filePath);
+    return head.updatedAt;
+  }
+  return null;
 }
 
 export async function loadLog(convoId: string) {

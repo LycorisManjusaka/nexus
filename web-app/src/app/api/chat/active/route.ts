@@ -1,10 +1,20 @@
 import { NextResponse } from 'next/server';
-import { getActiveTurn, touchTurn, endTurn, HEARTBEAT_MS } from '@/lib/turnRegistry';
+import { getActiveTurn, touchTurn, endTurn, HEARTBEAT_MS, resolveActiveTurn } from '@/lib/turnRegistry';
+import { liveTurnStatus } from '@/lib/turnBus';
+import { readLogUpdatedAt } from '@/lib/fsStorage';
+import { requestStop, forgetStop } from '@/lib/turnStop';
 
 // Read/refresh "is a turn running for this conversation, and is it mine".
 //
-// GET  ?convoId=&clientId=   → { active, mine, label?, startedAt?, ageMs? }
-// POST { convoId, turnId, event: 'beat' | 'end' } → { ok }
+// GET  ?convoId=&clientId=   → { active, mine, label?, startedAt?, ageMs?, diskUpdatedAt }
+// POST { convoId, turnId, event: 'beat' | 'end' | 'stop' } → { ok, outcome? }
+//
+// `diskUpdatedAt` is the conversation's version ON DISK (one 4 KB header
+// read, never the whole log), or null when it cannot be told. It rides along
+// here because the poll that asks the turn question already fires at the four
+// moments a screen can be out of date - mount, focus, becoming visible, and
+// `online` - and a second route would mean a second round trip at each.
+// Callers must not read null as "unchanged"; see lib/diskVersion.ts.
 //
 // There is deliberately NO way for a client to CLAIM a turn here. The only
 // writer of "a turn started" is the chat route itself, at the point it actually
@@ -23,18 +33,30 @@ export async function GET(req: Request) {
     const clientId = url.searchParams.get('clientId') || '';
     if (!convoId) return NextResponse.json({ error: 'convoId is required' }, { status: 400 });
 
-    const t = getActiveTurn(convoId);
-    if (!t) return NextResponse.json({ active: false, mine: false, heartbeatMs: HEARTBEAT_MS });
-
+    // BOTH sources. The registry alone goes quiet 25s into a server-run turn
+    // (nothing beats for one), and a tab reconnecting after a network drop
+    // asks exactly this question — see resolveActiveTurn in turnRegistry.ts
+    // for the measurement and for why the relay may only add, never subtract.
+    const ans = resolveActiveTurn(getActiveTurn(convoId), liveTurnStatus(convoId), clientId);
+    // Read on BOTH branches. "No turn is running" is exactly when another
+    // tab's edit or delete is most likely to be the thing this tab has not
+    // seen, so answering the version only while a turn runs would miss the
+    // common case. Failure is null, never a throw: the turn answer is the
+    // reason this route exists and must not be lost to a log read.
+    let diskUpdatedAt: number | null = null;
+    try { diskUpdatedAt = await readLogUpdatedAt(convoId); } catch { diskUpdatedAt = null; }
+    if (!ans.active) {
+      return NextResponse.json({ active: false, mine: false, source: ans.source, heartbeatMs: HEARTBEAT_MS, diskUpdatedAt });
+    }
     return NextResponse.json({
       active: true,
-      // The server decides this, not the caller — so "is it me?" is answered
-      // the same way everywhere instead of being re-derived per call site.
-      mine: !!clientId && t.clientId === clientId,
-      label: t.label,
-      startedAt: t.startedAt,
-      ageMs: Date.now() - t.startedAt,
+      mine: ans.mine,
+      label: ans.label,
+      startedAt: ans.startedAt,
+      ageMs: Date.now() - (ans.startedAt || 0),
+      source: ans.source,
       heartbeatMs: HEARTBEAT_MS,
+      diskUpdatedAt,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'failed to read active turn' }, { status: 500 });
@@ -50,8 +72,31 @@ export async function POST(req: Request) {
     if (!turnId || typeof turnId !== 'string') {
       return NextResponse.json({ error: 'turnId is required' }, { status: 400 });
     }
+    // ── Stop THIS turn, named explicitly ────────────────────────────────────
+    // Separate from the browser Stop button's abort, which the chat route
+    // cannot tell apart from a tab dying (see lib/turnStop.ts). A turn started
+    // by the server-side runner has no browser fetch at all, so this is the
+    // ONLY way to stop one. Shipped before the runner because it is its
+    // prerequisite, not a convenience.
+    //
+    // `ok` means the request was accepted. `outcome` is what actually
+    // happened, and the caller must read that rather than trusting `ok`:
+    //   fired    — a running turn was told
+    //   recorded — nobody was listening yet; a turn registering now gets it
+    //   already  — this exact turn had been asked before
+    // Saying ok:true while nothing happened is the failure this house has
+    // paid for twice (the dead "add timestamps" button returned ok:true,
+    // updated:0 for 55 days).
+    if (event === 'stop') {
+      const outcome = requestStop(convoId, turnId);
+      return NextResponse.json({ ok: true, outcome });
+    }
     if (event === 'end') {
       endTurn(convoId, turnId);
+      // A finished turn can no longer be stopped, so nothing about it should
+      // stay reachable. This is one of the two cleanups turnStop's TTL exists
+      // to back up — see LISTENER_TTL_MS.
+      forgetStop(convoId, turnId);
       return NextResponse.json({ ok: true });
     }
     // Anything else is a heartbeat. ok:false means there was nothing to keep

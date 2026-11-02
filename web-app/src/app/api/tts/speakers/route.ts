@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import { speakersJsonPath } from '@/lib/voicechangerPaths';
 import { ENGINES } from '@/lib/ttsEngines';
+import { fetchCoeiroinkSpeakers, type CoeiroinkSpeaker } from '@/lib/coeiroinkSpeakers';
 
 // Probing an engine that isn't installed normally fails in milliseconds
 // (ECONNREFUSED on a closed loopback port). But "refused" is not the only way a
@@ -22,14 +23,18 @@ export async function GET() {
       console.error('Failed to read Voicevox speakers', e);
     }
     
-    let coeiroink = [];
+    // Annotated, not inferred: the light-endpoint helper returns a TYPED list,
+    // and `[]` plus a conditional typed assignment leaves tsc unable to infer
+    // (TS7034/TS7005). The other engines here still answer `any` from .json().
+    let coeiroink: CoeiroinkSpeaker[] = [];
     try {
-      const coeRes = await fetch('http://127.0.0.1:50032/v1/speakers', {
+      // The heavy endpoint ships 15.8 MB of base64 artwork that nothing in src/
+      // reads, and this response goes to the BROWSER over plain HTTP. At 5 s it
+      // could also time out while the engine was busy synthesising, which the
+      // picker reads as "engine not running".
+      coeiroink = (await fetchCoeiroinkSpeakers({
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      });
-      if (coeRes.ok) {
-        coeiroink = await coeRes.json();
-      }
+      })).speakers;
     } catch(e) {
       console.error('Failed to fetch Coeiroink speakers', e);
     }

@@ -4,9 +4,15 @@
 npm test
 ```
 
-175 assertions, ~0.3 s wall clock. No new dependency: `node:test`, `node:assert`
-and Node 24's own type stripping. Nothing here starts a server, opens a browser,
-reads a path outside the repo, or touches `local_data`.
+**497 assertions as of 2026-10-29**, ~0.7 s wall clock. No new dependency:
+`node:test`, `node:assert` and Node 24's own type stripping. Nothing here
+starts a server, opens a browser, reads a path outside the repo, or touches
+`local_data`.
+
+The count carries a date on purpose. It said `211` for a day after the suite
+had grown past it, because an undated number goes stale in silence — and
+`npm test` prints the real one anyway. Dated, it is a historical statement
+that cannot become false, only old.
 
 Built 2026-10-27 as **phase 1** of the overhaul plan, before any refactoring.
 `desk: nexus-overhaul-plan.md`
@@ -165,11 +171,13 @@ typechecks them. **That is deliberate**, and it means the `tsc` baseline is part
 of this net: it was exactly 3 pre-existing errors before this folder existed
 (`live/start`, `tts/synthesize`, `ChatArea`) and it is exactly 3 after.
 
-`npx eslint tests/` is clean. For the record, with scopes — because a count
-without its scope is not a measurement: **`src/` 1,145 problems; `tests/` 0**.
+`npx eslint tests/` is clean. For the record, with scopes **and a date** —
+because a count without its scope is not a measurement, and a count without
+its date is not one for long: **2026-10-28: `src/` 1,134 problems; `tests/` 0**.
 (It was `src/` 1,156 / whole project 1,162 when this folder was created on
-2026-10-27; `test_watch.js` was deleted that day, which accounts for 3, and
-the phase-3 deletions for the rest.)
+2026-10-27; `test_watch.js` was deleted that day, which accounts for 3, the
+phase-3 deletions for most of the rest, and the `turnEvents` extraction for
+the last 3 `: any`. This line itself said 1,145 for a day after that.)
 
 
 ---
@@ -213,3 +221,111 @@ easier neighbour — usually the one a single-threaded test can see.
 
 Instruments for both measurements live on the desk:
 `plan_probe/p19_mutation2.py`, `p20_atomic_race.mjs`, `p22_atomic_detector.mjs`.
+
+## Phase 4a-2 additions (2026-10-27 late) — 208 → 211
+
+### `lib/turnQueue.test.ts` — `composeBatch` (9 cases)
+
+Three were written from the REQUIREMENT and the failure mode, before reading
+the body:
+
+- **one item is byte-identical to a direct send.** If this ever gains a header
+  or a label, the stock becomes a second log format for the commonest path in
+  the product, and no reader of a log can tell which one produced any message.
+- **nothing vanishes.** Every input is in the text or in `skipped`. A message
+  lost between the stock and the log is the failure the module exists to make
+  impossible, and the formatter is inside that path.
+- **a label is never doubled.** The `[name]` prefix has an owner upstream
+  (InputArea), so emitting it again is the obvious way to get `[A]\n[A]\n…`.
+
+One case carries a **CORRECTED EXPECTATION** block rather than being quietly
+rewritten. It first asserted that a skipped item's attachments still ride
+along; the code disagreed and the code was right — a skipped item is not
+consumed, so taking its bytes now would deliver them again later, and the
+report would say "skipped" while its attachments went through.
+
+### `source/i18nKeyParity.test.ts` — both UI dictionaries, same keys
+
+A SOURCE-TREE property, like `typeOnlyImports`. It began as a one-off script
+while 12 keys were being added, and found that `useridentity.err.emptyName`
+existed in Japanese only. `t()` falls back JA → EN → **the key itself**, so an
+English user saving an identity with an empty name was shown the literal string
+`useridentity.err.emptyName`.
+
+Nothing in the toolchain could see it: the dictionaries are string-indexed
+object literals (so `tsc` is silent), eslint has nothing to say, and the
+Japanese UI — the one this house runs in — was correct. **A check that runs
+once protects only the day it ran**, which is why it is here and not on the
+desk.
+
+Three assertions: no key in only one language (names every offender and says
+which direction is the bad one), no duplicate literal key inside either
+dictionary (legal TypeScript — the later one silently wins), and a floor of
+1,000 parsed keys on both sides so a parse change cannot make the whole suite
+pass by vacuity.
+
+Mutation-checked 2/2: removing the new key and duplicating a key each turn it
+red, and each names the key. Source restored byte-identical.
+
+
+### `lib/turnEventReducer.test.ts` — what ONE server event does to a turn
+
+EXTRACTION, like the finalizer and the accumulator state. 41 assertions over
+the 22-branch chain that left `ChatArea.tsx` in `5f4a608`.
+
+Two of the assertions are the load-bearing ones, and both pin a rule a
+reasonable second implementation gets wrong by being reasonable:
+
+  - a redacted betrayal clears the **Claude thinking blocks** too, not just the
+    visible text. Blocks are replayed to the model next turn, so keeping them
+    preserves exactly the contamination the guard exists to prevent — and
+    nothing on screen shows it happened.
+  - an `error` frame AFTER a redaction is **not** an error. Blanking works by
+    aborting the provider call, and an aborted call emits one last error frame.
+
+The rest pin the quieter rules: notices never enter the message body (they must
+stay out of the log, the replayed context and the token count), an empty
+`web_sources` frame cannot erase a real earlier list, `thinkingOffset` is the
+thought length AT THE MOMENT of the tool call, and tool-produced attachments
+land in `flags` rather than the accumulator (F34 — they reach the message
+through a host flush a runner does not have).
+
+One suite is a different kind of test. **A deleted branch in that chain is
+completely silent**: no error, no warning, no visual difference, and `tsc`
+cannot see it (string comparisons against a `Record<string, unknown>`). So
+`the branch list itself` enumerates all 22 types, asserts each produces an
+observable effect on state, flags or the sink, and asserts separately that an
+UNKNOWN type is a no-op — so "handled" and "ignored" cannot be confused.
+
+That suite also caught my own fabricated fixture: I wrote
+`{ type: 'notice', text: ... }` when the field is `content`, and the failure
+line read *"branch 'notice' had no effect"* — which is exactly what a deleted
+branch says. **An invented fixture field and a deleted branch fail identically.**
+
+Mutation-checked 9/9.
+### `slimHistory.test.ts` — the wire copy of the conversation
+
+EXTRACTION, like the finalizer, the accumulator state and the event chain.
+36 assertions over five rules that decide what a stored message may NOT carry
+upstream. Four of the five fail SILENTLY when missing: the POST still
+succeeds, it just carries the wrong thing.
+
+The two load-bearing ones:
+
+- **`exact key set`** — a stored message with every display-only field we know
+  of (tokens, cacheUsage, webSources, notices, modelFamily, ...) travels as
+  exactly four keys. The bug shape here is an EXTRA key, which is why the
+  assertion is a key-set equality and not a per-field check.
+- **`GATE 3`** — a message recorded against another family does not replay its
+  reasoning. The failure mode is not a wrong answer: feeding one provider's
+  raw chain-of-thought to another is what distillation guards look for, so a
+  runner that skipped this gate would manufacture a refusal out of nothing on
+  a turn nobody is watching.
+
+The tool-window assertion is deliberately written against the SHAPE of the
+bound rather than its value: 12 bearing turns go in, and the test asserts that
+the newest carries its calls and the oldest does not. A test naming the window
+size would have to be edited every time the constant moves, and would pass for
+the wrong reason if the window were removed and the list happened to be short.
+
+Mutation-checked 11/11.

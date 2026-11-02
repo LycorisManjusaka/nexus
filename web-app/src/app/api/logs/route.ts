@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
 import { listLogs, saveLog } from '@/lib/fsStorage';
+import { jsonMaybeGzip } from '@/lib/jsonGzip';
 
-export async function GET() {
+// `req` is taken only to read Accept-Encoding. Measured 2026-11-01: 305
+// conversations => 46,383 B, and this is on the critical path of every cold
+// start (the sidebar cannot render without it).
+export async function GET(req: Request) {
   const logs = await listLogs();
-  return NextResponse.json(logs);
+  return jsonMaybeGzip(req, logs);
 }
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { id, logData, baseUpdatedAt, preserveUpdatedAt } = body;
+  const { id, logData, baseUpdatedAt, preserveUpdatedAt, clientId } = body;
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
   // Same class of hole as the unwrapped `saveLog` below: without this, a body
   // with no `logData` throws a TypeError on the very next line and leaves the
@@ -52,6 +56,8 @@ export async function POST(req: Request) {
   try {
     result = await saveLog(id, logData, {
       expectedUpdatedAt: typeof baseUpdatedAt === 'number' ? baseUpdatedAt : undefined,
+      // Passed straight through; lastWriter decides what is recordable.
+      clientId,
     });
   } catch (e: unknown) {
     const err = e as { code?: unknown; message?: unknown };

@@ -4,6 +4,7 @@ import { speakersJsonPath, coeiroinkSpeakersJsonPath } from '@/lib/voicechangerP
 import { readCharacterMap, findIdentity } from '@/lib/characterMap';
 import { resolveUserIdentity } from '@/lib/userIdentity';
 import { ENGINES } from '@/lib/ttsEngines';
+import { fetchCoeiroinkSpeakers } from '@/lib/coeiroinkSpeakers';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,8 +40,7 @@ async function loadCatalog(engine: string): Promise<any[]> {
   }
   if (engine === 'coeiroink') {
     try {
-      const res = await fetch('http://127.0.0.1:50032/v1/speakers');
-      if (res.ok) return await res.json();
+      return (await fetchCoeiroinkSpeakers()).speakers;
     } catch { /* engine down */ }
     return readCache(coeiroinkSpeakersJsonPath());
   }

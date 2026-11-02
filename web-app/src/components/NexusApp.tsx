@@ -591,6 +591,14 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     // marking the LAST source-conversation message as the boundary, which
     // wrongly classified the last assistant turn as 'original' even though
     // it came straight from the previous conversation.
+    //
+    // ⚠ CORRECTION 2026-10-31: "consumed by ChatArea.handleSend" stopped being
+    // true when sends moved to the server-side runner — the handler no longer
+    // mints the user message, so it cannot name the id the marker lands on.
+    // The consumer is now `promotePendingMarker`, called by the runner at the
+    // moment it composes that message (runTurnForQueue). Leaving the sentence
+    // rather than editing it: it is the record of where the rule used to live,
+    // and the rule moving is exactly what broke this feature for a day.
     data.firstOriginalMessageId = null;
     data.firstOriginalIsNext = true;
 
@@ -601,13 +609,30 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     // reload the page to see their cloned conversation populate. Awaiting the
     // POST before the switch closes that window.
     try {
-      await fetch('/api/logs', {
+      const res = await fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: newId, logData: data }),
       });
+      // ⚠ The STATUS was never read until 2026-11-02 — only a thrown fetch was
+      // caught. `fetch` resolves for a 500, a 502, a gateway timeout and a 401
+      // from the admin gate, so on a slow link this went on to switch
+      // conversations with nothing written: the new log (including
+      // `firstOriginalIsNext` above) did not exist, and the tab presented an
+      // empty "New Conversation". SUSPECTED road for パイロット's report that
+      // "Next = First Original" came back unarmed after sleeping a being; her
+      // link is slow and Lizard-kun could not reproduce it on his.
+      //
+      // Staying on the current conversation is the honest outcome: the clone
+      // did not happen, so the screen should not look like it did.
+      if (!res.ok) {
+        console.error('clone-with-system-prompt POST failed:', res.status);
+        alert(translate('app.cloneFailed', globalSettings.language).replace('{status}', String(res.status)));
+        return;
+      }
     } catch (e) {
       console.error('clone-with-system-prompt POST failed:', e);
+      alert(translate('app.cloneFailed', globalSettings.language).replace('{status}', String((e as Error)?.message || e)));
       return;
     }
 

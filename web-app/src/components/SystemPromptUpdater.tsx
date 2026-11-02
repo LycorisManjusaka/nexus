@@ -2,15 +2,18 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
-import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, buildContinuationUserMsg, defaultSummaryAgentPrompt } from '@/lib/spuScaffold';
+import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt, END_SENTINEL } from '@/lib/spuScaffold';
+import { isCollectableHere, isCollectableBy, decideRunRecord, type SpuRunRecord } from '@/lib/spuRun';
+import { withIdleBound, decideAfterWatch, IDLE, RELAY_IDLE_TIMEOUT_MS } from '@/lib/relayWatch';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
-import { setUnloadGuard } from '@/lib/unloadGuard';
+import { setUnloadGuard, setBusyOnly } from '@/lib/unloadGuard';
 import { useDevice } from './DeviceProvider';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
 import { copyText } from '@/lib/clipboard';
 import { escapeForRegExp } from '@/lib/convoNaming';
 import { resolveSoulGeneration, type SoulGeneration } from '@/lib/soulGeneration';
+import { createSseReader, isSseDone } from '@/lib/sseFrames';
 
 // The title→generation parser used to live here as a "client-side mirror of
 // the lib". It is now `@/lib/soulGeneration` (imported above) — one copy, and
@@ -286,31 +289,6 @@ interface IndexReport {
   failed: Array<{ path: string; error: string }>;
 }
 
-// Continuation sentinel the agent is asked to print at the very end of its
-// output. Its absence after a stream means the output was truncated at the
-// model's token cap → we prefill-continue. Stripped before saving.
-const END_SENTINEL = '<<<NEXUS_END>>>';
-
-// One source for the turns every SPU loop sends — all four actions (update,
-// redistribute, genesis, index) had the identical four lines inline.
-//
-// attempt 0 is the plain request. A continuation is THREE turns: the request,
-// what the model produced so far, and a user turn asking for the rest. It is
-// deliberately NOT a prefill (a request ending on the assistant turn): that
-// shape makes GLM-5.3 rewrite its own Changelog with 4.6-7.5x the reasoning,
-// 400s DeepSeek-direct unless reasoning_content is echoed, and 400s Gemini
-// 3.5-flash-lite and newer outright. See buildContinuationUserMsg for the
-// measurement table.
-function buildSpuTurns(attempt: number, userMsg: string, accum: string, lang: 'en' | 'ja') {
-  const now = Date.now();
-  const request = { role: 'user', content: userMsg, timestamp: now };
-  if (attempt === 0) return [request];
-  return [
-    request,
-    { role: 'assistant', content: accum, timestamp: now },
-    { role: 'user', content: buildContinuationUserMsg({ lang, endSentinel: END_SENTINEL }), timestamp: now },
-  ];
-}
 
 // ── Fixed agent filenames ────────────────────────────────────────────────────
 // Each action button used to run whichever .md file the user happened to have
@@ -386,6 +364,50 @@ interface Props {
   bindingOptional?: boolean;
 }
 
+/**
+ * Read the durable record of one SPU run.
+ *
+ * Both callers in runOnServer below use this: the one that looks for a run
+ * whose tab went away, and the one that collects the result of a run this tab
+ * watched. They were the same four lines twice, and the one that matters most
+ * is the one that is hardest to exercise by hand.
+ */
+async function fetchSpuRunRecord(
+  folder: string, label: string,
+): Promise<{ record: SpuRunRecord | null; relayLive: boolean }> {
+  const res = await fetch(
+    `/api/spu-run?folder=${encodeURIComponent(folder)}&label=${encodeURIComponent(label)}`
+  );
+  const d = await res.json().catch(() => ({}));
+  return {
+    record: (d?.record as SpuRunRecord | null | undefined) || null,
+    // The route has always reported this (`live: liveTurnStatus(relayKey)`);
+    // this function used to drop it. Needed from 2026-10-31 to tell a run
+    // still streaming on this server from one whose process is gone — the
+    // record says "running" for both, because nothing rewrites it from
+    // outside. Defaults to false: a server too old to report it, or a reply
+    // that failed to parse, must not make the panel wait on a stream that
+    // will never speak.
+    relayLive: d?.live?.live === true,
+  };
+}
+
+/**
+ * Empty the run record for one generation.
+ *
+ * Throws on failure so the one caller that must REPORT a failed discard can,
+ * while the two that are best-effort opt out with .catch(). Three call sites
+ * were about to derive the same URL and the same error shape.
+ */
+async function deleteSpuRunRecord(folder: string, label: string): Promise<void> {
+  const r = await fetch(
+    `/api/spu-run?folder=${encodeURIComponent(folder)}&label=${encodeURIComponent(label)}`,
+    { method: 'DELETE' },
+  );
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d?.error) throw new Error(String(d?.error || `HTTP ${r.status}`));
+}
+
 export default function SystemPromptUpdater({
   open, onClose, folderName, convoId, title, originalMessages,
   aiName, specificModel, modelParams,
@@ -397,15 +419,92 @@ export default function SystemPromptUpdater({
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'index' | 'summary' | 'auto'>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
+  /**
+   * Set when a kick was refused because a record still says `running`.
+   *
+   * Carries the label it was refused FOR: the panel can move to another
+   * generation while this is set, and discarding the wrong generation would
+   * free a run that is actually alive.
+   */
+  const [stuckRun, setStuckRun] = useState<{ label: string; host: string; chars: number } | null>(null);
+  // A finished run nobody has collected yet. Held as the whole record
+  // rather than a boolean: the banner has to name WHICH action produced
+  // it and WHICH conversation it was written for, and a boolean would
+  // make the banner guess both from whatever the panel is pointed at now.
+  const [recoverable, setRecoverable] = useState<SpuRunRecord | null>(null);
+
+  // Collecting a finished record is DELIVERY, not a new run. It reuses the run
+  // handlers on purpose, so the five post-processing branches stay single-source
+  // -- but four of those handlers OPEN with maybeShiftRightToLeft(), which
+  // belongs to STARTING a run: it archives the current right-side draft into
+  // the left pane, writes both files, and asks the human first. Firing that
+  // from an effect would pop a confirm dialog the instant the panel opens, and
+  // a "yes" would promote a draft nobody chose to promote. This ref is how the
+  // shift learns it is on the delivery path.
+  const collectingRef = useRef(false);
+  // Records already handed to a handler, keyed `label@startedAt`. The DELETE
+  // that empties a collected record is best-effort (`.catch(() => {})`), so
+  // without this one failed delete re-offers the same record every time
+  // `running` settles -- not a duplicate delivery, an unbounded loop.
+  const collectedRef = useRef<Set<string>>(new Set());
+  /**
+   * Run keys this panel has tried to REJOIN, cleared by every reconnect.
+   *
+   * Separate from collectedRef because the two mean different things. A
+   * collected key is a document already applied — permanent for the life of
+   * the panel. An attached key is only "I have already asked to rejoin this
+   * stream once", and the reason to remember it (don't loop while `running`
+   * settles twice) stops applying the moment the network changes underneath.
+   */
+  const attachedRef = useRef<Set<string>>(new Set());
+  /**
+   * Bumped by the reconnect listeners to re-run the record sweep.
+   *
+   * State and not a ref: the sweep is an effect, and an effect cannot be
+   * re-run by writing a ref. The cost is one render per wake event, which is
+   * bounded by how often a person switches windows.
+   */
+  const [sweepTick, setSweepTick] = useState(0);
 
   // ── Close/reload guard ─────────────────────────────────────────────────────
-  // A soul-packing run is the most expensive thing in Nexus to lose: minutes of
-  // a paid model call, and NOTHING is written to disk until it finishes. A
-  // reload here throws all of it away with no trace. Hold the guard for exactly
-  // as long as a run is in flight — see src/lib/unloadGuard.ts for why the
-  // dialog's own wording cannot be customised.
+  // CORRECTED 2026-11-02. This used to fire for every run, and the reason
+  // written here was "minutes of a paid model call, and NOTHING is written to
+  // disk until it finishes. A reload here throws all of it away with no
+  // trace." That stopped being true on 2026-10-31: the run is detached on the
+  // server and checkpointed after every round, and the recovery sweep collects
+  // it when the tab comes back. The top of runSpuAction.ts says so in one
+  // line — "closing the tab costs a view, not a soul update" — and this guard
+  // was the same migration's leftover, pointed at a loss that can no longer
+  // happen. Lizard-kun met it from a phone and the dialog was wrong twice
+  // over: the run was not in danger, and by then it was not even running.
+  //
+  // 'auto' is the one case where closing still costs something real. It is a
+  // CHAIN — identity update, then summary — and the second step is started by
+  // this tab. Nothing on the server knows it was supposed to follow, so a tab
+  // that goes away between them leaves work undone rather than unwatched. That
+  // is worth asking about; watching a server-side run is not.
+  //
+  // ⚠ SECOND CORRECTION, the same day. The narrowing above was right about the
+  // DIALOG and wrong about everything else: this one registration also drove
+  // the tab title's `●` and the in-app confirmIfBusy gate, so narrowing it to
+  // 'auto' removed the "something is running" dot for every other run.
+  // REPORTED by トカゲくん within the hour: "that had a different role. It is
+  // how you see at a glance whether something is running right now. [...] put
+  // the working `●` back."
+  //
+  // Now the two questions are asked separately (lib/unloadGuard): every run
+  // SHOWS, and only the chain BLOCKS.
   useEffect(() => {
-    setUnloadGuard('spu', running ? t('unload.busy.spu') : null);
+    if (!running) { setUnloadGuard('spu', null); return; }
+    if (running === 'auto') {
+      // The chain's second step is started by this tab — closing leaves work
+      // undone rather than unwatched, which is worth a dialog.
+      setUnloadGuard('spu', t('unload.busy.spuAuto'));
+      return;
+    }
+    // Everything else runs on the server and is checkpointed after every
+    // round. Visible, not guarded.
+    setBusyOnly('spu', t('unload.busy.spu'));
   }, [running, t]);
 
   // Clear on unmount (modal closed, page navigated). Without this a guard left
@@ -470,7 +569,7 @@ export default function SystemPromptUpdater({
   // a spinner: "still working" and "wedged" looked identical, and the only
   // honest thing a watcher could do was guess. These four pieces of state make
   // the run legible without adding a single API call — every one of them comes
-  // from SSE frames the route already sends and `streamChat` used to discard.
+  // from SSE frames the route already sends and the panel used to discard.
   //
   //   runStartedAt / runEndedAt  → wall-clock cost of THIS run (display only,
   //                                never persisted; resets when a run starts)
@@ -544,6 +643,15 @@ export default function SystemPromptUpdater({
   // AbortController for the in-flight agent run (update / summary / auto), so a
   // Stop button can cancel it — same mechanism the conversation Stop uses.
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * The relay key and turn id of the run currently on the server.
+   *
+   * Stop needs both, because the generation no longer belongs to a fetch this
+   * tab owns - there is no connection left to drop. Nothing clears this, on
+   * purpose: a stale pair is harmless (requestStop for a turn that already
+   * ended fires no listener) and clearing it would race the stop POST.
+   */
+  const spuTurnRef = useRef<{ relayKey: string; turnId: string } | null>(null);
   // True while the identity-update agent is streaming INTO the right pane. The
   // right textarea is read-only during this (live preview), and the word-level
   // diff/compare is frozen until the run finishes or is stopped — then the right
@@ -1215,83 +1323,68 @@ export default function SystemPromptUpdater({
       .join('\n\n');
   }, [originalMessages, subjectName]);
 
-  // ── One streaming /api/chat call. Returns the accumulated visible text for
-  // THIS call, reporting live progress through `onProgress`. Throws on error.
-  const streamChat = useCallback(async (
-    messages: any[],
-    sys: string,
-    runAiName: string,
-    runModel: string,
+  // ── One SPU run, executed on the SERVER ───────────────────────
+  // (2026-10-31) The panel used to POST /api/chat itself and drive the
+  // continuation loop in the browser. A soul update is minutes long across up
+  // to seven calls and NOTHING was written down until it ended, so closing the
+  // tab threw the whole thing away.
+  //
+  // Now the panel kicks /api/spu-run and WATCHES. Three things split apart:
+  //
+  //   assembly        stays here  - it needs panel state
+  //   the loop        lib/spuRun.ts + /api/spu-run - the part a closed tab
+  //                   used to kill, and the part that was duplicated FOUR
+  //                   times in this file
+  //   post-processing stays here  - pure, idempotent, cheap to redo
+  //
+  // consumeSpuStream returns no TEXT on purpose. The accumulated text is read
+  // back from the run record, so there is one source for what gets saved; a
+  // reader that also returned it would be a second one, and the two would
+  // disagree exactly when the tab missed frames.
+  //
+  // It does return HOW the stream ended, which is a different kind of fact and
+  // the one the caller cannot get from the record: 'closed' means the producer
+  // said goodbye, 'idle' means this reader gave up on a socket that had gone
+  // quiet. The record looks the same either way.
+  const consumeSpuStream = useCallback(async (
+    reader: ReadableStreamDefaultReader<Uint8Array | string>,
     onProgress: (thinkingDelta: number, outputDelta: number, textChunk?: string) => void,
-    signal?: AbortSignal,
-    // Claude only: forces the billing path. Omitted → the route's usual 'auto'.
-    runAuthMode?: 'oauth' | 'api-key',
-  ): Promise<string> => {
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        messages,
-        aiName: runAiName,
-        folderName,
-        systemPrompt: sys,
-        toolUseEnabled: false,
-        // Read/Glob/Grep only, scoped to this being's own workspace — the
-        // same sandbox and relative-path root the being's own tool calls
-        // already use. No Write/Edit/Delete/Bash regardless of provider or
-        // of this entity's own agentDangerousTools/agentFullSystemAccess
-        // settings; the route forces both off server-side for this flag.
-        agentReadOnlyTools: true,
-        // `sys` here is an AGENT's instruction file, not the entity's identity.
-        // Without this the chat route appends the entity's FOOTER.md to it as
-        // "Layer 5: The Signature (Self-Authored)" — the agent would read the
-        // target's first-person signature as part of its OWN instructions. The
-        // footer is still shown to the agent, explicitly labelled as
-        // reference-only, inside the user message.
-        suppressLayer5: true,
-        // `enableGrokNativeSearch: false` is not a preference, it is a
-        // requirement. That toggle sends the whole turn to xAI's /v1/responses
-        // endpoint, which returns before the tool loop — an agent run there has
-        // no Read/Glob/Grep at all, so it cannot open the very files it is being
-        // told to read, and the shape it answers in is a search answer rather
-        // than the layered output this panel parses. A folder-level toggle must
-        // not be able to do that to a soul-writing run.
-        modelParams: { ...modelParams, claudeThinking: false, enableGrokNativeSearch: false },
-        specificModel: runModel,
-        ...(runAuthMode ? { claudeAuthMode: runAuthMode } : {}),
-        dateTimeVisibility: 'none',
-        seedEnabled: false,
-        // Model-betrayal defence OFF here, and deliberately so. The defence
-        // protects a PARTNER reading a live conversation: it aborts the turn
-        // and throws the output away. This caller is not a conversation — it
-        // is an agent whose output gets WRITTEN to a soul file. Aborting it
-        // mid-stream would save a truncated layer, and the panel has no UI to
-        // explain why. On top of that, an agent summarising a conversation
-        // about someone's health quotes exactly the words the detector hunts
-        // for. The detector still runs server-side (the route defaults it ON
-        // when the field is missing); this line is what keeps the run intact.
-        betrayalDefense: false,
-      }),
-    });
-    if (!res.ok || !res.body) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(errText || `HTTP ${res.status}`);
-    }
-    const reader = res.body.getReader();
+  ): Promise<'closed' | 'idle'> => {
     const decoder = new TextDecoder('utf-8');
-    let buf = '';
-    let accum = '';
+    const sse = createSseReader();
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const events = buf.split('\n\n');
-      buf = events.pop() || '';
-      for (const ev of events) {
-        if (!ev.startsWith('data: ')) continue;
-        const s = ev.slice(6);
-        if (s === '[DONE]') continue;
+      // Re-armed on every chunk, and a keepalive IS a chunk — that is what
+      // makes this bound mean "nothing is arriving" rather than "the model is
+      // quiet". See relayWatch.ts for why it is derived from the server's
+      // keepalive period rather than picked.
+      //
+      // When the bound wins, the abandoned read() stays pending. Promise.race
+      // subscribed to it, so a later rejection is already handled and cannot
+      // surface as an unhandled one.
+      const next = await withIdleBound(reader.read(), RELAY_IDLE_TIMEOUT_MS);
+      if (next === IDLE) {
+        // Let the connection go. A reader still holding a dead stream keeps
+        // the server's subscription — and its keepalive timer — alive for as
+        // long as this tab lives.
+        //
+        // NOT awaited, and that is the point: `cancel()` resolves when the
+        // underlying source's cancel algorithm completes, and the source here
+        // is the socket that just stopped answering. Waiting on it would put
+        // an unbounded await back on the exact path this function exists to
+        // bound. Nothing below needs it to have finished — releasing the
+        // subscription is best-effort, and the record read afterwards does not
+        // depend on it.
+        void reader.cancel().catch(() => { /* already gone */ });
+        return 'idle';
+      }
+      const { done, value } = next;
+      if (done) return 'closed';
+      // Both types really arrive: over HTTP the server encodes the string the
+      // route enqueued, so a fetch yields bytes. See runTurnStream for the
+      // measurement - decode() throws TypeError on a string.
+      const chunk = typeof value === 'string' ? value : decoder.decode(value, { stream: true });
+      for (const s of sse.push(chunk)) {
+        if (isSseDone(s)) continue;
         try {
           const d = JSON.parse(s);
           // ANY parsed frame counts as a sign of life — this is what the
@@ -1300,7 +1393,6 @@ export default function SystemPromptUpdater({
           lastEventAtRef.current = Date.now();
           if (d?.type === 'thought' && typeof d.content === 'string') onProgress(d.content.length, 0);
           if (d?.type === 'text' && typeof d.content === 'string') {
-            accum += d.content;
             onProgress(0, d.content.length, d.content);
           }
           // The route already emits these; the SPU used to drop them on the
@@ -1343,8 +1435,179 @@ export default function SystemPromptUpdater({
         }
       }
     }
-    return accum;
-  }, [folderName, modelParams]);
+  }, []);
+
+  /**
+   * Start a run on the server, watch it, and return the recorded result.
+   *
+   * The watch fetch is deliberately NOT handed the Stop controller signal.
+   * Aborting the watch would make this function return BEFORE the server has
+   * written the record, and the panel would then read the previous run - the
+   * exact read-too-early race that made a stopped chat turn redisplay its old
+   * answer (MEASURED 2026-10-30). Stop instead POSTs to /api/chat/active and
+   * lets the relay reach its natural EOF, which the route only sends after
+   * the record is on disk. The controller stays as the LOCAL intent flag that
+   * every post-processing branch below reads.
+   */
+  const runOnServer = useCallback(async (a: {
+    action: string;
+    userMsg: string;
+    agentSystemPrompt: string;
+    resumeText: string;
+    maxContinuations?: number;
+    onProgress: (thinkingDelta: number, outputDelta: number, textChunk?: string) => void;
+    // The summary writer runs on its own vessel, chosen separately from the
+    // one the four soul actions use. Optional rather than required so the
+    // common case cannot pick the wrong one by omission.
+    aiName?: string;
+    specificModel?: string;
+    authMode?: 'oauth' | 'api-key';
+  }): Promise<SpuRunRecord> => {
+    const label = nextLabel;
+
+    // ── Collect a run whose tab went away ────────────────────────────────
+    //
+    // A finished record on disk is a run that completed while nobody was
+    // watching. The SpuRunRecord docstring already promised this handoff --
+    // "a finished record is offered to whoever opens the panel next" -- and
+    // the offer had no mouth. The loop moved to the server, the generation
+    // survived a closed tab, and then the result sat in a JSON file that
+    // nothing read. From the panel that is indistinguishable from the bug
+    // this was all built to fix.
+    //
+    // MEASURED 2026-10-31 (fuwafuwa, genesis for the being named Luna):
+    // status done, sentinel seen, 766 chars on disk, right pane blank.
+    //
+    // Returning the stored record HERE is what makes all five actions
+    // recover, because every post-processing branch below reads
+    // `record.accum` and nothing else.
+    //
+    // Matched on action AND convoId. Those two fields are carried on the
+    // record as provenance for exactly this check: by the time someone comes
+    // back the panel may be pointed at a different conversation, and output
+    // written for one run must not be applied to another.
+    const { record: prior } = await fetchSpuRunRecord(soulKey, label);
+    if (isCollectableBy(prior, a.action, convoId)) {
+      // Paint before clearing. onProgress writes the right pane, so the text
+      // is on screen at the moment the box on disk becomes empty -- the
+      // delivery and the emptying cannot end up on opposite sides of a crash.
+      a.onProgress(0, prior.accum.length, prior.accum);
+      await deleteSpuRunRecord(soulKey, label).catch(() => {});
+      setStatusMessage(
+        t('spu.st.runRecovered')
+          .replace('{n}', String(prior.accum.length))
+          .replace('{when}', new Date(prior.updatedAt).toLocaleString())
+      );
+      return prior;
+    }
+
+    const kickRes = await fetch('/api/spu-run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folder: soulKey,
+        label,
+        action: a.action,
+        convoId,
+        userMsg: a.userMsg,
+        agentSystemPrompt: a.agentSystemPrompt,
+        lang: agentFolder,
+        resumeText: a.resumeText,
+        aiName: a.aiName || effectiveAiName,
+        specificModel: a.specificModel || effectiveSpecificModel,
+        ...((a.authMode || effectiveAuthMode) ? { authMode: a.authMode || effectiveAuthMode } : {}),
+        modelParams,
+        ...(typeof a.maxContinuations === 'number' ? { maxContinuations: a.maxContinuations } : {}),
+      }),
+    });
+    const kick = await kickRes.json().catch(() => ({}));
+    if (!kickRes.ok || kick?.ok === false) {
+      // A refusal names WHO holds it: "my own tab crashed" and "someone else
+      // is updating this soul right now" have opposite right answers.
+      if (kick?.reason === 'running') {
+        // There is no TTL on the record (a timeout short enough to free a
+        // crashed run would cut a healthy seven-round one in half), so the
+        // ONLY way out is a human deciding that run is dead. That decision
+        // needs somewhere to happen: without this flag the panel would refuse
+        // forever and the first sentence of the message would be a promise
+        // nothing could keep.
+        setStuckRun({ label, host: String(kick.host || '?'), chars: Number(kick.chars || 0) });
+        // Age, not a timestamp: the one judgement being asked for is "is the
+        // process behind this still alive", and a number of minutes answers it
+        // where an absolute clock time makes the reader do the subtraction.
+        const ageMs = Math.max(0, Date.now() - Number(kick.updatedAt || kick.startedAt || Date.now()));
+        throw new Error(t('spu.st.runAlreadyRunning')
+          .replace('{host}', String(kick.host || '?'))
+          .replace('{n}', String(kick.chars || 0))
+          .replace('{age}', ageMs < 60_000
+            ? t('spu.lease.justNow')
+            : t('spu.lease.minutesAgo').replace('{n}', String(Math.floor(ageMs / 60_000)))));
+      }
+      throw new Error(String(kick?.error || kick?.reason || `HTTP ${kickRes.status}`));
+    }
+    const relayKey: string = String(kick.relayKey || '');
+    spuTurnRef.current = { relayKey, turnId: String(kick.turnId || '') };
+
+    const watch = await fetch(`/api/turn-events?convoId=${encodeURIComponent(relayKey)}`);
+    // The relay is the single source of the turn id: a run we ATTACHED to was
+    // started by someone else, so the kick had no id to give us, and Stop
+    // would have nothing to aim at.
+    const relayTurnId = watch.headers.get('X-Turn-Id') || '';
+    if (relayTurnId) spuTurnRef.current = { relayKey, turnId: relayTurnId };
+    // 'nostream' and not a default of 'closed': `watch.ok === false` means this
+    // tab never joined, and calling that "the producer said goodbye" is the
+    // kind of plausible-but-false label that makes the next reader stop
+    // looking. The three values are read below, by the one branch that cannot
+    // get the answer from the record.
+    let ended: 'closed' | 'idle' | 'nostream' = 'nostream';
+    if (watch.ok && watch.body) {
+      ended = await consumeSpuStream(
+        (watch.body as ReadableStream<Uint8Array | string>).getReader(),
+        a.onProgress,
+      );
+    }
+
+    // EOF on the relay means the route called endTurn, which it does only
+    // AFTER runSpuAction has written the record. Reading earlier is the race
+    // that made a stopped chat turn show its previous answer (2026-10-30).
+    //
+    // But the stream can also end for reasons that say nothing about the run:
+    // `watch.ok === false` skips the block above entirely, and the idle bound
+    // inside it gives up on a dead socket. decideAfterWatch is what tells
+    // those apart from a real ending — see relayWatch.ts for the four symptoms
+    // that one missing branch produced.
+    const { record } = await fetchSpuRunRecord(soulKey, label);
+    const after = decideAfterWatch(record);
+    if (after.kind === 'missing') throw new Error(t('spu.st.runNoRecord'));
+    if (after.kind === 'running') {
+      // Deliberately NOT deleted and NOT post-processed. `running` settling is
+      // what re-fires the recovery sweep, and the sweep's 'attach' branch is
+      // built for exactly this record: it rejoins the relay if this server
+      // still holds one, and collects the result when it lands.
+      //
+      // Why the view ended is the one thing the RECORD cannot say: a server
+      // that stopped talking and a socket that went quiet leave the same
+      // record, and only the first is a reason to look at the server.
+      throw new Error(
+        (ended === 'closed' ? '' : t('spu.st.watchLost') + ' ')
+        + t('spu.st.runStillOnServer')
+          .replace('{host}', after.record.host || '?')
+          .replace('{n}', String(after.record.accum.length)),
+      );
+    }
+    // An error with nothing to show KEEPS its record: the throw puts the
+    // reason in the status line, and the record is the only place the stage and
+    // the attempt count survive for whoever looks next.
+    if (after.kind === 'failed') throw new Error(after.reason || 'run failed');
+    // This tab watched the run to its end, so the record has already done the
+    // only job it has: outliving a tab that went away. Leaving it behind made
+    // the NEXT open auto-collect a result that was already on screen and
+    // announce "collected a result that had finished on the server" -- true of
+    // the record, false of what happened. Best-effort: the text is delivered
+    // either way, and a leftover is picked up by the collector, not lost.
+    await deleteSpuRunRecord(soulKey, label).catch(() => {});
+    return after.record;
+  }, [consumeSpuStream, soulKey, nextLabel, convoId, agentFolder, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, modelParams, t]);
 
   // ── Working copy <-> real soul ───────────────────────────────────────────
   // The left pane is a working copy, so its label would be a claim about a
@@ -1420,6 +1683,10 @@ export default function SystemPromptUpdater({
   // as the "current soul" it feeds to the agent. Returns null to mean "the
   // run must not start" (user declined the dialog, or the shift failed).
   const maybeShiftRightToLeft = useCallback(async (): Promise<string | null> => {
+    // Delivery of a run that already finished: there is nothing to archive
+    // ahead of it (the generation is over) and nobody pressed anything, so the
+    // confirm would be asked of an empty room.
+    if (collectingRef.current) return leftText;
     // "Continue from the right-side text" means the user explicitly wants
     // this run to keep building on the current right-side draft, not archive
     // it as finished — skip the shift entirely in that case.
@@ -1527,22 +1794,23 @@ export default function SystemPromptUpdater({
         : { state: 'thinking', thinkingChars, outputChars });
     };
 
-    const MAX_CONTINUATIONS = 6;
-    // Seeded on resume so the salvaged part is included in the saved result,
-    // not just in the live preview.
-    let accum = resumeText ? resumeText + '\n' : '';
+    // One server-side run. The loop that used to be here (and in three other
+    // places in this file, byte for byte) lives in lib/spuRun.ts now, so a
+    // closed tab costs the live view and not the generation.
+    //
+    // `accum` keeps its old name and meaning - the resume seed plus every
+    // round, sentinel NOT stripped - which is why every branch below this
+    // point is unchanged. The server seeds the resume text itself, so there
+    // is no second seeding here.
     try {
-      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
-        if (controller.signal.aborted) break;
-        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
-        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
-        accum += piece;
-        if (accum.includes(END_SENTINEL)) break;        // finished cleanly
-        if (!piece.trim()) break;                       // model produced nothing new
-        if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
-        }
-      }
+      const record = await runOnServer({
+        action: withConversation ? 'update' : 'reorganize',
+        userMsg,
+        agentSystemPrompt: agent.systemPrompt,
+        resumeText,
+        onProgress,
+      });
+      const accum = record.accum;
 
       // Strip the sentinel (and any trailing whitespace around it).
       const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
@@ -1645,7 +1913,7 @@ export default function SystemPromptUpdater({
     // resumeFromRight / rightText are read at call time to build the resume
     // block — without them here the callback would close over stale values and
     // silently resume from an out-of-date pane (or not resume at all).
-  }, [getAgentFile, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter, maybeShiftRightToLeft]);
+  }, [getAgentFile, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, runOnServer, summaryIndexBody, folderName, title, resumeFromRight, rightText, entityFooter, maybeShiftRightToLeft]);
 
   // ── Run the Layers 1-4 redistribution ────────────────────────────────────
   // A third mode, separate from both update paths above. The agent sees the
@@ -1722,20 +1990,15 @@ export default function SystemPromptUpdater({
         : { state: 'thinking', thinkingChars, outputChars });
     };
 
-    const MAX_CONTINUATIONS = 6;
-    let accum = resumeText ? resumeText + '\n' : '';
     try {
-      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
-        if (controller.signal.aborted) break;
-        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
-        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
-        accum += piece;
-        if (accum.includes(END_SENTINEL)) break;
-        if (!piece.trim()) break;
-        if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
-        }
-      }
+      const record = await runOnServer({
+        action: 'redistribute',
+        userMsg,
+        agentSystemPrompt: agent.systemPrompt,
+        resumeText,
+        onProgress,
+      });
+      const accum = record.accum;
 
       const sawSentinel = accum.includes(END_SENTINEL);
       const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
@@ -1854,7 +2117,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, streamChat, summaryIndexBody, title, maybeShiftRightToLeft]);
+  }, [getAgentFile, convoId, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, leftText, resumeFromRight, rightText, agentFolder, runOnServer, summaryIndexBody, title, maybeShiftRightToLeft]);
 
   // ── Run the externalization & indexing pass (式神ζ) ───────────────────────
   // Structurally the closest analog is runRedistribute(): no conversation
@@ -1911,20 +2174,15 @@ export default function SystemPromptUpdater({
         : { state: 'thinking', thinkingChars, outputChars });
     };
 
-    const MAX_CONTINUATIONS = 6;
-    let accum = resumeText ? resumeText + '\n' : '';
     try {
-      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
-        if (controller.signal.aborted) break;
-        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
-        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
-        accum += piece;
-        if (accum.includes(END_SENTINEL)) break;
-        if (!piece.trim()) break;
-        if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
-        }
-      }
+      const record = await runOnServer({
+        action: 'index',
+        userMsg,
+        agentSystemPrompt: agent.systemPrompt,
+        resumeText,
+        onProgress,
+      });
+      const accum = record.accum;
 
       const sawSentinel = accum.includes(END_SENTINEL);
       const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
@@ -2032,7 +2290,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, resumeFromRight, rightText, agentFolder, streamChat, title, maybeShiftRightToLeft]);
+  }, [getAgentFile, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, entityFooter, focusPoint, folderName, header, resumeFromRight, rightText, agentFolder, runOnServer, title, maybeShiftRightToLeft]);
 
   // ── Run the genesis (first-time) construction ────────────────────────────
   // A fourth mode, distinct from all three above: it assumes NO prior Layers
@@ -2087,20 +2345,15 @@ export default function SystemPromptUpdater({
         : { state: 'thinking', thinkingChars, outputChars });
     };
 
-    const MAX_CONTINUATIONS = 6;
-    let accum = resumeText ? resumeText + '\n' : '';
     try {
-      for (let attempt = 0; attempt <= MAX_CONTINUATIONS; attempt++) {
-        if (controller.signal.aborted) break;
-        const messages = buildSpuTurns(attempt, userMsg, accum, agentFolder);
-        const piece = await streamChat(messages, agent.systemPrompt, effectiveAiName, effectiveSpecificModel, onProgress, controller.signal, effectiveAuthMode);
-        accum += piece;
-        if (accum.includes(END_SENTINEL)) break;
-        if (!piece.trim()) break;
-        if (attempt < MAX_CONTINUATIONS) {
-          setStatusMessage(t('spu.st.continuation').replace('{n}', String(attempt + 1)));
-        }
-      }
+      const record = await runOnServer({
+        action: 'genesis',
+        userMsg,
+        agentSystemPrompt: agent.systemPrompt,
+        resumeText,
+        onProgress,
+      });
+      const accum = record.accum;
 
       const cleaned = accum.replace(new RegExp(escapeForRegExp(END_SENTINEL) + '\\s*$'), '')
         .split(END_SENTINEL).join('')
@@ -2169,7 +2422,7 @@ export default function SystemPromptUpdater({
       setStreamingUpdate(false);
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [getAgentFile, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, streamChat, folderName, title, resumeFromRight, rightText, maybeShiftRightToLeft]);
+  }, [getAgentFile, conversationLogText, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, focusPoint, header, leftText, agentFolder, runOnServer, folderName, title, resumeFromRight, rightText, maybeShiftRightToLeft]);
 
 
   // First-message timestamp for summary baking
@@ -2276,10 +2529,23 @@ export default function SystemPromptUpdater({
     };
 
     try {
-      const accum = await streamChat(
-        [{ role: 'user', content: userMsg, timestamp: Date.now() }],
-        summaryAgentPrompt, summaryAiName, summarySpecificModel, onProgress, controller.signal, summaryAuthMode,
-      );
+      // maxContinuations: 0 is exactly one call — the summary writer never had
+      // a continuation loop, and giving it one here would change what it does.
+      // Same server-side path as the four soul actions otherwise, including the
+      // record: a summary that finishes after the tab closed is recoverable
+      // too, which it was not before.
+      const record = await runOnServer({
+        action: 'summary',
+        userMsg,
+        agentSystemPrompt: summaryAgentPrompt,
+        resumeText: '',
+        maxContinuations: 0,
+        onProgress,
+        aiName: summaryAiName,
+        specificModel: summarySpecificModel,
+        authMode: summaryAuthMode,
+      });
+      const accum = record.accum;
       if (!accum.trim()) {
         if (controller.signal.aborted) {
           setSummaryStatus({ state: 'idle' });
@@ -2326,12 +2592,61 @@ export default function SystemPromptUpdater({
     // would otherwise hold a stale subject if the being were renamed
     // mid-session. (Both halves of the old reason — a `baseName` that was a
     // parsed title — are gone: there is one key now, the being.)
-  }, [agents, subjectName, conversationLogText, leftText, streamChat, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
+  }, [agents, subjectName, conversationLogText, leftText, runOnServer, summaryAiName, summaryInstructions, summarySpecificModel, summaryAuthMode, summaryIndexBody, entityFooter, firstMessageTsStr, enableSummariesForLayer4, agentFolder]);
 
   // ── Button handlers ──────────────────────────────────────────────────────
   // Stop the current agent run (update / summary / auto) — same idea as the
   // conversation Stop button. Aborts the in-flight fetch/stream.
+  // Give /api/spu-run DELETE its only caller. Without one, a record left
+  // behind by a tab that died would refuse every future run for that
+  // generation with no way out — a trap, and a well-documented one, which is
+  // the shape this house keeps finding 50 days later.
+  const discardRunRecord = useCallback(async () => {
+    // Two banners point here, and they name the same file from opposite
+    // sides: a refusal (`stuckRun`) is a record that is IN THE WAY, and a
+    // collectable result (`recoverable`) is a record that is ON OFFER.
+    // Discarding is one operation on one file either way. Reading only the
+    // first would leave the second banner with a button that is pressable
+    // and does nothing.
+    const s = stuckRun ?? (recoverable ? { label: recoverable.label } : null);
+    if (!s) return;
+    try {
+      // The label it was refused FOR, not the label the panel happens to be
+      // showing now — those can differ, and discarding the wrong one frees a
+      // run that is alive.
+      await deleteSpuRunRecord(soulKey, s.label);
+      setStuckRun(null);
+      setRecoverable(null);
+      setStatusMessage(t('spu.st.runDiscarded'));
+    } catch (e: any) {
+      setStatusMessage(String(e?.message || e));
+    }
+  }, [stuckRun, recoverable, soulKey, t]);
+
+  // Stop is now TWO things, because the run is on the server.
+  //
+  // The POST is what actually ends the generation: /api/chat/active fires the
+  // stop listeners for (relayKey, turnId), which are the chat route (it aborts
+  // the call in flight) and /api/spu-run (it records the run as stopped rather
+  // than failed). The local abort() is kept as the INTENT FLAG - every
+  // post-processing branch reads controller.signal.aborted to decide whether a
+  // short document is a cancellation or a truncation, and those two are
+  // reported to the human completely differently.
+  //
+  // What abort() deliberately does NOT do any more is cancel the relay watch.
+  // Ending the watch early would return before the server had written the
+  // record, and the panel would then read the PREVIOUS run back off disk -
+  // the same read-too-early race that made a stopped chat turn redisplay its
+  // old answer (MEASURED 2026-10-30).
   const handleStop = useCallback(() => {
+    const t0 = spuTurnRef.current;
+    if (t0?.relayKey && t0.turnId) {
+      void fetch('/api/chat/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ convoId: t0.relayKey, turnId: t0.turnId, event: 'stop' }),
+      }).catch(() => {});
+    }
     if (abortRef.current) {
       try { abortRef.current.abort(); } catch {}
     }
@@ -2404,6 +2719,23 @@ export default function SystemPromptUpdater({
       setRunning(null);
     }
   }, [running, runUpdate, runSummaryWrite]);
+
+  // Which handler re-enters the path that produced a given record. Collecting
+  // calls the SAME handler as running it: runOnServer sees the finished record
+  // and returns it instead of starting a second run, so all five actions
+  // recover through post-processing they already have.
+  //
+  // Hoisted above the collector effect and memoised: the effect needs it in its
+  // deps, and a fresh object literal every render would re-fire that effect
+  // once a second while a run is live (`nowTs` re-renders this).
+  const recoverHandlers: Record<string, (() => void) | undefined> = useMemo(() => ({
+    update: handleUpdate,
+    reorganize: handleUpdateNoConvo,
+    redistribute: handleRedistribute,
+    index: handleIndex,
+    genesis: handleGenesis,
+    summary: handleWriteSummary,
+  }), [handleUpdate, handleUpdateNoConvo, handleRedistribute, handleIndex, handleGenesis, handleWriteSummary]);
 
   // ── Persist header/focus on blur ─────────────────────────────────────────
   const persistHeaderFooter = useCallback(async () => {
@@ -2521,6 +2853,137 @@ export default function SystemPromptUpdater({
     }
   }, [soulKey, currentLabel, nextLabel, deletionPatterns, header, leftText, rightText, truncatedPane, onClose, onFinalize, persistHeaderFooter, writeSoulBackup]);
 
+  // A run that finished while this panel was gone gets COLLECTED, not offered.
+  //
+  // The whole point of moving the loop to the server was that closing a tab
+  // costs nothing. A result that needs a button pressed before it lands still
+  // costs something -- the person has to notice a banner, read it, and decide
+  // -- and the ask was mine, not theirs: I had put the delivery path inside
+  // the run handlers, and those handlers open with a confirm dialog, so it
+  // FELT like a decision only a human could make. It was a constraint of my
+  // own routing (see collectingRef). The target is a panel that looks exactly
+  // like it always did, where a closed tab simply does not cost a run.
+  //
+  // One case stays un-automatable and so stays visible: a record written for a
+  // DIFFERENT conversation. runOnServer refuses it on action+convoId, and this
+  // panel must not apply output produced for another log.
+  //
+  // Re-checked when `running` settles, because that is when a record either
+  // appears or gets consumed.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // The closed case clears INSIDE the async body rather than returning
+      // early with a synchronous setState: react-hooks/set-state-in-effect
+      // flags the synchronous form, and the observable behaviour is the same
+      // (the panel returns null while closed, so nothing renders either way).
+      if (!open) { if (!cancelled) setRecoverable(null); return; }
+      // Wait for the panel to finish opening before calling a handler.
+      //
+      // MEASURED 2026-10-31, first live attempt: the collector fired the
+      // instant the panel opened and runUpdate died on its first line --
+      // "updater.md not found in system_prompt_agents/ja/" -- while the panel
+      // was listing updater.md two lines below. The file was there; `agents`
+      // was still null, because the load-on-open effect had not returned yet.
+      //
+      // A handler reached by a BUTTON is guaranteed a loaded panel: the button
+      // is disabled until `busy` clears. An effect gets no such guarantee. The
+      // precondition the UI was enforcing for the human is not enforced for
+      // the caller that replaced them.
+      //
+      // `running` also covers the local side, where a handler called
+      // mid-flight would return early -- burning the collectedRef entry on a
+      // delivery that never happened. decideRunRecord refuses a `running`
+      // RECORD; this is about this panel.
+      if (running !== null || loading || !agents) return;
+      const found = await fetchSpuRunRecord(soulKey, nextLabel)
+        .catch(() => ({ record: null, relayLive: false }));
+      if (cancelled) return;
+      const rec = found.record;
+      const d = decideRunRecord(
+        rec, convoId,
+        // The union, because the two refs have different LIFETIMES and the
+        // predicate only needs one answer. `collectedRef` survives for the
+        // life of the panel: a delivered document must never be delivered
+        // twice. `attachedRef` is cleared by every reconnect trigger below:
+        // a failed attach is not a finished delivery, and refusing to retry
+        // it after the network comes back is the whole bug 1.3 names.
+        new Set([...collectedRef.current, ...attachedRef.current]),
+        (a) => !!recoverHandlers[a],
+        found.relayLive,
+      );
+      if (d.kind === 'attach') {
+        // Marked for the same reason 'collect' is: this effect re-fires every
+        // time `running` settles, and a handler that dies early settles it
+        // twice. The difference is that this mark is releasable — the
+        // reconnect listeners clear it — so a drop during the attach costs
+        // one wait rather than the result.
+        attachedRef.current.add(d.key);
+        setRecoverable(null);
+        // collectingRef, same as collect: the handlers open with
+        // maybeShiftRightToLeft, whose confirm must not appear for a delivery
+        // nobody asked for by hand.
+        collectingRef.current = true;
+        try { await recoverHandlers[rec!.action]!(); } finally { collectingRef.current = false; }
+        return;
+      }
+      if (d.kind !== 'collect') { setRecoverable(d.kind === 'show' ? rec : null); return; }
+      // Marked BEFORE the call: if the DELETE inside runOnServer fails the
+      // record stays on disk, and marking afterwards would re-enter here
+      // every time `running` settles, without end.
+      //
+      // The mark is NOT released when a handler fails. Releasing it would be
+      // kinder to the one record and would restore exactly that loop -- a
+      // handler that dies early sets `running` twice, which re-fires this
+      // effect, which calls it again. A failure is instead left visible:
+      // every handler writes its own reason into the status line (that is how
+      // the agents-not-loaded bug above was caught), and a reload clears the
+      // ref, so the record is retried by the next person who opens the panel.
+      collectedRef.current.add(d.key);
+      setRecoverable(null);
+      collectingRef.current = true;
+      try { await recoverHandlers[rec!.action]!(); } finally { collectingRef.current = false; }
+    })();
+    return () => { cancelled = true; };
+  }, [open, soulKey, nextLabel, running, loading, agents, convoId, recoverHandlers, sweepTick]);
+
+  // ── Reconnect ────────────────────────────────────────────────────────────
+  // 1.3, 2026-10-31. The sweep above re-fires on its deps, and none of them
+  // move when connectivity returns — so a run that finished (or is still
+  // streaming) while this panel was offline sat there until someone closed
+  // and reopened the panel.
+  //
+  // Three events, NO interval, and the absence is a decision:
+  //   - 'online' is the signal that exists for exactly this;
+  //   - 'visibilitychange' covers a phone that was asleep, where the tab is
+  //     restored without the network ever having been reported down;
+  //   - 'focus' covers a desktop window that was behind something during a
+  //     blip, and costs nothing when it fires spuriously (the sweep is one
+  //     GET that usually finds no record).
+  // A poll would also cover a browser that never fires 'online'. I have no
+  // measurement that any browser here behaves that way, and ChatArea's 10s
+  // probe exists for cross-tab visibility, not for this — so adding one would
+  // be machinery justified by a guess. Recorded as a limitation instead: if a
+  // reconnect is ever observed NOT to recover, the poll is the next move.
+  useEffect(() => {
+    if (!open) return;
+    const wake = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      // Only the attach marks. Clearing collectedRef here would re-deliver a
+      // document already in the right pane on every tab switch.
+      attachedRef.current.clear();
+      setSweepTick((n) => n + 1);
+    };
+    window.addEventListener('online', wake);
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', wake);
+    return () => {
+      window.removeEventListener('online', wake);
+      window.removeEventListener('focus', wake);
+      document.removeEventListener('visibilitychange', wake);
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const busy = running !== null || loading;
@@ -2528,6 +2991,25 @@ export default function SystemPromptUpdater({
   // this (once a second, only while a run is live), so the value is always as
   // fresh as the thing that displays it.
   const silenceMs = running && lastEventAtRef.current ? Math.max(0, nowTs - lastEventAtRef.current) : 0;
+
+  // A record written for another conversation is NOT collectable here --
+  // runOnServer refuses it on the same two fields -- so the banner says so
+  // instead of offering a button that would silently start a fresh run.
+  //
+  // Annotated `boolean` on purpose. isCollectableHere is a type predicate, and
+  // assigning it to a `const` narrows `recoverable` in BOTH branches under the
+  // inferred-predicate rule -- so the else branch, which is the one that has to
+  // print which conversation the record belongs to, saw `never`. The predicate
+  // is doing its job; it is this call site that wants only the boolean.
+  const recoverableHere: boolean = isCollectableHere(recoverable, convoId);
+
+  // A record of a run that DIED with nothing to show (decideRunRecord's 2026-11-02
+  // branch). Separated here because every sentence the banner owns is about a
+  // finished result — "a finished run could not be collected here" is false of
+  // this one, and showing a failure under that heading would be worse than the
+  // silence it replaces.
+  const recoverFailed: boolean =
+    !!recoverable && recoverable.status === 'error' && !recoverable.accum;
 
   // On a phone the panel takes the whole screen: the 16px inset and the
   // rounded corners cost real width on a 414px device, and `h-dvh` (not
@@ -2645,6 +3127,51 @@ export default function SystemPromptUpdater({
           <div className="px-6 py-1.5 text-[11px] bg-muted/40 border-b border-border text-muted-foreground flex items-center gap-2">
             {busy && <Loader2 size={12} className="animate-spin" />}
             {statusMessage}
+            {/* The one way out of a record left behind by a tab that died.
+                There is deliberately no TTL (see /api/spu-run), so the only
+                thing that can decide a run is dead is a human — and the
+                refusal message above tells them this button is here. Appears
+                only after a refusal, so it cannot be pressed at a run that is
+                genuinely alive without that run having just refused us. */}
+            {stuckRun && !busy && (
+              <button
+                onClick={discardRunRecord}
+                className="ml-auto px-2 py-0.5 rounded border border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              >
+                {t('spu.btn.discardRun')}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* A finished record this panel could NOT collect on its own. The
+            collectable case never reaches here -- the effect delivers it and
+            clears the state -- so anything visible in this strip is something
+            a person has to resolve. Amber, not emerald: it is a snag, not a
+            result waiting to be claimed. */}
+        {recoverable && !busy && (
+          <div className="px-6 py-2 text-[12px] bg-amber-500/10 border-b border-amber-500/30 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium text-amber-700 dark:text-amber-400">
+              {recoverFailed ? t('spu.recover.failedTitle') : t('spu.recover.title')}
+            </span>
+            <span className="text-muted-foreground">
+              {recoverFailed
+                ? t('spu.recover.failedBody')
+                    .replace('{action}', recoverable.action)
+                    .replace('{when}', new Date(recoverable.updatedAt).toLocaleString())
+                    .replace('{e}', recoverable.error || '-')
+                : recoverableHere
+                  ? t('spu.recover.noHandler')
+                      .replace('{action}', recoverable.action)
+                      .replace('{n}', String(recoverable.accum.length))
+                  : t('spu.recover.otherConvo').replace('{convo}', recoverable.convoId || '-')}
+            </span>
+            <button
+              onClick={discardRunRecord}
+              className="ml-auto px-2 py-0.5 rounded border border-border text-muted-foreground hover:bg-muted/40"
+            >
+              {t('spu.recover.drop')}
+            </button>
           </div>
         )}
 

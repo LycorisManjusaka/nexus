@@ -11,8 +11,13 @@
 // true of a System Prompt Updater run, which can be minutes of paid model call
 // with nothing written until it finishes.
 //
-// So: closing an IDLE page must be frictionless, and closing a BUSY one must
-// ask first.
+// So: closing an IDLE page must be frictionless, and closing a page whose work
+// would DIE with it must ask first.
+//
+// ⚠ Those are two different tests, and until 2026-11-02 this file only had
+// one. Work that survives the tab — a server-side SPU run, a queued turn the
+// runner owns — must still be VISIBLE (the `●` below) and must NOT be guarded.
+// A reason is registered with `blocking: false` for that; see the Reason type.
 //
 // ── What the browser will and will not do ────────────────────────────────
 // The confirmation dialog itself is entirely browser-controlled. Since ~2017
@@ -48,24 +53,56 @@
 
 import { useSyncExternalStore } from 'react';
 
-/** key → human-readable label describing why we are busy. */
-const reasons = new Map<string, string>();
+/**
+ * key → what to SHOW, and whether it must also BLOCK leaving.
+ *
+ * ── WHY THESE ARE TWO THINGS (2026-11-02) ─────────────────────────────────
+ *
+ * This registry drove three surfaces off one Map: the `beforeunload` dialog,
+ * the in-app `confirmIfBusy` gate, and the tab title's `●`. Once the SPU run
+ * moved server-side there was no longer a reason to BLOCK a close during it,
+ * so I narrowed the SPU's registration to the one case that still chains
+ * through the tab (`auto`) — and that silently took the `●` away with the
+ * dialog.
+ *
+ * REPORTED by トカゲくん the same day: "that had a different role. It is how
+ * you see at a glance whether something is running right now. If the dialog is
+ * not needed any more by your judgement, you may delete it. But put the
+ * working `●` back."
+ *
+ * He is right, and the mistake was treating "tell the reader" and "stop the
+ * reader" as one flag. They are different questions with different answers for
+ * the same work: a server-side run must be VISIBLE and must not be GUARDED.
+ */
+interface Reason {
+  label: string;
+  /** Does this reason also justify holding the reader back? */
+  blocking: boolean;
+}
+const reasons = new Map<string, Reason>();
 const subscribers = new Set<() => void>();
 let attached = false;
+
+/** How many held reasons justify stopping a close / a navigation. */
+function blockingCount(): number {
+  let n = 0;
+  for (const r of reasons.values()) if (r.blocking) n += 1;
+  return n;
+}
 
 function onBeforeUnload(e: BeforeUnloadEvent) {
   // Defensive: the listener is detached when idle, but a race between a state
   // change and the detach must never block an idle close.
-  if (reasons.size === 0) return;
+  if (blockingCount() === 0) return;
   e.preventDefault();
   // Legacy only. Modern browsers ignore this string entirely (see header).
-  e.returnValue = describeBusy() ?? '';
+  e.returnValue = describeBlocking() ?? '';
 }
 
-/** Attach the listener only while something is actually busy. */
+/** Attach the listener only while something BLOCKING is held. */
 function syncListener() {
   if (typeof window === 'undefined') return;
-  const busy = reasons.size > 0;
+  const busy = blockingCount() > 0;
   if (busy && !attached) {
     window.addEventListener('beforeunload', onBeforeUnload);
     attached = true;
@@ -76,16 +113,27 @@ function syncListener() {
 }
 
 /**
- * Register or clear one reason the page must not be closed silently.
+ * Register or clear one reason the page is busy.
  *
  * @param key   stable per call-site ('generation', 'spu', 'save', …)
  * @param label what to show the reader, or null to clear this key
+ * @param opts  `blocking: false` for work that must SHOW in the tab title but
+ *              must not hold a close or a navigation back — i.e. work that
+ *              survives the tab. Defaults to true, so every call site that
+ *              predates this parameter keeps its old behaviour exactly.
  */
-export function setUnloadGuard(key: string, label: string | null): void {
+export function setUnloadGuard(
+  key: string,
+  label: string | null,
+  opts?: { blocking?: boolean },
+): void {
+  const blocking = opts?.blocking !== false;
   const prev = reasons.get(key);
   if (label) {
-    if (prev === label) return; // no-op: keeps effects from thrashing
-    reasons.set(key, label);
+    // no-op: keeps effects from thrashing. BOTH fields have to match, or a
+    // reason that changed only its blocking-ness would never take effect.
+    if (prev && prev.label === label && prev.blocking === blocking) return;
+    reasons.set(key, { label, blocking });
   } else {
     if (prev === undefined) return;
     reasons.delete(key);
@@ -95,12 +143,33 @@ export function setUnloadGuard(key: string, label: string | null): void {
 }
 
 /**
- * Current busy description, or null when idle. Multiple concurrent reasons
- * (e.g. a generation running while a save is still in flight) are joined.
+ * Register work that must be VISIBLE but must not be guarded — a named
+ * wrapper rather than a bare `{ blocking: false }` at the call site, so the
+ * intent is readable where it is used and the one-argument form cannot be
+ * mistaken for it.
+ */
+export function setBusyOnly(key: string, label: string | null): void {
+  setUnloadGuard(key, label, { blocking: false });
+}
+
+/**
+ * Current busy description, or null when idle — EVERY reason, blocking or
+ * not. This is what the tab title reads: the `●` answers "is something
+ * running", which is true of server-side work too.
  */
 export function describeBusy(): string | null {
   if (reasons.size === 0) return null;
-  return Array.from(reasons.values()).join(' / ');
+  return Array.from(reasons.values()).map(r => r.label).join(' / ');
+}
+
+/**
+ * Only the reasons that justify stopping the reader. What the `beforeunload`
+ * dialog and `confirmIfBusy` read — asking "are you sure?" about work that
+ * survives the tab is a control reporting a state nobody is in.
+ */
+export function describeBlocking(): string | null {
+  const labels = Array.from(reasons.values()).filter(r => r.blocking).map(r => r.label);
+  return labels.length > 0 ? labels.join(' / ') : null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -130,7 +199,9 @@ let answeredAt = 0;
  * @returns true to proceed — idle, already answered, or the reader said yes.
  */
 export function confirmIfBusy(render: (busy: string) => string): boolean {
-  const busy = describeBusy();
+  // BLOCKING only. A server-side SPU run shows a `●` and must not make
+  // switching conversations ask a question.
+  const busy = describeBlocking();
   if (!busy) return true;
   // One intent can navigate through two setters back-to-back (creating a being
   // calls setActiveFolderId then onSelectConvo in the same tick), so a confirm

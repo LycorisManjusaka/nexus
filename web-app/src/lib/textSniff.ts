@@ -34,12 +34,59 @@ export const MEDIA_EXT = {
 };
 
 /**
+ * Byte signatures of binary containers whose FIRST 4 KB reads as clean ASCII.
+ *
+ * The statistical tests in `looksLikeText` below are deliberately permissive,
+ * and a PDF defeats every one of them. Measured 2026-10-30 on two real PDFs
+ * (29.9 MB and 4.4 MB, probe = the first 4096 bytes):
+ *
+ *     has_NUL_in_prefix  false
+ *     replacement_ratio  0.0000
+ *     control_ratio      0.0000
+ *
+ * Zero. The header and the object dictionary that follow `%PDF-` are ASCII; the
+ * compressed content streams start further in than the sniff ever looks. So the
+ * prefix is not "mostly" text — it IS text, and there was nothing for a content
+ * test to object to. The damage is downstream: 4 MB of the body is read with
+ * `.text()`, stored INSTEAD of the real bytes, and injected into the prompt
+ * verbatim on every turn. 望月希子 measured the search-side half of this on
+ * 2026-09-10 (1 of her 113 attachments counted as text; it was a PDF of raw
+ * bytes, so searching it hit PDF internals and missed every real word).
+ *
+ * This is still a CONTENT test, not a filename test — the signature is in the
+ * bytes, and renaming the file changes nothing. The list is deliberately SHORT:
+ * every entry is a chance to call a readable file binary, which is the
+ * expensive direction (an entity that cannot see an attachment it was given).
+ * Only formats MEASURED to defeat the sniff belong here. ZIP containers
+ * (docx/xlsx/odt) are not listed because they carry NUL bytes in their local
+ * file headers and the NUL test already rejects them — that is measured in
+ * tests/lib/textSniff.test.ts, not assumed.
+ */
+const BINARY_SIGNATURES: readonly (readonly number[])[] = [
+  [0x25, 0x50, 0x44, 0x46, 0x2d], // "%PDF-"
+];
+
+/** True when `bytes` opens with one of the signatures above. */
+export function hasBinarySignature(bytes: Uint8Array): boolean {
+  for (const sig of BINARY_SIGNATURES) {
+    if (bytes.length < sig.length) continue;
+    let match = true;
+    for (let i = 0; i < sig.length; i++) {
+      if (bytes[i] !== sig[i]) { match = false; break; }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+/**
  * Decide whether a byte prefix is human-readable text.
  *
  * Deliberately permissive — the cost of a false "binary" (a readable file the
  * entity cannot see) is much worse than a false "text" (some mojibake the
  * entity can recognise and ignore). Rejects only what is clearly not text:
  *
+ *   • a known binary-container signature — see BINARY_SIGNATURES above
  *   • a NUL byte — decisive; text files do not contain them
  *   • >10% U+FFFD after a UTF-8 decode — not UTF-8 in any useful sense
  *   • >30% non-printable control characters
@@ -49,6 +96,13 @@ export const MEDIA_EXT = {
  */
 export function looksLikeText(bytes: Uint8Array): boolean {
   if (bytes.length === 0) return true; // empty file: harmless either way
+
+  // Checked BEFORE the BOM shortcut: a signature is a positive statement about
+  // what the file IS, and the statistical tests below cannot see past a prefix
+  // that happens to be ASCII. (No listed signature collides with a BOM, so the
+  // order is not observable today — it is written this way so that adding a
+  // signature later cannot be silently outvoted by a BOM.)
+  if (hasBinarySignature(bytes)) return false;
 
   // A BOM is positive proof of a text file, and UTF-8/UTF-16 BOMs would
   // otherwise trip the NUL check below.

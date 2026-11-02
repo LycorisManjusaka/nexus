@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { DATA_DIR, sanitizeBeingName, beingSoulDir, beingSoulBackupsDir } from './beingPaths';
 import { GENERATION_LABEL_RE } from './soulGeneration';
+import { atomicWriteFile } from './atomicWrite';
 
 // ── Generation labels ───────────────────────────────────────────────────────
 // A soul file is `<being>_<label>.md`, and until 2026-10-24 `label` was a
@@ -204,6 +205,84 @@ export async function writeSpuWorkFile(
   await fs.mkdir(spuWorkDir(folderName), { recursive: true });
   await fs.writeFile(p, contents, 'utf-8');
   return p;
+}
+
+// ── SPU run records (the RIGHT pane's durable home) ────────────────────────
+// Added 2026-10-31. The left pane has had a working copy on disk since
+// 2026-10-08; the right pane never did — it lived only in React state, so a
+// finished soul update died with the tab even though the generation had cost
+// minutes and up to seven provider calls.
+//
+// One JSON rather than a `_right.md` plus a status file: the text and "is this
+// run finished, truncated, or crashed?" have to agree, and two files can
+// disagree. The cost is that the accumulation is not human-readable in
+// WinMerge — acceptable, because the artifact a human diffs is the committed
+// soul, not an in-flight run.
+//
+// Written through atomicWriteFile: the panel polls/reads this file while the
+// runner is appending to it, and a half-written JSON reads as a corrupt record
+// rather than as an older one.
+// `catch (e: any)` appears 16 times above this line and stays: that is
+// existing debt, and a cleanup pass does not belong in a feature commit. It is
+// NOT a licence to add the 17th — a missing-file check is exactly the case
+// `unknown` plus one narrowing reads better than `any`, because the only
+// property anyone wants is `code`.
+function isEnoent(e: unknown): boolean {
+  return (e as { code?: unknown } | null)?.code === 'ENOENT';
+}
+
+function spuRunFilePath(folderName: string, label: string): string {
+  const safe = sanitizeFolderName(folderName);
+  return path.join(spuWorkDir(folderName), `${safe}_${assertGenerationLabel(label)}_run.json`);
+}
+
+// `null` means "no run has ever been recorded for this generation". A record
+// that fails to parse is ALSO returned as null rather than thrown: a corrupt
+// record must not make the panel unopenable, and the next run overwrites it.
+export async function readSpuRunRecord(
+  folderName: string,
+  label: string
+): Promise<unknown | null> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(spuRunFilePath(folderName, label), 'utf-8');
+  } catch (e: unknown) {
+    if (isEnoent(e)) return null;
+    throw e;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function writeSpuRunRecord(
+  folderName: string,
+  label: string,
+  record: unknown
+): Promise<string> {
+  const p = spuRunFilePath(folderName, label);   // validates the label FIRST
+  await fs.mkdir(spuWorkDir(folderName), { recursive: true });
+  await atomicWriteFile(p, JSON.stringify(record, null, 2));
+  return p;
+}
+
+// Called when the panel has taken the result into its own hands (applied it to
+// the right pane, or dismissed it). Without this, a finished record keeps being
+// offered after it has already been used — and the second offer would overwrite
+// edits the human made on top of it.
+export async function clearSpuRunRecord(
+  folderName: string,
+  label: string
+): Promise<boolean> {
+  try {
+    await fs.unlink(spuRunFilePath(folderName, label));
+    return true;
+  } catch (e: unknown) {
+    if (isEnoent(e)) return false;
+    throw e;
+  }
 }
 
 // ── Shift right pane -> left pane (SPU "start of a new run" contract) ──────

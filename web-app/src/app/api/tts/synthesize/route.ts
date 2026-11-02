@@ -5,6 +5,7 @@ import { speakersJsonPath } from '@/lib/voicechangerPaths';
 import { loadTtsDictPairs, applyTtsDict } from '@/lib/ttsDictionary';
 import { ensureEngineRunning, ENGINES } from '@/lib/ttsEngines';
 import { TTS_ENGINES, ttsEngineByKey, ttsEngineByNum } from '@/lib/ttsEngineCatalog';
+import { fetchCoeiroinkSpeakers, describeFetchFailure } from '@/lib/coeiroinkSpeakers';
 
 // A segment produces ZERO phonemes — and crashes the OpenJTalk-based engines —
 // when it contains no kana, kanji, or alphanumeric characters. Coeiroink fails
@@ -213,9 +214,15 @@ async function synthesizeSegment(text: string, engine: number | string, char_idx
       return await synthRes.arrayBuffer();
     }
     else if (engine === 1) {
-      const coeRes = await fetch('http://127.0.0.1:50032/v1/speakers');
-      if (!coeRes.ok) throw new Error('Failed to fetch Coeiroink speakers');
-      const coeData = await coeRes.json();
+      // ONE catalogue fetch per chunk, and the light endpoint makes that cheap:
+      // 5,641 bytes instead of 15,787,422 (see lib/coeiroinkSpeakers.ts). Sentence
+      // mode calls this once per sentence, so the heavy endpoint moved ~1.4 GB
+      // through JSON.parse for an 89-sentence message.
+      const coe = await fetchCoeiroinkSpeakers();
+      if (coe.via === 'heavy') {
+        console.warn(`[tts] COEIROINK light speakers endpoint missing; parsed ${coe.bytes} bytes.`);
+      }
+      const coeData = coe.speakers;
       const char = resolveByName(coeData, char_idx, char_name);
       if (!char) throw new Error('Coeiroink character not found');
       const style = resolveByName(char.styles, style_idx, style_name) || char.styles[0];
@@ -422,7 +429,7 @@ export async function POST(req: Request) {
     // streaming client used to discard the body entirely — which is exactly why
     // an unstable AivisSpeech could not be diagnosed from the UI.
     return NextResponse.json(
-      { error: e.message, engine: meta.engine, engineState: meta.engineState, chars: meta.chars },
+      { error: describeFetchFailure(e), engine: meta.engine, engineState: meta.engineState, chars: meta.chars },
       {
         status: 500,
         headers: {
@@ -430,7 +437,7 @@ export async function POST(req: Request) {
           'X-Tts-Engine-State': meta.engineState,
           'X-Tts-Chars': String(meta.chars),
           'X-Tts-Ms': String(Date.now() - started),
-          'X-Tts-Error': headerSafe(e?.message || 'synthesis failed'),
+          'X-Tts-Error': headerSafe(describeFetchFailure(e) || 'synthesis failed'),
         },
       },
     );
