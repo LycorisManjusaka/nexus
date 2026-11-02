@@ -71,6 +71,37 @@ export function isCommandKind(kind: string): kind is CommandKind {
   return (COMMAND_KINDS as readonly string[]).includes(kind);
 }
 
+/**
+ * May THIS installation run this item?
+ *
+ * Three answers, and each one is load-bearing:
+ *
+ *   addressed to me      → yes, EVEN IF this installation is not the host.
+ *     Without this the whole field changes nothing: the un-named installation
+ *     would still idle, which is exactly the symptom being fixed.
+ *   addressed elsewhere  → no, EVEN IF this installation is the host.
+ *     Without this the host drains the other clone's messages and answers
+ *     them with its own code — the thing `runnerHost.ts`'s header is afraid
+ *     of, arriving through the fix for it.
+ *   not addressed        → only the host.
+ *     Without this an item queued before this field existed, or one that no
+ *     screen produced (letter, timer), would be run by every installation
+ *     that polled — "whoever polled first", restored.
+ *
+ * Pure, so the rule is testable without a store. `selfId` and `isHost` are
+ * passed in rather than read here because this file must stay usable from a
+ * test with no local_data at all.
+ */
+export function itemIsForThisInstallation(
+  item: { host?: string },
+  selfId: string,
+  isHost: boolean
+): boolean {
+  const target = (item.host || '').trim();
+  if (!target) return isHost;
+  return target === selfId;
+}
+
 export interface QueueItem {
   /** Unique per item. Also the ack/dedupe handle for the enqueuer. */
   id: string;
@@ -85,6 +116,33 @@ export interface QueueItem {
   from: string;
   /** Kind-specific body. `user_message` → { text, attachments }. */
   payload: unknown;
+  /**
+   * Which installation may run this item (an `installationId()`, so a realpath).
+   *
+   * WHY AN ITEM CARRIES THIS (measured 2026-11-02, トカゲくん):
+   *   「C:\dev\nexus-cairn\local_data\runner.json と C:\dev\nexus\local_data\
+   *     runner.json は両方物理的に同じファイルだ ... 同時には動かない」
+   *
+   * He is right, and the single flag could not have fixed it: two clones share
+   * ONE store by junction, so there is ONE runner.json and it can name only
+   * one of them. Whichever is not named idles — and after the merge BOTH have
+   * runner code, so the un-named installation stocks a message and never runs
+   * it.
+   *
+   * The flag answers "who hosts this STORE". That was the right question while
+   * an item had no address: something had to break the "whoever polled first"
+   * tie that `runnerHost.ts`'s header is about. An ADDRESSED item breaks that
+   * tie by construction, and breaks it the way a person would want: the
+   * installation whose screen you typed into is the one that answers, so the
+   * code that runs is the code you are looking at.
+   *
+   * Absent is NOT "anyone". Absent means "the named host", which is both the
+   * backward-compatible reading for items queued before this field and the
+   * right reading for an item nobody typed — a letter, a timer (his 2.2).
+   * Those have no screen to belong to, so the store-level flag is still the
+   * only thing that can place them.
+   */
+  host?: string;
 }
 
 export interface Lease {
@@ -126,12 +184,32 @@ export type ClaimResult =
   | { ok: true; claim: Claim }
   /** Someone holds the lease. `lease` is whatever is on disk, for display. */
   | { ok: false; reason: 'busy'; lease: Lease | null }
-  /** Nothing to do. No lease was left behind. */
-  | { ok: false; reason: 'empty' };
+  /**
+   * Nothing THIS caller may run. No lease was left behind.
+   *
+   * `elsewhere` is how many items were skipped because they are addressed to
+   * a different installation. Zero means the stock is genuinely empty. It is
+   * reported rather than folded into the count because "nothing was sent" and
+   * "the other clone has not picked yours up yet" are opposite situations
+   * that otherwise print the same word, and only the second one needs a
+   * sentence on screen.
+   */
+  | { ok: false; reason: 'empty'; elsewhere: number };
 
 interface Opts {
   /** Override the beings root. Tests point this at a temp dir; nothing else should. */
   beingsDir?: string;
+  /**
+   * Restrict which items this call can see. Applied in `pendingWithErrors`,
+   * so `pending`, `claim` and the `position` an `enqueue` reports all narrow
+   * together — one filter, one answer. Omitted means every item, which is
+   * what every caller written before addressing existed still gets.
+   *
+   * Callers pass `itemIsForThisInstallation` bound to their own identity. The
+   * predicate lives in this module and the identity does not, because reading
+   * local_data from here would make the queue untestable without a store.
+   */
+  accept?: (item: QueueItem) => boolean;
 }
 
 /**
@@ -189,7 +267,7 @@ function isItemFile(name: string): boolean {
 export async function enqueue(
   being: string,
   convoId: string,
-  draft: { kind?: QueueItemKind; from: string; payload: unknown },
+  draft: { kind?: QueueItemKind; from: string; payload: unknown; host?: string },
   opts?: Opts
 ): Promise<{ item: QueueItem; position: number }> {
   if (!being || !convoId) throw new Error('turnQueue.enqueue: being and convoId are required');
@@ -203,6 +281,11 @@ export async function enqueue(
     from: draft.from || '',
     payload: draft.payload ?? null,
   };
+  // Only written when there is one, so an un-addressed item keeps exactly the
+  // shape it had before this field existed — `host: undefined` would serialise
+  // to an absent key anyway, but writing the key conditionally says so out loud.
+  const host = (draft.host || '').trim();
+  if (host) item.host = host;
 
   // `wx` so a repeated id (impossible in practice) fails loudly instead of
   // overwriting a queued message.
@@ -237,17 +320,18 @@ export async function pendingWithErrors(
   being: string,
   convoId: string,
   opts?: Opts
-): Promise<{ items: QueueItem[]; unreadable: string[] }> {
+): Promise<{ items: QueueItem[]; unreadable: string[]; elsewhere: QueueItem[] }> {
   const dir = queueDir(being, convoId, opts);
   let names: string[];
   try {
     names = await fs.readdir(dir);
   } catch (e) {
-    if (errCode(e) === 'ENOENT') return { items: [], unreadable: [] };
+    if (errCode(e) === 'ENOENT') return { items: [], unreadable: [], elsewhere: [] };
     throw e;
   }
   const items: QueueItem[] = [];
   const unreadable: string[] = [];
+  const elsewhere: QueueItem[] = [];
   for (const name of names.filter(isItemFile).sort()) {
     try {
       const raw = await fs.readFile(path.join(dir, name), 'utf-8');
@@ -256,12 +340,23 @@ export async function pendingWithErrors(
         unreadable.push(name);
         continue;
       }
+      // An item this caller may not run is NOT the same as no item, for the
+      // same reason `unreadable` is separate: all three print an empty list
+      // otherwise, and one of them means "waiting for the other installation
+      // to pick it up" while another means "nothing was sent". `unreadable`
+      // is deliberately NOT filtered — a file whose address cannot be parsed
+      // is everyone's problem, and hiding it from the clone that could show
+      // it would be the one failure mode worse than showing it twice.
+      if (opts?.accept && !opts.accept(parsed as QueueItem)) {
+        elsewhere.push(parsed as QueueItem);
+        continue;
+      }
       items.push(parsed as QueueItem);
     } catch {
       unreadable.push(name);
     }
   }
-  return { items, unreadable };
+  return { items, unreadable, elsewhere };
 }
 
 /** The lease on disk, or null. Never throws on a missing/corrupt lease. */
@@ -323,12 +418,18 @@ export async function claim(
     await fh.close();
   }
 
-  const items = await pending(being, convoId, opts);
+  const scan = await pendingWithErrors(being, convoId, opts);
+  const items = scan.items;
   if (items.length === 0) {
     // Nothing to run. Give the lease back rather than hold it for a poll that
     // found nothing — `release` is used so the same ownership check applies.
+    //
+    // The lease was taken before this was known, and that order is deliberate
+    // (see above). So an installation that may run none of the queued items
+    // briefly holds the lease — which is why it is given back here rather
+    // than kept: the clone that CAN run them must be able to take it.
     await release(being, convoId, lease.token, [], opts);
-    return { ok: false, reason: 'empty' };
+    return { ok: false, reason: 'empty', elsewhere: scan.elsewhere.length };
   }
 
   // Record WHICH items this lease took, so a reader can separate "in flight"

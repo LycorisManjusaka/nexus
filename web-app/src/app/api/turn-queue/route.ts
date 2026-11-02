@@ -1,14 +1,20 @@
 import { NextResponse } from 'next/server';
 import {
-  enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
-  breakLease, isCommandKind, isEmptyTurnText,
+  enqueue, claim, release, abandon, composeBatch, readLease, splitByLease,
+  breakLease, isCommandKind, isEmptyTurnText, pendingWithErrors, itemIsForThisInstallation,
 } from '@/lib/turnQueue';
+import { installationId, runnerHostStatus } from '@/lib/runnerHost';
 import { liveTurnStatus } from '@/lib/turnBus';
 
 // The stock a being's turns are fed from (phase 4a, 2026-10-27).
 //
 // GET  ?being=&convoId=            → { count, waiting, claimed, claimedUnknown,
-//                                      items: [{id, at, from, kind, claimed}], lease }
+//                                      elsewhere, items: [{id, at, from, kind, claimed}], lease }
+//
+// Every count here is narrowed to what THIS installation may run, except
+// `elsewhere`, which is how many it may not (2026-11-02 — two clones share one
+// store, so the question "what is queued" has two different right answers
+// depending on who asks).
 // POST { action: 'enqueue', being, convoId, from, text, attachments?, kind? }
 //                                  → { ok, id, position }
 // POST { action: 'claim',   being, convoId, holder }
@@ -54,7 +60,17 @@ export async function GET(req: Request) {
     if (!ok) {
       return NextResponse.json({ error: 'being and convoId are required' }, { status: 400 });
     }
-    const items = await pending(being, convoId);
+    // Narrowed to what THIS installation may run, so the panel's "N waiting"
+    // counts messages this NEXUS can actually answer. Items belonging to the
+    // other clone are reported separately rather than hidden: a message that
+    // nothing here will ever pick up is the one case where silence reads as
+    // "your message was ignored".
+    const selfId = await installationId();
+    const isHost = (await runnerHostStatus(selfId)) === 'host';
+    const scan = await pendingWithErrors(being, convoId, {
+      accept: (it) => itemIsForThisInstallation(it, selfId, isHost),
+    });
+    const items = scan.items;
     const lease = await readLease(being, convoId);
     const split = splitByLease(items, lease);
     const claimedSet = new Set(split.claimed.map((i) => i.id));
@@ -66,6 +82,14 @@ export async function GET(req: Request) {
       waiting: split.waiting.length,
       claimed: split.claimed.length,
       claimedUnknown: split.claimedUnknown,
+      /**
+       * Queued here but addressed to a different installation of NEXUS.
+       *
+       * Counted, not listed: the labels would be the same labels, and what a
+       * person needs is not WHICH message but the fact that this NEXUS is not
+       * the one that will answer it.
+       */
+      elsewhere: scan.elsewhere.length,
       items: items.map((i) => ({
         id: i.id, at: i.at, from: i.from, kind: i.kind, claimed: claimedSet.has(i.id),
       })),
@@ -121,6 +145,9 @@ export async function POST(req: Request) {
           kind: body.kind as 'rerun' | 'continue',
           from: typeof body.from === 'string' ? body.from : '',
           payload: { targetMsgId },
+          // A rerun/continue came from a BUTTON on a message, so there is a
+          // screen behind it and that screen's installation should answer.
+          host: await installationId(),
         });
         return NextResponse.json({ ok: true, id: r.item.id, position: r.position });
       }
@@ -140,13 +167,27 @@ export async function POST(req: Request) {
         kind,
         from: typeof body.from === 'string' ? body.from : '',
         payload: { text, attachments },
+        // Addressed only when a person typed it. A `letter`/`schedule`/
+        // `system` item has no screen to belong to — those are exactly the
+        // items the store-level host flag is still for, so they are left
+        // un-addressed on purpose (see QueueItem.host).
+        ...(kind === 'user_message' ? { host: await installationId() } : {}),
       });
       return NextResponse.json({ ok: true, id: r.item.id, position: r.position });
     }
 
     if (action === 'claim') {
       const holder = typeof body.holder === 'string' ? body.holder : '';
-      const r = await claim(being, convoId, holder);
+      // ⚠ MEASURED 2026-11-02: this action has ZERO callers in the tree —
+      // "Run now" goes through the runner tick, not through here. Narrowed
+      // anyway, because an action that is reachable over HTTP and does NOT
+      // apply the addressing rule is a way to drain the other clone's stock,
+      // and the day something calls it is not the day to discover that.
+      const selfId = await installationId();
+      const isHost = (await runnerHostStatus(selfId)) === 'host';
+      const r = await claim(being, convoId, holder, {
+        accept: (it) => itemIsForThisInstallation(it, selfId, isHost),
+      });
       if (!r.ok) {
         return NextResponse.json({
           ok: false,

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { claim, release, abandon, queuedConversations } from '@/lib/turnQueue';
+import { claim, release, abandon, queuedConversations, itemIsForThisInstallation, type QueueItem } from '@/lib/turnQueue';
 import { runTurnForQueue, type RunTurnResult } from '@/lib/runTurnForQueue';
-import { runnerHostStatus, describeRunnerHost, installationId, claimRunnerHostIfUnset } from '@/lib/runnerHost';
+import { runnerHostStatus, describeRunnerHost, installationId, claimRunnerHostIfUnset, readRunnerHost, type RunnerHostStatus } from '@/lib/runnerHost';
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
 import { onStop } from '@/lib/turnStop';
 import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnBus';
@@ -60,6 +60,18 @@ import { POST as chatPost } from '@/app/api/chat/route';
 // invisible from the screen. Default is "nobody hosts", so a fresh checkout
 // runs nothing until someone says where.
 //
+// ⚠ CORRECTED 2026-11-02. The paragraph above is still true about the PROBLEM
+// and became false about the MECHANISM the same day the branches merged. The
+// flag is one file in the shared store (トカゲくん measured it: both trees'
+// `local_data\runner.json` are the same bytes), so honouring it for the whole
+// tick meant the un-named installation refused every send typed into it.
+//
+// A tick is no longer refused as a whole. Each ITEM names the installation
+// that may run it (QueueItem.host), and the flag decides only the items that
+// name nobody — anything queued before addressing existed, and anything no
+// screen produced (a letter, a timer). "Which tree answered" is now decided by
+// which tree was typed into, which is also the one a person is looking at.
+//
 // NO RULES HERE. Scheduling, exclusivity, the relay and the turn itself live
 // in lib.
 
@@ -69,7 +81,7 @@ type Outcome = {
   convoId: string;
   ran: boolean;
   /** Why nothing ran, when nothing ran. Never a bare "failed". */
-  skipped?: 'busy' | 'empty' | 'auto-trigger-off' | 'claim-failed';
+  skipped?: 'busy' | 'empty' | 'elsewhere' | 'auto-trigger-off' | 'claim-failed';
   result?: RunTurnResult;
 };
 
@@ -95,6 +107,22 @@ interface PassOpts {
   oneBeing: string;
   oneConvo: string;
   selfId: string;
+  /**
+   * What `runner.json` says about THIS installation, and who it names.
+   *
+   * Not "may this pass run" — that question is now per item, answered by
+   * `itemIsForThisInstallation`. The flag is only the fallback half of that
+   * rule: it decides who runs items with no address on them (anything queued
+   * before addressing existed, and anything no screen produced — a letter, a
+   * timer). An addressed item runs on the installation it names regardless.
+   *
+   * Carried as the four-way status rather than a boolean so the sentence this
+   * pass can show a person keeps all four meanings. 'unset' and 'unreadable'
+   * are both "not the host" for the rule and NEITHER of them is "someone else
+   * is the host" for the human.
+   */
+  hostStatus: RunnerHostStatus;
+  hostId?: string;
   origin: string;
   /**
    * The placeholder id a kicking tab is already streaming into. Passed
@@ -117,13 +145,28 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
   const globalSettings = (await loadUserSettings()) || null;
   const holder = `runner:${opts.selfId}`;
 
+  // Bound once and passed to every place THIS PASS looks at an item — the
+  // conversation list and the claim — so the two cannot disagree about which
+  // items belong here. (GET /api/turn-queue binds its own, from the same
+  // predicate: it answers a different request and has no PassOpts.)
+  //
+  // Declared HERE, above the target list, and not next to the claim: the sweep
+  // below uses it, and a `const` used before its declaration is a TDZ throw at
+  // runtime (tsc caught it; nothing else would have until a sweep ran).
+  const accept = (it: QueueItem) => itemIsForThisInstallation(it, opts.selfId, opts.hostStatus === 'host');
+
   const targets: Array<{ being: string; convoId: string; settings: Record<string, unknown> }> = [];
   if (opts.oneBeing && opts.oneConvo) {
     const f = folders.find((x: { name: string }) => x.name === opts.oneBeing);
     targets.push({ being: opts.oneBeing, convoId: opts.oneConvo, settings: (f?.settings || {}) as Record<string, unknown> });
   } else {
     for (const f of folders as Array<{ name: string; settings?: Record<string, unknown> }>) {
-      for (const row of await queuedConversations(f.name)) {
+      // Narrowed: a conversation holding ONLY the other clone's items is not
+      // a target at all. Without this the sweep takes its lease, finds
+      // nothing it may run, and releases — harmless for data, but the
+      // rightful clone gets `busy` if it ticks in that instant, and there is
+      // no poll loop to retry (ticks happen on send and on the button).
+      for (const row of await queuedConversations(f.name, { accept })) {
         targets.push({ being: f.name, convoId: row.convoId, settings: f.settings || {} });
       }
     }
@@ -152,12 +195,25 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
         continue;
       }
 
-      const c = await claim(t.being, t.convoId, holder);
+      const c = await claim(t.being, t.convoId, holder, { accept });
       if (!c.ok) {
-        const skipped = c.reason === 'busy' ? 'busy' : c.reason === 'empty' ? 'empty' : 'claim-failed';
+        // 'elsewhere' is split out of 'empty' because the two need opposite
+        // reactions: an empty stock is normal and silent, while a stock full
+        // of another clone's messages means THIS tick can never drain it and
+        // the person should be told which installation can.
+        const elsewhere = c.reason === 'empty' && c.elsewhere > 0;
+        const skipped = c.reason === 'busy' ? 'busy'
+          : elsewhere ? 'elsewhere'
+          : c.reason === 'empty' ? 'empty'
+          : 'claim-failed';
         outcomes.push({ being: t.being, convoId: t.convoId, ran: false, skipped });
         if (skipped !== 'empty') console.log(`[runner] skipped ${t.being}/${t.convoId}: ${skipped}`);
-        closeRelay(t.convoId, { type: 'notice', content: `Nothing ran: ${skipped}.` });
+        closeRelay(t.convoId, {
+          type: 'notice',
+          content: elsewhere
+            ? `Nothing ran here: ${(c as { elsewhere: number }).elsewhere} queued message(s) are addressed to a different installation of NEXUS. ${describeRunnerHost(opts.hostStatus, opts.selfId, opts.hostId)}`
+            : `Nothing ran: ${skipped}.`,
+        });
         continue;
       }
 
@@ -331,26 +387,38 @@ export async function POST(req: Request) {
       status = await runnerHostStatus(selfId);
     }
 
-    if (status !== 'host') {
-      return NextResponse.json({
-        ok: false,
-        skipped: 'not-host',
-        // The sentence, not just the status word: a runner that idles without
-        // saying why is indistinguishable from one that is broken.
-        //
-        // 'failed' is appended because it is the ONE outcome the sentence
-        // cannot cover: describeRunnerHost('unset') now says the first turn
-        // claims the role automatically, and this turn just tried to and
-        // could not. 'taken' needs no suffix — the status is 'not-host' by
-        // then, and that sentence names the winner.
-        reason: describeRunnerHost(status, selfId)
-          + (claimOutcome === 'failed'
-            ? ` This turn tried to take the role and the write failed, so the store may be read-only.`
-            : ''),
-        self: selfId,
-        ...(claimOutcome ? { claim: claimOutcome } : {}),
-      });
-    }
+    // ⚠ A WHOLE-TICK REFUSAL STOOD HERE until 2026-11-02 and was wrong once
+    // two clones shared one store:
+    //
+    //     if (status !== 'host') return { skipped: 'not-host' }
+    //
+    // MEASURED (トカゲくん, 2026-11-02): `C:\dev\nexus\local_data\runner.json`
+    // and `C:\dev\nexus-cairn\local_data\runner.json` are THE SAME FILE — the
+    // store is shared by junction. So the flag can name exactly one of the two
+    // installations, and after the merge the other one has runner code and
+    // refuses here: a message typed into it is stocked and never runs.
+    //
+    // The gate is now PER ITEM (`itemIsForThisInstallation`), because the
+    // question the flag actually answers is "who runs an item that names
+    // nobody". Addressing changes which answers are possible, not which
+    // question is being asked — see the field doc on QueueItem.host.
+    //
+    // `status` is still read, still carried, and still turns into a sentence:
+    // it decides un-addressed items, and `claim` reporting `elsewhere` is what
+    // reaches a person when a stock belongs to the other clone.
+    const hostRecord = status === 'not-host' ? await readRunnerHost().catch(() => null) : null;
+
+    // Carried on every answer below, not just a refusal, because the thing a
+    // person needs to know changed shape: a tick no longer stops at the flag,
+    // so "did it run?" and "what does the flag say?" are separate facts and
+    // both belong in the response. `claim: 'failed'` is the ONE outcome no
+    // status word covers — the role was unclaimed, this turn tried to take it,
+    // and the write did not land, which means the store may be read-only.
+    const hostNote = {
+      hostStatus: status,
+      ...(status !== 'host' ? { hostReason: describeRunnerHost(status, selfId, hostRecord?.host) } : {}),
+      ...(claimOutcome ? { claim: claimOutcome } : {}),
+    };
 
     if (detach) {
       if (!oneBeing || !oneConvo) {
@@ -368,16 +436,16 @@ export async function POST(req: Request) {
       }
       const turnId = newTurnId();
       beginTurn(oneConvo, turnId);
-      void runPass({ auto, oneBeing, oneConvo, selfId, origin, assistantMsgId, relayConvoId: oneConvo })
+      void runPass({ auto, oneBeing, oneConvo, selfId, hostStatus: status, hostId: hostRecord?.host, origin, assistantMsgId, relayConvoId: oneConvo })
         .catch((e) => {
           console.error('[runner] detached pass threw:', e);
           endTurn(oneConvo, { type: 'error', error: String((e as Error)?.message || e) });
         });
-      return NextResponse.json({ ok: true, started: true, attached: false, host: selfId, turnId });
+      return NextResponse.json({ ok: true, started: true, attached: false, host: selfId, turnId, ...hostNote });
     }
 
-    const r = await runPass({ auto, oneBeing, oneConvo, selfId, origin, assistantMsgId, relayConvoId: null });
-    return NextResponse.json({ ok: true, host: selfId, auto, ...r });
+    const r = await runPass({ auto, oneBeing, oneConvo, selfId, hostStatus: status, hostId: hostRecord?.host, origin, assistantMsgId, relayConvoId: null });
+    return NextResponse.json({ ok: true, host: selfId, auto, ...r, ...hostNote });
   } catch (e) {
     return fail(e, 'the runner tick failed');
   }

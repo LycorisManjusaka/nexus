@@ -53,7 +53,7 @@ import { showStockPanel } from '@/lib/stockPanel';
 describe('stockPanel: a problem always reaches the person', () => {
   it('shows a problem note with debug OFF', () => {
     assert.equal(
-      showStockPanel({ debug: false, noteKind: 'problem', stockCount: 0, stockWaiting: 0 }),
+      showStockPanel({ debug: false, noteKind: 'problem', stockCount: 0, stockWaiting: 0, stockElsewhere: 0 }),
       true,
     );
   });
@@ -62,14 +62,14 @@ describe('stockPanel: a problem always reaches the person', () => {
     // The refused-kick case: the item was never enqueued, so there is no
     // count to key off. The note is the entire signal.
     assert.equal(
-      showStockPanel({ debug: false, noteKind: 'problem', stockCount: 0, stockWaiting: 0 }),
+      showStockPanel({ debug: false, noteKind: 'problem', stockCount: 0, stockWaiting: 0, stockElsewhere: 0 }),
       true,
     );
   });
 
   it('shows a problem note with debug ON', () => {
     assert.equal(
-      showStockPanel({ debug: true, noteKind: 'problem', stockCount: 3, stockWaiting: 1 }),
+      showStockPanel({ debug: true, noteKind: 'problem', stockCount: 3, stockWaiting: 1, stockElsewhere: 0 }),
       true,
     );
   });
@@ -80,7 +80,7 @@ describe('stockPanel: a message queued behind a turn is NOT machinery', () => {
     // The policy case: send while a turn runs, the item queues, and the live
     // count is the only honest statement that someone is waiting for it.
     assert.equal(
-      showStockPanel({ debug: false, noteKind: null, stockCount: 1, stockWaiting: 1 }),
+      showStockPanel({ debug: false, noteKind: null, stockCount: 1, stockWaiting: 1, stockElsewhere: 0 }),
       true,
     );
   });
@@ -90,7 +90,7 @@ describe('stockPanel: a message queued behind a turn is NOT machinery', () => {
     // produced the queue. The note stays suppressed (ChatArea's kind gate) but
     // it must not suppress the panel the live count has earned.
     assert.equal(
-      showStockPanel({ debug: false, noteKind: 'info', stockCount: 1, stockWaiting: 1 }),
+      showStockPanel({ debug: false, noteKind: 'info', stockCount: 1, stockWaiting: 1, stockElsewhere: 0 }),
       true,
     );
   });
@@ -100,7 +100,7 @@ describe('stockPanel: a message queued behind a turn is NOT machinery', () => {
     // the turn resolves. Keying the new clause off `count` would paint this
     // panel on literally every send, which is the look 1.2 just removed.
     assert.equal(
-      showStockPanel({ debug: false, noteKind: null, stockCount: 1, stockWaiting: 0 }),
+      showStockPanel({ debug: false, noteKind: null, stockCount: 1, stockWaiting: 0, stockElsewhere: 0 }),
       false,
     );
   });
@@ -109,7 +109,7 @@ describe('stockPanel: a message queued behind a turn is NOT machinery', () => {
     // `waiting` arrives from a route and this is a `> 0` test. The obvious
     // edit — `stockWaiting !== 0` — passes every other case in this file.
     assert.equal(
-      showStockPanel({ debug: false, noteKind: null, stockCount: 0, stockWaiting: -1 }),
+      showStockPanel({ debug: false, noteKind: null, stockCount: 0, stockWaiting: -1, stockElsewhere: 0 }),
       false,
     );
   });
@@ -118,35 +118,35 @@ describe('stockPanel: a message queued behind a turn is NOT machinery', () => {
 describe('stockPanel: machinery is hidden unless asked for', () => {
   it('hides an info note with debug OFF — the "1 waiting" lie', () => {
     assert.equal(
-      showStockPanel({ debug: false, noteKind: 'info', stockCount: 1, stockWaiting: 0 }),
+      showStockPanel({ debug: false, noteKind: 'info', stockCount: 1, stockWaiting: 0, stockElsewhere: 0 }),
       false,
     );
   });
 
   it('hides a non-empty but fully-claimed stock with debug OFF and no note', () => {
     assert.equal(
-      showStockPanel({ debug: false, noteKind: null, stockCount: 2, stockWaiting: 0 }),
+      showStockPanel({ debug: false, noteKind: null, stockCount: 2, stockWaiting: 0, stockElsewhere: 0 }),
       false,
     );
   });
 
   it('hides everything with debug OFF and nothing happening', () => {
     assert.equal(
-      showStockPanel({ debug: false, noteKind: null, stockCount: 0, stockWaiting: 0 }),
+      showStockPanel({ debug: false, noteKind: null, stockCount: 0, stockWaiting: 0, stockElsewhere: 0 }),
       false,
     );
   });
 
   it('shows an info note with debug ON', () => {
     assert.equal(
-      showStockPanel({ debug: true, noteKind: 'info', stockCount: 0, stockWaiting: 0 }),
+      showStockPanel({ debug: true, noteKind: 'info', stockCount: 0, stockWaiting: 0, stockElsewhere: 0 }),
       true,
     );
   });
 
   it('shows a non-empty stock with debug ON and no note', () => {
     assert.equal(
-      showStockPanel({ debug: true, noteKind: null, stockCount: 1, stockWaiting: 0 }),
+      showStockPanel({ debug: true, noteKind: null, stockCount: 1, stockWaiting: 0, stockElsewhere: 0 }),
       true,
     );
   });
@@ -155,7 +155,7 @@ describe('stockPanel: machinery is hidden unless asked for', () => {
 describe('stockPanel: debug alone does not paint an empty box', () => {
   it('hides when debug is ON but there is nothing to look at', () => {
     assert.equal(
-      showStockPanel({ debug: true, noteKind: null, stockCount: 0, stockWaiting: 0 }),
+      showStockPanel({ debug: true, noteKind: null, stockCount: 0, stockWaiting: 0, stockElsewhere: 0 }),
       false,
     );
   });
@@ -165,8 +165,58 @@ describe('stockPanel: debug alone does not paint an empty box', () => {
     // 0 or a negative must not open the panel. Asserted because the obvious
     // edit — `stockCount !== 0` — passes every other case here.
     assert.equal(
-      showStockPanel({ debug: true, noteKind: null, stockCount: -1, stockWaiting: 0 }),
+      showStockPanel({ debug: true, noteKind: null, stockCount: -1, stockWaiting: 0, stockElsewhere: 0 }),
       false,
+    );
+  });
+});
+
+describe('stockPanel: a stock this installation cannot run always reaches the person', () => {
+  /*
+   * NOT written from the implementation. These come from the symptom
+   * (トカゲくん, 2026-11-02): two clones share one local_data by junction, so
+   * `runner.json` names one of them and a message typed into the other was
+   * stocked and never ran. The panel is the only place that can say so.
+   */
+
+  it('shows an elsewhere-addressed stock with debug OFF', () => {
+    // Without this clause the day's symptom survives the fix: the item is
+    // narrowed out of `count` and `waiting` by the server (that is what makes
+    // the runner leave it alone), so every other reason to open the panel is
+    // already false and the person sees an empty screen.
+    assert.equal(
+      showStockPanel({ debug: false, noteKind: null, stockCount: 0, stockWaiting: 0, stockElsewhere: 1 }),
+      true,
+    );
+  });
+
+  it('does not need a count or a waiting item to say so', () => {
+    // Keyed on its own field, not on `stockCount`. If this were folded into
+    // the count test, a server that narrows correctly (count 0) would hide
+    // exactly the case the field exists for.
+    assert.equal(
+      showStockPanel({ debug: false, noteKind: null, stockCount: 0, stockWaiting: 0, stockElsewhere: 3 }),
+      true,
+    );
+  });
+
+  it('a negative elsewhere is not treated as content', () => {
+    // Same defensive shape as the count and waiting cases above: the number
+    // arrives from a route, and the obvious edit — `!== 0` — passes every
+    // other case in this file.
+    assert.equal(
+      showStockPanel({ debug: true, noteKind: null, stockCount: 0, stockWaiting: 0, stockElsewhere: -1 }),
+      false,
+    );
+  });
+
+  it('shows both rows when a stock has waiting AND elsewhere items', () => {
+    // One boolean for the whole panel, so this cannot distinguish the rows —
+    // asserted anyway because the two clauses are independent and a future
+    // `else if` between them would silently drop one.
+    assert.equal(
+      showStockPanel({ debug: false, noteKind: null, stockCount: 2, stockWaiting: 1, stockElsewhere: 1 }),
+      true,
     );
   });
 });

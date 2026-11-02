@@ -71,6 +71,20 @@ export type StockPanelInput = {
    * items, so it is non-zero only while something really is behind something.
    */
   stockWaiting: number;
+  /**
+   * Items queued for this conversation that are addressed to a DIFFERENT
+   * installation of NEXUS (2026-11-02; two clones share one store by junction).
+   *
+   * A third count and not folded into `waiting`, because the two mean opposite
+   * things to the person reading them. `waiting` is "behind something, coming
+   * shortly". This is "NOTHING HERE WILL EVER RUN IT" — the other NEXUS has to
+   * be the one, and if that one is not running, the message sits forever.
+   *
+   * Which is why it opens the panel unconditionally: the whole argument for
+   * hiding machinery is that a user cannot act on it. A person CAN act on
+   * this one — open the other NEXUS, or move the host flag.
+   */
+  stockElsewhere: number;
 };
 
 /**
@@ -103,6 +117,13 @@ export function showStockPanel(i: StockPanelInput): boolean {
   // Keyed on `stockWaiting` and not `stockCount`: count stays positive for
   // the whole of a healthy turn, so it would paint this row on every send.
   if (i.stockWaiting > 0) return true;
+  // Addressed elsewhere is the STRONGEST of the three "always" clauses and is
+  // listed last only because it is the newest. ADDED 2026-11-02: a message
+  // this installation may never run is not "queued behind" anything — there
+  // is no turn ahead of it that will finish and let it through. Treating it
+  // as machinery would reproduce exactly the symptom this day's work started
+  // from: a message that is stocked and never runs, with nothing on screen.
+  if (i.stockElsewhere > 0) return true;
   if (!i.debug) return false;
   return i.stockCount > 0 || i.noteKind !== null;
 }

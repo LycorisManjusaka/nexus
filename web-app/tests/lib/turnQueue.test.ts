@@ -38,6 +38,7 @@ import {
   composeBatch,
   splitByLease,
   isEmptyTurnText,
+  itemIsForThisInstallation,
   LEASE_NAME,
 } from '../../src/lib/turnQueue';
 import type { QueueItem } from '../../src/lib/turnQueue';
@@ -608,5 +609,157 @@ describe('turnQueue: isEmptyTurnText', () => {
     assert.equal(isEmptyTurnText(null, null), true);
     assert.equal(isEmptyTurnText(42, 'not-an-array'), true,
       'composeBatch yields text:"" for a payload like this; it must not be sent');
+  });
+});
+
+describe('turnQueue: an item can name the installation that runs it', () => {
+  /*
+   * NOT written from the implementation. Written from the measurement
+   * (トカゲくん, 2026-11-02): `C:\dev\nexus\local_data\runner.json` and
+   * `C:\dev\nexus-cairn\local_data\runner.json` are THE SAME FILE, because
+   * both trees reach one store through a junction. So the store-level host
+   * flag can name exactly one of the two installations, and after the merge
+   * the other one has runner code and refuses every tick: a message typed
+   * into it is stocked and never runs.
+   *
+   * Each case below says what would be different without it, because the
+   * three answers of `itemIsForThisInstallation` fail in three different
+   * directions and two of them are silent.
+   */
+
+  const ME = 'c:\\dev\\nexus-cairn';
+  const THEM = 'c:\\dev\\nexus';
+
+  it('runs an item addressed to me even when I am NOT the host', () => {
+    // Without this the field changes nothing at all: the un-named clone still
+    // idles, which is the whole symptom.
+    assert.equal(itemIsForThisInstallation({ host: ME }, ME, false), true);
+  });
+
+  it('refuses an item addressed elsewhere even when I AM the host', () => {
+    // Without this the host drains the other clone's stock and answers it
+    // with its own code — the exact failure runnerHost.ts's header is about,
+    // arriving through the fix for it.
+    assert.equal(itemIsForThisInstallation({ host: THEM }, ME, true), false);
+  });
+
+  it('gives an un-addressed item to the host, and to nobody else', () => {
+    // Both halves matter. The first keeps anything queued before this field
+    // existed — and anything no screen produced (a letter, a timer) — running
+    // at all. The second stops "whoever polled first" from coming back.
+    assert.equal(itemIsForThisInstallation({}, ME, true), true);
+    assert.equal(itemIsForThisInstallation({}, ME, false), false);
+  });
+
+  it('treats a blank or whitespace host as un-addressed', () => {
+    // A route that writes `host: ''` must not produce an item NOTHING can
+    // run: '' matches no installation id, so without the trim this item
+    // would sit forever on both clones.
+    assert.equal(itemIsForThisInstallation({ host: '' }, ME, true), true);
+    assert.equal(itemIsForThisInstallation({ host: '   ' }, ME, false), false);
+    // ⚠ This third line is the only one that tests the trim, and it was added
+    // while DESIGNING the mutation that removes it. Without `isHost: true`,
+    // dropping `.trim()` changes nothing either test can see: '   ' is truthy,
+    // so the un-trimmed path falls through to `'   ' === selfId` → false, and
+    // both lines above expect false anyway. A whitespace host must reach the
+    // host, not nobody.
+    assert.equal(itemIsForThisInstallation({ host: '   ' }, ME, true), true);
+  });
+
+  it('enqueue writes the host only when one is given', () => {
+    // The absent key is the backward-compatible shape AND the right shape for
+    // an item nobody typed. A `host: ''` on every item would make every one
+    // of them un-runnable-by-name while LOOKING addressed.
+    return (async () => {
+      const a = await enqueue('H', 'c1', { from: '', payload: { text: 'x' }, host: ME }, { beingsDir: root });
+      const b = await enqueue('H', 'c1', { from: '', payload: { text: 'y' } }, { beingsDir: root });
+      assert.equal(a.item.host, ME);
+      assert.equal('host' in b.item, false);
+      const onDisk = await pending('H', 'c1', { beingsDir: root });
+      assert.equal(onDisk.length, 2);
+    })();
+  });
+
+  it('pendingWithErrors splits mine from elsewhere, and hides neither', () => {
+    // `elsewhere` is reported rather than dropped for the same reason
+    // `unreadable` is: three different situations print the same empty list
+    // otherwise, and "the other NEXUS has not picked yours up" is the one a
+    // person is waiting on.
+    return (async () => {
+      await enqueue('H', 'c2', { from: '', payload: { text: 'mine' }, host: ME }, { beingsDir: root });
+      await enqueue('H', 'c2', { from: '', payload: { text: 'theirs' }, host: THEM }, { beingsDir: root });
+      const scan = await pendingWithErrors('H', 'c2', {
+        beingsDir: root,
+        accept: (it) => itemIsForThisInstallation(it, ME, false),
+      });
+      assert.equal(scan.items.length, 1);
+      assert.equal(scan.elsewhere.length, 1);
+      assert.deepEqual((scan.items[0].payload as { text: string }).text, 'mine');
+      // Unfiltered still sees both — the filter is per CALL, not a property
+      // of the store, because the same files have two right answers.
+      const all = await pendingWithErrors('H', 'c2', { beingsDir: root });
+      assert.equal(all.items.length, 2);
+      assert.equal(all.elsewhere.length, 0);
+    })();
+  });
+
+  it('claim takes only my items and leaves theirs on disk', () => {
+    return (async () => {
+      await enqueue('H', 'c3', { from: '', payload: { text: 'mine' }, host: ME }, { beingsDir: root });
+      await enqueue('H', 'c3', { from: '', payload: { text: 'theirs' }, host: THEM }, { beingsDir: root });
+      const c = await claim('H', 'c3', 'runner:me', {
+        beingsDir: root,
+        accept: (it) => itemIsForThisInstallation(it, ME, false),
+      });
+      assert.equal(c.ok, true);
+      if (c.ok) {
+        assert.equal(c.claim.items.length, 1);
+        await release('H', 'c3', c.claim.token, c.claim.items.map((i) => i.id), { beingsDir: root });
+      }
+      // The other clone's message is untouched — not consumed, not claimed.
+      const left = await pending('H', 'c3', { beingsDir: root });
+      assert.equal(left.length, 1);
+      assert.equal((left[0].payload as { text: string }).text, 'theirs');
+    })();
+  });
+
+  it('claim reports how many belong elsewhere, and GIVES THE LEASE BACK', () => {
+    // The lease is taken before the items are read (deliberate, see `claim`),
+    // so an installation that may run none of them holds it for a moment. If
+    // it kept the lease, the clone that CAN run them would get `busy` forever
+    // — a deadlock produced by the fix for a stall.
+    return (async () => {
+      await enqueue('H', 'c4', { from: '', payload: { text: 'theirs' }, host: THEM }, { beingsDir: root });
+      const c = await claim('H', 'c4', 'runner:me', {
+        beingsDir: root,
+        accept: (it) => itemIsForThisInstallation(it, ME, false),
+      });
+      assert.equal(c.ok, false);
+      if (!c.ok && c.reason === 'empty') assert.equal(c.elsewhere, 1);
+      assert.equal(await readLease('H', 'c4', { beingsDir: root }), null);
+      // And the rightful owner can now take it.
+      const theirs = await claim('H', 'c4', 'runner:them', {
+        beingsDir: root,
+        accept: (it) => itemIsForThisInstallation(it, THEM, false),
+      });
+      assert.equal(theirs.ok, true);
+      if (theirs.ok) {
+        assert.equal(theirs.claim.items.length, 1);
+        await release('H', 'c4', theirs.claim.token, theirs.claim.items.map((i) => i.id), { beingsDir: root });
+      }
+    })();
+  });
+
+  it('distinguishes a genuinely empty stock from one belonging elsewhere', () => {
+    // Both are `{ ok: false, reason: 'empty' }`. Only the second one needs a
+    // sentence on screen, and `elsewhere: 0` is what lets the caller tell.
+    return (async () => {
+      const c = await claim('H', 'c5', 'runner:me', {
+        beingsDir: root,
+        accept: (it) => itemIsForThisInstallation(it, ME, false),
+      });
+      assert.equal(c.ok, false);
+      if (!c.ok && c.reason === 'empty') assert.equal(c.elsewhere, 0);
+    })();
   });
 });

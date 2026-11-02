@@ -2786,6 +2786,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     claimed: number;
     /** A lease with no id list: some are claimed, we cannot say which. */
     claimedUnknown: boolean;
+    /**
+     * Queued, but addressed to the OTHER installation sharing this store.
+     *
+     * Not in `count`/`waiting`/`items`: the server narrows all three to what
+     * it may run, so this is the only field that says "there is a message
+     * here and this NEXUS is not the one that answers it".
+     */
+    elsewhere: number;
     items: StockItem[];
     /**
      * Who holds the lease and since when, exactly as GET reports it.
@@ -2877,6 +2885,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     noteKind: stockNote?.kind ?? null,
     stockCount: stock?.count ?? 0,
     stockWaiting: stock?.waiting ?? 0,
+    stockElsewhere: stock?.elsewhere ?? 0,
   });
 
   const refreshStock = useCallback(async () => {
@@ -2895,6 +2904,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         waiting: typeof d?.waiting === 'number' ? d.waiting : (d?.count || 0),
         claimed: typeof d?.claimed === 'number' ? d.claimed : 0,
         claimedUnknown: !!d?.claimedUnknown,
+        // Zero from an older server, which is the right default: it narrowed
+        // nothing, so everything it reported is already in `count`.
+        elsewhere: typeof d?.elsewhere === 'number' ? d.elsewhere : 0,
         items,
         // An older server that does not report a lease yields null, which the
         // panel renders as "no holder info" rather than as "nobody holds it".
@@ -6035,6 +6047,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       </button>
                     ) : null}
                   </>
+                ) : null}
+                {/* Addressed to the OTHER installation sharing this store.
+                    Placed BEFORE the waiting row and carrying no button, on
+                    purpose: there is nothing this NEXUS can do about it, so
+                    the only honest thing on screen is the sentence, and it
+                    should be the first thing read. A "Run now" here would be
+                    a button that cannot work — the claim narrows these items
+                    away before it ever sees them. */}
+                {stock && stock.elsewhere > 0 ? (
+                  <span className="font-medium text-amber-600 dark:text-amber-400">
+                    {t('chat.stock.elsewhere').replace('{n}', String(stock.elsewhere))}
+                  </span>
                 ) : null}
                 {stock && stock.waiting > 0 ? (
                   <>
