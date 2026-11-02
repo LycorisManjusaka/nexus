@@ -1,8 +1,16 @@
 /**
- * The runner's STOP path.
+ * The runner's UNFINISHED endings — a stop, and (since 2026-11-02) a failure.
  *
- * TWO fixes live here, measured two days apart, and the second one CORRECTS
- * the first — so both reasons are kept rather than overwritten:
+ * The file is still named for the stop because the stop is where the shape was
+ * worked out: commit what the pass produced, mark it, consume the batch. A
+ * failure now takes the same road, so the two live together — and the two
+ * tests at the bottom that used to assert the OPPOSITE for a failure are
+ * rewritten in place, with their old contract quoted, because a test that
+ * encodes a decision keeps the whole suite silent about it when the decision
+ * changes.
+ *
+ * THREE fixes live here, and each one CORRECTS the one before — so every
+ * reason is kept rather than overwritten:
  *
  * 1. 2026-10-29 — "Stop does nothing". Pressing Stop DOES abort the generation
  *    (`[runner] FAILED ... at stream: This operation was aborted`), but the
@@ -26,13 +34,30 @@
  *    nothing about the thing that was wrong. That is why these tests now check
  *    WHAT IS IN the saved reply and not only how many messages there are.
  *
+ * 3. 2026-11-02 — a FAILURE (not a stop) still abandoned its batch and saved
+ *    nothing, and this file's own comment defended it: "committing a partial
+ *    here AND abandoning would compose the same user message a second time on
+ *    the retry". True, but it only ruled out ONE of the two pairs. Lizard-kun
+ *    named the pair the browser always used: commit, and let a PERSON retry.
+ *    "In the pre-server version the USER message stays as it is, the ASSISTANT
+ *    message stays empty, and 'retry' is easy to press — if the assistant
+ *    message is not kept, 'retry' cannot be pressed either."
+ *
+ *    Committing and CONSUMING has neither failure mode: no duplicate (nothing
+ *    re-composes a spent batch) and no lost text (it is in the log).
+ *
  * What would look different without each rule:
  *   · no partial commit      → a stopped turn loses the text, the thinking,
  *                              the tool report and the billing record
  *   · no stop marker         → a truncated reply is indistinguishable from a
  *                              terse one to anyone opening the log later
- *   · partial on a non-stop  → the batch is also abandoned for retry, so the
- *     failure                  same user message is composed a second time
+ *   · no commit on a failure  → the typed text exists only in the queue item
+ *                              and an optimistic bubble (InputArea clears its
+ *                              draft on send), there is no assistant message
+ *                              to press "retry" on, and the item sits in the
+ *                              stock panel asking a question nobody wanted
+ *   · commit WITHOUT consume  → the next poll composes the same user message
+ *                              again: one request, two copies
  *   · rerun without commit   → the old reply is gone AND the new one is not
  *                              saved: the conversation loses a message
  *   · continue without commit → the continuation is lost, the half stays
@@ -213,28 +238,136 @@ test('stop before anything arrived: an empty reply is still saved, carrying the 
   assert.ok((msgs[1].notices || []).length >= 1, 'and it says why it is empty');
 });
 
-test('non-stop failure: nothing is saved, because the batch is abandoned for retry', async () => {
+// ── A FAILURE commits too (2026-11-02) ──────────────────────────────────────
+//
+// ⚠ The two tests immediately below REPLACE two that asserted the opposite:
+//   'non-stop failure: nothing is saved, because the batch is abandoned for
+//    retry'  → assert.equal(saves.length, 0)
+//   'wasStopped is optional: a throw with no callback is a plain stream
+//    failure' → assert.equal(saves.length, 0)
+// They were green for three days and they were the reason nobody could see
+// that a failed send left no message to retry from. Quoted rather than
+// deleted: the next reader needs to know the suite once promised this.
+
+test('non-stop stream failure: the partial IS saved and the batch is spent', async () => {
   const { deps: d, saves } = deps({
     wasStopped: () => false,
     chatPost: async () => ({
       ok: true, status: 200,
-      body: partialThenAbort([frame({ type: 'text', content: 'would be lost' })]),
+      body: partialThenAbort([frame({ type: 'text', content: 'arrived before the break' })]),
     } as unknown as Response),
   });
   const r = await runTurnForQueue('Default', 'c1', items('keep me'), d);
 
   assert.equal((r as { stage: string }).stage, 'stream');
-  assert.deepEqual((r as { consumedIds: string[] }).consumedIds, [], 'abandoned');
-  // Committing a partial here AND abandoning would compose the same user
-  // message a second time on the retry.
-  assert.equal(saves.length, 0, 'no save on a non-stop failure');
+  assert.deepEqual((r as { consumedIds: string[] }).consumedIds, ['item-1'], 'consumed, not abandoned');
+  assert.equal(saves.length, 1);
+  const msgs = savedMessages(saves[0]);
+  assert.equal(msgs.length, 2, 'the user turn and the reply it got');
+  assert.ok(msgs[0].content.includes('keep me'), 'the typed text is in the log');
+  assert.equal(msgs[1].content, 'arrived before the break', 'text that was generated is kept');
+  // A failure is not a decision, so it gets no stop marker — otherwise the log
+  // would claim somebody cancelled this.
+  assert.ok(!(msgs[1].notices || []).some((n) => /stopped|停止/i.test(n)), 'no stop notice');
 });
 
-test('wasStopped is optional: a throw with no callback is a plain stream failure', async () => {
+test('wasStopped is optional: a throw with no callback still commits', async () => {
   const { deps: d, saves } = deps({}); // no wasStopped at all
   const r = await runTurnForQueue('Default', 'c1', items('x'), d);
   assert.equal((r as { stage: string }).stage, 'stream');
-  assert.equal(saves.length, 0);
+  assert.equal(saves.length, 1);
+  assert.equal(savedMessages(saves[0]).length, 2);
+});
+
+test('the LM Studio shape: a 400 from the route leaves the user turn and an EMPTY reply', async () => {
+  // REPORTED 2026-11-01: 'LM Studio: 400 { "error": ... Failed to load model
+  // ... Engine protocol startup was aborted }'. The post never got through, so
+  // there is no partial — which is exactly the case that has to produce an
+  // assistant message anyway, because "Rerun from here" only renders on one.
+  const { deps: d, saves } = deps({
+    chatPost: async () => ({ ok: false, status: 400, body: null } as unknown as Response),
+  });
+  const r = await runTurnForQueue('Default', 'c1', items('load the model please'), d);
+
+  assert.equal(r.ok, false);
+  assert.equal((r as { stage: string }).stage, 'post');
+  assert.deepEqual((r as { consumedIds: string[] }).consumedIds, ['item-1'], 'nothing waits in the stock');
+  assert.equal(saves.length, 1, 'a post failure saves too');
+  const msgs = savedMessages(saves[0]);
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].role, 'user');
+  assert.ok(msgs[0].content.includes('load the model please'));
+  assert.equal(msgs[1].role, 'assistant');
+  assert.equal(msgs[1].content, '', 'empty, not absent — this is what retry hangs on');
+});
+
+test('a post that THROWS commits the same way', async () => {
+  const { deps: d, saves } = deps({
+    chatPost: async () => { throw new Error('fetch failed'); },
+  });
+  const r = await runTurnForQueue('Default', 'c1', items('network down'), d);
+  assert.equal((r as { stage: string }).stage, 'post');
+  assert.ok((r as { reason: string }).reason.includes('fetch failed'), 'the reason survives');
+  assert.deepEqual((r as { consumedIds: string[] }).consumedIds, ['item-1']);
+  assert.equal(savedMessages(saves[0]).length, 2);
+});
+
+test('continue + post failure: the half it was extending is kept, with its id', async () => {
+  // Without this, a continue whose post dies replaces the target with a blank —
+  // the one shape where committing could DESTROY text instead of keeping it.
+  const log = {
+    id: 'c1', aiName: 'Local', updatedAt: 5,
+    messages: [
+      { id: 'u1', role: 'user', content: 'Q' },
+      { id: 'a1', role: 'assistant', content: 'HALF' },
+    ],
+  };
+  const { deps: d, saves } = deps({
+    loadLog: async () => log,
+    chatPost: async () => ({ ok: false, status: 503, body: null } as unknown as Response),
+  });
+  await runTurnForQueue('Default', 'c1', command('continue', 'a1'), d);
+
+  const msgs = savedMessages(saves[0]);
+  assert.equal(msgs.length, 2, 'no second bubble');
+  assert.equal(msgs[1].id, 'a1');
+  assert.equal(msgs[1].content, 'HALF', 'the existing half was not blanked');
+});
+
+test('a failure whose SAVE fails is abandoned, because there is nothing to retry from', async () => {
+  // The one remaining abandon on this road. Consuming here would delete the
+  // only copy of the typed text: the log write did not land.
+  const { deps: d } = deps({
+    saveLog: async () => ({ ok: false, error: 'disk full' }),
+  });
+  const r = await runTurnForQueue('Default', 'c1', items('do not lose me'), d);
+  assert.equal((r as { stage: string }).stage, 'save');
+  assert.deepEqual((r as { consumedIds: string[] }).consumedIds, [], 'the items stay');
+});
+
+test('rerun + post failure: the old reply is replaced by the empty one', async () => {
+  // Stated as a test because it LOSES text and that has to be deliberate: the
+  // rewind is what the person asked for, and this is what the browser did too
+  // (its optimistic state drops the target before the request goes out). The
+  // alternative — put the old answer back on a failure — would make a rerun
+  // that half-succeeded ambiguous.
+  const log = {
+    id: 'c1', aiName: 'Local', updatedAt: 5,
+    messages: [
+      { id: 'u1', role: 'user', content: 'Q' },
+      { id: 'a1', role: 'assistant', content: 'OLD ANSWER' },
+    ],
+  };
+  const { deps: d, saves } = deps({
+    loadLog: async () => log,
+    chatPost: async () => ({ ok: false, status: 400, body: null } as unknown as Response),
+  });
+  await runTurnForQueue('Default', 'c1', command('rerun', 'a1'), d);
+
+  const msgs = savedMessages(saves[0]);
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[1].content, '', 'the rerun stands even though it failed');
+  assert.notEqual(msgs[1].content, 'OLD ANSWER');
 });
 
 test('rerun + stop: the partial takes the old reply\'s place, so no message is lost', async () => {

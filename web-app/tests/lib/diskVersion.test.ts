@@ -13,7 +13,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldReloadFromDisk } from '../../src/lib/diskVersion';
+import { shouldReloadFromDisk, classifyLogLoad } from '../../src/lib/diskVersion';
 
 const base = (over: Partial<Parameters<typeof shouldReloadFromDisk>[0]> = {}) => ({
   diskUpdatedAt: 2000,
@@ -111,5 +111,62 @@ describe('shouldReloadFromDisk', () => {
     const own = [1500, 1800];
     shouldReloadFromDisk(base({ ownWrites: own }));
     assert.deepEqual(own, [1500, 1800]);
+  });
+});
+
+/**
+ * classifyLogLoad — "is it ABSENT, or could I not READ it?" (F89).
+ *
+ * ChatArea tested `!r.ok || !r.body` and called the branch "No log on disk — a
+ * conversation that was just created and has never been written". A 404 is the
+ * only status that means that. The branch also threw away the optimistic-lock
+ * base and presented an empty conversation, whose next auto-save overwrote the
+ * real file — the suspected road by which "Next = First Original" came back
+ * unarmed for パイロット (REPORTED 2026-11-02 via トカゲくん; NOT reproduced).
+ *
+ * This house's own rule, written down before this bug and broken here anyway:
+ * absence has three meanings and the instrument has to say which one.
+ */
+describe('classifyLogLoad', () => {
+  it('404 is the ONLY status that means "not written yet"', () => {
+    // Without this, opening a freshly created chat would warn and refuse to
+    // save — the normal new-conversation path.
+    assert.equal(classifyLogLoad(404, false), 'missing');
+  });
+
+  it('a server error is UNREADABLE, never missing', () => {
+    // Without the distinction, a 500 presents an empty conversation and the
+    // next save writes that emptiness over the file.
+    for (const s of [500, 502, 503, 504]) {
+      assert.equal(classifyLogLoad(s, false), 'unreadable', `HTTP ${s}`);
+    }
+  });
+
+  it('the admin gate (401/403) is unreadable too', () => {
+    // The optional login answers 401 for routes that exist AND for routes that
+    // do not (MEASURED 2026-10-27), so it can never be read as absence.
+    assert.equal(classifyLogLoad(401, false), 'unreadable');
+    assert.equal(classifyLogLoad(403, false), 'unreadable');
+  });
+
+  it('200 with no body is unreadable, not empty', () => {
+    // A proxy that answers 200 with nothing is not telling us the file is
+    // gone. Same direction: refuse to conclude absence.
+    assert.equal(classifyLogLoad(200, false), 'unreadable');
+  });
+
+  it('200 with a body is the only "ok"', () => {
+    assert.equal(classifyLogLoad(200, true), 'ok');
+  });
+
+  it('every 2xx with a body is ok', () => {
+    // 204 cannot carry a body, so it lands on unreadable through hasBody —
+    // which is the honest answer for a log fetch that returned no content.
+    assert.equal(classifyLogLoad(206, true), 'ok');
+    assert.equal(classifyLogLoad(204, false), 'unreadable');
+  });
+
+  it('a 3xx is unreadable (fetch follows redirects, so one reaching here is a failure)', () => {
+    assert.equal(classifyLogLoad(304, false), 'unreadable');
   });
 });

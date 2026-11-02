@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   enqueue, pending, claim, release, abandon, composeBatch, readLease, splitByLease,
-  breakLease, isCommandKind, isEmptyTurnText, discard,
+  breakLease, isCommandKind, isEmptyTurnText,
 } from '@/lib/turnQueue';
 import { liveTurnStatus } from '@/lib/turnBus';
 
@@ -17,8 +17,9 @@ import { liveTurnStatus } from '@/lib/turnBus';
 // POST { action: 'abandon', being, convoId, token }               → { ok }
 // POST { action: 'break',   being, convoId, expectedHolder, expectedStartedAt }
 //                                  → { ok } | { ok:false, reason }
-// POST { action: 'discard', being, convoId, ids }
-//                                  → { ok, removed[], refused[], remaining }
+//
+// (A 'discard' action lived here for one day; see the note in lib/turnQueue.ts
+// for why it is gone — a failed turn no longer leaves anything to discard.)
 //
 // This file holds NO rules. Ordering, exclusivity and rendering all live in
 // lib/turnQueue.ts, because `next/server` cannot be imported outside Next's own
@@ -211,20 +212,6 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, reason: 'stale' });
       }
       return NextResponse.json({ ok: await breakLease(being, convoId, lease.token) });
-    }
-
-    // Throw items away without running them.
-    //
-    // The caller names the ids it SAW (the same witness idea as `break`): an
-    // item that arrived since the panel was drawn is not in the list and is
-    // therefore not dropped. No token — the lib refuses anything a lease
-    // covers, so this can never reach a live turn's batch.
-    if (action === 'discard') {
-      const ids = Array.isArray(body.ids)
-        ? body.ids.filter((x): x is string => typeof x === 'string')
-        : [];
-      if (ids.length === 0) return NextResponse.json({ error: 'ids is required' }, { status: 400 });
-      return NextResponse.json(await discard(being, convoId, ids));
     }
 
     return NextResponse.json({ error: `unknown action: ${action || '(none)'}` }, { status: 400 });

@@ -39,6 +39,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'app.welcome.title': 'Welcome to NEXUS',
   'app.welcome.subtitle': 'Select or create a conversation to start',
   'app.welcome.newChat': 'New Chat',
+  'app.cloneFailed': 'Could not clone this conversation ({status}). You are still in the original one — try again.',
 
   // ── Switch-away guard ────────────────────────────────────────────────────
   // Shown in a window.confirm() when the reader clicks another conversation
@@ -1147,11 +1148,6 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.stock.nothingRan': 'the runner ran nothing (the queue was empty, or it is already running elsewhere)',
   'chat.stock.breakStale': 'the claim changed while this was open — reopen the conversation',
   'chat.stock.breakGone': 'already released',
-  'chat.stock.discard': 'Discard',
-  'chat.stock.discardWhy': 'throw the waiting messages away instead of sending them',
-  'chat.stock.discardConfirm': 'Discard the {n} message(s) waiting in the stock?\n\nThey are deleted without being sent. This cannot be undone.\n\nMessages a running turn is working from are kept.',
-  'chat.stock.discarded': 'discarded {n}',
-  'chat.stock.discardRefused': 'kept {n} — a running turn is working from them',
   'chat.stock.waitingSince': 'arrived {time}',
   'chat.tts.lastError': 'Last engine error:\n{error}',
   'chat.tts.state': 'Live TTS pipeline state',
@@ -1826,6 +1822,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'app.welcome.title': 'NEXUS へようこそ',
   'app.welcome.subtitle': '会話を選ぶか、新しく作成してください',
   'app.welcome.newChat': '新しい会話',
+  'app.cloneFailed': 'この会話を複製できませんでした（{status}）。元の会話のままです。もう一度試してください。',
 
   // ── 切り替え時の確認 ──────────────────────────────────────────────────────
   // ターン実行中に別の会話・別の存在へ切り替えようとしたときの window.confirm()
@@ -2863,11 +2860,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.stock.nothingRan': 'ランナーは何も走らせませんでした（キューが空か、別の場所で動いています）',
   'chat.stock.breakStale': '開いている間に占有が変わりました——会話を開き直してください',
   'chat.stock.breakGone': 'すでに解放されています',
-  'chat.stock.discard': '捨てる',
-  'chat.stock.discardWhy': 'ストックで待っているメッセージを、送らずに捨てる',
-  'chat.stock.discardConfirm': 'ストックで待っている {n} 通を捨てますか？\n\n送られずに消えます。元に戻せません。\n\n動いているターンが使っているメッセージは捨てません。',
-  'chat.stock.discarded': '{n} 通を捨てました',
-  'chat.stock.discardRefused': '{n} 通は動いているターンが使っているので残しました',
   'chat.stock.waitingSince': '{time} に届いたもの',
   'chat.tts.lastError': '直近のエンジンエラー：\n{error}',
   'chat.tts.state': 'ライブ TTS パイプラインの状態',

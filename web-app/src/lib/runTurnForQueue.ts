@@ -25,12 +25,21 @@
  *
  * ── WHAT THIS DELIBERATELY DOES NOT DO ─────────────────────────────────────
  *
- * No retry. A turn whose FIRST pass failed leaves the queue items alone
- * (`abandon`, not `release`), so the next poll sees the same batch and the
- * auto-trigger signature is unchanged — the same guard the client-side drain
- * uses, for the same reason: a turn that fails instantly must not re-fire
- * forever. Once any pass has SAVED, the batch is consumed instead; see the
- * pass chain for why re-firing then would duplicate the conversation.
+ * No retry, and (since 2026-11-02) no abandon for a pass that RAN. Every
+ * ending of a pass — finished, stopped, failed — commits a message and
+ * CONSUMES the batch. A failed send therefore looks like it did before the
+ * server existed: the user message stays, the assistant message is empty, and
+ * the person presses "retry" if they want it. Nothing re-fires on its own, so
+ * nothing can re-fire forever, and nothing waits in the stock panel for an
+ * answer the person never wanted to give.
+ *
+ * THREE things still abandon, and all three are a batch that never became a
+ * turn: no log on disk, an empty batch, and a save that failed before anything
+ * of this turn was written (there is no record to retry FROM, so consuming
+ * would delete the text instead of keeping it). The tick route abandons for
+ * the same class of reason when the runner itself throws. ⚠ The first of them
+ * re-fires forever if a conversation is deleted while items wait for it — see
+ * pending-tasks; it predates this change and is not fixed by it.
  *
  * No attachment-description write-back. See runnerSink's RunnerSinkReport.
  *
@@ -576,6 +585,17 @@ export async function runTurnForQueue(
      * answer" would be false.
      */
     sawOutput: boolean;
+    /**
+     * REQUIRED on every failure, not just a Stop (2026-11-02).
+     *
+     * The reason it is required rather than optional is the one the Stop
+     * variant used to give on its own: the partial has to exist by the time
+     * the chain reads the failure, or a later reader has to decide whether
+     * its absence meant "nothing arrived" or "nobody built it". That was
+     * true for a stop and it is true for a failure — a failed send owes the
+     * log an empty assistant message so the person can press "retry".
+     */
+    assistant: Record<string, unknown>;
   }
 
   type PassResult =
@@ -586,14 +606,11 @@ export async function runTurnForQueue(
         sawOutput: boolean;
         unapplied: number;
       }
-    // A transient failure: nothing to commit, the batch goes back.
-    | ({ ok: false; stopped: false } & PassFailure)
-    // The person pressed Stop. `assistant` is REQUIRED on this variant, not
-    // optional, because a Stop that saves nothing is the bug this shape fixes:
-    // the partial has to exist by the time the chain can read `stopped`, or a
-    // later reader has to decide whether its absence meant "nothing arrived"
-    // or "nobody built it". Only ever produced for a 'stream' failure.
-    | ({ ok: false; stopped: true; assistant: Record<string, unknown> } & PassFailure);
+    // A failure. `stopped` separates a DECISION from an accident — it decides
+    // the notice the watcher gets and whether the log says so, but both now
+    // commit (see PassFailure.assistant). `stopped: true` is only ever produced
+    // for a 'stream' failure.
+    | ({ ok: false; stopped: boolean } & PassFailure);
 
   const runPass = async (plan: PassPlan): Promise<PassResult> => {
     const passStart = deps.nowMs();
@@ -661,29 +678,6 @@ export async function runTurnForQueue(
       },
     );
 
-    let res: Response;
-    try {
-      res = await deps.chatPost(
-        new Request(`${deps.origin}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        }),
-      );
-    } catch (e) {
-      return {
-        ok: false, stage: 'post', reason: String((e as Error)?.message || e),
-        stopped: false, sawOutput: false,
-      };
-    }
-    if (!res.ok || !res.body) {
-      return {
-        ok: false, stage: 'post',
-        reason: `route answered ${res.status}${res.body ? '' : ' with no body'}`,
-        stopped: false, sawOutput: false,
-      };
-    }
-
     // Empty for a send or a rerun; the target's own half for a continue (see
     // the shape block above for why the thinking has to travel too). Notices
     // are seeded rather than empty so a previous vessel's failure text reaches
@@ -692,9 +686,10 @@ export async function runTurnForQueue(
     const flags = createTurnFlags();
     const sink = createRunnerSink();
 
-    // Built HERE, above the try, because BOTH exits need it: the pass that
-    // finishes and the pass someone stops. Until 2026-10-30 only the success
-    // path finalized, and a Stop therefore threw the partial away — measured by
+    // Built HERE, above BOTH the post and the stream, because EVERY exit needs
+    // it: the pass that finishes, the pass someone stops, and (since
+    // 2026-11-02) the pass that fails. Until 2026-10-30 only the success path
+    // finalized, and a Stop therefore threw the partial away — measured by
     // Lizard-kun on all three shapes (send, rerun, change_model).
     //
     // ⚠ `attachments` — see F34. finalizeTurnMessage does NOT set it; in the
@@ -726,6 +721,42 @@ export async function runTurnForQueue(
         tokenModel: acc.chosenModelFamily || shell.aiName,
       },
     );
+
+    // ── POST, below the finalizer, because a POST failure also has to COMMIT ──
+    //
+    // Moved here 2026-11-02. These two exits used to return with no `assistant`
+    // at all, which forced the chain to abandon the batch. Lizard-kun named the
+    // behaviour the server version owes the browser one: "the USER message stays
+    // as it is, the ASSISTANT message stays empty, and 'retry' is easy to press
+    // — if the assistant message is not kept, 'retry' cannot be pressed." That
+    // needs a message to EXIST, so both exits finalize like every other one.
+    //
+    // For a send the finalized message is empty (nothing streamed). For a
+    // CONTINUE it carries `plan.seed` — the half the target already had — so a
+    // continue whose post dies keeps the text it was extending instead of
+    // replacing it with a blank.
+    let res: Response;
+    try {
+      res = await deps.chatPost(
+        new Request(`${deps.origin}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }),
+      );
+    } catch (e) {
+      return {
+        ok: false, stage: 'post', reason: String((e as Error)?.message || e),
+        stopped: false, sawOutput: false, assistant: finalizeAssistant(),
+      };
+    }
+    if (!res.ok || !res.body) {
+      return {
+        ok: false, stage: 'post',
+        reason: `route answered ${res.status}${res.body ? '' : ' with no body'}`,
+        stopped: false, sawOutput: false, assistant: finalizeAssistant(),
+      };
+    }
 
     try {
       await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
@@ -760,6 +791,10 @@ export async function runTurnForQueue(
         ok: false, stage: 'stream', reason,
         stopped: false,
         sawOutput: flags.sawOutput,
+        // No stop notice: nobody decided anything. The text that DID arrive
+        // before the stream broke is kept for the same reason a stop keeps it —
+        // it was generated, and it was paid for.
+        assistant: finalizeAssistant(),
       };
     }
 
@@ -837,6 +872,46 @@ export async function runTurnForQueue(
       return { assistant, user: plan.announcedUser ?? null, dropId: plan.dropId ?? null };
     };
 
+    /**
+     * Commit a pass that did not finish, and SPEND the batch.
+     *
+     * One helper for the two ways a pass ends badly (stopped, failed) because
+     * they want the identical three things — the same composition, the same
+     * version guard, the same consume decision — and two derivations of that
+     * drift in exactly the field nobody is looking at.
+     *
+     * `[...plan.keep, assistant]` is the SAME composition the success path
+     * uses, and is right for all four shapes for the same reason: `keep` is by
+     * construction everything in FRONT of this pass's reply.
+     *   send      stored + the user message  → reply appended (empty if the
+     *                                          post never got through)
+     *   rerun     stored MINUS the target    → reply takes its place
+     *   continue  everything before target   → `base` IS the target, so the
+     *                                          half-written reply extends in
+     *                                          place, keeping its id
+     *   handoff   + the handing-over reply   → appended after it
+     *
+     * `null` for the handoff argument: neither a stop nor a failure handed over
+     * to anybody, so the chain ends here and the tab may patch rather than
+     * re-download.
+     */
+    const commitUnfinished = async (
+      assistant: Record<string, unknown>,
+      outcome: { stage: 'stopped' | 'post' | 'stream'; reason: string },
+    ): Promise<RunTurnResult> => {
+      const r = await saveMessages([...plan.keep, assistant], publishableSave(assistant, null));
+      if (!r.ok) {
+        return {
+          ok: false, stage: 'save',
+          reason: r.conflict
+            ? 'refused: the conversation changed on disk while this turn ran'
+            : `save failed: ${String(r.error || 'unknown')}`,
+          consumedIds: saved ? consumedIds : [],
+        };
+      }
+      return { ok: false, stage: outcome.stage, reason: outcome.reason, consumedIds };
+    };
+
     if (!pass.ok) {
       if (pass.stopped) {
         // The person pressed Stop: COMMIT THE PARTIAL and report 'stopped', so
@@ -855,31 +930,10 @@ export async function runTurnForQueue(
         // to the log instead of lost." MEASURED by Lizard-kun as three
         // separate symptoms (send / rerun / change_model), which were one bug.
         //
-        // `[...plan.keep, assistant]` is the SAME composition the success path
-        // uses, and is right for all four shapes for the same reason: `keep` is
-        // by construction everything in FRONT of this pass's reply.
-        //   send      stored + the user message  → partial reply appended
-        //   rerun      stored MINUS the target   → partial reply takes its place
-        //   continue   everything before target  → `base` IS the target, so the
-        //                                          half-written reply extends
-        //                                          in place, keeping its id
-        //   handoff    + the handing-over reply  → partial appended after it
-        const stopSave = await saveMessages(
-          [...plan.keep, pass.assistant],
-          // null: a Stop is a 'stream' failure, so THIS pass handed over to
-          // nobody. The chain ends here either way.
-          publishableSave(pass.assistant, null),
-        );
-        if (!stopSave.ok) {
-          return {
-            ok: false, stage: 'save',
-            reason: stopSave.conflict
-              ? 'refused: the conversation changed on disk while this turn ran'
-              : `save failed: ${String(stopSave.error || 'unknown')}`,
-            consumedIds: saved ? consumedIds : [],
-          };
-        }
-        return { ok: false, stage: 'stopped', reason: 'stopped by request', consumedIds };
+        return commitUnfinished(pass.assistant, {
+          stage: 'stopped',
+          reason: 'stopped by request',
+        });
       }
 
       // A HANDOFF pass failed with nothing to show: no credit, a dead key, the
@@ -937,23 +991,35 @@ export async function runTurnForQueue(
         };
       }
 
-      // The FIRST pass failed, not by request, and nothing is on disk.
+      // The FIRST pass failed, not by request, and nothing is on disk yet.
       //
-      // The partial is NOT saved here, and the reason is the empty
-      // `consumedIds` on the next line, NOT a claim about the browser: this
-      // return ABANDONS the batch, so the queue items stay and the request can
-      // be run again. Saving a partial AND abandoning would compose the same
-      // user message a second time on the retry — one request, two copies.
-      // "Commit the partial" and "let it be retried" are the two coherent
-      // answers to a failure and they exclude each other; a stop takes the
-      // first because a stop is a decision, a transient failure takes the
-      // second because nobody decided anything.
+      // ⚠ CORRECTION, 2026-11-02 — of a comment I wrote in this file and then
+      // reasoned from for days. It said:
       //
-      // (An earlier version of this comment said "same as the browser, where
-      // an un-finalized streaming message is dropped on an error that is not
-      // an abort". That was wrong in the same way the Stop comment above was:
-      // ChatArea:4226 calls finalizeMessage() for EVERY error, abort or not.)
-      return { ok: false, stage: pass.stage, reason: pass.reason, consumedIds: [] };
+      //   "'Commit the partial' and 'let it be retried' are the two coherent
+      //    answers to a failure and they exclude each other"
+      //
+      // Lizard-kun named the THIRD, which is the one the browser always gave:
+      // commit, and let a PERSON retry. In his words: "In the pre-server
+      // version the USER message stays as it is, the ASSISTANT message stays
+      // empty, and 'retry' is easy to press — if the assistant message is not
+      // kept, 'retry' cannot be pressed either. I expect the same behaviour on
+      // the server version. So there is no 'run now' and no 'discard' here at
+      // all; on a failure this just stays, and the rest is the admin's
+      // judgement."
+      //
+      // The two answers I named excluded each other only because I had assumed
+      // the retry must be AUTOMATIC. Commit-and-consume has neither failure
+      // mode: no duplicate user message (the batch is spent, so no poll
+      // re-composes it) and no lost text (it is in the log, where a reader can
+      // see it and a tab paints it). The text the person typed is NOT in the
+      // queue item alone — InputArea clears its localStorage draft on send, so
+      // before this change the only copies were the queue item and an
+      // optimistic bubble that a reload erases.
+      //
+      // This also removes the only thing that ever pushed a failed SEND into
+      // the stock panel, which is why the two buttons are gone with it.
+      return commitUnfinished(pass.assistant, { stage: pass.stage, reason: pass.reason });
     }
 
     // Saved through the one helper built above (see it for why `updatedAt` is

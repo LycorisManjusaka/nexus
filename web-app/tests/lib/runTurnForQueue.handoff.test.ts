@@ -260,16 +260,19 @@ test('handoff: a failed hop still CONSUMES the batch, because pass 1 is on disk'
     'abandoning here re-composes the same user message from the queue and posts it again');
 });
 
-test('handoff: a first-pass failure abandons, because nothing was written', async () => {
+test('handoff: a first-pass failure commits and is spent, like any other failure', async () => {
+  // ⚠ REPLACES 'a first-pass failure abandons, because nothing was written'
+  // (assert.deepEqual(res.consumedIds, [])). Changed 2026-11-02: every failure
+  // commits a message and consumes the batch, so the two tests here now differ
+  // only in `ok` and in whether the failure is NAMED beside an answer — not in
+  // whether the items come back.
   const r = rig(oneTurn(), [deadVessel()]);
   const res = await runTurnForQueue('Default', 'c1', [send('q7')], r.deps);
 
   assert.equal(res.ok, false);
   if (!res.ok) assert.equal(res.stage, 'stream');
-  // Empty = abandon: the items stay, the next poll retries. The difference
-  // from the test above is only "did a save happen", and it decides between
-  // "retry" and "never again".
-  assert.deepEqual(res.consumedIds, []);
+  assert.deepEqual(res.consumedIds, ['q7'],
+    'the user message is in the log now, so nothing may re-compose it');
 });
 
 // ── the cap ──────────────────────────────────────────────────────────────────

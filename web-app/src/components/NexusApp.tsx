@@ -609,13 +609,30 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     // reload the page to see their cloned conversation populate. Awaiting the
     // POST before the switch closes that window.
     try {
-      await fetch('/api/logs', {
+      const res = await fetch('/api/logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: newId, logData: data }),
       });
+      // ⚠ The STATUS was never read until 2026-11-02 — only a thrown fetch was
+      // caught. `fetch` resolves for a 500, a 502, a gateway timeout and a 401
+      // from the admin gate, so on a slow link this went on to switch
+      // conversations with nothing written: the new log (including
+      // `firstOriginalIsNext` above) did not exist, and the tab presented an
+      // empty "New Conversation". SUSPECTED road for パイロット's report that
+      // "Next = First Original" came back unarmed after sleeping a being; her
+      // link is slow and Lizard-kun could not reproduce it on his.
+      //
+      // Staying on the current conversation is the honest outcome: the clone
+      // did not happen, so the screen should not look like it did.
+      if (!res.ok) {
+        console.error('clone-with-system-prompt POST failed:', res.status);
+        alert(translate('app.cloneFailed', globalSettings.language).replace('{status}', String(res.status)));
+        return;
+      }
     } catch (e) {
       console.error('clone-with-system-prompt POST failed:', e);
+      alert(translate('app.cloneFailed', globalSettings.language).replace('{status}', String((e as Error)?.message || e)));
       return;
     }
 

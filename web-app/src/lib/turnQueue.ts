@@ -461,63 +461,23 @@ export async function breakLease(
 }
 
 /**
- * Throw named items away without running them.
+ * ⚠ `discard` LIVED HERE, 2026-11-01 to 2026-11-02, and was withdrawn.
  *
- * WHY THIS EXISTS (REPORTED 2026-11-01, トカゲくん): a turn that fails —
- * "LM Studio: 400 Failed to load model" — abandons its batch, which is right
- * (losing a message you typed is the worst failure this family has). But the
- * items then sit in the stock with exactly ONE control offered, "Run now", and
- * his answer was "I don't know why it's there and I don't want it". The
- * judgement is his; what was missing was the hand. Same sentence as
- * `breakLease`, same reason, a different thing to let go of.
+ * It let a person throw queued items away, because a failed turn left its
+ * batch in the stock panel with exactly one control ("Run now") and トカゲくん
+ * said "I don't know why it's there and I don't want it". I read that as a
+ * missing hand and added a second button.
  *
- * ── Claimed items are REFUSED, never deleted ────────────────────────────────
- * Deleting an item a live turn is working from would make that turn's own
- * `release` a no-op and its message vanish with no error — the shape every
- * guard in this file is pointed at. And when a lease exists but does not say
- * WHICH ids it took (`claimedUnknown`), nothing is deleted at all: not knowing
- * must fail in the direction that keeps the message.
+ * He read it as a missing BEHAVIOUR: "there is no 'run now' and no 'discard'
+ * here at all; on a failure this just stays, and the rest is the admin's
+ * judgement." A failed turn now commits its user message and an empty
+ * assistant message and consumes the batch (runTurnForQueue's pass chain), so
+ * a failed send never reaches the stock panel and there is nothing to discard.
  *
- * Returns what actually happened per id, because "ok" alone cannot tell "I
- * dropped your message" from "I refused and it is still queued".
+ * Kept as a note and not as code because the code was reachable, tested and
+ * wrong-shaped — the kind of thing someone restores from history by accident
+ * if the only record is a deletion.
  */
-export async function discard(
-  being: string,
-  convoId: string,
-  ids: string[],
-  opts?: Opts
-): Promise<{ ok: boolean; removed: string[]; refused: string[]; remaining: number }> {
-  const dir = queueDir(being, convoId, opts);
-  const items = await pending(being, convoId, opts);
-  const lease = await readLease(being, convoId, opts);
-  const split = splitByLease(items, lease);
-
-  const want = new Set(ids);
-  const protectedIds = split.claimedUnknown
-    ? new Set(items.map((i) => i.id))
-    : new Set(split.claimed.map((i) => i.id));
-
-  const removed: string[] = [];
-  const refused: string[] = [];
-  let names: string[] = [];
-  try {
-    names = await fs.readdir(dir);
-  } catch { /* directory vanished; nothing to remove */ }
-
-  for (const name of names.filter(isItemFile)) {
-    // Same derivation as `release`: the id is what follows the padded
-    // timestamp and its separator.
-    const id = name.slice(AT_PAD + 1, -'.json'.length);
-    if (!want.has(id)) continue;
-    if (protectedIds.has(id)) { refused.push(id); continue; }
-    try {
-      await fs.unlink(path.join(dir, name));
-      removed.push(id);
-    } catch { /* already gone — the end state is what was asked for */ }
-  }
-
-  return { ok: true, removed, refused, remaining: (await pending(being, convoId, opts)).length };
-}
 
 /**
  * Every conversation of this being that has anything queued or a live lease.

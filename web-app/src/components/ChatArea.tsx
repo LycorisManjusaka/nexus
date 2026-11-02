@@ -9,7 +9,7 @@ import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
-import { shouldReloadFromDisk } from '@/lib/diskVersion';
+import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
@@ -940,6 +940,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // needlessly churns bytes that rclone/Mercurial then have to re-sync. With
   // this flag, updatedAt only advances when the user actually changes something.
   const skipNextAutoSaveRef = useRef(false);
+  // Set when a load could not READ the file (an unreadable status, a network
+  // error, a body that did not parse) — as opposed to a 404, which is a real
+  // answer. While it is true the auto-save is held off entirely, because the
+  // state this tab holds was never the file's state and writing it back is how
+  // a setting silently reverts. A ref and not state: nothing renders from it,
+  // and a re-render on a failed load would only re-run the load.
+  //
+  // It is NOT a timed retry and NOT a reconnect — this tab stays read-only for
+  // this conversation until a load succeeds. The 10-second poll already calls
+  // one (ChatArea's probeConversationState path), and a reload always does.
+  const loadFailedRef = useRef(false);
   // ── Optimistic-concurrency base ───────────────────────────────────────────
   // The `updatedAt` this tab last SAW on disk — set when the conversation is
   // loaded, advanced on every successful save from the value the server reports
@@ -1582,19 +1593,39 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       let totalBytes = 0;
       try {
         const r = await fetch(`/api/logs/${convoId}`, { signal: ac.signal });
-        if (!r.ok || !r.body) {
-          // No log on disk — a conversation that was just created and has never
-          // been written. Everything else is already correct because ChatArea
-          // remounts per convoId, but the title is not: adopt the
-          // `<identity>_<n>` name the sidebar assigned, so the name on screen is
-          // the name that gets saved on the first message.
+        const kind = classifyLogLoad(r.status, !!r.body);
+        if (kind === 'unreadable') {
+          // ⚠ This branch is NEW (2026-11-02). It used to be folded into the
+          // one below, which is titled "no log on disk" — so a 500, a gateway
+          // timeout or a 401 from the admin gate all presented an empty
+          // conversation whose next save overwrote the real file. See
+          // lib/diskVersion.classifyLogLoad for the whole reasoning and for
+          // whose report it is a guess about.
+          //
+          // Nothing is applied and nothing is reset: the base stays null-free,
+          // the title stays, and `loadFailedRef` keeps the auto-save off until
+          // a load succeeds — because the state this tab holds was never the
+          // file's state, and writing it back is how a flag disappears.
+          loadFailedRef.current = true;
+          console.warn(`[chat] could not read conversation ${convoId}: HTTP ${r.status}. Saving is held off until a load succeeds; reload the tab.`);
+          setConvoIsLoading(false);
+          return;
+        }
+        if (kind === 'missing') {
+          // A conversation that was just created and has never been written.
+          // Everything else is already correct because ChatArea remounts per
+          // convoId, but the title is not: adopt the `<identity>_<n>` name the
+          // sidebar assigned, so the name on screen is the name that gets saved
+          // on the first message.
           if (plannedTitleRef.current) setTitle(plannedTitleRef.current);
           // No file on disk yet, so there is no base to guard against. The
           // first successful save adopts the updatedAt the server reports.
           baseUpdatedAtRef.current = null;
+          loadFailedRef.current = false;
           setConvoIsLoading(false);
           return;
         }
+        if (!r.body) return; // unreachable: 'ok' requires a body. For the type.
         // X-Raw-Length is the body size BEFORE compression; Content-Length is
         // the wire size. The browser inflates a gzipped body transparently, so
         // `received` below counts UNCOMPRESSED bytes — dividing it by the wire
@@ -1647,9 +1678,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           setConvoIsLoading(false);
           return;
         }
-        // Network/parse errors fall through to the "data === null" path below,
-        // which resets ChatArea to a clean empty conversation. A 404 does NOT
-        // arrive here — it is handled by the early return above.
+        // A network or parse error is the same thing as an unreadable status:
+        // this tab does not know what is in the file. It used to fall through
+        // to the "data === null" path, which resets ChatArea to a clean empty
+        // conversation — and that empty state is what the next save writes.
+        // (A 404 does NOT arrive here; it is classified above.)
+        loadFailedRef.current = true;
+        console.warn(`[chat] could not read conversation ${convoId}: ${String(e?.message || e)}. Saving is held off until a load succeeds; reload the tab.`);
       }
 
       // Only apply if this load wasn't aborted in between.
@@ -1665,6 +1700,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // the send most likely to break: the first attachment added to an
         // already-huge conversation right after opening it.
         savedBytesRef.current = totalBytes;
+        // A load SUCCEEDED, so this tab holds the file's state again and may
+        // save. Cleared here rather than at the top of the load, so a failure
+        // keeps holding until something actually arrives.
+        loadFailedRef.current = false;
         // Opening a conversation must not bump updatedAt. Applying the loaded
         // state below re-fires the auto-save effect; this flag makes that one
         // run skip its POST so the file's mtime/contents stay untouched.
@@ -1908,6 +1947,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // loading flips back to false this effect runs once and persists the final
     // state.
     if (loading) return;
+
+    // ⚠ A tab that could not READ this conversation must not WRITE it. Added
+    // 2026-11-02: an unreadable load used to present an empty conversation,
+    // and this effect then saved that emptiness over the real file — the
+    // suspected road by which "Next = First Original" came back unarmed for
+    // パイロット. See lib/diskVersion.classifyLogLoad.
+    //
+    // Deliberately NOT consumed like `skipNextAutoSave` below: that flag is a
+    // one-shot for a load that worked, this one holds until a load works.
+    if (loadFailedRef.current) return;
 
     // Skip the single POST triggered by a conversation load. Opening a convo
     // applies the on-disk state in one batched render, which fires this effect
@@ -3471,60 +3520,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * The token is never sent here: handing it out would also hand out
    * `release`, which can delete the items of a live turn.
    */
-  /**
-   * Throw the waiting messages away instead of sending them.
+  /*
+   * ⚠ `discardStock` lived here for one day (2026-11-01 → 2026-11-02).
    *
-   * WHY (REPORTED 2026-11-01, トカゲくん): a turn that fails — "LM Studio: 400
-   * Failed to load model" — abandons its batch, which is correct; losing a
-   * message someone typed is the worst failure here. But the item then sat in
-   * the stock with exactly one control, "Run now", and survived every page
-   * reload, because it is a real file on disk. "I don't know why it is there
-   * and I don't want it" is a request for a HAND, not for different policy:
-   * keeping the message is still right, and now letting it go is possible.
+   * It threw waiting items away, because a failed turn left its batch in the
+   * stock panel offering only "Run now" and トカゲくん said "I don't know why
+   * it is there and I don't want it". I read that as a missing HAND.
    *
-   * Acts on the ids that were ON SCREEN — the same witness idea as breakStock.
-   * An item that arrived since the panel was drawn is not in the list, so it is
-   * not dropped by a click aimed at something else. The server refuses anything
-   * a lease covers, so this can never reach a live turn's batch; `refused` is
-   * reported rather than hidden, because "I dropped it" and "I kept it" must
-   * not print the same sentence.
+   * It was a missing BEHAVIOUR: "there is no 'run now' and no 'discard' here at
+   * all; on a failure this just stays, and the rest is the admin's judgement."
+   * A failed turn now writes the user message and an empty assistant message
+   * and consumes the batch, so a failed send never reaches this panel. The
+   * panel is left for what he does want it for — messages genuinely waiting
+   * (two sends at once, a being writing to a being) — where the only sensible
+   * hand is "Run now".
    */
-  const discardStock = useCallback(async () => {
-    const ids = (stock?.items || []).filter((i) => !i.claimed).map((i) => i.id);
-    if (ids.length === 0 || stockBusy || !folderName || !convoId) return;
-    if (!window.confirm(t('chat.stock.discardConfirm').replace('{n}', String(ids.length)))) return;
-    setStockBusy(true);
-    try {
-      const res = await fetch('/api/turn-queue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'discard', being: folderName, convoId, ids }),
-      });
-      const d = await res.json().catch(() => null);
-      if (!d?.ok) {
-        setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
-        return;
-      }
-      const removed = Array.isArray(d.removed) ? d.removed.length : 0;
-      const refused = Array.isArray(d.refused) ? d.refused.length : 0;
-      // 'problem' only when something was KEPT. A clean discard needs no
-      // sentence: the row it was counted on disappears, which is the answer —
-      // and lib/stockPanel's rule is that machinery waits for debug while
-      // anything a person must act on always shows.
-      setStockNote({
-        text: [
-          removed ? t('chat.stock.discarded').replace('{n}', String(removed)) : '',
-          refused ? t('chat.stock.discardRefused').replace('{n}', String(refused)) : '',
-        ].filter(Boolean).join(' / ') || t('chat.stock.discarded').replace('{n}', '0'),
-        kind: refused > 0 ? 'problem' : 'info',
-      });
-    } catch {
-      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
-    } finally {
-      setStockBusy(false);
-      refreshStock();
-    }
-  }, [stock, stockBusy, folderName, convoId, refreshStock, t]);
 
   const breakStock = useCallback(async () => {
     const lease = stock?.lease;
@@ -5997,33 +6007,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           Math.min(...stock.items.filter((i) => !i.claimed).map((i) => i.at))
                         ).toLocaleTimeString())}
                     </span>
-                    {!loading && !injectTurnId ? (
-                      <button
-                        onClick={discardStock}
-                        disabled={stockBusy}
-                        title={t('chat.stock.discardWhy')}
-                        /* ml-auto, so the pair sits at the right edge together
-                           and "Run now" stays the rightmost button it has
-                           always been. Discard is the one that cannot be
-                           undone, so it must not take over the position a
-                           hand already aims at. */
-                        className="ml-auto px-2 py-1 text-xs font-medium rounded-lg border border-red-500/50 text-red-500 dark:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-500/10"
-                      >
-                        {stockBusy ? '…' : t('chat.stock.discard')}
-                      </button>
-                    ) : null}
                     {(stockNote !== null || !autoRunStock) && !loading && !injectTurnId ? (
                       <button
                         onClick={drainStock}
                         disabled={stockBusy}
                         title={t('chat.stock.retryWhy')}
-                        /* ml-auto moved to Discard above, which now always
-                           renders whenever this one does (its gate is a strict
-                           superset). Two ml-auto in one flex row split the free
-                           space between them instead of pushing the pair right
-                           — the same failure the Release button's comment
-                           already names. */
-                        className="px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
+                        /* ml-auto is back here, where it was before Discard
+                           briefly took it (2026-11-01 → 2026-11-02): this is
+                           again the only button in the waiting row, so it is
+                           the one that pushes to the right edge. See the
+                           Release button's comment for why two ml-auto in one
+                           flex row would split the free space instead. */
+                        className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
                       >
                         {stockBusy ? '…' : t('chat.stock.run')}
                       </button>

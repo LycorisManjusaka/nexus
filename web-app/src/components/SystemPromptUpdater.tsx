@@ -6,7 +6,7 @@ import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buil
 import { isCollectableHere, isCollectableBy, decideRunRecord, type SpuRunRecord } from '@/lib/spuRun';
 import { withIdleBound, decideAfterWatch, IDLE, RELAY_IDLE_TIMEOUT_MS } from '@/lib/relayWatch';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
-import { setUnloadGuard } from '@/lib/unloadGuard';
+import { setUnloadGuard, setBusyOnly } from '@/lib/unloadGuard';
 import { useDevice } from './DeviceProvider';
 import { estimateTokensForModel } from '@/lib/tokenEstimate';
 import type { SoulBackupInfo } from '@/lib/systemPromptStorage';
@@ -483,8 +483,28 @@ export default function SystemPromptUpdater({
   // this tab. Nothing on the server knows it was supposed to follow, so a tab
   // that goes away between them leaves work undone rather than unwatched. That
   // is worth asking about; watching a server-side run is not.
+  //
+  // ⚠ SECOND CORRECTION, the same day. The narrowing above was right about the
+  // DIALOG and wrong about everything else: this one registration also drove
+  // the tab title's `●` and the in-app confirmIfBusy gate, so narrowing it to
+  // 'auto' removed the "something is running" dot for every other run.
+  // REPORTED by トカゲくん within the hour: "that had a different role. It is
+  // how you see at a glance whether something is running right now. [...] put
+  // the working `●` back."
+  //
+  // Now the two questions are asked separately (lib/unloadGuard): every run
+  // SHOWS, and only the chain BLOCKS.
   useEffect(() => {
-    setUnloadGuard('spu', running === 'auto' ? t('unload.busy.spuAuto') : null);
+    if (!running) { setUnloadGuard('spu', null); return; }
+    if (running === 'auto') {
+      // The chain's second step is started by this tab — closing leaves work
+      // undone rather than unwatched, which is worth a dialog.
+      setUnloadGuard('spu', t('unload.busy.spuAuto'));
+      return;
+    }
+    // Everything else runs on the server and is checkpointed after every
+    // round. Visible, not guarded.
+    setBusyOnly('spu', t('unload.busy.spu'));
   }, [running, t]);
 
   // Clear on unmount (modal closed, page navigated). Without this a guard left

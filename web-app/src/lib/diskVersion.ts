@@ -72,3 +72,47 @@ export function shouldReloadFromDisk(input: DiskVersionInput): boolean {
   if (ownWrites.includes(diskUpdatedAt)) return false;
   return true;
 }
+
+/**
+ * A GET of a conversation that did not return a usable body: is the
+ * conversation ABSENT, or did the read FAIL?
+ *
+ * ── WHY THESE MUST BE DIFFERENT ANSWERS ────────────────────────────────────
+ *
+ * ChatArea's load used to test `!r.ok || !r.body` and comment the branch as
+ * "No log on disk — a conversation that was just created and has never been
+ * written". That is true of a 404 and FALSE of everything else: a 500, a 502,
+ * a gateway timeout and a 401 from the optional admin gate all land there too.
+ * The branch then threw away the optimistic-lock base and presented an empty
+ * conversation, i.e. it treated "I could not read it" as "there is nothing".
+ *
+ * This house already has that rule written down — absence has three meanings,
+ * and the instrument has to say which — and broke it here anyway. SUSPECTED
+ * cause of パイロット's report (2026-11-02, via トカゲくん): after sleeping a
+ * being, "Next = First Original" was not armed and she had to set it by hand.
+ * Her connection is slow and his is not, which fits a branch that only opens
+ * when a read is slow enough to fail. NOT reproduced — this is the guess, and
+ * what it buys is that a failed read can no longer overwrite the flag.
+ *
+ * Each rule, with what would look different without it:
+ *
+ *   404 → 'missing'
+ *     The genuine new-conversation case: the sidebar created it, nothing has
+ *     written it yet. Without this, opening a fresh chat would warn.
+ *
+ *   any other non-2xx → 'unreadable'
+ *     Without it, a server error presents an empty conversation whose next
+ *     save overwrites the real one (the flag, the title, the settings).
+ *
+ *   2xx with no body → 'unreadable'
+ *     A proxy that answers 200 with nothing is not telling us the file is
+ *     gone. Same direction: refuse to conclude absence.
+ */
+export type LogLoadKind = 'ok' | 'missing' | 'unreadable';
+
+export function classifyLogLoad(status: number, hasBody: boolean): LogLoadKind {
+  if (status === 404) return 'missing';
+  if (status < 200 || status >= 300) return 'unreadable';
+  if (!hasBody) return 'unreadable';
+  return 'ok';
+}
