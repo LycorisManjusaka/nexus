@@ -8,7 +8,10 @@
 //
 //   - `firstOriginalIsNext` and no marker → the marker is PENDING on the next
 //     message added. Everything currently in the log is carry-over, so
-//     NOTHING is original yet. (the post-clone state)
+//     NOTHING is original yet (the post-clone state) — UNLESS the caller can
+//     name the message it is going to land on, which a tab mid-turn can and a
+//     server walking a stored log cannot (`optimisticMarkerIndex`). Then the
+//     boundary applies from that message, before it reaches disk.
 //   - no marker and not pending → EVERY message is original. This is the
 //     safest default: hand-built conversations, and everything that predates
 //     the marker, never went through the clone workflow. **The absence of the
@@ -47,10 +50,26 @@ export interface FirstOriginalMarker {
 export function makeIsOriginalIndex(
   marker: FirstOriginalMarker,
   messages: Array<{ id?: string }>,
+  optimisticMarkerIdx = -1,
 ): (idx: number) => boolean {
   const markerId = marker.firstOriginalMessageId || null;
   const isNext = marker.firstOriginalIsNext === true;
-  if (isNext && !markerId) return () => false;
+  if (isNext && !markerId) {
+    // The boundary is PENDING, and a caller that is holding the message it
+    // will land on can be answered now: `promotePendingMarker` already says
+    // the next user message added becomes the marker, so this is that rule's
+    // consequence and not a guess about the future. Only the tab mid-turn can
+    // supply it (see `optimisticMarkerIndex`); a server walking a stored log
+    // has no such message and passes nothing.
+    //
+    // -1 keeps the pre-2026-11-02 answer: NOTHING is original yet. That is
+    // the OPPOSITE default from a resolved-but-missing marker below, for a
+    // different reason — an absent marker id was DELETED (the conversation
+    // outlived its boundary, so everything is original), while an absent
+    // landing message has not been ADDED yet (the clone is still waiting).
+    if (optimisticMarkerIdx < 0) return () => false;
+    return (idx: number) => idx >= optimisticMarkerIdx;
+  }
   if (!markerId) return () => true;
   const markerIdx = messages.findIndex((m) => m.id === markerId);
   if (markerIdx < 0) return () => true;
@@ -68,14 +87,52 @@ export function makeIsOriginalIndex(
 export function makeIsOriginalId(
   marker: FirstOriginalMarker,
   messages: Array<{ id?: string }>,
+  optimisticMarkerIdx = -1,
 ): (id: string) => boolean {
-  const byIndex = makeIsOriginalIndex(marker, messages);
+  const byIndex = makeIsOriginalIndex(marker, messages, optimisticMarkerIdx);
   return (id: string) => byIndex(messages.findIndex((m) => m.id === id));
 }
 
 /** Is the boundary PENDING — the clone happened, nothing has consumed it yet? */
 export function isMarkerPending(marker: FirstOriginalMarker): boolean {
   return marker.firstOriginalIsNext === true && !marker.firstOriginalMessageId;
+}
+
+/**
+ * Where a PENDING boundary is going to land, read off a tab's own optimistic
+ * bubbles — the index to hand `makeIsOriginal*` while a turn is in flight.
+ *
+ * ⚠ WHY THIS EXISTS. The runner mints the user message the marker names, so
+ * the boundary only reaches disk when the turn is saved. Between send and save
+ * the tab holds its own copy of the sent text, and `isNext && !markerId` read
+ * that copy — and the reply growing under it — as carry-over. REPORTED by
+ * Lizard-kun 2026-11-02: 「メッセージを送ると、僕のメッセージも相手の返事も
+ * 灰色のままだ。僕のメッセージに、フラグがつかない。でも、それはそのターンが
+ * 終わってないときだけ。ターンが終わったら、あるべき姿になる」.
+ *
+ * The answer is NOT to move the marker optimistically into state: a save
+ * during the turn would write that guess to disk, and a failed turn would
+ * leave a marker naming a message the runner never wrote. This is render-time
+ * only, so nothing it says can be persisted.
+ *
+ * The FIRST optimistic user message, in list order, not the last: the pending
+ * marker lands on the next user message ADDED, and if a batch contributes
+ * several, the boundary belongs at the earliest of them. List order decides
+ * (the id array's push order agrees today; the list is the one that is true).
+ */
+export function optimisticMarkerIndex(
+  marker: FirstOriginalMarker,
+  messages: Array<{ id?: string; role?: string }>,
+  optimisticIds: readonly string[],
+): number {
+  if (!isMarkerPending(marker)) return -1;
+  // No early return for an empty id list: the loop already answers -1 for it,
+  // and a guard that cannot change any answer is a line no mutation can test.
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === 'user' && m.id && optimisticIds.includes(m.id)) return i;
+  }
+  return -1;
 }
 
 /** The two fields a consumer writes back once the boundary is resolved. */

@@ -8,7 +8,7 @@ import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
-import { makeIsOriginalId, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
+import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
@@ -1088,6 +1088,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * text appeared twice, the tab's copy above the runner's.
    */
   const optimisticIdsRef = useRef<string[]>([]);
+  /**
+   * The same list, mirrored into state for RENDER-time reads.
+   *
+   * The ref stays the source — callbacks read it without taking it as a
+   * dependency, which is the whole reason it is a ref (`runOnRunner` is a
+   * dependency of effects, one of them the auto-trigger). But the
+   * copied/original boundary needs this list DURING render, and reading a ref
+   * there is what `react-hooks` flags as "Cannot access refs during render".
+   * The rule is right: a render whose output depends on a ref goes stale when
+   * only the ref changes. Mirroring costs one extra set in the two places
+   * that already write the ref, in the same synchronous block, so the mirror
+   * can never lag behind its source.
+   */
+  const [optimisticIds, setOptimisticIds] = useState<string[]>([]);
   // Did SOMEONE IN THIS TAB press Stop on the turn being watched?
   //
   // A watched runner turn ends, when stopped, with the route's own abort echo
@@ -2333,6 +2347,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
   const computeMsgTokens = (m: any) => computeMsgTextTokens(m) + computeMsgAttachTokens(m);
 
+  // Where the pending copied/original boundary lands while a turn is in
+  // flight. Computed ONCE per render and handed to BOTH consumers below — the
+  // token breakdown and the per-message predicate — so the bar and the bubbles
+  // can never disagree about where the boundary is.
+  //
+  // Reads the STATE mirror, not the ref: see its declaration. The first
+  // version of this line read `optimisticIdsRef.current` and argued it was
+  // safe because the writer calls `setMessages` in the same block. The
+  // argument held; the lint rule caught it anyway, and a structure that is
+  // correct without an argument is worth one extra `setState`.
+  const optimisticMarkerIdx = optimisticMarkerIndex(
+    { firstOriginalMessageId, firstOriginalIsNext },
+    messages,
+    optimisticIds,
+  );
+
   // System / Copied / Original / Attachments breakdown for the progress bar.
   // Attachments are a separate bucket regardless of whether they belong to a
   // copied or original message — they're displayed independently and (per the
@@ -2347,15 +2377,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // WHY it is that number, and a disagreement about it can only be settled by
     // guessing at the other person's screen. The tip carries its own inputs.
     const detail = { image: 0, video: 0, audio: 0, text: 0, other: 0, thinking: 0, droppedCount: 0, droppedRaw: 0 };
-    const markerIdx = firstOriginalMessageId
-      ? messages.findIndex(m => m.id === firstOriginalMessageId)
-      : -1;
-    // "Next = First Original" pending state: no marker exists yet, but the next
-    // user message WILL become it — so the entire current history is carry-over
-    // context. Count it all as copied (original = 0). Without this, the unmarked
-    // conversation fell through to the all-original default below, showing
-    // copied = 0 and original = full, which is the exact inverse of the truth.
-    const allCopied = markerIdx < 0 && firstOriginalIsNext;
+    // The copied/original rule, from lib. This used to be a PARTIAL inline
+    // copy of it (`markerIdx < 0 && firstOriginalIsNext`) — the FIFTH
+    // derivation, and the one the 2026-10-27 extraction left behind precisely
+    // because it was partial rather than a full copy. It had to go tonight
+    // for a reason that extraction did not have: the bubbles were fixed by
+    // passing an optimistic index, and a separate copy of the same arithmetic
+    // would have kept asserting the old answer on the same screen.
+    const isOrigIdx = makeIsOriginalIndex(
+      { firstOriginalMessageId, firstOriginalIsNext },
+      messages,
+      optimisticMarkerIdx,
+    );
     messages.forEach((m, i) => {
       const textT = computeMsgTextTokens(m);
       const attT = computeMsgAttachTokens(m, i);
@@ -2372,12 +2405,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         }
       }
       if (saveThinkingToLog && !m.thinkingExcluded) detail.thinking += msgThinkingTokens(m);
-      // allCopied -> the whole pending carry-over history counts as copied.
-      // No marker (and not pending) -> everything is "original" (safe default).
-      // Marker present -> messages before it are copied, at-and-after original.
-      if (allCopied) copied += textT;
-      else if (markerIdx >= 0 && i < markerIdx) copied += textT;
-      else original += textT;
+      if (isOrigIdx(i)) original += textT;
+      else copied += textT;
     });
     return { sys, copied, original, attach, detail, total: sys + copied + original + attach };
   })();
@@ -3464,7 +3493,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Cleared on BOTH branches, and after both: a reload replaces the whole
       // array so the optimistic bubbles are gone either way, and a list that
       // outlived its turn would make the NEXT patch delete a real message.
+      //
+      // The mirror clears with it, which hands the copied/original boundary
+      // back to the real marker. Both branches resolve that marker ABOVE this
+      // line and in the same batch (the patch branch via adoptResolvedMarker,
+      // the reload branch inside reloadMessagesFromDisk), so there is no
+      // render in between where the boundary is neither predicted nor known.
       optimisticIdsRef.current = [];
+      setOptimisticIds([]);
       setLoading(false);
       // The panel's poll only runs while `injectTurnId` is set, and Stop clears
       // that immediately — so without this read the lease row FREEZES at its
@@ -3807,6 +3843,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // appending the runner's copy. Without this the sent text appears twice
     // (lib/turnSaved.ts, localOnlyIds).
     optimisticIdsRef.current = [...optimisticIdsRef.current, newMessage.id];
+    // The render-time mirror, set from the ref so the two cannot disagree.
+    // This is also what makes the copied/original boundary land on this bubble
+    // immediately instead of at save (lib/firstOriginal.optimisticMarkerIndex).
+    setOptimisticIds(optimisticIdsRef.current);
     setHandoffOverride(null);
     await enqueueToStock(text, attachments, opts?.from || '');
     await runOnRunner();
@@ -4456,9 +4496,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // it, one of four. A fresh predicate per render, exactly as that copy was;
   // the only difference is that the marker index is now resolved once when the
   // predicate is built instead of once per message asked about.
+  //
+  // The third argument is what lets it answer DURING a turn, before the runner
+  // has written the marker to disk. Every consumer of this predicate wants
+  // that: the delete confirm, the $ total, the Soul Updater's material, the
+  // live session's seed. All four were treating the message just sent as
+  // pre-clone history.
   const isMessageOriginal = makeIsOriginalId(
     { firstOriginalMessageId, firstOriginalIsNext },
     messages,
+    optimisticMarkerIdx,
   );
 
   const handleDelete = (id: string) => {
