@@ -1,4 +1,5 @@
 import { subscribeTurn, liveTurnStatus } from '@/lib/turnBus';
+import { RELAY_KEEPALIVE_MS } from '@/lib/relayWatch';
 
 // ── Watch a turn that this tab is NOT running ───────────────────────────────
 //
@@ -34,7 +35,10 @@ import { subscribeTurn, liveTurnStatus } from '@/lib/turnBus';
  *  reaches no reducer branch — it exists to keep a silent connection warm
  *  while a model thinks, which here can be minutes with nothing emitted. */
 const KEEPALIVE = ': keepalive\n\n';
-const KEEPALIVE_MS = 20_000;
+// The PERIOD lives in lib/relayWatch.ts, with the watcher's idle bound that is
+// derived from it. Two copies would let this one be widened and leave every
+// watcher declaring healthy connections dead.
+const KEEPALIVE_MS = RELAY_KEEPALIVE_MS;
 
 export async function GET(req: Request) {
   const convoId = new URL(req.url).searchParams.get('convoId')?.trim() || '';

@@ -8148,7 +8148,18 @@ export async function POST(req: Request) {
             ? modelParams.localContextWindow : 80000;
           const current = (lm.meta || []).find((m) => m.id === localModel && m.loaded);
           if (!current || (current.loadedContext < targetCtx)) {
-            await loadLocalModel(localModel, targetCtx);
+            // The signal, because `lms unload --all` + `lms load` can hold
+            // this line for 150 seconds and Stop could not reach it: MEASURED
+            // 2026-11-02 (Lizard-kun) as "Stop does nothing while the model
+            // loads, and is instant once it has loaded".
+            //
+            // No `break` guard after it, deliberately, unlike the tool loops:
+            // the fetch below carries the SAME signal and rejects immediately
+            // when it is already aborted — which is the path Stop was
+            // observed taking correctly once the model was resident. A second
+            // branch here would be a second answer to "how does an aborted
+            // local turn end", and the existing one is the measured-good one.
+            await loadLocalModel(localModel, targetCtx, turnAbort.signal);
           }
           // Read the catalog's vision flag for the resolved model (not gated on
           // `loaded` — the flag is known from `lms ls` whether in VRAM or not).

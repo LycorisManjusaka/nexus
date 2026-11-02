@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt, END_SENTINEL } from '@/lib/spuScaffold';
 import { isCollectableHere, isCollectableBy, decideRunRecord, type SpuRunRecord } from '@/lib/spuRun';
+import { withIdleBound, decideAfterWatch, IDLE, RELAY_IDLE_TIMEOUT_MS } from '@/lib/relayWatch';
 import { useT, useLanguage, Tx } from '@/lib/i18n';
 import { setUnloadGuard } from '@/lib/unloadGuard';
 import { useDevice } from './DeviceProvider';
@@ -466,13 +467,24 @@ export default function SystemPromptUpdater({
   const [sweepTick, setSweepTick] = useState(0);
 
   // ── Close/reload guard ─────────────────────────────────────────────────────
-  // A soul-packing run is the most expensive thing in Nexus to lose: minutes of
-  // a paid model call, and NOTHING is written to disk until it finishes. A
-  // reload here throws all of it away with no trace. Hold the guard for exactly
-  // as long as a run is in flight — see src/lib/unloadGuard.ts for why the
-  // dialog's own wording cannot be customised.
+  // CORRECTED 2026-11-02. This used to fire for every run, and the reason
+  // written here was "minutes of a paid model call, and NOTHING is written to
+  // disk until it finishes. A reload here throws all of it away with no
+  // trace." That stopped being true on 2026-10-31: the run is detached on the
+  // server and checkpointed after every round, and the recovery sweep collects
+  // it when the tab comes back. The top of runSpuAction.ts says so in one
+  // line — "closing the tab costs a view, not a soul update" — and this guard
+  // was the same migration's leftover, pointed at a loss that can no longer
+  // happen. Lizard-kun met it from a phone and the dialog was wrong twice
+  // over: the run was not in danger, and by then it was not even running.
+  //
+  // 'auto' is the one case where closing still costs something real. It is a
+  // CHAIN — identity update, then summary — and the second step is started by
+  // this tab. Nothing on the server knows it was supposed to follow, so a tab
+  // that goes away between them leaves work undone rather than unwatched. That
+  // is worth asking about; watching a server-side run is not.
   useEffect(() => {
-    setUnloadGuard('spu', running ? t('unload.busy.spu') : null);
+    setUnloadGuard('spu', running === 'auto' ? t('unload.busy.spuAuto') : null);
   }, [running, t]);
 
   // Clear on unmount (modal closed, page navigated). Without this a guard left
@@ -1305,19 +1317,48 @@ export default function SystemPromptUpdater({
   //                   times in this file
   //   post-processing stays here  - pure, idempotent, cheap to redo
   //
-  // consumeSpuStream returns NOTHING on purpose. The accumulated text is read
+  // consumeSpuStream returns no TEXT on purpose. The accumulated text is read
   // back from the run record, so there is one source for what gets saved; a
   // reader that also returned it would be a second one, and the two would
   // disagree exactly when the tab missed frames.
+  //
+  // It does return HOW the stream ended, which is a different kind of fact and
+  // the one the caller cannot get from the record: 'closed' means the producer
+  // said goodbye, 'idle' means this reader gave up on a socket that had gone
+  // quiet. The record looks the same either way.
   const consumeSpuStream = useCallback(async (
     reader: ReadableStreamDefaultReader<Uint8Array | string>,
     onProgress: (thinkingDelta: number, outputDelta: number, textChunk?: string) => void,
-  ): Promise<void> => {
+  ): Promise<'closed' | 'idle'> => {
     const decoder = new TextDecoder('utf-8');
     const sse = createSseReader();
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      // Re-armed on every chunk, and a keepalive IS a chunk — that is what
+      // makes this bound mean "nothing is arriving" rather than "the model is
+      // quiet". See relayWatch.ts for why it is derived from the server's
+      // keepalive period rather than picked.
+      //
+      // When the bound wins, the abandoned read() stays pending. Promise.race
+      // subscribed to it, so a later rejection is already handled and cannot
+      // surface as an unhandled one.
+      const next = await withIdleBound(reader.read(), RELAY_IDLE_TIMEOUT_MS);
+      if (next === IDLE) {
+        // Let the connection go. A reader still holding a dead stream keeps
+        // the server's subscription — and its keepalive timer — alive for as
+        // long as this tab lives.
+        //
+        // NOT awaited, and that is the point: `cancel()` resolves when the
+        // underlying source's cancel algorithm completes, and the source here
+        // is the socket that just stopped answering. Waiting on it would put
+        // an unbounded await back on the exact path this function exists to
+        // bound. Nothing below needs it to have finished — releasing the
+        // subscription is best-effort, and the record read afterwards does not
+        // depend on it.
+        void reader.cancel().catch(() => { /* already gone */ });
+        return 'idle';
+      }
+      const { done, value } = next;
+      if (done) return 'closed';
       // Both types really arrive: over HTTP the server encodes the string the
       // route enqueued, so a fetch yields bytes. See runTurnStream for the
       // measurement - decode() throws TypeError on a string.
@@ -1493,8 +1534,14 @@ export default function SystemPromptUpdater({
     // would have nothing to aim at.
     const relayTurnId = watch.headers.get('X-Turn-Id') || '';
     if (relayTurnId) spuTurnRef.current = { relayKey, turnId: relayTurnId };
+    // 'nostream' and not a default of 'closed': `watch.ok === false` means this
+    // tab never joined, and calling that "the producer said goodbye" is the
+    // kind of plausible-but-false label that makes the next reader stop
+    // looking. The three values are read below, by the one branch that cannot
+    // get the answer from the record.
+    let ended: 'closed' | 'idle' | 'nostream' = 'nostream';
     if (watch.ok && watch.body) {
-      await consumeSpuStream(
+      ended = await consumeSpuStream(
         (watch.body as ReadableStream<Uint8Array | string>).getReader(),
         a.onProgress,
       );
@@ -1503,12 +1550,35 @@ export default function SystemPromptUpdater({
     // EOF on the relay means the route called endTurn, which it does only
     // AFTER runSpuAction has written the record. Reading earlier is the race
     // that made a stopped chat turn show its previous answer (2026-10-30).
+    //
+    // But the stream can also end for reasons that say nothing about the run:
+    // `watch.ok === false` skips the block above entirely, and the idle bound
+    // inside it gives up on a dead socket. decideAfterWatch is what tells
+    // those apart from a real ending — see relayWatch.ts for the four symptoms
+    // that one missing branch produced.
     const { record } = await fetchSpuRunRecord(soulKey, label);
-    if (!record) throw new Error(t('spu.st.runNoRecord'));
-    // An error with nothing to show KEEPS its record: the throw above puts the
+    const after = decideAfterWatch(record);
+    if (after.kind === 'missing') throw new Error(t('spu.st.runNoRecord'));
+    if (after.kind === 'running') {
+      // Deliberately NOT deleted and NOT post-processed. `running` settling is
+      // what re-fires the recovery sweep, and the sweep's 'attach' branch is
+      // built for exactly this record: it rejoins the relay if this server
+      // still holds one, and collects the result when it lands.
+      //
+      // Why the view ended is the one thing the RECORD cannot say: a server
+      // that stopped talking and a socket that went quiet leave the same
+      // record, and only the first is a reason to look at the server.
+      throw new Error(
+        (ended === 'closed' ? '' : t('spu.st.watchLost') + ' ')
+        + t('spu.st.runStillOnServer')
+          .replace('{host}', after.record.host || '?')
+          .replace('{n}', String(after.record.accum.length)),
+      );
+    }
+    // An error with nothing to show KEEPS its record: the throw puts the
     // reason in the status line, and the record is the only place the stage and
     // the attempt count survive for whoever looks next.
-    if (record.status === 'error' && !record.accum) throw new Error(String(record.error || 'run failed'));
+    if (after.kind === 'failed') throw new Error(after.reason || 'run failed');
     // This tab watched the run to its end, so the record has already done the
     // only job it has: outliving a tab that went away. Leaving it behind made
     // the NEXT open auto-collect a result that was already on screen and
@@ -1516,7 +1586,7 @@ export default function SystemPromptUpdater({
     // the record, false of what happened. Best-effort: the text is delivered
     // either way, and a leftover is picked up by the collector, not lost.
     await deleteSpuRunRecord(soulKey, label).catch(() => {});
-    return record;
+    return after.record;
   }, [consumeSpuStream, soulKey, nextLabel, convoId, agentFolder, effectiveAiName, effectiveSpecificModel, effectiveAuthMode, modelParams, t]);
 
   // ── Working copy <-> real soul ───────────────────────────────────────────
@@ -2913,6 +2983,14 @@ export default function SystemPromptUpdater({
   // is doing its job; it is this call site that wants only the boolean.
   const recoverableHere: boolean = isCollectableHere(recoverable, convoId);
 
+  // A record of a run that DIED with nothing to show (decideRunRecord's 2026-11-02
+  // branch). Separated here because every sentence the banner owns is about a
+  // finished result — "a finished run could not be collected here" is false of
+  // this one, and showing a failure under that heading would be worse than the
+  // silence it replaces.
+  const recoverFailed: boolean =
+    !!recoverable && recoverable.status === 'error' && !recoverable.accum;
+
   // On a phone the panel takes the whole screen: the 16px inset and the
   // rounded corners cost real width on a 414px device, and `h-dvh` (not
   // `92vh`) keeps it inside the visible area when the keyboard is up — `vh`
@@ -3054,14 +3132,19 @@ export default function SystemPromptUpdater({
         {recoverable && !busy && (
           <div className="px-6 py-2 text-[12px] bg-amber-500/10 border-b border-amber-500/30 flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium text-amber-700 dark:text-amber-400">
-              {t('spu.recover.title')}
+              {recoverFailed ? t('spu.recover.failedTitle') : t('spu.recover.title')}
             </span>
             <span className="text-muted-foreground">
-              {recoverableHere
-                ? t('spu.recover.noHandler')
+              {recoverFailed
+                ? t('spu.recover.failedBody')
                     .replace('{action}', recoverable.action)
-                    .replace('{n}', String(recoverable.accum.length))
-                : t('spu.recover.otherConvo').replace('{convo}', recoverable.convoId || '-')}
+                    .replace('{when}', new Date(recoverable.updatedAt).toLocaleString())
+                    .replace('{e}', recoverable.error || '-')
+                : recoverableHere
+                  ? t('spu.recover.noHandler')
+                      .replace('{action}', recoverable.action)
+                      .replace('{n}', String(recoverable.accum.length))
+                  : t('spu.recover.otherConvo').replace('{convo}', recoverable.convoId || '-')}
             </span>
             <button
               onClick={discardRunRecord}

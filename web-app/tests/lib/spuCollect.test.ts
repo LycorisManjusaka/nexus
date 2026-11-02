@@ -349,3 +349,56 @@ test('decideRunRecord: the returned key is the one seen is tested against', () =
   const seen = new Set([(d as { key: string }).key]);
   assert.deepEqual(decideRunRecord(r, CONVO, seen, ALL, false), { kind: 'none' });
 });
+
+// ── An error that produced NOTHING is SHOWN (2026-11-02) ────────────────────
+// Reported by Lizard-kun from a phone: a soul update that failed left no soul
+// in the right pane and nothing anywhere saying why. runSpuAction KEEPS such a
+// record on purpose -- it is the only place the reason and the attempt count
+// survive -- but every reader of it returned 'none', so the reason sat on disk
+// until the next run overwrote it.
+
+test('decideRunRecord: an error with NO text is SHOWN, not dropped', () => {
+  // Absent, this is 'none': "the soul was not written" with no sentence
+  // anywhere saying why, which is exactly the report.
+  const r = rec({ status: 'error', accum: '', error: 'DeepSeek 400' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), { kind: 'show' });
+});
+
+test('decideRunRecord: a failed record is shown even for ANOTHER conversation', () => {
+  // The record is keyed by folder+label, not by conversation, so a sibling
+  // conversation resolving to the same next label can meet it. Shown anyway:
+  // the banner names the action and the reason rather than claiming the run
+  // was this panel's, and discarding it is the only way to clear the file.
+  const r = rec({ status: 'error', accum: '', error: 'boom', convoId: 'some-other-log' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), { kind: 'show' });
+});
+
+test('decideRunRecord: RUNNING still wins over the failed branch', () => {
+  // Order check. A record can be status 'running' with no text at all, and
+  // reading that as a failure would put a "the run failed" banner in front of
+  // a run that is producing. Dead relay -> 'none' (the stuck-run path owns it),
+  // live relay -> 'attach'.
+  const live = rec({ status: 'running', accum: '', error: 'ignored' });
+  assert.deepEqual(decideRunRecord(live, CONVO, EMPTY, ALL, false), { kind: 'none' });
+  assert.equal(decideRunRecord(live, CONVO, EMPTY, ALL, true).kind, 'attach');
+});
+
+test('decideRunRecord: a DONE record with no text stays none, not shown', () => {
+  // Only `error` opens the new branch. A done-but-empty record has no reason
+  // to print, and a banner with an empty "Reason:" is worse than the silence.
+  const r = rec({ status: 'done', accum: '' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), { kind: 'none' });
+});
+
+test('decideRunRecord: an error that DID produce text is collected, not shown', () => {
+  // The hole mutation testing found (2026-11-02): the 'show' branch added the
+  // same day tests `status === 'error' && !accum`, and dropping the accum half
+  // turned every partial failure into a banner. A provider error on round six
+  // of seven holds five rounds of a soul, and "Continue from the right-side
+  // text" is what rescues it -- from the PANE, which only gets filled if this
+  // says collect.
+  const r = rec({ status: 'error', accum: 'FIVE ROUNDS OF LAYER 3', error: 'provider 500' });
+  assert.deepEqual(decideRunRecord(r, CONVO, EMPTY, ALL, false), {
+    kind: 'collect', key: spuRecordKey(r),
+  });
+});

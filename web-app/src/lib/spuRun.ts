@@ -273,6 +273,22 @@ export function decideRunRecord(
     return { kind: 'attach', key: spuRecordKey(rec) };
   }
 
+  // A run that died with nothing to show.
+  //
+  // ADDED 2026-11-02. runSpuAction deliberately KEEPS this record — "the throw
+  // puts the reason in the status line, and the record is the only place the
+  // stage and the attempt count survive for whoever looks next". But that
+  // sentence assumed the tab that threw was still there to say it. For anyone
+  // arriving afterwards (a reload, a phone whose tab was discarded) this fell
+  // through to 'none': the reason sat on disk with nothing offering to show
+  // it, and the next run quietly overwrote it. "The soul was not written" with
+  // no sentence anywhere saying why is exactly the shape Lizard-kun reported.
+  //
+  // Before the isFinishedRun check and not after, because that predicate is
+  // false here for the right reason (no accum) and cannot distinguish "nothing
+  // happened" from "something happened and failed".
+  if (rec && rec.status === 'error' && !rec.accum) return { kind: 'show' };
+
   // No record, or one that finished having produced nothing.
   if (!isFinishedRun(rec)) return { kind: 'none' };
 
