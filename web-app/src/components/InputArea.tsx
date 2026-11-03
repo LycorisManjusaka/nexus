@@ -36,6 +36,24 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
   // Enter means different things on the two layouts — see handleKeyDown.
   const { isMobile } = useDevice();
   const [text, setText] = useState('');
+  // ── "Your press was received" ────────────────────────────────────────────
+  //
+  // REPORTED 2026-11-03 (津代): "you press the button and nothing happens for
+  // about ten seconds." Half of that complaint was the runner (fixed in
+  // runTurnForQueue — see the check above deps.chatPost) and half is here:
+  // handleStop deliberately does NOT clear `loading`, because the reload that
+  // decides what the turn produced has to run first. So the spinner, the
+  // disabled input and this very button all stayed exactly as they were, and
+  // the only honest reading of the screen was "the click missed".
+  //
+  // LOCAL state and not a prop, because the fact on display belongs to the
+  // BUTTON ("this was pressed"), not to the turn. Threading it down from
+  // ChatArea would make a second source of truth about one event, and it is
+  // the shape that broke the first-original marker when sends moved house.
+  // Cleared by `isGenerating` going false — the one signal that always
+  // arrives, whichever way the turn ends.
+  const [stopPressed, setStopPressed] = useState(false);
+  useEffect(() => { if (!isGenerating) setStopPressed(false); }, [isGenerating]);
   const [userName, setUserName] = useState('');
   // Which VRChat transcript file is being cleared right now ('kohai' | 'ear').
   const [clearing, setClearing] = useState<string | null>(null);
@@ -884,10 +902,20 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           />
         </div>
         {isGenerating && (
-          <button 
-            onClick={onStop}
-            className="p-3 bg-red-500 text-white rounded-xl hover:bg-red-600 transition-colors shadow-sm"
-            title={t('input.stop')}
+          <button
+            onClick={() => { setStopPressed(true); onStop(); }}
+            // Disabled rather than merely restyled. A second press is harmless
+            // server-side (turnStop answers 'already') but it tells the person
+            // nothing new, and a live-looking button that changes nothing is
+            // the exact reading this whole fix exists to remove.
+            disabled={stopPressed}
+            className={`p-3 text-white rounded-xl transition-colors shadow-sm ${
+              stopPressed
+                ? 'bg-red-400 cursor-default animate-pulse'
+                : 'bg-red-500 hover:bg-red-600'
+            }`}
+            title={t(stopPressed ? 'input.stopping' : 'input.stop')}
+            aria-label={t(stopPressed ? 'input.stopping' : 'input.stop')}
           >
             <Square size={18} className="fill-current" />
           </button>

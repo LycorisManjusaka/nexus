@@ -69,6 +69,7 @@ import type { TurnEventDeps } from '@/lib/turnEventReducer';
 import type { TurnHandoffPlan } from '@/lib/turnEvents';
 import { describeProviderError } from '@/lib/providerErrors';
 import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
+import { planRebase } from '@/lib/saveRebase';
 
 /** What the runner could not do itself. */
 export interface RunTurnDeps {
@@ -464,8 +465,13 @@ export async function runTurnForQueue(
   // (MEASURED: a turn saved six messages and was back to four a second later).
   // Dropping the key is the whole fix: saveLog then stamps now, as it does for
   // a tab.
-  const { updatedAt: _carriedVersion, ...logWithoutVersion } = log;
+  const { updatedAt: _carriedVersion, ...initialLogFields } = log;
   void _carriedVersion;
+  // Replaced wholesale by a rebase (see `saveMessages`), so that a retry
+  // carries the OTHER writer's ~55 fields and not our stale copy of them. A
+  // rebase that kept these would quietly undo whatever settings change the
+  // conflicting save was actually making.
+  let logWithoutVersion: Record<string, unknown> = initialLogFields;
   // ⚠ The guard has to ADVANCE after every successful save. MEASURED
   // 2026-10-30, live, on the first real handoff: pass 1 saved, pass 2 was
   // refused with `from runner:..., by runner:...` — the runner racing ITSELF,
@@ -480,20 +486,71 @@ export async function runTurnForQueue(
   // same interface did not, because the browser only ever saves once per turn
   // and so never needed the field its own contract provides.
   let guardVersion = typeof log.updatedAt === 'number' ? log.updatedAt : undefined;
+  // ── WHAT THIS TURN LAST PUT ON DISK ──────────────────────────────────────
+  // The premise of the rebase in `saveMessages`: compared against THIS, a
+  // conflicting write is either "the other tab re-saved what I wrote" (safe to
+  // build on) or "someone changed the conversation" (not). Starts as the array
+  // loaded at turn start, because before the first save that IS our last word.
+  let lastSpine: unknown[] = stored;
+  // Why the most recent refusal could not be rebased, for the failure report.
+  // Null while nothing has been refused — the two call sites fall back to the
+  // sentence they have always printed.
+  let rebaseRefusal: string | null = null;
   const saveMessages = async (messages: unknown[], published?: TurnSavedPublish) => {
     // Read BEFORE the save: this is the version the patch is a continuation
     // of, and it is the only thing that lets a tab prove the patch applies to
     // the array it is holding. Taken here rather than at the call site so the
     // success save and the Stop save cannot disagree about it.
-    const readVersion = guardVersion;
-    const r = await deps.saveLog(
+    let readVersion = guardVersion;
+    const write = () => deps.saveLog(
       convoId,
       // `markerPatch` AFTER `messages`: it must win over the pending fields
       // carried in `logWithoutVersion`, which are what the tab last saved.
       { ...logWithoutVersion, messages, ...markerPatch },
       { expectedUpdatedAt: guardVersion, clientId: deps.clientId },
     );
-    if (r.ok && typeof r.writtenUpdatedAt === 'number') guardVersion = r.writtenUpdatedAt;
+    let r = await write();
+    // ── ONE REBASE, WHEN THE OTHER WRITER CHANGED NOTHING ──────────────────
+    //
+    // REPORTED 2026-11-04 (津代): a reply vanished the instant it finished.
+    // MEASURED: Cairn_60 was open in BOTH installations sharing this store, and
+    // both tabs write the log back after mirroring it. Every such write bumps
+    // `updatedAt` — so a long turn, guarded against the version it read at the
+    // start, is refused at the end and the whole reply is discarded.
+    //
+    // The lock is not the bug and is not loosened: the retry is guarded too,
+    // against the version now on disk, and only after `planRebase` has proved
+    // that version says the same thing we last said. A real second message,
+    // an edit, a deletion — all still refuse, and still refuse with a sentence.
+    //
+    // ONCE. A second conflict means writes are arriving faster than this turn
+    // can answer them, and a loop that keeps re-reading to win a race is how a
+    // save becomes unbounded. Losing the turn is bad; a runner that cannot be
+    // interrupted is worse.
+    if (!r.ok && r.conflict) {
+      const fresh = await deps.loadLog(convoId).catch(() => null);
+      const plan = planRebase(fresh, lastSpine);
+      if (plan.retry) {
+        const { updatedAt: _freshVersion, ...freshFields } = fresh as Record<string, unknown>;
+        void _freshVersion;
+        logWithoutVersion = freshFields;
+        guardVersion = plan.onto;
+        // The patch a tab receives has to name the version it APPLIES TO, and
+        // after a rebase that is the version we just adopted — not the one the
+        // first attempt was refused against. A `turn_saved` carrying the stale
+        // base is a patch every tab correctly ignores, which would turn this
+        // fix into "the reply survives but nobody sees it until a reload".
+        readVersion = plan.onto;
+        rebaseRefusal = null;
+        r = await write();
+      } else {
+        rebaseRefusal = plan.why;
+      }
+    }
+    if (r.ok) {
+      if (typeof r.writtenUpdatedAt === 'number') guardVersion = r.writtenUpdatedAt;
+      lastSpine = messages;
+    }
     // ── TELL THE TABS WHAT LANDED, so they do not re-download the log ───────
     //
     // MEASURED 2026-11-01 over 293 conversations: this frame is p50 7,891 B
@@ -608,8 +665,14 @@ export async function runTurnForQueue(
       }
     // A failure. `stopped` separates a DECISION from an accident — it decides
     // the notice the watcher gets and whether the log says so, but both now
-    // commit (see PassFailure.assistant). `stopped: true` is only ever produced
-    // for a 'stream' failure.
+    // commit (see PassFailure.assistant).
+    //
+    // ⚠ CORRECTED 2026-11-03. This used to say "`stopped: true` is only ever
+    // produced for a 'stream' failure", and that sentence was the whole bug
+    // 津代 reported: a stop could only be acted on once a stream existed, so
+    // every press made during the body build waited for the request it was
+    // trying to cancel. A 'post' failure can now carry it too — see the check
+    // above deps.chatPost.
     | ({ ok: false; stopped: boolean } & PassFailure);
 
   const runPass = async (plan: PassPlan): Promise<PassResult> => {
@@ -735,6 +798,51 @@ export async function runTurnForQueue(
     // CONTINUE it carries `plan.seed` — the half the target already had — so a
     // continue whose post dies keeps the text it was extending instead of
     // replacing it with a blank.
+    // ── A STOP THAT LANDED BEFORE THE POST ────────────────────────────────
+    //
+    // REPORTED 2026-11-03 (津代): "you press the button and nothing happens for
+    // about ten seconds — and it is not exactly ten. My guess is it is however
+    // long the prompt takes to reach Anthropic; before it arrives, Stop does
+    // literally nothing. You will not reproduce it on Default — the context is
+    // short, so the reaction is fast." She was right, and the mechanism is
+    // here: the stop channel was LIVE the whole time and the press WAS
+    // recorded, but nothing between the tick's listener and this POST could
+    // act on it.
+    //
+    //   tick: beginTurn → onStop(…, () => { stopped = true })   ← flag only
+    //   runner: loadLog → turnInputFromLog → buildSlimHistory
+    //           → buildTurnRequestBody                          ← seconds, on a
+    //                                                             big context
+    //   THIS POST → chat route → onStop(…, abortTurn)           ← first abort
+    //
+    // So the earliest moment the turn could die was the instant the chat route
+    // registered — i.e. after the whole body had been built and sent. Every
+    // press before that waited, invisibly, for the request it was trying to
+    // prevent. The flag the tick route already keeps is the answer; it just
+    // had no reader on this side.
+    //
+    // Checked HERE and not at the top of the pass: this is the last line
+    // before a request can reach a provider, so one check covers the whole
+    // prelude (load, slim, body build) and there is no second site to drift
+    // from it. A `stopped: true` 'post' failure commits the empty assistant
+    // message and consumes the batch — the same ending the stream-level stop
+    // takes, so an auto-trigger cannot re-fire what someone just cancelled.
+    if (deps.wasStopped?.() === true) {
+      const lang = (deps.globalSettings as { language?: string } | null)?.language;
+      // A DIFFERENT sentence from the stream-level stop on purpose: there, text
+      // exists and the notice says how far it got. Here nothing was sent, and
+      // that the turn cost nothing is the fact a reader wants.
+      acc.notices.push(
+        lang === 'ja'
+          ? 'このターンは送信される前に停止されました。モデルは呼ばれていません。'
+          : 'Turn stopped before it was sent — the model was never called.',
+      );
+      return {
+        ok: false, stage: 'post', reason: 'stopped before post',
+        stopped: true, sawOutput: false, assistant: finalizeAssistant(),
+      };
+    }
+
     let res: Response;
     try {
       res = await deps.chatPost(
@@ -904,7 +1012,10 @@ export async function runTurnForQueue(
         return {
           ok: false, stage: 'save',
           reason: r.conflict
-            ? 'refused: the conversation changed on disk while this turn ran'
+            // `rebaseRefusal` names WHICH of the three refusals this was; the
+            // literal is the fallback for a conflict reported before the rebase
+            // ran at all.
+            ? `refused: ${rebaseRefusal ?? 'the conversation changed on disk while this turn ran'}`
             : `save failed: ${String(r.error || 'unknown')}`,
           consumedIds: saved ? consumedIds : [],
         };
@@ -1035,7 +1146,7 @@ export async function runTurnForQueue(
       return {
         ok: false, stage: 'save',
         reason: result.conflict
-          ? 'refused: the conversation changed on disk while this turn ran'
+          ? `refused: ${rebaseRefusal ?? 'the conversation changed on disk while this turn ran'}`
           : `save failed: ${String(result.error || 'unknown')}`,
         // A handoff pass that cannot save has still spent the first pass's
         // answer, which IS on disk — so the batch stays consumed.

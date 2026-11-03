@@ -140,6 +140,36 @@ function deps(over: Partial<RunTurnDeps>): Rig {
   return { deps: base, saves };
 }
 
+/**
+ * `wasStopped` with the SHAPE THE SYSTEM ACTUALLY PRODUCES: false while the
+ * body is being built, true once the request is on the wire.
+ *
+ * ⚠ WHY THIS REPLACED `wasStopped: () => true` (2026-11-03). Every stop test
+ * here used that constant to mean "someone pressed Stop during the reply". It
+ * was a fixture simplification, and the moment runTurnForQueue learned to
+ * check the flag BEFORE posting (津代's ~10s dead button) the simplification
+ * started lying in two different directions at once:
+ *
+ *   · four tests FAILED — the turn now returns before the stream they were
+ *     about even exists;
+ *   · two tests still PASSED, by the new path, asserting on a notice that
+ *     happened to also contain the word they grep for. A test that passes for
+ *     a different reason than it names has stopped checking anything.
+ *
+ * The second kind is why this is a helper and not six edited lines: the flag
+ * flipping at the POST is one fact about the system, and it belongs in one
+ * place that every stop test shares.
+ */
+function stopOnceSent(post?: RunTurnDeps['chatPost']): Pick<RunTurnDeps, 'wasStopped' | 'chatPost'> {
+  let sent = false;
+  const inner: RunTurnDeps['chatPost'] =
+    post ?? (async () => ({ ok: true, status: 200, body: abortingBody() } as unknown as Response));
+  return {
+    chatPost: async (req) => { sent = true; return inner(req); },
+    wasStopped: () => sent,
+  };
+}
+
 type Saved = {
   role: string;
   content: string;
@@ -154,8 +184,7 @@ const savedMessages = (log: Record<string, unknown>) => log.messages as Saved[];
 
 test('stop mid-reply: the partial text, thinking, tools and billing are all saved', async () => {
   const { deps: d, saves } = deps({
-    wasStopped: () => true,
-    chatPost: async () => ({
+    ...stopOnceSent(async () => ({
       ok: true, status: 200,
       body: partialThenAbort([
         frame({ type: 'thought', content: 'weighing it' }),
@@ -163,7 +192,7 @@ test('stop mid-reply: the partial text, thinking, tools and billing are all save
         frame({ type: 'tool_call', call: { name: 'Bash', input: { command: 'ls' } } }),
         frame({ type: 'cache_usage', cachedInputTokens: 10, outputTokens: 4 }),
       ]),
-    } as unknown as Response),
+    } as unknown as Response)),
   });
 
   const r = await runTurnForQueue('Default', 'c1', items('cancel me'), d);
@@ -191,11 +220,10 @@ test('stop mid-reply: the partial text, thinking, tools and billing are all save
 
 test('a stopped reply is MARKED, so a truncation cannot read as a complete answer', async () => {
   const { deps: d, saves } = deps({
-    wasStopped: () => true,
-    chatPost: async () => ({
+    ...stopOnceSent(async () => ({
       ok: true, status: 200,
       body: partialThenAbort([frame({ type: 'text', content: 'half a sent' })]),
-    } as unknown as Response),
+    } as unknown as Response)),
   });
   await runTurnForQueue('Default', 'c1', items('x'), d);
 
@@ -212,12 +240,11 @@ test('a stopped reply is MARKED, so a truncation cannot read as a complete answe
 
 test('the stop marker follows the interface language', async () => {
   const { deps: d, saves } = deps({
-    wasStopped: () => true,
     globalSettings: { language: 'ja' },
-    chatPost: async () => ({
+    ...stopOnceSent(async () => ({
       ok: true, status: 200,
       body: partialThenAbort([frame({ type: 'text', content: 'とちゅう' })]),
-    } as unknown as Response),
+    } as unknown as Response)),
   });
   await runTurnForQueue('Default', 'c1', items('x'), d);
   const notices = savedMessages(saves[0])[1].notices || [];
@@ -229,7 +256,7 @@ test('stop before anything arrived: an empty reply is still saved, carrying the 
   // behind) and reported it as a third symptom. It is the correct outcome and
   // the browser's too — the streaming placeholder is created up front — so the
   // fix makes all three shapes agree rather than special-casing this one.
-  const { deps: d, saves } = deps({ wasStopped: () => true });
+  const { deps: d, saves } = deps({ ...stopOnceSent() });
   await runTurnForQueue('Default', 'c1', items('instant stop'), d);
 
   const msgs = savedMessages(saves[0]);
@@ -382,11 +409,10 @@ test('rerun + stop: the partial takes the old reply\'s place, so no message is l
   };
   const { deps: d, saves } = deps({
     loadLog: async () => log,
-    wasStopped: () => true,
-    chatPost: async () => ({
+    ...stopOnceSent(async () => ({
       ok: true, status: 200,
       body: partialThenAbort([frame({ type: 'text', content: 'NEW PAR' })]),
-    } as unknown as Response),
+    } as unknown as Response)),
   });
 
   await runTurnForQueue('Default', 'c1', command('rerun', 'a1'), d);
@@ -410,11 +436,10 @@ test('continue + stop: the continuation extends the target in place, keeping its
   };
   const { deps: d, saves } = deps({
     loadLog: async () => log,
-    wasStopped: () => true,
-    chatPost: async () => ({
+    ...stopOnceSent(async () => ({
       ok: true, status: 200,
       body: partialThenAbort([frame({ type: 'text', content: '-MORE' })]),
-    } as unknown as Response),
+    } as unknown as Response)),
   });
 
   await runTurnForQueue('Default', 'c1', command('continue', 'a1'), d);
@@ -422,4 +447,62 @@ test('continue + stop: the continuation extends the target in place, keeping its
   assert.equal(msgs.length, 2, 'no second bubble was minted');
   assert.equal(msgs[1].id, 'a1', 'the target kept its id');
   assert.equal(msgs[1].content, 'HALF-MORE', 'the stopped continuation was kept');
+});
+
+// ── A stop that lands BEFORE the post ───────────────────────────────────────
+//
+// REPORTED 2026-11-03 (津代): "you press the button and nothing happens for
+// about ten seconds — and it is not exactly ten. My guess is it is however
+// long the prompt takes to reach Anthropic. You will not reproduce it on
+// Default; the context is short, so the reaction is fast."
+//
+// She had the mechanism right. The stop channel was live and the press WAS
+// recorded — the tick route registers its listener before the turn starts —
+// but the only reader of that flag was the catch around the STREAM. So on a
+// large conversation the press sat through loadLog, turnInputFromLog,
+// buildSlimHistory and buildTurnRequestBody, and the earliest the turn could
+// die was after the request had already gone out.
+//
+// These two tests pin the part a person can check: nothing is sent.
+
+test('a stop requested before the post never calls the model', async () => {
+  let posts = 0;
+  const { deps: d, saves } = deps({
+    wasStopped: () => true,         // already pressed, as it is on a big context
+    chatPost: async () => {
+      posts += 1;
+      return { ok: true, status: 200, body: abortingBody() } as unknown as Response;
+    },
+  });
+
+  const r = await runTurnForQueue('Default', 'c1', items('never mind'), d);
+
+  // THE assertion. Everything else here is about not losing anything.
+  assert.equal(posts, 0, 'no request was made');
+
+  assert.equal(r.ok, false);
+  assert.equal((r as { stage: string }).stage, 'stopped', 'reported as a decision, not a failure');
+  assert.deepEqual((r as { consumedIds: string[] }).consumedIds, ['item-1'],
+    'the batch is consumed, so an auto-trigger cannot re-fire what was cancelled');
+
+  const msgs = savedMessages(saves[0]);
+  assert.equal(msgs.length, 2, 'the user turn and an empty reply, same as every other stop');
+  assert.equal(msgs[1].content, '', 'empty, not absent — so "retry" has something to sit on');
+  assert.ok((msgs[1].notices || []).length >= 1, 'and it says why it is empty');
+});
+
+test('the pre-post notice says the model was never called, not how far it got', async () => {
+  // A DIFFERENT sentence from the stream-level stop, in both languages: there
+  // the reader wants to know the text is truncated; here the fact is that the
+  // turn cost nothing. One notice for both would make the log unable to tell
+  // a cancelled send from a very short answer.
+  const en = deps({ wasStopped: () => true });
+  await runTurnForQueue('Default', 'c1', items('x'), en.deps);
+  const enNotice = (savedMessages(en.saves[0])[1].notices || []).join(' ');
+  assert.match(enNotice, /never called/i, `got ${JSON.stringify(enNotice)}`);
+
+  const ja = deps({ wasStopped: () => true, globalSettings: { language: 'ja' } });
+  await runTurnForQueue('Default', 'c1', items('x'), ja.deps);
+  const jaNotice = (savedMessages(ja.saves[0])[1].notices || []).join(' ');
+  assert.ok(jaNotice.includes('呼ばれていません'), `got ${JSON.stringify(jaNotice)}`);
 });

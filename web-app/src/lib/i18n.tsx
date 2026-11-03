@@ -1003,6 +1003,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // send button sits next to the field, and a narrow screen truncates anyway.
   'input.placeholder.mobile': 'Send a message...',
   'input.stop': 'Stop Generating',
+  'input.stopping': 'Stopping…',
   'input.send': 'Send',
   'input.mode.pick': 'What the send button does',
   'input.mode.interject': 'Interject',
@@ -2735,6 +2736,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   // 説明になってしまうので置かない（送信ボタンは入力欄の隣に常にある）。
   'input.placeholder.mobile': 'メッセージを送る…',
   'input.stop': '生成を止める',
+  // Shown the instant Stop is pressed, while the turn is still winding down.
+  // The button cannot truthfully say "stopped" yet — the runner may still be
+  // finalizing and saving — so it says what IS true: the press arrived.
+  'input.stopping': '停止中…',
   'input.send': '送信',
   'input.mode.pick': '送信ボタンの動作',
   'input.mode.interject': '割り込む',
