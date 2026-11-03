@@ -411,7 +411,14 @@ export async function POST(req: Request) {
 
     // Diagnostics ride along with the audio. The browser reads them to drive the
     // live TTS indicator; nothing here changes the audio itself.
-    return new NextResponse(finalWav, {
+    // BodyInit only admits views over a non-shared ArrayBuffer, while Node types
+    // a Buffer as generic over its backing store (Buffer<ArrayBufferLike>) --
+    // so a Buffer that is in fact non-shared still fails the check. These bytes
+    // come from Node's own allocator via concatenateWavs, never from a
+    // SharedArrayBuffer, so the cast states what the allocator already
+    // guarantees. Chosen over `new Uint8Array(finalWav)`, which would copy the
+    // whole WAV to satisfy the type alone.
+    return new NextResponse(finalWav as unknown as BodyInit, {
       headers: {
         'Content-Type': 'audio/wav',
         'X-Tts-Engine': String(meta.engine),

@@ -281,7 +281,13 @@ export async function POST(req: Request) {
           const buf = fs.readFileSync(fullPath);
           // Convert PNG → JPEG via sharp if available, else send as-is
           let mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-          let data = buf;
+          // Node types Buffer as generic over its backing store. readFileSync
+          // yields Buffer<ArrayBuffer>, sharp's toBuffer() yields
+          // Buffer<ArrayBufferLike>, so plain inference from `buf` makes the
+          // reassignment below a type error. Widening the annotation (rather
+          // than casting at the assignment) keeps both branches honest: either
+          // allocator is acceptable here, and .toString('base64') works on both.
+          let data: Buffer<ArrayBufferLike> = buf;
           try {
             // Dynamic import — sharp may or may not be installed
             const sharp = (await import('sharp')).default;
