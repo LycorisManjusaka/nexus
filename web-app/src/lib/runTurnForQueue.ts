@@ -68,8 +68,6 @@ import {
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
 import type { TurnHandoffPlan, TurnEventPayload } from '@/lib/turnEvents';
 import { applyDescriptions } from '@/lib/applyDescriptions';
-// ⚠ TEMPORARY instrument, 2026-11-04. Remove with lib/senseProbe.ts.
-import { senseProbe } from '@/lib/senseProbe';
 import { describeProviderError } from '@/lib/providerErrors';
 import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 import { planRebase } from '@/lib/saveRebase';
@@ -538,18 +536,6 @@ export async function runTurnForQueue(
     // re-calling the bridge model, and the bubble can draw the chip. Pure, and
     // free when the turn described nothing (returns the same array).
     const described = applyDescriptions(messages as Record<string, unknown>[], describedAttachments);
-    // ⚠ TEMPORARY probe — see lib/senseProbe.ts. Remove with it.
-    senseProbe('apply', {
-      collected: describedAttachments.length,
-      changed: described.changed,
-      msgs: messages.length,
-      atts: (messages as Record<string, unknown>[]).reduce(
-        (n, m) => n + (Array.isArray(m.attachments) ? (m.attachments as unknown[]).length : 0), 0),
-      ids: describedAttachments.slice(0, 2).map((p) => ({
-        m: (p as Record<string, unknown>).messageId,
-        a: (p as Record<string, unknown>).attachmentId,
-      })),
-    });
     messages = described.next;
     // Read BEFORE the save: this is the version the patch is a continuation
     // of, and it is the only thing that lets a tab prove the patch applies to
@@ -626,6 +612,13 @@ export async function runTurnForQueue(
         // THIS turn travels with the save that persisted it. Empty for a
         // rerun/continue, which cannot move the boundary.
         marker: Object.keys(markerPatch).length > 0 ? markerPatch : null,
+        // ⚠ THE SENSE BRIDGE WRITES OUTSIDE THE PAIR. `applyDescriptions`
+        // above put its text on the attachments of the messages that carry
+        // them — any age — so this save is not describable as "two messages
+        // changed" and the tab has to take the whole log. It is true at most
+        // once per attachment: the next turn re-uses the stored text, so
+        // `changed` is false and the patch comes back.
+        historyChanged: described.changed,
       })}\n\n`);
     }
     return r;

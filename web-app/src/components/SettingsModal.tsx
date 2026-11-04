@@ -1402,7 +1402,7 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={globalSettings.saveTimestampsToMd ?? false}
+                  checked={globalSettings.saveTimestampsToMd ?? true}
                   onChange={e => setGlobalSettings({...globalSettings, saveTimestampsToMd: e.target.checked})}
                   className="w-4 h-4 accent-indigo-500"
                 />

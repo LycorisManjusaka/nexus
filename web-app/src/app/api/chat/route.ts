@@ -5,8 +5,6 @@ import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
 import { type ThinkTagState, newThinkTagState, splitThinkTags } from '@/lib/thinkTagSplitter';
-// ⚠ TEMPORARY instrument, 2026-11-04. Remove with lib/senseProbe.ts.
-import { senseProbe } from '@/lib/senseProbe';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
@@ -1324,8 +1322,6 @@ async function streamClaudeViaAgentSDK(args: {
       enqueue(modelSelectedPayload);
       // Flush any newly-generated sense descriptions so the frontend can
       // persist them onto message attachments before AI text begins streaming.
-      // ⚠ TEMPORARY probe — see lib/senseProbe.ts. Remove with it.
-      senseProbe('flush-oauth', { n: senseEvents.length, convoId });
       for (const ev of senseEvents) enqueue(ev);
 
       // ── Token accounting lives OUTSIDE the try ─────────────────────────
@@ -1341,6 +1337,26 @@ async function streamClaudeViaAgentSDK(args: {
       // out here because `consume()` can run twice (the resume fallback) and
       // the entity should still be told only once. See lib/rateLimitNote.ts.
       let rateLimitNoted = false;
+      // ── THE SCREEN NOTE IS HELD, NOT STREAMED ────────────────────────────
+      // REPORTED 2026-11-04 (津代): eight identical ⚠️ rows stacked above one
+      // message, 75% / 75% / … / 76% / 76%. The SDK emits `rate_limit_event`
+      // on EVERY turn past the threshold and this path enqueued one notice
+      // each time — but a notice is not visible while the stream runs, it is
+      // bundled into the meta bar afterwards. So eight rows said one thing,
+      // seven of them with a stale percentage.
+      //
+      // Held and overwritten, flushed once at either exit, so the row carries
+      // the LAST reading rather than the first. Nothing is lost by delaying
+      // it: the reader never saw it earlier anyway. The one who IS cut off
+      // mid-sentence gets told mid-turn through the system-note queue below,
+      // which is a different channel with a different deadline.
+      let rateLimitScreenNote: string | null = null;
+      const flushRateLimitNote = () => {
+        if (rateLimitScreenNote) {
+          enqueue({ type: 'notice', content: rateLimitScreenNote });
+          rateLimitScreenNote = null;
+        }
+      };
 
       try {
         // Dynamic import so a broken/missing SDK install doesn't kill the
@@ -2640,7 +2656,8 @@ async function streamClaudeViaAgentSDK(args: {
               console.log(`${oauthTag} rate_limit ${ri.status} type=${ri.rateLimitType} util=${ri.utilization} resetsAt=${ri.resetsAt} overage=${ri.isUsingOverage} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
               if (ri.status === 'rejected' || ri.surpassedThreshold) {
                 const pct = typeof ri.utilization === 'number' ? ` (${Math.round(ri.utilization * 100)}% used)` : '';
-                enqueue({ type: 'notice', content: `Subscription rate limit ${ri.status === 'rejected' ? 'reached' : 'threshold passed'} on the ${String(ri.rateLimitType || 'plan').replace(/_/g, '-')} budget${pct}${ri.resetsAt ? `, resets ${new Date(Number(ri.resetsAt) * 1000).toLocaleTimeString()}` : ''}.` });
+                // Overwrites, does not append — see `rateLimitScreenNote`.
+                rateLimitScreenNote = `Subscription rate limit ${ri.status === 'rejected' ? 'reached' : 'threshold passed'} on the ${String(ri.rateLimitType || 'plan').replace(/_/g, '-')} budget${pct}${ri.resetsAt ? `, resets ${new Date(Number(ri.resetsAt) * 1000).toLocaleTimeString()}` : ''}.`;
               }
               // The notice above is screen furniture — it reaches the reader
               // after the turn, bundled in the meta bar. The one who is about
@@ -3124,6 +3141,7 @@ async function streamClaudeViaAgentSDK(args: {
           enqueue({ type: 'web_sources', sources: [...oauthSourceMap.values()] });
         }
 
+        flushRateLimitNote();
         controller.enqueue(`data: [DONE]\n\n`);
         controller.close();
       } catch (e: any) {
@@ -3136,6 +3154,11 @@ async function streamClaudeViaAgentSDK(args: {
         // refresh token, etc.).
         const msg = e?.message || String(e);
         console.error('[claude-oauth] error:', msg);
+        // ⚠ BEFORE the error frames, and this exit matters MORE than the
+        // success one: a turn the budget cut off is exactly the turn whose
+        // last reading the reader needs. Holding the note would be a
+        // regression if it could be dropped here.
+        try { flushRateLimitNote(); } catch {}
         // ── Report the bill even when the turn ends badly ──────────────────
         // See `lib/unfinishedBilling.ts` for why. Same field-by-field merge as
         // the success path (never added — both accumulators count the same
@@ -4336,11 +4359,17 @@ export async function POST(req: Request) {
       // glm-4.6) while still allowing image-bearing conversations to flow.
       //   • eyesEnabled — master toggle (default ON)
       //   • eyesPrompt  — entity-specific instruction sent with each image
-      //   • eyesModel   — the multimodal model to call (default glm-5v-turbo)
+      //   • eyesModel   — the multimodal model to call
       // For vision-capable primary models, all three fields are ignored.
+      //
+      // ⚠ THESE THREE FALLBACKS MUST MATCH lib/turnInputDefaults.ts. They are
+      // what a body that omits the field gets, and the runner sends the field;
+      // so a disagreement does not fail — it gives the browser path and the
+      // runner path DIFFERENT eyes on the same attachment, which shows up as a
+      // cache miss and a second bill, never as an error.
       eyesEnabled = false,
       eyesPrompt = 'Describe this image in detail for an AI that cannot see images. Be specific about people, objects, text, colors, composition, and context. Output only the description, no preamble.',
-      eyesModel = 'glm-5v-turbo',
+      eyesModel = 'gemini-3.5-flash-lite',
       // ── "Ears" — audio bridge for non-audio-capable primary models ───────
       // Same architecture as eyes: when the active model can't take audio,
       // NEXUS routes each audio attachment through an audio-capable model
@@ -4348,14 +4377,14 @@ export async function POST(req: Request) {
       // transcript/description. Cached on disk by (audioBytes, prompt, model).
       earsEnabled = false,
       earsPrompt = 'Listen to this audio carefully. Provide a transcript of any speech (preserving the speaker\'s original language), then describe non-speech elements: tone of voice, background sounds, music, ambient noise, and overall context. Output only the transcript+description, no preamble.',
-      earsModel = 'qwen3.5-omni-flash',
+      earsModel = 'gemini-3.5-flash-lite',
       // ── "Video Watcher" — video bridge for non-video-capable primary models ─
-      // Same architecture as eyes/ears. Default model is Gemini 3.5 Flash
-      // since Gemini handles video content particularly well; Qwen Omni is a
-      // valid alternative selectable from the conversation settings.
+      // Same architecture as eyes/ears. Gemini carries image, audio AND video
+      // on one wire, so all three bridges share one default vessel; Qwen Omni
+      // stays a valid alternative selectable per conversation.
       watcherEnabled = false,
       watcherPrompt = 'Watch this video carefully. Describe what happens chronologically: actions, people, objects, setting changes, on-screen text, and audio (speech transcript + non-speech sounds). Be thorough but concise. Output only the description, no preamble.',
-      watcherModel = 'gemini-3.5-flash',
+      watcherModel = 'gemini-3.5-flash-lite',
       // ── read_conversation tool gate ──────────────────────────────────────
       // Enabled when the folder opts into "summaries instead of the 4th layer"
       // (so the model can pull the full text of any active past conversation it
@@ -5308,8 +5337,6 @@ export async function POST(req: Request) {
     // the frontend can update message attachments with their new descriptions
     // before the AI text begins flowing.
     const emitSenseEvents = (controller: ReadableStreamDefaultController) => {
-      // ⚠ TEMPORARY probe — see lib/senseProbe.ts. Remove with it.
-      senseProbe('flush-stream', { n: senseEvents.length });
       for (const ev of senseEvents) {
         controller.enqueue(`data: ${JSON.stringify(ev)}\n\n`);
       }

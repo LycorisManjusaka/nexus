@@ -22,6 +22,7 @@ const frame = (over: Partial<TurnSavedEvent> = {}): TurnSavedEvent => ({
   assistant: { id: 'a1', role: 'assistant', content: 'done', tokens: 42 },
   dropId: null,
   marker: null,
+  historyChanged: false,
   ...over,
 });
 
@@ -316,5 +317,74 @@ describe('normaliseTurnSaved', () => {
     const ev = normaliseTurnSaved({ assistant: { id: 'a' }, dropId: '' });
     assert.ok(ev);
     assert.equal(ev.dropId, null);
+  });
+});
+
+describe('applyTurnSaved — historyChanged: the patch is insufficient, not wrong', () => {
+  it('refuses the patch when the save also wrote outside the pair', () => {
+    // REPORTED four times 2026-11-04 (津代). The sense bridge writes its
+    // descriptions onto the attachments of OLD messages; this frame said
+    // "nothing else moved", so the tab patched two messages and kept its
+    // description-less copies of the rest. Disk was right and no watching tab
+    // ever saw it. Without this guard the bug is invisible from both sides:
+    // the patch is internally valid and the screen is quietly stale.
+    const r = applyTurnSaved<M>(
+      [{ id: 'u1' }, { id: 'a1', content: 'par' }],
+      1000,
+      frame({ historyChanged: true }),
+    );
+    assert.equal(r, null);
+  });
+
+  it('still patches when nothing outside the pair moved', () => {
+    // The other half, and the reason the flag is not simply "always reload":
+    // a description is written at most once per attachment, so the turn AFTER
+    // the bridge ran must get its 55x patch back. If this case ever starts
+    // returning null, 2026-11-01 has been silently undone.
+    const r = applyTurnSaved<M>(
+      [{ id: 'u1' }, { id: 'a1', content: 'par' }],
+      1000,
+      frame({ historyChanged: false }),
+    );
+    assert.ok(r);
+    assert.equal((r.messages[1] as M).content, 'done');
+  });
+
+  it('refuses even when every version guard is satisfied', () => {
+    // Stated separately because this is the distinction the old comment got
+    // wrong: the four version guards are correctness guards, this one is a
+    // completeness guard, and a reader who assumes the list is closed will
+    // not come back here when a new writer appears. Same frame, same base,
+    // same ids as the passing case above — only the flag differs.
+    const ok = applyTurnSaved<M>([{ id: 'a1' }], 1000, frame());
+    const no = applyTurnSaved<M>([{ id: 'a1' }], 1000, frame({ historyChanged: true }));
+    assert.ok(ok);
+    assert.equal(no, null);
+  });
+});
+
+describe('normaliseTurnSaved — historyChanged', () => {
+  it('reads an absent flag as false, keeping the patch available', () => {
+    // Defaulting true would be the "safe" choice and would send every tab to
+    // a full reload after every turn — undoing 2026-11-01 with no error. It
+    // is safe to default false because the line that applies descriptions and
+    // the line that sets this flag are the same writer: a runner that can
+    // produce the condition always reports it.
+    const ev = normaliseTurnSaved({ assistant: { id: 'a' } });
+    assert.ok(ev);
+    assert.equal(ev.historyChanged, false);
+  });
+
+  it('only true is true', () => {
+    // Guards the wire boundary: JSON carries whatever the publisher put there,
+    // and a truthy non-boolean ("false", 0, {}) must not decide this.
+    for (const v of ['true', 1, {}, [], 'yes']) {
+      const ev = normaliseTurnSaved({ assistant: { id: 'a' }, historyChanged: v });
+      assert.ok(ev);
+      assert.equal(ev.historyChanged, false, `${JSON.stringify(v)} must not read as true`);
+    }
+    const yes = normaliseTurnSaved({ assistant: { id: 'a' }, historyChanged: true });
+    assert.ok(yes);
+    assert.equal(yes.historyChanged, true);
   });
 });

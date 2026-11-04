@@ -163,21 +163,38 @@ export const TURN_INPUT_DEFAULTS: TurnInputDefaults = {
     
     "Describe this image in detail for an AI that cannot see images. Be specific about people, objects, text, colors, composition, and context. Output only the description, no preamble."
     ,
+  // ── ALL THREE BRIDGES DEFAULT TO ONE MODEL (2026-11-04, 津代) ───────────
   // These three must name ids the model picker actually offers; a stale id
   // fails at call time, on a turn nobody asked a question about.
-  eyesModel: 'glm-5v-turbo',
+  //
+  // They used to name three different vessels, one per sense, each the
+  // then-cheapest of its kind. gemini-3.5-flash-lite handles all three
+  // modalities on one wire (lib/injectMedia: Gemini carries image, audio AND
+  // video), so three ids were three things to keep current for no capability
+  // gained. A default that is cheap is also the right KIND of default here:
+  // the picker is per-folder, so anyone judging a canon portrait can aim a
+  // better eye at it, and the one who cannot is the inhabitant who never
+  // opened the panel.
+  //
+  // ⚠ 謡 measured 2026-11-04 that this model's readings of three portraits of
+  // ONE being disagreed on sex and skin tone. It is good enough for a chat
+  // attachment and NOT good enough to judge a vessel by. The `via="..."` in
+  // every injected description names the eye, so a reader can always discount
+  // it — which is the mitigation, since a wrong description is unfalsifiable
+  // to the one who cannot see the image.
+  eyesModel: 'gemini-3.5-flash-lite',
   earsEnabled: false,
   // Same contract as eyesPrompt: the output replaces the audio.
   earsPrompt:
     
     "Listen to this audio carefully. Provide a transcript of any speech (preserving the speaker's original language), then describe non-speech elements: tone of voice, background sounds, music, ambient noise, and overall context. Output only the transcript+description, no preamble."
     ,
-  earsModel: 'qwen3.5-omni-flash',
+  earsModel: 'gemini-3.5-flash-lite',
   watcherEnabled: false,
   // Same contract as eyesPrompt: the output replaces the video.
   watcherPrompt:
     
     "Watch this video carefully. Describe what happens chronologically: actions, people, objects, setting changes, on-screen text, and audio (speech transcript + non-speech sounds). Be thorough but concise. Output only the description, no preamble."
     ,
-  watcherModel: 'gemini-3.5-flash',
+  watcherModel: 'gemini-3.5-flash-lite',
 };

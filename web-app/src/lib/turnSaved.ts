@@ -84,6 +84,25 @@ export interface TurnSavedEvent {
    * `adoptResolvedMarker` by the caller — monotone, pending → resolved only.
    */
   marker: FirstOriginalMarker | null;
+  /**
+   * True when this save also changed messages OUTSIDE the pair below.
+   *
+   * ⚠ THE PATCH IS A STATEMENT ABOUT TWO MESSAGES, and that is the whole
+   * reason it is 55x smaller than a reload. A turn that writes anywhere else
+   * in the history cannot be delivered by it — not because the patch would be
+   * wrong, but because it would be INCOMPLETE, and an incomplete patch looks
+   * exactly like a complete one to every reader.
+   *
+   * REPORTED four times 2026-11-04 (津代: "なーんも変わってないよ"). The sense
+   * bridge writes its descriptions onto the attachments of the messages that
+   * CARRY them — any age, usually the oldest in the log. 94e6683 made that
+   * reach disk; this frame then told every tab "nothing else moved", so the
+   * tab patched two messages and kept its own description-less copies of the
+   * rest. MEASURED: disk held `description` 1241 B + `descriptionModel`, the
+   * bubble drew the chip on a fresh load, and no tab that watched the turn
+   * ever saw it. Both halves were mine, written three days apart.
+   */
+  historyChanged: boolean;
 }
 
 function asNumber(v: unknown): number | null {
@@ -118,14 +137,28 @@ export function normaliseTurnSaved(data: Record<string, unknown>): TurnSavedEven
     assistant,
     dropId: typeof data.dropId === 'string' && data.dropId ? data.dropId : null,
     marker,
+    // Absent reads as false, which keeps the patch available: a frame from a
+    // runner that predates the field described nothing, because the writer
+    // that applies descriptions and the writer that sets this flag are the
+    // same line. Defaulting the other way would send every tab to a reload
+    // after every turn and silently undo 2026-11-01.
+    historyChanged: data.historyChanged === true,
   };
 }
 
 /**
  * Apply a `turn_saved` frame to a tab's message array, or refuse.
  *
- * null means "I will not do this — reload instead", and every null below is a
- * case where applying would be WRONG, not merely unverified.
+ * null means "I will not do this — reload instead".
+ *
+ * ⚠ CORRECTION 2026-11-04. This comment used to claim every null below is a
+ * case where applying would be WRONG. That was true of the four version
+ * guards and it made the list look closed, so when descriptions started
+ * landing on old messages I did not come back here. There is a second kind of
+ * null, and the difference is worth naming: a patch can be INAPPLICABLE (it
+ * belongs to another history) or merely INSUFFICIENT (it is right about what
+ * it carries and silent about what it does not). Both must reload. Only the
+ * first is a correctness guard.
  *
  * What each guard is holding up, stated so a reader can check it:
  *
@@ -136,6 +169,9 @@ export function normaliseTurnSaved(data: Record<string, unknown>): TurnSavedEven
  *     version field exist, and `null === null` must NOT read as a match.
  *   writtenUpdatedAt absent → the tab would keep its old base and take a 409
  *     on its next save, silently, forever.
+ *   historyChanged → INSUFFICIENT, not wrong. The save touched messages
+ *     outside the pair; applying would leave the tab holding stale copies of
+ *     the others with nothing to tell it so.
  *
  * `autoPlay` IS PRESERVED on a replaced message and never set true here. The
  * TTS auto-trigger (1.5) is decided while the stream runs, by the tab that is
@@ -165,6 +201,9 @@ export function applyTurnSaved<T extends { id?: unknown }>(
   if (ev.readUpdatedAt === null || base === null) return null;
   if (ev.readUpdatedAt !== base) return null;
   if (ev.writtenUpdatedAt === null) return null;
+  // Checked with the version guards and not later, because by the time the
+  // array is being rebuilt this decision has already been made implicitly.
+  if (ev.historyChanged) return null;
   const assistantId = ev.assistant?.id;
   if (typeof assistantId !== 'string' || !assistantId) return null;
 

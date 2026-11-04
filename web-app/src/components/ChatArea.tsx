@@ -4699,7 +4699,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   const handleExport = () => {
-    const md = exportToMarkdown(messages, folderName, saveThinkingToLog, globalSettings?.saveTimestampsToMd ?? false);
+    // ⚠ DEFAULT ON since 2026-11-04 (津代: "毎回あれつけるのうんざりなの").
+    // `??` and not `||`: an explicit false must still be false. The matching
+    // `?? true` is in SettingsModal — the two have to agree, or the checkbox
+    // says one thing and the file written says another.
+    const md = exportToMarkdown(messages, folderName, saveThinkingToLog, globalSettings?.saveTimestampsToMd ?? true);
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
