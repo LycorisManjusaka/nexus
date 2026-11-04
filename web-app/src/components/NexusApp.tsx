@@ -15,6 +15,9 @@ import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
 import { resolveUiFontScale } from '@/lib/uiFontScale';
 import { firstRunLanguage, hasStoredLanguage, browserLanguageCandidates } from '@/lib/firstRunLanguage';
+import { needsSidebarOpener } from '@/lib/paneChrome';
+import { useDevice } from '@/components/DeviceProvider';
+import { Menu } from 'lucide-react';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -332,6 +335,11 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   }, [currentConvoId]);
 
   const activeFolder = folders.find(f => f.id === activeFolderId);
+
+  // Read here, not threaded down: the drawer's open/close state lives in the
+  // device context precisely because the control that opens it and the panel it
+  // opens are siblings. This component is now a third opener site.
+  const { isMobile, setSidebarOpen } = useDevice();
 
   // ── Keep the address bar on the visible conversation ─────────────────────
   // history.replaceState, deliberately, for two reasons:
@@ -820,6 +828,18 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     };
   }, []);
 
+  // Is the conversation pane the one rendering? Hoisted out of the JSX because
+  // TWO things depend on it now: which pane shows, and whether this component
+  // has to supply the drawer opener that ChatArea would otherwise carry (see
+  // lib/paneChrome.ts). Inlining it twice would let the two drift, and the
+  // direction they'd drift is "no opener on a phone" — the bug being fixed.
+  const chatOpen = !!(
+    currentConvoId &&
+    activeFolder &&
+    (!conversations.find(c => c.id === currentConvoId) ||
+      conversations.find(c => c.id === currentConvoId)?.folderName === activeFolder.name)
+  );
+
   return (
     <LanguageProvider language={globalSettings.language}>
     <div className="flex h-dvh bg-background text-foreground overflow-hidden font-sans">
@@ -858,7 +878,26 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
       />
 
       <main className="flex-1 flex flex-col relative min-w-0">
-        {currentConvoId && activeFolder && (!conversations.find(c => c.id === currentConvoId) || conversations.find(c => c.id === currentConvoId)?.folderName === activeFolder.name) ? (
+        {/* Mobile only, and OUTSIDE the pane branch below on purpose: whichever
+            non-conversation pane renders, this is how the being list is
+            reached. Same icon in the same corner as ChatArea's, so it is one
+            control that moved, not a second one to learn. */}
+        {needsSidebarOpener({ isMobile, chatOpen }) && (
+          <div className="shrink-0 px-3 py-2.5 flex items-center border-b border-border">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              title={translate('layout.openSidebar', globalSettings.language)}
+              aria-label={translate('layout.openSidebar', globalSettings.language)}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <Menu size={20} />
+              <span className="text-sm font-medium">
+                {translate('layout.openSidebar', globalSettings.language)}
+              </span>
+            </button>
+          </div>
+        )}
+        {chatOpen ? (
           <ChatArea
             key={currentConvoId}
             convoId={currentConvoId}
@@ -946,7 +985,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
               {translate('app.welcome.title', globalSettings.language)}
             </h1>
             <p className="text-muted-foreground max-w-md">
-              {translate('app.welcome.pickEntity', globalSettings.language)}
+              {translate(
+                isMobile ? 'app.welcome.pickEntityMobile' : 'app.welcome.pickEntity',
+                globalSettings.language,
+              )}
             </p>
             <button
               onClick={() => setIsGuideOpen(true)}

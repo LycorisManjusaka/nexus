@@ -5255,10 +5255,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               : 'font-semibold text-lg flex items-center gap-2'
           }
         >
-          {/* Mobile only: summons the conversation drawer. Lives in the header,
-              which is always rendered, so the list can never become
-              unreachable — a floating control could be scrolled away or
-              covered, this cannot. */}
+          {/* Mobile only: summons the conversation drawer. Lives in the header
+              rather than floating, so it cannot be scrolled away or covered.
+              CORRECTION (2026-11-05): this comment used to add "which is
+              always rendered, so the list can never become unreachable". That
+              stopped being true when the bare root URL stopped auto-opening a
+              being — ChatArea itself is then absent, and on a phone it took
+              the only opener with it. NexusApp now renders one for every pane
+              that is not a conversation; see lib/paneChrome.ts. */}
           {isMobile && (
             <button
               onClick={() => setSidebarOpen(true)}

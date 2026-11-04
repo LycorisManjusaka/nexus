@@ -42,9 +42,11 @@ interface DeviceContextValue {
   setCameraSlot: (el: HTMLElement | null) => void;
   /**
    * Mobile only: whether the conversation drawer is showing. Lives here rather
-   * than in NexusApp because the control that OPENS it is in ChatArea's header
-   * and the panel it opens is Sidebar — two siblings that would otherwise need
-   * the state threaded through a parent that has no other use for it.
+   * than in one component because the controls that OPEN it and the panel it
+   * opens are siblings: ChatArea's header while a conversation is showing,
+   * NexusApp's pane header when one is not (lib/paneChrome.ts), and Sidebar
+   * itself for the close. Threading that through a parent with no other use
+   * for it would be three props for one boolean.
    * Always false in effect on desktop, where the sidebar is never a drawer.
    */
   sidebarOpen: boolean;

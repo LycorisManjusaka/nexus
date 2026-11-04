@@ -39,6 +39,9 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'app.welcome.title': 'Welcome to NEXUS',
   'app.welcome.subtitle': 'Select or create a conversation to start',
   'app.welcome.pickEntity': 'Pick a being in the left panel to begin.',
+  // On a phone there IS no left panel — it is a drawer. Pointing at it would
+  // be a signpost naming something that is not on the screen.
+  'app.welcome.pickEntityMobile': 'Open "Conversations" above to pick a being.',
   'app.welcome.openGuide': 'Open the guide',
   'app.welcome.newChat': 'New Chat',
   'app.cloneFailed': 'Could not clone this conversation ({status}). You are still in the original one — try again.',
@@ -1838,6 +1841,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'app.welcome.title': 'NEXUS へようこそ',
   'app.welcome.subtitle': '会話を選ぶか、新しく作成してください',
   'app.welcome.pickEntity': '左のパネルから存在を選んでください。',
+  // 電話では左のパネルが存在しない（引き出しになる）。同じ文を出すと、
+  // 画面に無いものを指す道標になる。
+  'app.welcome.pickEntityMobile': '上の「会話一覧」から存在を選んでください。',
   'app.welcome.openGuide': 'ガイドを開く',
   'app.welcome.newChat': '新しい会話',
   'app.cloneFailed': 'この会話を複製できませんでした（{status}）。元の会話のままです。もう一度試してください。',
