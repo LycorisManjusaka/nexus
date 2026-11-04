@@ -60,6 +60,36 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+
+  /* THE font stack for the whole app, and the reason it is spelled out.
+     Tailwind's own default for `font-sans` starts `ui-sans-serif, system-ui`,
+     and the app shell (NexusApp.tsx) wears `font-sans` — so that default was
+     deciding the glyph for every character in the UI, overriding the body rule
+     below, which is why the body rule alone never fixed anything.
+
+     On Japanese Windows `system-ui` resolves to Yu Gothic UI, and Yu Gothic UI
+     draws U+03A9 GREEK CAPITAL LETTER OMEGA with a glyph that reads as the
+     Cyrillic и. Reported by つよ about the genesis shikigami button ("Ω が и に
+     見えちゃう"). Measured 2026-11-05, same page, same size:
+
+       Geist / Segoe UI / Arial / Tahoma / serif / Meiryo  → Ω
+       Yu Gothic UI                                        → и
+       ui-sans-serif, system-ui   (→ Yu Gothic UI here)    → и
+       Tailwind's `font-sans` class                        → и   ← the app
+       body's own rule, outside font-sans                  → Ω
+
+     Geist itself carries Ω even on subsets:['latin'] (verified: a stack of
+     Geist then Yu Gothic UI still draws Ω), so naming it first is the whole
+     repair; the rest is what catches a render where Geist has not arrived —
+     a blocked web font (Brave's fingerprint shields), a cold cache, a portal
+     outside the shell. Cyrillic falls out of the latin subset on every render,
+     so Пилот/Навигатор are drawn from these too.
+
+     Do NOT shorten this to `sans-serif`. That word is resolved by the MACHINE,
+     from the viewer's browser settings — the same trap AUDIT_FONT fixed for
+     the computer-control overlay, where a shared font name produced different
+     pixels on different PCs. A stack that looks fine locally is not evidence. */
+  --font-sans: var(--font-geist-sans), "Segoe UI", Arial, Helvetica, sans-serif;
 }
 
 @layer base {
@@ -146,7 +176,12 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
-    font-family: var(--font-geist-sans), sans-serif;
+    /* One stack, defined once in @theme above — the same variable Tailwind's
+       `font-sans` utility reads. Writing the list again here is how the two
+       would drift: the shell wears `font-sans`, so a body-only edit is
+       invisible, and a body-only reader would conclude the stack was already
+       right. See the @theme comment for the measurements. */
+    font-family: var(--font-sans);
   }
 }
 
