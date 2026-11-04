@@ -202,6 +202,27 @@ export function wireCarriesMedia(kind: MediaKind, ctx: DeliveryContext): boolean
   //     is false so NEXUS says so up front instead of surfacing a provider
   //     error. Meta serves video on other products, not on this endpoint.
   if (family.includes('meta')) return kind === 'image';
+  // DeepSeek is on the OpenAI-compatible path, where the default below used to
+  // claim all three. Its endpoint does not merely ignore the extra parts — it
+  // refuses to parse the request at all. Reported by つよ 2026-11-05 after
+  // attaching a clip, reproduced verbatim:
+  //
+  //   422 "Failed to deserialize the JSON body into the target type:
+  //        messages[0]: unknown variant `video_url`, expected one of
+  //        `text`, `image_url`, `file`"
+  //
+  // That message is DeepSeek enumerating its OWN accepted variants, which is
+  // why this covers audio too without a separate measurement: `input_audio` is
+  // not on the list it printed. (`file` exists but NEXUS never emits it — text
+  // attachments are inlined into the body.) Images are real on the vision
+  // models and go as `image_url`.
+  //
+  // Returning false here is what makes the failure stop: an undeliverable
+  // attachment is auto-excluded by applyAutoHide, excluded attachments are not
+  // sent, and MessageBubble prints the amber "won't arrive" badge in its place.
+  // Nothing new had to be built — the whole turn used to die on a 422 purely
+  // because this function said the wire carried something it does not.
+  if (family.includes('deepseek')) return kind === 'image';
   return true;
 }
 
