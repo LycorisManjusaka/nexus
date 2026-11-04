@@ -5283,7 +5283,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             const pctCopied = (copied / denom) * 100;
             const pctOriginal = (original / denom) * 100;
             const pctAttach = (attach / denom) * 100;
-            const overLimit = logTotal > cap;
+            // Over the cap WHILE A TURN IS RUNNING is the normal state, not a
+            // fault: the turn sends the whole log and trimming happens AFTER it
+            // lands. So the red fired on literally every turn, which is the one
+            // thing an alarm must never do — a warning that is always on carries
+            // no information. The ARITHMETIC is untouched (the readout still
+            // shows the true numbers); only the alarm waits for a moment the
+            // reader can act on. `loading` stays true through "stopping…", which
+            // is correct: the turn has not resolved yet either.
+            const overLimit = logTotal > cap && !loading;
             // `min-w-[260px]` is a FLOOR, not a ceiling: the legend inside is far
             // wider than 260px, so on a phone this block grew to fill the row and
             // pushed the cost onto a line of its own. On mobile it becomes a
@@ -5336,7 +5344,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               whole wrapped line of a 414px-wide header. One reading, one place. */}
           {!isMobile && (
           <span
-            className={`text-sm font-semibold tabular-nums cursor-default ${consolidationDue ? 'text-red-500' : contextElapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
+            // Same rule as the gauge's red ring: mid-turn the reading is SUPPOSED
+            // to be over, so the alarm colour waits for the turn to resolve. Only
+            // the COLOUR waits — `consolidationDue` itself is untouched, so the 💤
+            // cue and the Soul Updater button keep firing off the real number.
+            className={`text-sm font-semibold tabular-nums cursor-default ${consolidationDue && !loading ? 'text-red-500' : contextElapsed >= 70 ? 'text-amber-500' : 'text-muted-foreground'}`}
             title={t('chat.elapsed.tip')
               .replace('{pct}', String(contextElapsed))
               .replace('{original}', tokenBreakdown.original.toLocaleString())
