@@ -2494,8 +2494,38 @@ async function streamClaudeViaAgentSDK(args: {
           const turnT0 = Date.now();
           let sdkMsgSeq = 0;
           let lastSdkMsgAt = turnT0;
+          /** Set when the loop below leaves early because Stop was pressed. */
+          let stoppedMidIteration = false;
           const oauthTag = `[oauth ${folderName || 'turn'}]`;
           for await (const msg of query({ prompt: userMsgGen(!useResume), options: opts } as any)) {
+            // ── Leave the loop ourselves instead of waiting for the abort ───
+            //
+            // MEASURED 2026-11-04, standalone probe against the real OAuth
+            // token, stop fired 100 ms after query() (i.e. while the child is
+            // still booting — which is exactly when a user presses Stop right
+            // after sending):
+            //
+            //   abort() alone        → threw after 7041 ms, and an `assistant`
+            //                          message arrived at 3658 ms: THE MODEL
+            //                          RAN. The 5-hour window moved (observed
+            //                          46→48→50→52 % across four presses).
+            //   interrupt() alone    → 8704 ms, model also ran. Worse.
+            //   break out of here    → 2408 ms, NO assistant message at all.
+            //   break + abort        → 2311 ms, NO assistant message.
+            //
+            // The abortController does not reach the child until the SDK's
+            // transport is up; until then it only arms a 2000+5000 ms Windows
+            // teardown (sdk.mjs ProcessTransport.close — the non-Windows branch
+            // signals immediately, which is why this was never seen on Linux).
+            // Closing the iterator ourselves tears the transport down at the
+            // FIRST message the child emits (`system`, ~450 ms), before it has
+            // sent anything to Anthropic. That is the whole point: not the
+            // seconds, the billing.
+            //
+            // Mid-stream the abort still wins the race and throws in ~240 ms,
+            // so this costs that case nothing — whichever ending arrives first
+            // is the one taken.
+            if (oauthAbort.signal.aborted) { stoppedMidIteration = true; break; }
             // Any SDK message means the turn is alive — feed the watchdog.
             touchSdkActivity();
             // Gap accounting: log any silence longer than 20s and say exactly
@@ -2857,6 +2887,15 @@ async function streamClaudeViaAgentSDK(args: {
               break;
             }
           }
+          // One ending, not two. A break leaves the loop NORMALLY, so without
+          // this the turn would fall through to the success path and be
+          // reported as "ended with no output at all" — a stop described as a
+          // silent model. Throwing puts it back on the exact path the abort
+          // used to take: the catch below enqueues the error frame, the runner
+          // reads `wasStopped()` and writes the stop notice, and the partial
+          // reply is saved. Same words the abort produces, so nothing
+          // downstream has to learn a new shape.
+          if (stoppedMidIteration) throw new Error('Operation aborted');
           return { subtype: resultSubtype, errorText: resultErrorText };
         };
 
