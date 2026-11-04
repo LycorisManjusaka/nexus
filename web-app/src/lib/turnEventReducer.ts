@@ -230,7 +230,19 @@ export function applyTurnEvent(
 ): void {
   // An error frame after a redacted betrayal is not an error: the gatekeeper's
   // refusal IS how a redacted turn ends.
-  if (data.error && !flags.betrayalRedacted) throw new Error(String(data.error));
+  //
+  // ⚠ `attachment_described` is EXEMPT, and the exemption is the whole bug it
+  // fixes. That frame carries the BRIDGE's outcome, so a failed description
+  // ships `error: '429 rate limited'` as a FIELD OF A SUCCESSFUL FRAME — and
+  // this guard read it as the turn's own error and threw, killing a turn whose
+  // model had not spoken yet because one past thumbnail could not be described.
+  // MEASURED 2026-11-04 (tests/lib/runTurnForQueue.descriptions.test.ts): the
+  // runner returned ok:false for a turn whose only fault was a transient 429 on
+  // an image from days ago. The failure is not dropped — `describedFields`
+  // stores it as `descriptionError` and the bubble draws it in red.
+  if (data.error && !flags.betrayalRedacted && data.type !== 'attachment_described') {
+    throw new Error(String(data.error));
+  }
 
   if (data.type === 'model_selected') {
     acc.chosenModelFamily = (data.family as string) || '';

@@ -68,6 +68,8 @@ import {
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
 import type { TurnHandoffPlan, TurnEventPayload } from '@/lib/turnEvents';
 import { applyDescriptions } from '@/lib/applyDescriptions';
+// ⚠ TEMPORARY instrument, 2026-11-04. Remove with lib/senseProbe.ts.
+import { senseProbe } from '@/lib/senseProbe';
 import { describeProviderError } from '@/lib/providerErrors';
 import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 import { planRebase } from '@/lib/saveRebase';
@@ -535,7 +537,20 @@ export async function runTurnForQueue(
     // the version-guarded write — so the next turn re-uses the text instead of
     // re-calling the bridge model, and the bubble can draw the chip. Pure, and
     // free when the turn described nothing (returns the same array).
-    messages = applyDescriptions(messages as Record<string, unknown>[], describedAttachments).next;
+    const described = applyDescriptions(messages as Record<string, unknown>[], describedAttachments);
+    // ⚠ TEMPORARY probe — see lib/senseProbe.ts. Remove with it.
+    senseProbe('apply', {
+      collected: describedAttachments.length,
+      changed: described.changed,
+      msgs: messages.length,
+      atts: (messages as Record<string, unknown>[]).reduce(
+        (n, m) => n + (Array.isArray(m.attachments) ? (m.attachments as unknown[]).length : 0), 0),
+      ids: describedAttachments.slice(0, 2).map((p) => ({
+        m: (p as Record<string, unknown>).messageId,
+        a: (p as Record<string, unknown>).attachmentId,
+      })),
+    });
+    messages = described.next;
     // Read BEFORE the save: this is the version the patch is a continuation
     // of, and it is the only thing that lets a tab prove the patch applies to
     // the array it is holding. Taken here rather than at the call site so the

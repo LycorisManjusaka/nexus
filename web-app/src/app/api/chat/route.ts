@@ -5,6 +5,8 @@ import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
 import { type ThinkTagState, newThinkTagState, splitThinkTags } from '@/lib/thinkTagSplitter';
+// ⚠ TEMPORARY instrument, 2026-11-04. Remove with lib/senseProbe.ts.
+import { senseProbe } from '@/lib/senseProbe';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
@@ -1322,6 +1324,8 @@ async function streamClaudeViaAgentSDK(args: {
       enqueue(modelSelectedPayload);
       // Flush any newly-generated sense descriptions so the frontend can
       // persist them onto message attachments before AI text begins streaming.
+      // ⚠ TEMPORARY probe — see lib/senseProbe.ts. Remove with it.
+      senseProbe('flush-oauth', { n: senseEvents.length, convoId });
       for (const ev of senseEvents) enqueue(ev);
 
       // ── Token accounting lives OUTSIDE the try ─────────────────────────
@@ -5304,6 +5308,8 @@ export async function POST(req: Request) {
     // the frontend can update message attachments with their new descriptions
     // before the AI text begins flowing.
     const emitSenseEvents = (controller: ReadableStreamDefaultController) => {
+      // ⚠ TEMPORARY probe — see lib/senseProbe.ts. Remove with it.
+      senseProbe('flush-stream', { n: senseEvents.length });
       for (const ev of senseEvents) {
         controller.enqueue(`data: ${JSON.stringify(ev)}\n\n`);
       }
