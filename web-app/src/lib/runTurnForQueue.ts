@@ -66,7 +66,8 @@ import {
   type QueueItem, type CommandPayload,
 } from '@/lib/turnQueue';
 import type { TurnEventDeps } from '@/lib/turnEventReducer';
-import type { TurnHandoffPlan } from '@/lib/turnEvents';
+import type { TurnHandoffPlan, TurnEventPayload } from '@/lib/turnEvents';
+import { applyDescriptions } from '@/lib/applyDescriptions';
 import { describeProviderError } from '@/lib/providerErrors';
 import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 import { planRebase } from '@/lib/saveRebase';
@@ -219,7 +220,7 @@ export type RunTurnResult =
       ok: true;
       messageId: string;
       savedAt: number;
-      unappliedDescriptions: number;
+      describedAttachments: number;
       handoffHops: number;
       handoffError?: string;
     } & Consumed)
@@ -521,7 +522,20 @@ export async function runTurnForQueue(
   // Null while nothing has been refused — the two call sites fall back to the
   // sentence they have always printed.
   let rebaseRefusal: string | null = null;
+  // ── SENSE DESCRIPTIONS, COLLECTED ACROSS EVERY PASS ──────────────────────
+  // One array, handed to every pass's sink (see createRunnerSink's `into`), so
+  // a handoff's second vessel cannot be the pass whose descriptions go
+  // missing. Applied in `saveMessages` below rather than at each call site:
+  // the success save, the Stop save and the failure save all go through there,
+  // and a description that reached only one of the three would be a gap that
+  // depends on how the turn ended.
+  const describedAttachments: TurnEventPayload[] = [];
   const saveMessages = async (messages: unknown[], published?: TurnSavedPublish) => {
+    // Write the bridge's answers onto the attachments they describe, BEFORE
+    // the version-guarded write — so the next turn re-uses the text instead of
+    // re-calling the bridge model, and the bubble can draw the chip. Pure, and
+    // free when the turn described nothing (returns the same array).
+    messages = applyDescriptions(messages as Record<string, unknown>[], describedAttachments).next;
     // Read BEFORE the save: this is the version the patch is a continuation
     // of, and it is the only thing that lets a tab prove the patch applies to
     // the array it is holding. Taken here rather than at the call site so the
@@ -686,7 +700,6 @@ export async function runTurnForQueue(
         assistant: Record<string, unknown>;
         handoff: TurnHandoffPlan | null;
         sawOutput: boolean;
-        unapplied: number;
       }
     // A failure. `stopped` separates a DECISION from an accident — it decides
     // the notice the watcher gets and whether the log says so, but both now
@@ -772,7 +785,7 @@ export async function runTurnForQueue(
     // the reader on the message that reports it.
     const acc = createTurnAccState({ ...plan.seed, notices: [...plan.carryNotices] });
     const flags = createTurnFlags();
-    const sink = createRunnerSink();
+    const sink = createRunnerSink(describedAttachments);
 
     // Built HERE, above BOTH the post and the stream, because EVERY exit needs
     // it: the pass that finishes, the pass someone stops, and (since
@@ -936,7 +949,6 @@ export async function runTurnForQueue(
       assistant: finalizeAssistant(),
       handoff: flags.pendingHandoff,
       sawOutput: flags.sawOutput,
-      unapplied: sink.report.unappliedDescriptions.length,
     };
   };
 
@@ -961,7 +973,6 @@ export async function runTurnForQueue(
   let saved = false;
   let lastMessageId = '';
   let lastSavedAt = 0;
-  let unapplied = 0;
   let depth = 0;
   let handoffNote: string | undefined;
   /** The vessel of the pass that handed over — null means the saved default. */
@@ -1120,7 +1131,7 @@ export async function runTurnForQueue(
           ok: true,
           messageId: lastMessageId,
           savedAt: lastSavedAt,
-          unappliedDescriptions: unapplied,
+          describedAttachments: describedAttachments.length,
           handoffHops: depth,
           handoffError: `${pass.stage}: ${pass.reason}`,
           consumedIds,
@@ -1181,7 +1192,6 @@ export async function runTurnForQueue(
     saved = true;
     lastMessageId = String(pass.assistant.id);
     lastSavedAt = deps.nowMs();
-    unapplied += pass.unapplied;
 
     const handoff = pass.handoff;
     if (!handoff) break;
@@ -1237,7 +1247,7 @@ export async function runTurnForQueue(
     ok: true,
     messageId: lastMessageId,
     savedAt: lastSavedAt,
-    unappliedDescriptions: unapplied,
+    describedAttachments: describedAttachments.length,
     handoffHops: depth,
     ...(handoffNote ? { handoffError: handoffNote } : {}),
     consumedIds,

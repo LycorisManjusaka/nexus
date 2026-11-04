@@ -21,7 +21,8 @@
  * tool activity into a line in the server log — ~hundreds per turn, for
  * information already on the saved message. The one thing a runner genuinely
  * must not drop (`attachment_described`, which edits an EARLIER message) is
- * reported by the caller, not swallowed here: see the note on that method.
+ * COLLECTED here and applied by the caller before it saves — see the note on
+ * that method. It used to be merely recorded, and nothing applied it.
  */
 
 import type { TurnEventSink, TurnEventFlags } from '@/lib/turnEventReducer';
@@ -55,29 +56,49 @@ export const SINK_METHODS = [
 ] as const;
 
 /**
- * What a runner noticed that it could not act on.
+ * Descriptions this sink collected, for the caller to apply.
  *
- * Only one entry exists today. `attachment_described` means a sense bridge
- * wrote a description onto a message EARLIER in the conversation; ChatArea
- * edits that message in React state. A runner would have to edit the log it
- * is about to save, and the ordering there is not obviously safe (the bridge
- * can answer after the turn has finalized). So the runner records that it
- * happened and leaves the log alone — a visible gap, rather than a silent
- * one or a half-applied edit.
+ * ⚠ CORRECTED 2026-11-04. This used to read "a runner would have to edit the
+ * log it is about to save, and the ordering there is not obviously safe (the
+ * bridge can answer after the turn has finalized). So the runner records that
+ * it happened and leaves the log alone." The parenthesis was a guess, and it
+ * was wrong: all three `senseEvents` pushes in `api/chat/route.ts` happen while
+ * the request body is being assembled, and `emitSenseEvents` flushes them "at
+ * the start of its stream ... before the AI text begins flowing". A description
+ * cannot land after the turn finalizes, because it exists before the turn's
+ * first byte.
+ *
+ * The gap was not visible either. Nothing replaced the browser closure that
+ * used to store these (`c38ea15` made the tab's handler `() => {}`), so for six
+ * days no path stored a description at all — measured across the house: 115
+ * images / 0 descriptions in Cairn_59, 67 / 0 in 先輩_65, against 46 / 44 in
+ * the last pre-runner conversation. The house reported it as "the descriptions
+ * stopped being visible", which is what a silent gap looks like from a chair.
+ *
+ * So the array is no longer a record of something declined. The caller applies
+ * it (`lib/applyDescriptions.ts`) before it saves, and `into` lets the owner of
+ * the save pass ONE array through however many passes a handoff opens — so a
+ * second vessel's descriptions cannot be the ones that go missing.
  */
 export interface RunnerSinkReport {
-  /** Payloads for descriptions this runner did NOT apply to the log. */
-  unappliedDescriptions: TurnEventPayload[];
+  /** Payloads this sink saw, in arrival order. Applied by the caller. */
+  describedAttachments: TurnEventPayload[];
 }
 
 export interface RunnerSink extends TurnEventSink {
-  /** What the runner saw and deliberately did not act on. */
+  /** What the runner saw that its caller has to act on. */
   report: RunnerSinkReport;
 }
 
-/** A sink that does nothing, and says so when asked. */
-export function createRunnerSink(): RunnerSink {
-  const report: RunnerSinkReport = { unappliedDescriptions: [] };
+/**
+ * A sink that does nothing, and says so when asked.
+ *
+ * `into` is the collecting array. Pass the SAME one to every pass of a turn:
+ * a `change_model` handoff builds a fresh sink per pass, and a per-sink array
+ * would mean only the last pass's descriptions reached the save.
+ */
+export function createRunnerSink(into?: TurnEventPayload[]): RunnerSink {
+  const report: RunnerSinkReport = { describedAttachments: into ?? [] };
   return {
     report,
     modelSelected(): void { /* no screen */ },
@@ -97,8 +118,10 @@ export function createRunnerSink(): RunnerSink {
     toolActivity(): void { /* no status line */ },
     stallIdleSeconds(): void { /* no warning row */ },
     attachmentDescribed(data: TurnEventPayload): void {
-      // NOT a no-op: recorded so the caller can report a gap it cannot close.
-      report.unappliedDescriptions.push(data);
+      // NOT a no-op: collected so the caller can write it onto the attachment
+      // before it saves. Dropping this is what stopped descriptions from
+      // persisting for six days — see RunnerSinkReport.
+      report.describedAttachments.push(data);
     },
     turnPlan(): void {
       // The runner is the one who PUBLISHED this frame. Reading its own

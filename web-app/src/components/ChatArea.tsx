@@ -3389,10 +3389,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           }
         },
         stallIdleSeconds: (seconds) => setStallIdleSeconds(seconds),
-        // The runner records these as unapplied (RunnerSinkReport) rather
-        // than editing an earlier message it is about to save. A watcher
-        // editing it here would make the tab the writer again, which is the
-        // whole thing this path removed.
+        // Deliberately empty, and now for a reason that holds: since
+        // 2026-11-04 the runner WRITES these onto the attachments before it
+        // saves (lib/applyDescriptions.ts), so the chip arrives with the turn's
+        // save like every other field. A tab that also applied them would be a
+        // second writer racing the first for the same six fields.
+        //
+        // The cost is honest and small: the chip appears when the turn lands
+        // rather than the instant the bridge answers. What this comment used to
+        // claim — that the runner "records these as unapplied" and the gap was
+        // visible — was true of the code and false about the effect: nothing
+        // stored a description for six days (115 images / 0 in Cairn_59).
         attachmentDescribed: () => {},
         // ── WHERE to paint, for a tab that did not start this turn ──────────
         turnPlan: (plan) => {
