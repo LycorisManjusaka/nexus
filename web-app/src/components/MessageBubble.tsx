@@ -23,6 +23,7 @@ import { applySinkId } from '@/lib/audioSink';
 import { highlightTtsPhrase, reapplyTtsHighlight, clearTtsHighlight } from '@/lib/ttsHighlight';
 import { attachmentTokens, attachmentKind, undeliverableReason } from '@/lib/attachmentVisibility';
 import { copyText } from '@/lib/clipboard';
+import { copyTextForMessage } from '@/lib/copySpeaker';
 import { isLocalFileRef, mediaKindOf, workspaceFileUrl, baseNameOf, makeMarkdownUrlTransform } from '@/lib/inlineMedia';
 import { MOBILE_ACTION_ICON, MOBILE_ACTION_PAD } from '@/lib/bubbleActionBar';
 
@@ -877,7 +878,16 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
     // copyText, not navigator.clipboard: over plain HTTP (how a phone reaches
     // this house) the clipboard object does not exist and the bare call throws
     // before anything is copied. See lib/clipboard.ts.
-    const ok = await copyText(msg.content || '');
+    //
+    // A being's reply leaves here stamped with the same name the bubble is
+    // showing; a user turn leaves untouched because its name is already the
+    // first line of the body. See lib/copySpeaker.ts.
+    const ok = await copyText(copyTextForMessage({
+      content: msg.content || '',
+      role: msg.role,
+      name: msg.name,
+      folderName,
+    }));
     setCopiedBody(ok ? 'ok' : 'fail');
     setTimeout(() => setCopiedBody('idle'), 1600);
   };
