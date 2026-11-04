@@ -71,6 +71,8 @@ import { applyDescriptions } from '@/lib/applyDescriptions';
 import { describeProviderError } from '@/lib/providerErrors';
 import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 import { planRebase } from '@/lib/saveRebase';
+import { undeliveredNotice } from '@/lib/undeliveredInjection';
+import type { DrainedInjection } from '@/lib/injectMessage';
 
 /** What the runner could not do itself. */
 export interface RunTurnDeps {
@@ -172,6 +174,20 @@ export interface RunTurnDeps {
    * turnId first.
    */
   wasStopped?: () => boolean;
+  /**
+   * Take whatever mid-turn interjection never reached the entity, and forget
+   * it. Called ONCE, at the turn's last save.
+   *
+   * An interjection is only handed over at a tool-call boundary, so a turn that
+   * calls no tool after one arrives has nowhere to put it. Until 2026-11-04
+   * that entry was dropped in silence and the sender could not tell "delivered"
+   * from "lost" (Tsuyo asked for the failure to be shown per turn).
+   *
+   * Injected rather than imported so a test can hand over a known set without
+   * a live globalThis queue. Absent in a test that does not care — a turn with
+   * no reporter behaves exactly as it did before.
+   */
+  takeUndelivered?: (turnId: string) => DrainedInjection;
 }
 
 /**
@@ -624,6 +640,35 @@ export async function runTurnForQueue(
     return r;
   };
 
+  /**
+   * Attach "your interjection never reached the entity" to the reply, when one
+   * was left over.
+   *
+   * MUST only be called at the turn's LAST save — the read is destructive, and
+   * taking it after a non-final pass would discard a note that the NEXT pass
+   * could still have delivered at its own first tool boundary.
+   *
+   * The notice channel, not the message body: `notices` is not in
+   * `buildSlimHistory`'s allowlist, so this reaches the reader and never
+   * reaches the model. The entity being told "a message you never received was
+   * lost" would be an instruction to act on something it cannot see.
+   */
+  const withUndelivered = (assistant: Record<string, unknown>): Record<string, unknown> => {
+    if (!deps.takeUndelivered) return assistant;
+    let notice: string | null = null;
+    try {
+      const lang = (deps.globalSettings as { language?: string } | null)?.language;
+      notice = undeliveredNotice(deps.takeUndelivered(deps.injectTurnId), lang === 'ja');
+    } catch {
+      // Never let the report cost the reply. A throw here would lose a
+      // generated answer over a warning about a lost one.
+      return assistant;
+    }
+    if (!notice) return assistant;
+    const prev = Array.isArray(assistant.notices) ? (assistant.notices as string[]) : [];
+    return { ...assistant, notices: [...prev, notice] };
+  };
+
   // ── ONE PASS = one POST, one stream, one saved message ────────────────────
   //
   // A turn is usually a single pass. `change_model` makes it more than one: the
@@ -1051,6 +1096,12 @@ export async function runTurnForQueue(
       assistant: Record<string, unknown>,
       outcome: { stage: 'stopped' | 'post' | 'stream'; reason: string },
     ): Promise<RunTurnResult> => {
+      // Unconditional here: this helper IS the end of the chain (see the
+      // `null` handoff argument above), so there is no later pass that could
+      // still deliver a queued interjection. A stopped turn is also the case
+      // most likely to have one — the tool boundary it would have ridden on
+      // never came.
+      assistant = withUndelivered(assistant);
       const r = await saveMessages([...plan.keep, assistant], publishableSave(assistant, null));
       if (!r.ok) {
         return {
@@ -1182,9 +1233,14 @@ export async function runTurnForQueue(
     // `keep` is history for a send or a rerun, and everything BEFORE the
     // target for a continue — where `assistant` carries the target's own id,
     // so this replaces it in place instead of appending a near-duplicate.
+    // Only when nothing follows. A pass that hands over is not the end of the
+    // turn, and the vessel taking over may still deliver a queued interjection
+    // at its own first tool call — taking the note here would report it lost
+    // moments before it arrived.
+    const finalAssistant = pass.handoff ? pass.assistant : withUndelivered(pass.assistant);
     const result = await saveMessages(
-      [...plan.keep, pass.assistant],
-      publishableSave(pass.assistant, pass.handoff),
+      [...plan.keep, finalAssistant],
+      publishableSave(finalAssistant, pass.handoff),
     );
     if (!result.ok) {
       return {

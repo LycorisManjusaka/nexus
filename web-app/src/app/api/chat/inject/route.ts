@@ -106,3 +106,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: e?.message || 'failed to queue interjection' }, { status: 500 });
   }
 }
+
+// NO GET here on purpose. An "ask whether my note was delivered" endpoint was
+// written and then removed: the runner already attaches the report to the reply
+// it saves (runTurnForQueue → withUndelivered), so every provider path and
+// every ending — finished, stopped, failed — is covered by one site, and the
+// notice survives a reload because it is on the message. A second way to learn
+// the same fact would be a second source of truth, and an endpoint nobody calls
+// reads to the next person as if something somewhere calls it.

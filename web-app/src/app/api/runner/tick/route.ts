@@ -12,6 +12,7 @@ import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnB
 // retires the cross-tab REGISTRY entry (what tabs probe before sending). Two
 // different lifetimes that happen to end at the same moment.
 import { endTurn as endRegistryTurn } from '@/lib/turnRegistry';
+import { takeUndelivered } from '@/lib/injectMessage';
 import { loadLog, saveLog, listFolders, loadUserSettings } from '@/lib/fsStorage';
 // ⚠ The FIRST route-to-route import in this tree (measured: zero others).
 // The alternative was an HTTP fetch to our own server, which would have to get
@@ -293,6 +294,10 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
           origin: opts.origin,
           onRawText: (text) => publishTurnText(t.convoId, text),
           injectTurnId: turnId,
+          // So a mid-turn interjection that found no tool boundary is reported
+          // on the reply instead of vanishing. Passed in rather than imported
+          // inside the runner, so a test can supply a known set.
+          takeUndelivered,
         });
       } catch (e) {
         offStop();
