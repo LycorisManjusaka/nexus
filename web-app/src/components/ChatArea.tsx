@@ -3052,7 +3052,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * one this tab already has; re-applying them would re-run thirty setStates
    * for no change.
    */
-  const reloadMessagesFromDisk = useCallback(async (opts?: { keepBaseIfSettingsDiffer?: boolean }): Promise<'loaded' | 'skipped' | 'unreachable'> => {
+  // ⚠ TEMPORARY PROBE (F32, 2026-11-05). `why` exists only so the console can
+  // name WHICH caller replaced the array. つよ measured a late-opened tab
+  // painting the live turn correctly and then reverting to the pre-turn state
+  // a moment later; four callers here can do that and they leave identical
+  // evidence. Remove the parameter and the console line together once the
+  // overwrite is named — a probe left in is a second thing to keep true.
+  const reloadMessagesFromDisk = useCallback(async (opts?: { keepBaseIfSettingsDiffer?: boolean; why?: string }): Promise<'loaded' | 'skipped' | 'unreachable'> => {
     if (!convoId) return 'skipped';
     try {
       const r = await fetch(`/api/logs/${convoId}`);
@@ -3092,6 +3098,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
         .map((m) => ({ ...m, autoPlay: false }));
       setMessages(dedupeMessageIds(loaded).messages);
+      console.warn('[nexus-probe] reload-from-disk', {
+        why: opts?.why ?? '(unnamed)',
+        appliedCount: loaded.length,
+        diskUpdatedAt: data.updatedAt,
+        at: new Date().toISOString(),
+      });
       // Learn a boundary something else resolved. The RUNNER mints the user
       // message the marker names, so the tab cannot compute it; and this
       // reload replaces `messages` only, so without this the tab's state keeps
@@ -3588,7 +3600,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // patch, which is the branch below.)
         staleViewRef.current = false;
       } else {
-        staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+        staleViewRef.current = (await reloadMessagesFromDisk({ why: 'watch-end-no-patch' })) === 'unreachable';
       }
       // Cleared on BOTH branches, and after both: a reload replaces the whole
       // array so the optimistic bubbles are gone either way, and a list that
@@ -4418,7 +4430,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // request that never completed, so a server that answered (404,
       // malformed body) is never retried.
       if (staleViewRef.current) {
-        if ((await reloadMessagesFromDisk()) !== 'unreachable') {
+        if ((await reloadMessagesFromDisk({ why: 'stale-view-retry' })) !== 'unreachable') {
           staleViewRef.current = false;
           // The MESSAGES are not the only thing the outage froze. Three notes
           // were written while the network was down and all three say
@@ -4499,7 +4511,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // "disk is newer" and refetch the whole log every ten seconds.
         // Correctness does not need this; a multi-megabyte conversation does.
         mirroredVersionRef.current = mirrorKey;
-        if (await reloadMessagesFromDisk({ keepBaseIfSettingsDiffer: true }) === 'unreachable') {
+        if (await reloadMessagesFromDisk({ keepBaseIfSettingsDiffer: true, why: 'cross-tab-mirror' }) === 'unreachable') {
           staleViewRef.current = true;
           // Not actually taken — let the next poll try again.
           mirroredVersionRef.current = '';
@@ -4514,7 +4526,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Marked BEFORE the await, so a second probe landing mid-attach does not
       // start a second watch of the same turn.
       attachedTurnRef.current = key;
+      console.warn('[nexus-probe] attach-start', { key, at: new Date().toISOString() });
       const outcome = await runOnRunner(undefined, true);
+      console.warn('[nexus-probe] attach-end', { key, outcome, at: new Date().toISOString() });
       // Cleared ONLY on 'failed'.
       //
       //   'idle'  — the relay had nothing to give. KEEP the mark: this is the
@@ -4631,7 +4645,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (!(await enqueueCommand('rerun', msgId))) {
       // Nothing was queued, so no turn will run and nothing will reload —
       // put the screen back rather than leaving a silent truncation behind.
-      staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+      staleViewRef.current = (await reloadMessagesFromDisk({ why: 'rerun-rollback' })) === 'unreachable';
       setLoading(false);
       return;
     }
