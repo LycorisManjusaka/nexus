@@ -13,6 +13,7 @@ import { resolveSoulGeneration, newerSiblingTitleInOrder, titleForGeneration } f
 import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
 import { resolveUiFontScale } from '@/lib/uiFontScale';
+import { firstRunLanguage, hasStoredLanguage, browserLanguageCandidates } from '@/lib/firstRunLanguage';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
 // use the plain t(key, language) form. Every component below it uses useT().
 import { LanguageProvider, t as translate } from '@/lib/i18n';
@@ -39,23 +40,12 @@ function navSet(key: string, value: string) {
   try { sessionStorage.setItem(key, value); localStorage.setItem(key, value); } catch {}
 }
 
-// First-run language default: a fresh install has never saved a language
-// choice anywhere, so there's nothing to respect yet — read the browser/OS
-// locale once and pick the closer default. Any machine whose language tag
-// (or any of its ranked alternates) starts with "ja" gets Japanese; every
-// other locale gets English, since English is the language the rest of the
-// project's content (agents, docs) is authored in first. This only ever
-// runs when no saved settings exist yet — an explicit prior choice, even a
-// blank/unset one that was still saved, is never overridden by this.
+// First-run language default. The judgement lives in lib/firstRunLanguage.ts
+// so it can be tested without a machine in the locale being tested — the bug
+// it fixes was found on an install nobody here can reproduce (Russian browser,
+// Japanese OS), and was reported by its user, not by a test.
 function detectSystemLanguage(): 'en' | 'ja' {
-  try {
-    const candidates = (typeof navigator !== 'undefined' && navigator.languages && navigator.languages.length)
-      ? navigator.languages
-      : [typeof navigator !== 'undefined' ? navigator.language : ''];
-    return candidates.some((l) => (l || '').toLowerCase().startsWith('ja')) ? 'ja' : 'en';
-  } catch {
-    return 'en';
-  }
+  return firstRunLanguage(browserLanguageCandidates());
 }
 
 export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | null }) {
@@ -87,6 +77,10 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     userName: 'Anonymous',
     theme: 'dark',
   });
+  // Gates the persist effect below until the load effect has run. Without it,
+  // the first save writes the INITIAL state over the stored one (see the
+  // persist effect's comment).
+  const settingsLoadedRef = useRef(false);
 
   const [folders, setFolders] = useState<any[]>([]);
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
@@ -169,15 +163,23 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     if (savedGlobal) {
       try {
         const parsed = JSON.parse(savedGlobal);
-        // 'language' key genuinely absent (older save, or a save from before
-        // this field existed) — same first-run treatment as no save at all.
-        if (!parsed.language) parsed.language = detectSystemLanguage();
+        // Presence of the KEY — not a truthy value — is what says this install
+        // has already been through first-run. A saved `''` is an answer, and
+        // re-deciding it would replace a choice with a guess on every load.
+        if (!hasStoredLanguage(parsed)) parsed.language = detectSystemLanguage();
         setGlobalSettings(parsed);
-      } catch (e) { }
+      } catch (e) {
+        // A corrupt blob is NOT "no settings" — it is settings we failed to
+        // read. Say so, then leave the stored bytes alone: the save effect
+        // below is gated on this ref, so a silent swallow here no longer
+        // overwrites whatever is on disk with the initial state.
+        console.warn('[settings] stored global settings are unreadable; keeping them untouched', e);
+      }
     } else {
       // Nothing saved on this machine yet — detect once from the browser/OS.
       setGlobalSettings((prev: any) => ({ ...prev, language: detectSystemLanguage() }));
     }
+    settingsLoadedRef.current = true;
     fetchFolders();
     fetchLogs();
     // Warm the build identifier once. Failure paths (import diagnostics) read
@@ -186,7 +188,25 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
     loadBuildTag();
   }, []);
 
+  // Persist global settings — but never before the load effect above has run.
+  //
+  // Effects fire in declaration order on mount, so this one used to run with
+  // `globalSettings` still closed over the INITIAL state ({userName:'Anonymous',
+  // theme:'dark'}) — which carries no `language` at all, and the wrong
+  // `userName`. That write landed on top of the real stored settings. The
+  // following re-render normally repaired it within milliseconds, which is why
+  // it never showed up here: this house runs on a desktop that stays open.
+  //
+  // On a phone it does not repair. Chrome discards a backgrounded tab (measured
+  // in this house: the "phone wakes to Welcome" cold-reload), and a tab killed
+  // inside that window leaves the stripped settings as the only copy. The one
+  // install that reported losing its language is phone-first.
+  //
+  // Same shape as the three earlier write-ordering bugs this house has already
+  // paid for — a not-yet-loaded writer overwriting a loaded one. The ref is the
+  // same fix as `loadFailedRef` in ChatArea.
   useEffect(() => {
+    if (!settingsLoadedRef.current) return;
     localStorage.setItem('nexus_globalSettings', JSON.stringify(globalSettings));
   }, [globalSettings]);
 
