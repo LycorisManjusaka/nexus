@@ -9,7 +9,8 @@ import { liveTurnStatus } from '@/lib/turnBus';
 // The stock a being's turns are fed from (phase 4a, 2026-10-27).
 //
 // GET  ?being=&convoId=            → { count, waiting, claimed, claimedUnknown,
-//                                      elsewhere, items: [{id, at, from, kind, claimed}], lease }
+//                                      elsewhere, lease,
+//                                      items: [{id, at, from, kind, claimed, returned?}] }
 //
 // Every count here is narrowed to what THIS installation may run, except
 // `elsewhere`, which is how many it may not (2026-11-02 — two clones share one
@@ -90,8 +91,15 @@ export async function GET(req: Request) {
        * the one that will answer it.
        */
       elsewhere: scan.elsewhere.length,
+      /* F20 ships NO `returned` count here on purpose. The panel's row names a
+         CAUSE and reads it off `items[].returned`; a count derived separately
+         on this side could report "2 came back" beside a sentence built from
+         one mark. The caller can count the marks it is already being given. */
       items: items.map((i) => ({
         id: i.id, at: i.at, from: i.from, kind: i.kind, claimed: claimedSet.has(i.id),
+        // Per-item so the panel can name the time and, with debug on, the
+        // runner's own words. The payload stays omitted (see the header).
+        returned: i.returned,
       })),
       // `relayLive` is the only EVIDENCE anyone has that the process holding
       // this lease still exists. It is not derived from the lease — a lease

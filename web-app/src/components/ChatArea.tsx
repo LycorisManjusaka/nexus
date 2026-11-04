@@ -2786,7 +2786,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // the backoff are the subject. Nothing about the on-disk shape changes when
   // it lands; `kind` already carries 'letter' | 'schedule'.
   /** What GET /api/turn-queue reports per item — labels only, never bodies. */
-  type StockItem = { id: string; at: number; from: string; kind: string; claimed?: boolean };
+  type StockItem = {
+    id: string; at: number; from: string; kind: string; claimed?: boolean;
+    /** F20: present when a pass ran this item and gave it back. */
+    returned?: { at: number; kind: string; reason: string };
+  };
   /* `StockNote` and the show/hide rule live in @/lib/stockPanel — a boolean
      inside this component is a rule no test and no mutation check reaches. */
   type StockView = {
@@ -2805,6 +2809,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
      * here and this NEXUS is not the one that answers it".
      */
     elsewhere: number;
+    /**
+     * Of `waiting`, how many were already run and handed back (F20).
+     *
+     * A subset of `waiting`, not a separate pile — the row that reports it
+     * says "{n} of them", because two independent-looking counts on one line
+     * read as two messages when there is one.
+     */
+    returned: number;
     items: StockItem[];
     /**
      * Who holds the lease and since when, exactly as GET reports it.
@@ -2897,6 +2909,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     stockCount: stock?.count ?? 0,
     stockWaiting: stock?.waiting ?? 0,
     stockElsewhere: stock?.elsewhere ?? 0,
+    stockReturned: stock?.returned ?? 0,
   });
 
   const refreshStock = useCallback(async () => {
@@ -2918,6 +2931,16 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // Zero from an older server, which is the right default: it narrowed
         // nothing, so everything it reported is already in `count`.
         elsewhere: typeof d?.elsewhere === 'number' ? d.elsewhere : 0,
+        // DERIVED, not read off the response, even though GET reports the same
+        // number. The row's sentence names a CAUSE, and it reads that cause
+        // off `items`; a count taken from anywhere else could say "2 came
+        // back" beside a sentence built from one mark. One derivation, so the
+        // number and the reason cannot disagree.
+        //
+        // `!claimed` matches the server's own narrowing: a marked item that is
+        // claimed again is being retried right now, and calling that "came
+        // back" describes a live turn as a dead one.
+        returned: items.filter((i) => !i.claimed && !!i.returned).length,
         items,
         // An older server that does not report a lease yields null, which the
         // panel renders as "no holder info" rather than as "nobody holds it".
@@ -6212,7 +6235,49 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           Math.min(...stock.items.filter((i) => !i.claimed).map((i) => i.at))
                         ).toLocaleTimeString())}
                     </span>
-                    {(stockNote !== null || !autoRunStock) && !loading && !injectTurnId ? (
+                    {/* F20: WHY it is sitting there, when it already had a go.
+                        Separate span and not folded into the count above: the
+                        count is true either way, and what changes is the
+                        history behind it. つよ (2026-11-04) read the plain
+                        count as "queued behind something" — the two readings
+                        ask for opposite actions, and only one of them is in
+                        the item. Returned items are a SUBSET of `waiting`, so
+                        this renders inside the waiting row, and the sentence
+                        says "{n} of them" rather than announcing a pile. */}
+                    {stock.returned > 0 ? (() => {
+                      // The kind is CARRIED on the item, never inferred from
+                      // the text — same rule as StockNote. All returned items
+                      // in one batch share one mark, so the first is the mark.
+                      const mark = stock.items.find((i) => !i.claimed && i.returned)?.returned;
+                      const conflict = mark?.kind === 'save-refused';
+                      return (
+                        <span
+                          className="text-xs font-medium text-amber-600 dark:text-amber-400"
+                          title={[
+                            conflict
+                              ? t('chat.stock.returnedWhyConflict')
+                              : t('chat.stock.returnedWhyFailed'),
+                            // The runner's own words, debug only: it is English
+                            // machinery, and the person who needs the sentence
+                            // above is the one who never opened a settings panel.
+                            debugRunner && mark?.reason ? `\n\n${mark.reason}` : '',
+                          ].join('')}
+                        >
+                          {t(conflict ? 'chat.stock.returnedConflict' : 'chat.stock.returnedFailed')
+                            .replace('{n}', String(stock.returned))}
+                        </span>
+                      );
+                    })() : null}
+                    {/* `stock.returned > 0` ADDED 2026-11-04 (F20) beside the
+                        note clause, because it is the same clause outliving a
+                        reload. The note is what used to say "something went
+                        wrong" and earn this button; it belongs to one tab and
+                        dies with it. A returned item says the same thing from
+                        disk — and the auto-trigger will NOT pick it up again
+                        on its own (the waiting ids are unchanged, so the
+                        signature is unchanged, by design), so without this
+                        the person is shown a failure with nothing to press. */}
+                    {(stockNote !== null || stock.returned > 0 || !autoRunStock) && !loading && !injectTurnId ? (
                       <button
                         onClick={drainStock}
                         disabled={stockBusy}

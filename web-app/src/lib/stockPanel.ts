@@ -54,6 +54,40 @@ export type StockNoteKind = 'info' | 'problem';
 
 export type StockNote = { text: string; kind: StockNoteKind };
 
+// ── Why an item came back (2026-11-04, F20) ─────────────────────────────────
+//
+// つよ: 「なんであたしの失敗したメッセージをスタックに保存してんの？なんで
+// 普通にログに出さない？スタックってさ、そういう役割じゃないっしょ。」
+//
+// Her reading was right about the role and wrong about the cause, and both
+// halves are the bug. The stock is where a message LIVES until the save that
+// answers it lands — consuming it before the save would mean a refused save
+// deletes the message with nowhere to put it back. So an attempted item and a
+// never-attempted one sit in the same directory with the same shape, and the
+// panel showed them with the same sentence.
+//
+// Two kinds and not a boolean, for the reason stockNote has two kinds: what a
+// person does next differs. `save-refused` is actionable (another writer is
+// live — close the other tab); `failed` is not.
+export type ReturnedKind = 'save-refused' | 'failed';
+
+/**
+ * The runner's stage → what the person is told. THE ONLY derivation.
+ *
+ * Kept here rather than at the tick route because that route imports
+ * `next/server` and so cannot be reached by a test (measured 2026-10-27), and
+ * a classifier nothing can check is how a wrong diagnosis ships quietly.
+ *
+ * `'save'` is the runner's own name for "the answer existed and the write was
+ * refused" — the 3000/3001 collision つよ hit on 2026-11-03, where her message
+ * and my reply both vanished from the screen. Everything else, including a
+ * pass that threw before it had a stage at all, is `failed`: a sentence that
+ * promises a cause it cannot show is worse than one that admits it has none.
+ */
+export function classifyReturn(stage?: string | null): ReturnedKind {
+  return stage === 'save' ? 'save-refused' : 'failed';
+}
+
 export type StockPanelInput = {
   /** `globalSettings.showRunnerNotices === true`. OFF is the shipped default. */
   debug: boolean;
@@ -85,6 +119,22 @@ export type StockPanelInput = {
    * this one — open the other NEXUS, or move the host flag.
    */
   stockElsewhere: number;
+  /**
+   * Items carrying a `returned` mark — claimed, run, handed back (F20).
+   *
+   * A SUBSET of `stockWaiting` today, and deliberately its own count anyway.
+   * Marking happens while the lease is held and abandoning follows, so a
+   * marked item is always unclaimed and `waiting > 0` already opens the panel
+   * — which means this clause can never currently be the one that fires.
+   *
+   * It is here because that is an invariant of two functions in another file,
+   * and the thing it guards is a FAILURE REPORT. The whole argument of this
+   * module's header is that a sentence saying "what you asked for did not
+   * happen" must reach a person who has never opened a settings panel. Leaving
+   * that reachability resting on "something else happens to be positive" is
+   * the inversion the header is about, one level up.
+   */
+  stockReturned: number;
 };
 
 /**
@@ -124,6 +174,10 @@ export function showStockPanel(i: StockPanelInput): boolean {
   // as machinery would reproduce exactly the symptom this day's work started
   // from: a message that is stocked and never runs, with nothing on screen.
   if (i.stockElsewhere > 0) return true;
+  // ADDED 2026-11-04 (F20). An item that was run and handed back is a failure
+  // report with no note behind it — the note that described it belonged to one
+  // tab and is gone by the time anyone reloads. See `stockReturned`.
+  if (i.stockReturned > 0) return true;
   if (!i.debug) return false;
   return i.stockCount > 0 || i.noteKind !== null;
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { claim, release, abandon, queuedConversations, itemIsForThisInstallation, type QueueItem } from '@/lib/turnQueue';
+import { claim, release, abandon, markReturned, queuedConversations, itemIsForThisInstallation, type QueueItem } from '@/lib/turnQueue';
+import { classifyReturn } from '@/lib/stockPanel';
 import { runTurnForQueue, type RunTurnResult } from '@/lib/runTurnForQueue';
 import { runnerHostStatus, describeRunnerHost, installationId, claimRunnerHostIfUnset, readRunnerHost, type RunnerHostStatus } from '@/lib/runnerHost';
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
@@ -300,8 +301,18 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
         // outside its own error handling threw. The lease still has to go back
         // and the watcher still has to be told, or a crash in one turn leaves
         // the conversation permanently "running".
-        await abandon(t.being, t.convoId, c.claim.token);
         const reason = String((e as Error)?.message || e);
+        // STAMP BEFORE ABANDON — the lease is the only thing keeping another
+        // pass off this batch (see markReturned). `classifyReturn` with no
+        // stage gives `failed`, which is the honest answer here: a throw from
+        // outside the runner's own handling tells us nothing about how far it
+        // got, and the items it DID consume are simply not on disk to stamp.
+        await markReturned(
+          t.being, t.convoId, c.claim.token,
+          c.claim.items.map((i) => i.id),
+          { at: Date.now(), kind: classifyReturn(null), reason },
+        );
+        await abandon(t.being, t.convoId, c.claim.token);
         outcomes.push({ being: t.being, convoId: t.convoId, ran: false, result: { ok: false, stage: 'post', reason, consumedIds: [] } });
         closeRelay(t.convoId, { type: 'error', error: reason });
         continue;
@@ -339,6 +350,19 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
       if (result.consumedIds.length > 0) {
         await release(t.being, t.convoId, c.claim.token, result.consumedIds);
       } else {
+        // F20: say WHY it is coming back, on the item, before the lease goes.
+        //
+        // Only for `!ok`. An `ok` pass that consumed nothing is abandon's
+        // other meaning — "nothing to answer, let the next poll retry" — and
+        // stamping that as a failure would be a sentence promising a cause it
+        // does not have, which is the thing classifyReturn refuses to do.
+        if (!result.ok) {
+          await markReturned(
+            t.being, t.convoId, c.claim.token,
+            c.claim.items.map((i) => i.id),
+            { at: Date.now(), kind: classifyReturn(result.stage), reason: result.reason },
+          );
+        }
         await abandon(t.being, t.convoId, c.claim.token);
       }
       outcomes.push({ being: t.being, convoId: t.convoId, ran: result.ok, result });

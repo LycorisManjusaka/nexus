@@ -25,9 +25,15 @@
 // ── Why a .lease file and not atomicWriteFile ───────────────────────────────
 // atomicWriteFile has replace semantics: it always wins. A claim must express
 // "only if nobody holds this", and it must hold across PROCESSES — 3000 and
-// 3001 are two Next installs on one shared local_data (and 3000 is on `dev`
-// while 3001 stays on `main`). `fs.open(path, 'wx')` is the primitive that
-// fails when the file exists; an in-process Map would not see the other install.
+// 3001 are two Next installs on one shared local_data. `fs.open(path, 'wx')`
+// is the primitive that fails when the file exists; an in-process Map would
+// not see the other install.
+//
+// CORRECTION 2026-11-04: this said "(and 3000 is on `dev` while 3001 stays on
+// `main`)". `dev` was merged into `main` and deleted on 2026-11-02 (f24bc6d);
+// both installs are on `main`. The cross-process requirement is unchanged and
+// never depended on the branches — but a comment that names a branch which no
+// longer exists is read as a description of today.
 //
 // ── Why staleness is reported and never acted on ────────────────────────────
 // A lease has no TTL. Turns here run for tens of minutes (35m measured), so any
@@ -43,6 +49,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { BEINGS_DIR, sanitizeBeingName } from './beingPaths';
+// Replace semantics are WRONG for the lease (see the header above) and RIGHT
+// for stamping an item that already exists: the caller holds the lease, so
+// there is no competing writer, and a half-written item file would be read as
+// corrupt by `pendingWithErrors`.
+import { atomicWriteFile } from './atomicWrite';
 
 /**
  * What woke (or will wake) the being.
@@ -143,6 +154,49 @@ export interface QueueItem {
    * only thing that can place them.
    */
   host?: string;
+  /**
+   * Set when a runner CLAIMED this item, ran a pass, and gave it back without
+   * consuming it (2026-11-04, F20 — つよ).
+   *
+   * WHY THE ITEM HAS TO CARRY THIS:
+   * An item that came back is unclaimed again, so every count in the panel
+   * puts it in exactly the same place as an item that has never been touched.
+   * つよ read "ストックに 1 通" + "今すぐ動かす" as "queued behind something"
+   * and asked 「なんであたしの失敗したメッセージをスタックに保存してんの？」
+   * — the panel was telling her the truth about the count and nothing at all
+   * about the history, and the two readings call for opposite actions ("wait"
+   * vs "close the other tab").
+   *
+   * The sentence cannot live in the in-memory note instead: the note is
+   * replaced by the next one, dies with a reload, and belongs to ONE tab,
+   * while the item outlives all three. The only place that survives with the
+   * item is the item.
+   *
+   * ABSENT means "never attempted" — the backward-compatible reading for
+   * every item queued before this field existed, and the right one.
+   */
+  returned?: ReturnedMark;
+}
+
+/**
+ * Why an item came back, as stored.
+ *
+ * `kind` is a bare string HERE on purpose: this module owns the on-disk shape
+ * and must not learn the runner's vocabulary. The enum and the one function
+ * that decides it live in `stockPanel.ts`, which owns what a person is shown
+ * about the stock.
+ */
+export interface ReturnedMark {
+  /** Epoch ms when the pass gave it back. NOT `item.at`, which is the enqueue. */
+  at: number;
+  /** A `ReturnedKind` from stockPanel — carried, never inferred from `reason`. */
+  kind: string;
+  /**
+   * The runner's own words. Shown only with the debug flag on: it is English
+   * machinery ("409 refused by a newer version"), and the person who needs the
+   * plain sentence is the one who has never opened a settings panel.
+   */
+  reason: string;
 }
 
 export interface Lease {
@@ -522,6 +576,69 @@ export async function release(
   } catch { /* already gone */ }
 
   return { ok: true, removed, remaining: (await pending(being, convoId, opts)).length };
+}
+
+/**
+ * Stamp items with WHY they are coming back, before the lease goes.
+ *
+ * ORDER IS LOAD-BEARING: this must run while the caller still holds the
+ * lease, i.e. before `abandon`. Between abandon and now, an auto-trigger may
+ * already have claimed the batch again, and stamping an item some other pass
+ * is running would describe a turn that is alive as one that failed.
+ *
+ * Requires the token for the same reason `release` does — a passer-by must
+ * not be able to write "this failed" onto somebody else's running batch.
+ *
+ * Items that are already gone are SKIPPED, not an error. A pass can consume
+ * part of a batch and hand the rest back, and this is also called on the path
+ * where the pass threw, where nothing is known about what it managed to do.
+ * The end state is what was asked for either way.
+ *
+ * Rewrites each file UNDER ITS OWN NAME. The name carries the enqueue time
+ * and the whole FIFO order is that name, so a stamped item must not move: a
+ * message that came back has not lost its place in the line.
+ */
+export async function markReturned(
+  being: string,
+  convoId: string,
+  token: string,
+  ids: string[],
+  mark: ReturnedMark,
+  opts?: Opts
+): Promise<{ ok: boolean; stamped: number }> {
+  if (ids.length === 0) return { ok: true, stamped: 0 };
+  const dir = queueDir(being, convoId, opts);
+  const lease = await readLease(being, convoId, opts);
+  if (!lease || lease.token !== token) return { ok: false, stamped: 0 };
+
+  const want = new Set(ids);
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return { ok: true, stamped: 0 };
+  }
+
+  let stamped = 0;
+  for (const name of names.filter(isItemFile)) {
+    const id = name.slice(AT_PAD + 1, -'.json'.length);
+    if (!want.has(id)) continue;
+    const file = path.join(dir, name);
+    try {
+      const item = JSON.parse(await fs.readFile(file, 'utf-8')) as QueueItem;
+      // The LATEST attempt replaces the previous one rather than accumulating.
+      // A person reads "why is it still here", which is about the last try; a
+      // list of every attempt is a log, and this file is not one.
+      item.returned = mark;
+      await atomicWriteFile(file, JSON.stringify(item));
+      stamped++;
+    } catch {
+      // Unreadable, malformed, or deleted under us. `pendingWithErrors`
+      // already reports a corrupt item file; losing a stamp costs the person
+      // one sentence, and throwing here would cost them the lease.
+    }
+  }
+  return { ok: true, stamped };
 }
 
 /**

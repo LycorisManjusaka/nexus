@@ -11,16 +11,31 @@ import { atomicWriteFile } from '@/lib/atomicWrite';
 //   3001  tree C:\dev\nexus-cairn   local_data(realpath) C:\dev\common\local_data
 //
 // Two independent clones share ONE store, by junction, and .gitignore:6 keeps
-// it out of git — so switching branches moves no data. That is the point of
-// the split (3000 on `dev`, 3001 on `main`) and it is safe TODAY only because
-// `main` has no runner code at all.
+// it out of git — so switching branches moves no data.
 //
-// The moment `main` merges, both installations poll the same store. The lease
-// in turnQueue stops DOUBLE EXECUTION — that is its job and it is tested. What
-// no lease can decide is WHICH installation hosts a given conversation's turn:
-// that would be settled by "whichever polled first", which changes silently on
-// every restart. A being's turn would run on 3001's code one day and 3000's
-// the next, and NOTHING ON SCREEN WOULD SAY WHICH.
+// ⚠ CORRECTION 2026-11-04. This paragraph used to read: "That is the point of
+// the split (3000 on `dev`, 3001 on `main`) and it is safe TODAY only because
+// `main` has no runner code at all. The moment `main` merges, both
+// installations poll the same store."
+//
+// `dev` was merged into `main` and deleted on 2026-11-02 (f24bc6d). BOTH
+// installations have runner code and BOTH poll the same store — the sentence
+// above described the safety of the day it was written as if it were a
+// property of the design, and then kept saying so after the day ended. That
+// is worse than saying nothing: a reader concludes the arrangement is safe
+// for a reason that stopped being true.
+//
+// What actually makes it safe now is NOT this flag. An item carries the
+// installation that may run it (`QueueItem.host`, 3e718e7), so the answer to
+// "who runs this turn" is decided by the screen it was typed into and not by
+// who polled first. This flag still decides the items NOBODY typed — a letter,
+// a timer — which have no screen to belong to.
+//
+// The lease in turnQueue stops DOUBLE EXECUTION — that is its job and it is
+// tested. What no lease can decide is WHICH installation hosts a given
+// conversation's turn: that would be settled by "whichever polled first",
+// which changes silently on every restart. A being's turn would run on 3001's
+// code one day and 3000's the next, and NOTHING ON SCREEN WOULD SAY WHICH.
 //
 // The human convention ("don't open the same being in two tabs") cannot cover
 // this. A convention binds what a PERSON opens. The whole purpose of a runner

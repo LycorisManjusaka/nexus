@@ -15,8 +15,9 @@ import {
 // POST { clear: true }             → back to "nobody hosts"
 //
 // WHY (measured 2026-10-27/28): two independent clones share ONE local_data by
-// junction — 3000 at C:\dev\nexus on `dev`, 3001 at C:\dev\nexus-cairn on
-// `main`. The lease in turnQueue prevents double execution. Nothing prevents
+// junction — 3000 at C:\dev\nexus, 3001 at C:\dev\nexus-cairn (both on `main`
+// since 2026-11-02; this line named two branches, one of which is deleted).
+// The lease in turnQueue prevents double execution. Nothing prevents
 // "which installation hosted this being's turn" from changing on every
 // restart, because it would be settled by whichever polled first. See
 // lib/runnerHost.ts for the full argument.
