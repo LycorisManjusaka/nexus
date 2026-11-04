@@ -13,6 +13,7 @@ import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { mintTurnId } from '@/lib/turnName';
 import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
+import { uiProbe } from '@/lib/uiProbe';  // ⚠ TEMPORARY (F32) — remove with the probes
 import {
   type StopTrace, beginStopTrace, markStop, noteStopHow, formatStopTrace,
 } from '@/lib/stopTrace';
@@ -3037,6 +3038,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const buildLogDataRef = useRef(buildLogData);
   useEffect(() => { buildLogDataRef.current = buildLogData; }, [buildLogData]);
 
+  // ⚠ TEMPORARY PROBE (F32, 2026-11-05) — delete with the rest.
+  //
+  // The reported symptom is subtractive: a late-opened tab paints the live
+  // turn and then the bubbles go away. Naming the four reload callers (`why`)
+  // only identifies the culprit IF a reload is the culprit; if some other
+  // setMessages shrinks the array, those probes stay silent and the evidence
+  // looks identical to "the attach never happened".
+  //
+  // So watch the array itself. In the log this line lands immediately after
+  // whichever probe caused it, which turns "one of four, or none of them" into
+  // a reading rather than a guess.
+  const probeCountRef = useRef(0);
+  useEffect(() => {
+    const prev = probeCountRef.current;
+    probeCountRef.current = messages.length;
+    if (messages.length < prev) uiProbe('messages-shrank', { from: prev, to: messages.length, convoId });
+  }, [messages.length, convoId]);
+
   /**
    * Replace what is on screen with what is on disk, without writing anything.
    *
@@ -3098,11 +3117,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
         .map((m) => ({ ...m, autoPlay: false }));
       setMessages(dedupeMessageIds(loaded).messages);
-      console.warn('[nexus-probe] reload-from-disk', {
+      uiProbe('reload-from-disk', {
         why: opts?.why ?? '(unnamed)',
         appliedCount: loaded.length,
         diskUpdatedAt: data.updatedAt,
-        at: new Date().toISOString(),
+        convoId,
       });
       // Learn a boundary something else resolved. The RUNNER mints the user
       // message the marker names, so the tab cannot compute it; and this
@@ -4526,9 +4545,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Marked BEFORE the await, so a second probe landing mid-attach does not
       // start a second watch of the same turn.
       attachedTurnRef.current = key;
-      console.warn('[nexus-probe] attach-start', { key, at: new Date().toISOString() });
+      uiProbe('attach-start', { key, convoId });
       const outcome = await runOnRunner(undefined, true);
-      console.warn('[nexus-probe] attach-end', { key, outcome, at: new Date().toISOString() });
+      uiProbe('attach-end', { key, outcome, convoId });
       // Cleared ONLY on 'failed'.
       //
       //   'idle'  — the relay had nothing to give. KEEP the mark: this is the
