@@ -22,6 +22,8 @@ import { openAiCannotUseTools, openAiOffEffort, openAiToolsNeedNoneEffort } from
 import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFailureInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
+import { unfinishedBillingFrames, unfinishedBillingLog } from '@/lib/unfinishedBilling';
+import { shouldNoteRateLimit, rateLimitNoteText } from '@/lib/rateLimitNote';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -1322,6 +1324,20 @@ async function streamClaudeViaAgentSDK(args: {
       // persist them onto message attachments before AI text begins streaming.
       for (const ev of senseEvents) enqueue(ev);
 
+      // ── Token accounting lives OUTSIDE the try ─────────────────────────
+      // Both accumulators are written deep inside the try (stream events into
+      // cumUsage, `assistant` messages into sdkUsage) and read on BOTH exits:
+      // the success path before [DONE], and the catch — which is where every
+      // Stop lands. Declared in here previously, they were invisible to the
+      // catch, so an interrupted turn reported no bill at all even when
+      // Anthropic had charged for it. See the catch for the measurement.
+      let cumUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+      const sdkUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+      // One subscription-budget note per TURN, not per rate_limit_event. Lives
+      // out here because `consume()` can run twice (the resume fallback) and
+      // the entity should still be told only once. See lib/rateLimitNote.ts.
+      let rateLimitNoted = false;
+
       try {
         // Dynamic import so a broken/missing SDK install doesn't kill the
         // whole NEXUS process. Worst case: the OAuth path errors gracefully
@@ -2322,9 +2338,10 @@ async function streamClaudeViaAgentSDK(args: {
         };
 
         let capturedSessionId: string | null = null;
-        let cumUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
-        // Authoritative per-call usage, SUMMED over every model call the SDK
-        // makes inside one NEXUS turn.
+        // cumUsage / sdkUsage are declared ABOVE the try so the catch can read
+        // them (see the note there). sdkUsage is the authoritative per-call
+        // usage, SUMMED over every model call the SDK makes inside one NEXUS
+        // turn.
         //
         // This used to overwrite rather than accumulate, so a turn that used a
         // tool recorded only its LAST inner call — the first call's input and
@@ -2333,7 +2350,6 @@ async function streamClaudeViaAgentSDK(args: {
         // therefore under-reported, and under-reported MORE the more tools an
         // entity used. That is what made OAuth look far cheaper than the API
         // path whenever the two were compared.
-        const sdkUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
         let sdkUsageCalls = 0;
         // Track which content-block index is currently open and what type
         // it is, so deltas know whether to be emitted as 'text' or 'thought'.
@@ -2621,6 +2637,17 @@ async function streamClaudeViaAgentSDK(args: {
               if (ri.status === 'rejected' || ri.surpassedThreshold) {
                 const pct = typeof ri.utilization === 'number' ? ` (${Math.round(ri.utilization * 100)}% used)` : '';
                 enqueue({ type: 'notice', content: `Subscription rate limit ${ri.status === 'rejected' ? 'reached' : 'threshold passed'} on the ${String(ri.rateLimitType || 'plan').replace(/_/g, '-')} budget${pct}${ri.resetsAt ? `, resets ${new Date(Number(ri.resetsAt) * 1000).toLocaleTimeString()}` : ''}.` });
+              }
+              // The notice above is screen furniture — it reaches the reader
+              // after the turn, bundled in the meta bar. The one who is about
+              // to be cut off mid-sentence is the entity, so the same fact also
+              // rides the system-note queue and arrives at the next tool-call
+              // boundary, mid-turn. Same path automatic compaction uses.
+              // Wording rules and the one-per-turn reason: lib/rateLimitNote.ts
+              if (shouldNoteRateLimit(ri, rateLimitNoted)) {
+                rateLimitNoted = true;
+                pushSystemNote(injectTurnId, rateLimitNoteText(ri, language === 'ja'));
+                console.log(`${oauthTag} rate_limit system-note queued for the entity (util=${ri.utilization} status=${ri.status})`);
               }
               continue;
             }
@@ -3105,6 +3132,23 @@ async function streamClaudeViaAgentSDK(args: {
         // refresh token, etc.).
         const msg = e?.message || String(e);
         console.error('[claude-oauth] error:', msg);
+        // ── Report the bill even when the turn ends badly ──────────────────
+        // See `lib/unfinishedBilling.ts` for why. Same field-by-field merge as
+        // the success path (never added — both accumulators count the same
+        // calls).
+        {
+          const pickErr = (a: number, b: number) => (a > b ? a : b);
+          const errFrame = normalizeCacheUsage({
+            input_tokens: pickErr(sdkUsage.input, cumUsage.input),
+            output_tokens: pickErr(sdkUsage.output, cumUsage.output),
+            cache_read_input_tokens: pickErr(sdkUsage.cacheRead, cumUsage.cacheRead),
+            cache_creation_input_tokens: pickErr(sdkUsage.cacheCreate, cumUsage.cacheCreate),
+          }, 'claude');
+          console.log(unfinishedBillingLog('[claude-oauth]', errFrame));
+          for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+            try { enqueue(f); } catch {}
+          }
+        }
         // If the turn died while compaction was still running, record it here
         // (before the stream closes) so the report says "it started and did not
         // finish" rather than showing nothing at all.
@@ -4100,6 +4144,24 @@ async function streamViaAnthropicCompat(args: {
         controller.enqueue(`data: [DONE]\n\n`);
         controller.close();
       } catch (e: any) {
+        // Report the bill before the stream closes — see
+        // `lib/unfinishedBilling.ts`. Hand-built frame to match the inline
+        // Anthropic-shape arithmetic the success path above uses.
+        {
+          const errFrame = {
+            type: 'cache_usage' as const,
+            cachedInputTokens: cumUsage.cacheRead,
+            uncachedInputTokens: cumUsage.input,
+            totalInputTokens: cumUsage.cacheRead + cumUsage.cacheCreate + cumUsage.input,
+            outputTokens: cumUsage.output,
+            cacheCreationTokens: cumUsage.cacheCreate,
+            providerHint: provider,
+          };
+          console.log(unfinishedBillingLog(`[${provider}]`, errFrame));
+          for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+            try { enqueue(f); } catch {}
+          }
+        }
         // Same guard as the other providers: after Stop the controller is
         // already gone and enqueue() throws.
         try { controller.enqueue(`data: ${JSON.stringify({ error: e?.message || 'unknown error' })}\n\n`); } catch {}
@@ -6601,6 +6663,22 @@ export async function POST(req: Request) {
             controller.enqueue(`data: [DONE]\n\n`);
             controller.close();
           } catch (e: any) {
+            // Report the bill before the stream closes — see
+            // `lib/unfinishedBilling.ts`. On this path a Stop aborts a fetch
+            // that was ALREADY sent, so the provider bills for whatever it
+            // generated; the usage here is the only record of it.
+            {
+              const errFrame = normalizeCacheUsage({
+                input_tokens: cumUsage.input,
+                output_tokens: cumUsage.output,
+                cache_read_input_tokens: cumUsage.cacheRead,
+                cache_creation_input_tokens: cumUsage.cacheCreate,
+              }, 'claude');
+              console.log(unfinishedBillingLog('[claude-api]', errFrame));
+              for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+                try { enqueue(f); } catch {}
+              }
+            }
             // After a Stop the client is gone (or the controller was already
             // closed by the stop key), so enqueue() throws "Invalid state".
             // Guard it: the cleanup path must never become the unhandled
@@ -7214,6 +7292,12 @@ export async function POST(req: Request) {
           const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
           const repeatGuard = makeRepeatGuard();
           let toolStopNotice = '';
+          // Declared OUTSIDE the try so the catch can report the bill on a
+          // Stop (see `lib/unfinishedBilling.ts`). Sum of every iteration's
+          // usageMetadata so the final cache_usage event reflects the whole
+          // turn (tool loop + continuations).
+          let cumGeminiUsage: { promptTokenCount: number; candidatesTokenCount: number; cachedContentTokenCount: number } =
+            { promptTokenCount: 0, candidatesTokenCount: 0, cachedContentTokenCount: 0 };
           try {
             let contents = [...fullContents];
             let continuationAttempts = 0;
@@ -7237,10 +7321,6 @@ export async function POST(req: Request) {
             // signature continuity and avoids stacking consecutive model turns.
             let cumulativeContinuationParts: any[] = [];
             let lastIterationWasContinuation = false;
-            // Sum of every iteration's usageMetadata so the final cache_usage
-            // event reflects the whole turn (tool loop + continuations).
-            let cumGeminiUsage: { promptTokenCount: number; candidatesTokenCount: number; cachedContentTokenCount: number } =
-              { promptTokenCount: 0, candidatesTokenCount: 0, cachedContentTokenCount: 0 };
             // Grounding citations deduped across the whole turn.
             const cumGeminiSourceMap = new Map<string, { url: string; title?: string }>();
 
@@ -7822,6 +7902,15 @@ export async function POST(req: Request) {
             controller.enqueue(`data: [DONE]\n\n`);
             controller.close();
           } catch (e: any) {
+            // Report the bill before the stream closes — see
+            // `lib/unfinishedBilling.ts`.
+            {
+              const errFrame = normalizeCacheUsage(cumGeminiUsage, 'gemini');
+              console.log(unfinishedBillingLog('[gemini]', errFrame));
+              for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+                try { enqueue(f); } catch {}
+              }
+            }
             // After a Stop the client is gone (or the controller was already
             // closed by the stop key), so enqueue() throws "Invalid state".
             // Guard it: the cleanup path must never become the unhandled
@@ -10236,6 +10325,15 @@ export async function POST(req: Request) {
             controller.enqueue(`data: [DONE]\n\n`);
             controller.close();
           } catch (e: any) {
+            // Report the bill before the stream closes — see
+            // `lib/unfinishedBilling.ts`.
+            {
+              const errFrame = normalizeCacheUsage(cumOaiUsage, providerHint);
+              console.log(unfinishedBillingLog(`[${providerHint}]`, errFrame));
+              for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+                try { enqueue(f); } catch {}
+              }
+            }
             // After a Stop the client is gone (or the controller was already
             // closed by the stop key), so enqueue() throws "Invalid state".
             // Guard it: the cleanup path must never become the unhandled
