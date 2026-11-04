@@ -23,6 +23,7 @@ import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFailureInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
 import { unfinishedBillingFrames, unfinishedBillingLog } from '@/lib/unfinishedBilling';
+import { renderTranscriptHistory } from '@/lib/transcriptRender';
 import { shouldNoteRateLimit, rateLimitNoteText } from '@/lib/rateLimitNote';
 
 // Payload field for an attachment the AI produced by reading an image from the
@@ -1148,56 +1149,11 @@ async function streamClaudeViaAgentSDK(args: {
   // still sees its prior reasoning (the one thing server-side resume gave us).
   const lastIdx = processedMessages.indexOf(lastUserMsg);
   const priorMsgs = lastIdx > 0 ? processedMessages.slice(0, lastIdx) : [];
-  // Renders the full prior conversation as the transcript the model reads — the
-  // same text every turn, exactly what the user sees.
-  const renderHistory = (): string => {
-    const all = priorMsgs;
-    if (all.length === 0) return '';
-    // The entity's own name (the character folder = its identity, same value the
-    // .md export labels assistant turns with). Used to name ASSISTANT turns
-    // symmetrically with the human [name] tags that USER turns already carry in
-    // their content — so both sides of the transcript are named, not just the
-    // human. The [USER]/[ASSISTANT] role tokens are kept because they are the
-    // least ambiguous turn-boundary signal for the model; the names sit beneath
-    // them and carry no hierarchy.
-    const entityName = (folderName || '').trim() || 'Assistant';
-    const lines: string[] = [];
-    for (const m of all) {
-      const role = m.role === 'assistant' ? 'ASSISTANT' : 'USER';
-      let block = '';
-      // Surface Claude's own saved thinking (present only when the entity has
-      // "save thinking to log" enabled) so it can see its earlier reasoning.
-      if (m.role === 'assistant' && Array.isArray(m.claudeThinkingBlocks) && m.claudeThinkingBlocks.length) {
-        const thoughts = m.claudeThinkingBlocks
-          .map((tb: any) => (tb?.thinking || '').trim())
-          .filter(Boolean)
-          .join('\n\n');
-        if (thoughts) block += `(thinking)\n${thoughts}\n\n`;
-      }
-      block += (m.content || '').trim();
-      if (!block.trim()) continue;
-      // Assistant turns get the entity's name beneath the role label, mirroring
-      // the human's in-content [name] tags. (Prepended only after the empty-turn
-      // skip above, so a truly empty assistant turn isn't emitted as a bare name.)
-      const named = m.role === 'assistant'
-        ? `[${entityName}]\n${block.trim()}`
-        : block.trim();
-      lines.push(`[${role}]:\n${named}`);
-    }
-    if (lines.length === 0) return '';
-    return (
-      '<conversation_history>\n' +
-      'This is the full prior conversation, provided for your context — it is exactly ' +
-      'what your partner currently sees. Continue naturally from it; this is NOT the first ' +
-      'message. Each turn is labelled with its speaker: your own turns are marked ' +
-      `[ASSISTANT] and carry your name ([${entityName}]); everyone else appears under ` +
-      '[USER] with their name in brackets. Lines marked "(thinking)" are your own ' +
-      'earlier reasoning.\n\n' +
-      lines.join('\n\n') +
-      '\n</conversation_history>'
-    );
-  };
-  const historyText = renderHistory();
+  // Rendered in `lib/transcriptRender.ts` — the entity's own name comes from the
+  // character folder (its identity, the same value the .md export labels
+  // assistant turns with). Why that module carries no [USER]/[ASSISTANT] role
+  // tokens is measured and argued there.
+  const historyText = renderTranscriptHistory(priorMsgs, folderName || '');
 
   const readableStream = new ReadableStream({
     async start(controller) {

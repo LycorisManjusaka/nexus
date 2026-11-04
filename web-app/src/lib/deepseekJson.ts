@@ -19,12 +19,17 @@
  * to trust it: the bytes are the contract, not the restated intent.
  *
  * OUTPUT DIALECT: "You:" / "<Label>:", never native "[Name]:". Measured
- * reasons, both in markdownLogic.ts:
- *   - In the native dialect a body line "[Anonymous]:" IS a boundary, and the
- *     user branch of `exportToMarkdown` strips any leading "[...]" from the
- *     body as a speaker tag. Foreign text with brackets would be mangled.
+ * reason, in markdownLogic.ts:
+ *   - In the native dialect a body line "[Anonymous]:" IS a boundary, so
+ *     foreign text that happens to carry one would be cut there.
  *   - In this dialect only the two detected label lines are boundaries; any
  *     other "Label:" line stays ordinary body text.
+ *
+ * CORRECTED 2026-11-04: this used to cite a second reason — that the user
+ * branch of `exportToMarkdown` strips a leading "[...]" from the body as a
+ * speaker tag. It no longer does; the body is written verbatim (see the long
+ * note in that branch). The first reason above is unaffected and still decides
+ * this, so the dialect choice does not change.
  *
  * LABELS ARE CHOSEN, NOT HARD-CODED. A body line that is exactly "DeepSeek:"
  * is entirely possible in a conversation about DeepSeek, and it would become a
