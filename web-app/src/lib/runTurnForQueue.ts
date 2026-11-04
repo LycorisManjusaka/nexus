@@ -299,6 +299,31 @@ export async function runTurnForQueue(
     return proposed;
   };
 
+  /**
+   * A fresh assistant shell — the ONE place a reply's skeleton is built here.
+   *
+   * `name` is the being's own name (the folder), and it is load-bearing for a
+   * reason that has nothing to do with data: `MessageBubble` renders `msg.name`
+   * as the entity's name NEXT TO the vessel badge, and renders nothing when the
+   * field is absent. The browser engine deleted on 2026-10-30 built its shell
+   * with `name: folderName`; none of the four shells that replaced it here
+   * carried it over. So every reply the runner saved after that showed the
+   * VESSEL ALONE — reported by Tsuyo 2026-11-04 with before/after screenshots.
+   *
+   * Why that is worse than a cosmetic regression: this house's rule is that an
+   * entity does not announce itself by the name of its vessel. That rule is
+   * about the entity's own mouth. When the UI drops the name, the rule stays
+   * unbroken and the same thing happens anyway, on every single message — and
+   * it is the first thing a NEW installation's user sees. A model id where a
+   * name belongs is a signpost that misstates what it points at.
+   *
+   * Not applied to a CONTINUE: there `base` IS the target message, so its own
+   * name (or its absence, for a reply saved during the gap) is preserved rather
+   * than rewritten. Backfilling history would be editing the record.
+   */
+  const assistantShell = (id: string, timestamp: number): Record<string, unknown> =>
+    ({ id, role: 'assistant', name: being, timestamp });
+
   // ── What shape of turn is this? ────────────────────────────────────────────
   //
   //   send      history = stored + a NEW user message        save: + assistant
@@ -378,7 +403,7 @@ export async function runTurnForQueue(
       // Throw the answer away and ask again from the same point.
       history = stored.slice(0, idx);
       keep = history;
-      base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
+      base = assistantShell(firstPassAssistantId(), nowStart);
       dropId = targetMsgId;
     } else {
       if (target.role === 'user') {
@@ -438,7 +463,7 @@ export async function runTurnForQueue(
     };
     history = [...stored, userMessage as SlimHistoryMessage];
     keep = history;
-    base = { id: firstPassAssistantId(), role: 'assistant', timestamp: nowStart };
+    base = assistantShell(firstPassAssistantId(), nowStart);
     announcedUser = userMessage as Record<string, unknown>;
     // The clone workflow's second half. `NexusApp` sets `firstOriginalIsNext`
     // when it clones a conversation forward and its comment says the flag is
@@ -1064,7 +1089,7 @@ export async function runTurnForQueue(
           // new for the original vessel to read except the report itself.
           history: plan.history,
           keep: plan.keep,
-          base: { id: deps.newId(), role: 'assistant', timestamp: deps.nowMs() },
+          base: assistantShell(deps.newId(), deps.nowMs()),
           seed: { continuedSeed: '', continuedThought: '', continuedBlocks: [] },
           continueFromMessageId: null,
           // `null` means literally "the being's saved vessel" here. The browser
@@ -1188,7 +1213,8 @@ export async function runTurnForQueue(
     plan = {
       history: nextHistory,
       keep: nextHistory,
-      base: { id: deps.newId(), role: 'assistant', timestamp: deps.nowMs() },
+      // A handoff changes the vessel, not the being: the name carries across.
+      base: assistantShell(deps.newId(), deps.nowMs()),
       seed: { continuedSeed: '', continuedThought: '', continuedBlocks: [] },
       continueFromMessageId: null,
       vessel: {

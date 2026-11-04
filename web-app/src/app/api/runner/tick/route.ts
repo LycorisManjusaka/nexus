@@ -5,6 +5,7 @@ import { runnerHostStatus, describeRunnerHost, installationId, claimRunnerHostIf
 import { autoTriggerEnabled } from '@/lib/autoTriggers';
 import { conversationToolsEnabled } from '@/lib/agentCapabilities';
 import { onStop } from '@/lib/turnStop';
+import { resolveTurnName, mintTurnId } from '@/lib/turnName';
 import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnBus';
 // Aliased: `endTurn` above closes the RELAY (what watchers read), this one
 // retires the cross-tab REGISTRY entry (what tabs probe before sending). Two
@@ -94,9 +95,7 @@ type Outcome = {
  * uses for a turn it POSTs itself, so /api/chat/active and /api/chat/inject
  * cannot tell the two apart -- which is the point.
  */
-function newTurnId(): string {
-  return `turn_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`;
-}
+const newTurnId = mintTurnId;
 
 function fail(e: unknown, fallback: string) {
   const msg = e instanceof Error ? e.message : fallback;
@@ -132,6 +131,19 @@ interface PassOpts {
    * RunTurnDeps.proposedAssistantId.
    */
   assistantMsgId: string;
+  /**
+   * The name the kicking tab already addresses Stop to.
+   *
+   * Same bargain as `assistantMsgId` one field up: whoever has to point at the
+   * thing FIRST should be the one that names it. Here the stakes are higher
+   * than a React key — a press that arrives before the tab learns the name has
+   * nowhere to go, and MEASURED 2026-11-04 that cost 8.9 s on a turn the person
+   * had already cancelled. See lib/turnName.ts.
+   *
+   * Declined (not rejected) when malformed, and always overruled by a turn
+   * that is already live on this conversation.
+   */
+  proposedTurnId: string;
   /**
    * A relay this route already opened (the `detach` path). Whatever happens —
    * including nothing at all, because the batch was claimed by someone else —
@@ -225,11 +237,15 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
       // already watching read it from there, and minting a second one here
       // would leave Stop pointing at a turn that does not exist.
       const existing = liveTurnStatus(t.convoId);
-      let turnId: string;
-      if (existing?.live === true) {
-        turnId = existing.turnId;
-      } else {
-        turnId = newTurnId();
+      // One derivation, shared with the tests: live wins, then a well-formed
+      // proposal from the kicking tab, then a fresh mint.
+      const named = resolveTurnName(
+        existing?.live === true ? existing.turnId : null,
+        opts.proposedTurnId || undefined,
+        newTurnId,
+      );
+      const turnId = named.turnId;
+      if (named.isNew) {
         beginTurn(t.convoId, turnId);
         open.add(t.convoId);
       }
@@ -365,6 +381,9 @@ export async function POST(req: Request) {
     // Only meaningful alongside a single being+convo: it names ONE placeholder.
     // A sweep over every being has no tab behind it and leaves this empty.
     const assistantMsgId = typeof body.assistantMsgId === 'string' ? body.assistantMsgId.trim() : '';
+    // Same scope as assistantMsgId: it names ONE turn. Shape-checked by
+    // resolveTurnName at the point of use, not trusted here.
+    const proposedTurnId = typeof body.turnId === 'string' ? body.turnId.trim() : '';
     const origin = new URL(req.url).origin;
 
     // ── Who may run turns for this store ──────────────────────────────────
@@ -441,9 +460,16 @@ export async function POST(req: Request) {
       if (liveTurnStatus(oneConvo)?.live === true) {
         return NextResponse.json({ ok: true, started: false, attached: true, host: selfId });
       }
-      const turnId = newTurnId();
+      // THE site that matters for Stop latency: `detach: true` has exactly one
+      // caller in the source (ChatArea's runOnRunner), so this is the path a
+      // tab takes when a person presses Send. Adopting the name it already
+      // minted means its Stop is addressable from before this request returns,
+      // instead of two round-trips later. `liveTurnStatus` was checked just
+      // above, hence `null` for the live argument.
+      const named = resolveTurnName(null, proposedTurnId || undefined, newTurnId);
+      const turnId = named.turnId;
       beginTurn(oneConvo, turnId);
-      void runPass({ auto, oneBeing, oneConvo, selfId, hostStatus: status, hostId: hostRecord?.host, origin, assistantMsgId, relayConvoId: oneConvo })
+      void runPass({ auto, oneBeing, oneConvo, selfId, hostStatus: status, hostId: hostRecord?.host, origin, assistantMsgId, proposedTurnId, relayConvoId: oneConvo })
         .catch((e) => {
           console.error('[runner] detached pass threw:', e);
           endTurn(oneConvo, { type: 'error', error: String((e as Error)?.message || e) });
@@ -451,7 +477,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, started: true, attached: false, host: selfId, turnId, ...hostNote });
     }
 
-    const r = await runPass({ auto, oneBeing, oneConvo, selfId, hostStatus: status, hostId: hostRecord?.host, origin, assistantMsgId, relayConvoId: null });
+    const r = await runPass({ auto, oneBeing, oneConvo, selfId, hostStatus: status, hostId: hostRecord?.host, origin, assistantMsgId, proposedTurnId, relayConvoId: null });
     return NextResponse.json({ ok: true, host: selfId, auto, ...r, ...hostNote });
   } catch (e) {
     return fail(e, 'the runner tick failed');

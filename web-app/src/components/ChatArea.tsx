@@ -11,6 +11,7 @@ import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
+import { mintTurnId } from '@/lib/turnName';
 import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
@@ -3226,10 +3227,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       setMessages(prev => prev.map(m => (m.id === watchId ? { ...m, streaming: true, autoPlay: vrchatModeRef.current } : m)));
     } else {
       setMessages(prev => [...prev, {
-        id: watchId, role: 'assistant', content: '', timestamp: Date.now(), streaming: true,
+        // `name` is the being's own name. Same omission as the runner's four
+        // shells (see assistantShell in runTurnForQueue): without it the meta
+        // bar shows the VESSEL ALONE for the whole length of a generation,
+        // which is the state a reader is looking at the longest.
+        id: watchId, role: 'assistant', name: folderName, content: '', timestamp: Date.now(), streaming: true,
         autoPlay: vrchatModeRef.current,
       }]);
     }
+
+    // ── Name the turn BEFORE sending it ──────────────────────────────────────
+    // MEASURED 2026-11-04 (Tsuyo): press Stop right after Send and the screen
+    // took 8.9 s to settle, because the tab could not address the press until
+    // the relay handed it a name — two round-trips away — while the runner's
+    // whole prelude is 19.6 ms. Minting here makes Stop addressable from this
+    // line onward; `requestStop`'s rendezvous covers a press that arrives
+    // before the runner has even registered its listener. See lib/turnName.ts.
+    //
+    // Not for `attach`: there a turn is already running under its own name, and
+    // proposing a second one would point Stop at a turn that does not exist.
+    const myTurnId = attach ? '' : mintTurnId();
+    if (myTurnId) activeTurnKeyRef.current = { convoId, turnId: myTurnId };
 
     try {
       const kick = attach ? null : await fetch('/api/runner/tick', {
@@ -3241,10 +3259,21 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           being: folderName,
           convoId,
           detach: true,
+          turnId: myTurnId,
           ...(watch?.continueMsgId ? {} : { assistantMsgId: watchId }),
         }),
       });
       const kd = kick ? await kick.json().catch(() => null) : { ok: true };
+      // The proposal was DECLINED because a turn was already live here, so the
+      // name above belongs to nothing. Drop it rather than let Stop address a
+      // turn that does not exist — a control that silently points at nothing is
+      // the shape this whole fix is about — and fall back to the mechanism that
+      // covered this window before: remember the press, deliver it when the
+      // relay names the real turn.
+      if (myTurnId && kd?.attached === true) {
+        activeTurnKeyRef.current = null;
+        if (stopPressedRef.current) pendingStopRef.current = true;
+      }
       if (!kd?.ok) {
         // `reason` is the runner's own sentence — "nobody hosts turns for this
         // store", most often. Surfacing it beats a generic failure, because it
@@ -3393,6 +3422,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             return [...next, {
               id: plan.assistantId,
               role: 'assistant',
+              name: folderName,
               content: plan.continuedSeed,
               timestamp: Date.now(),
               streaming: true,
