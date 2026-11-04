@@ -13,6 +13,9 @@ import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { mintTurnId } from '@/lib/turnName';
 import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
+import {
+  type StopTrace, beginStopTrace, markStop, noteStopHow, formatStopTrace,
+} from '@/lib/stopTrace';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -3448,6 +3451,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       );
       return 'ran';
     } catch (e) {
+      // GAUGE, stage 2 of 4: the server got the press and aborted the stream.
+      // Marked before the drain below, because the two answer different
+      // questions — "did the stop arrive promptly" vs "how long did the save
+      // take" — and Stop was mis-diagnosed three times for want of that split.
+      if (stopTraceRef.current) {
+        stopTraceRef.current = markStop(stopTraceRef.current, 'reach', Date.now());
+      }
       // ⚠ WAIT FOR THE RELAY TO CLOSE BEFORE FALLING INTO `finally`.
       //
       // The reload down there is the authority on what this turn produced, and
@@ -3471,6 +3481,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // only ever arrives on this side of the throw — and every stop paid for a
       // full re-download of the conversation.
       if (reader) await drainStreamToEnd(reader, RELAY_DRAIN_TIMEOUT_MS, (ev) => { saved.frame = ev; });
+      // GAUGE, stage 3 of 4: the runner finished finalizing and saving, and
+      // the route closed the relay. Everything between this and the mark above
+      // is server-side work no tab-side change can shorten.
+      if (stopTraceRef.current) {
+        stopTraceRef.current = markStop(stopTraceRef.current, 'close', Date.now());
+      }
       // A stop is not a failure. Returns 'stopped' rather than 'ran' so the
       // caller does not read it as a completed turn.
       if (stopPressedRef.current) return 'stopped';
@@ -3551,6 +3567,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // render in between where the boundary is neither predicted nor known.
       optimisticIdsRef.current = [];
       setOptimisticIds([]);
+      // GAUGE, stage 4 of 4, and the readout. Only a stop builds a trace, so
+      // a normal completion costs nothing here. The note is `info`, which the
+      // panel shows only with the runner debug display on: this is an
+      // instrument for whoever is diagnosing Stop, not a line for someone
+      // meeting Nexus for the first time.
+      if (stopTraceRef.current) {
+        let tr = markStop(stopTraceRef.current, 'apply', Date.now());
+        tr = noteStopHow(tr, patch && frame ? 'patch' : 'reload');
+        stopTraceRef.current = null;
+        setStockNote({
+          text: `${t('chat.stop.trace')} ${formatStopTrace(tr, {
+            reach: t('chat.stop.span.reach'),
+            save: t('chat.stop.span.save'),
+            apply: t('chat.stop.span.apply'),
+            patch: t('chat.stop.how.patch'),
+            reload: t('chat.stop.how.reload'),
+            incomplete: t('chat.stop.incomplete'),
+          })}`,
+          kind: 'info',
+        });
+      }
       setLoading(false);
       // The panel's poll only runs while `injectTurnId` is set, and Stop clears
       // that immediately — so without this read the lease row FREEZES at its
@@ -4097,7 +4134,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     ensureAudioPermission();
   }, [vrchatMode]);
 
+  /**
+   * ⚠ DECLARED, ABORTED, NEVER ASSIGNED — and that is the Stop bug's root.
+   *
+   * Nothing in this file writes `abortControllerRef.current`. It is a remnant
+   * of the browser turn engine deleted on 2026-10-30, which owned the fetch
+   * this used to govern; a runner turn does not hang from it (the comment on
+   * `activeTurnKeyRef` already said so). So the `abort()` below is a no-op,
+   * this tab never stops reading the relay on its own, and the entire visible
+   * wait after a press is the SERVER's unwind — which is why three tab-side
+   * fixes were each real and none of them shortened it.
+   *
+   * Left in place rather than deleted today: removing it is a behaviour change
+   * on a path I cannot drive myself (a real turn needs /api/runner/tick, which
+   * is behind the admin gate), and the gauge in lib/stopTrace.ts is about to
+   * say whether the server's time goes to reaching, saving, or applying. Delete
+   * it with that answer in hand, not before.
+   */
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  /** Non-null only between a press and the end of that turn's unwind. */
+  const stopTraceRef = useRef<StopTrace | null>(null);
 
   const handleStop = () => {
     // Set FIRST, before anything that can yield: the watch loop can throw on
@@ -4105,6 +4162,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // catch over there reads this flag to tell "stopped on purpose" from "the
     // turn failed".
     stopPressedRef.current = true;
+    // GAUGE, stage 1 of 4. First statement in the handler, so the clock starts
+    // at the press and not after the work below.
+    stopTraceRef.current = beginStopTrace(Date.now());
 
     // ── Say "stop THIS turn" out loud, then abort ─────────────────────────
     // The abort below is what stops the turn today, and this POST changes
