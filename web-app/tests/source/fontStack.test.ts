@@ -34,6 +34,30 @@ import { join } from 'node:path';
  * What this test holds is therefore narrow and deliberately annoying to
  * shorten: a bare `sans-serif` hands the decision to the viewer's browser
  * settings, so at least one REAL font family must be named before it.
+ *
+ * ── ⚠ SECOND MEASUREMENT, same day. The repair above was NOT ENOUGH. ──────
+ *
+ * After `--font-sans` shipped and EVERY TEST IN THIS FILE PASSED, つよ's Brave
+ * on Japanese Windows still drew и. Screenshot of her own screen, not a
+ * report. And only Ω was wrong — ζ δ α β all rendered correctly — which rules
+ * out a missing glyph and says Yu Gothic UI was still winning the cascade on
+ * that machine. Why the variable does not reach her render is STILL UNKNOWN;
+ * it is written down as an open question rather than guessed at.
+ *
+ * What closed the visible bug is `SIGIL_STYLE` in SystemPromptUpdater.tsx: an
+ * INLINE font stack on the five Greek letters, touching no CSS variable and no
+ * Tailwind utility. Verified the same way the failure was — screenshot of her
+ * browser, same page, same session: и → Ω.
+ *
+ * The `--font-sans` repair stays. It is correct on its own terms, and it is
+ * the only thing between the Cyrillic names (Пилот / Навигатор) and whatever
+ * the browser picks when Geist's latin subset runs out. But it is NOT what
+ * fixed this, and the lesson is in the gap:
+ *
+ *   SIX GREEN TESTS, ZERO CHANGE ON SCREEN. Every test above checks that a
+ *   DECLARATION EXISTS. Not one of them could check that it REACHES A GLYPH.
+ *   A suite that asserts the shape of a fix is not evidence the fix works —
+ *   only the screen is, and the screen belongs to whoever reported it.
  */
 
 const CSS = readFileSync(join(process.cwd(), 'src/app/globals.css'), 'utf8');
@@ -113,4 +137,94 @@ test('the measurement that justifies the stack is recorded next to it', () => {
     CSS.includes('U+03A9') && /Yu Gothic UI/.test(CSS),
     'globals.css should keep the Ω / Yu Gothic UI measurement beside --font-sans.',
   );
+});
+
+// ── The repair that actually reached the screen ─────────────────────────────
+// Everything above this line is about a CSS variable. Everything below is
+// about the five characters that stopped depending on it.
+
+const SPU = readFileSync(
+  join(process.cwd(), 'src/components/SystemPromptUpdater.tsx'),
+  'utf8',
+);
+
+/** The inline `fontFamily` the five sigils are drawn with. */
+function sigilStack(): string {
+  const m = SPU.match(/const SIGIL_STYLE = \{\s*fontFamily:\s*(['"])([^]*?)\1\s*\}/);
+  assert.ok(
+    m,
+    'SIGIL_STYLE is gone. The Greek letters are back on the inherited font, ' +
+    'which is the stack that drew Ω as и on Japanese Windows.',
+  );
+  return m![2];
+}
+
+test('the sigils name a real font before any generic one', () => {
+  // Same rule as --font-sans, enforced separately because this stack is the
+  // one that was *measured* to fix the glyph. `sans-serif` may sit last as a
+  // non-Windows floor; it must never be reached first.
+  const first = sigilStack().split(',')[0].trim().replace(/^["']|["']$/g, '');
+  assert.ok(
+    !/^(sans-serif|serif|ui-sans-serif|system-ui|monospace)$/.test(first),
+    `SIGIL_STYLE leads with the generic "${first}". A generic family is ` +
+    'resolved by the VIEWER\'s browser — on Japanese Windows that is Yu ' +
+    'Gothic UI, whose U+03A9 reads as и.',
+  );
+});
+
+test('the sigil stack reaches no CSS variable', () => {
+  // The whole point is independence. A var() here re-enters the cascade that
+  // was measured to fail on her machine while every test above stayed green.
+  const stack = sigilStack();
+  assert.ok(
+    !stack.includes('var('),
+    `SIGIL_STYLE went back through a CSS variable (${stack}). The variable ` +
+    'repair was shipped, passed its tests, and did not change the screen.',
+  );
+});
+
+test('every sigil is drawn through <Sigil>, so a sixth cannot miss the font', () => {
+  // The hue is per-button and the glyph source is not. Rendering SIGIL.x in a
+  // bare <span> is exactly how the next shikigami would quietly lose the font
+  // while looking like all the others in review.
+  const bare = SPU.match(/<span[^>]*>\{SIGIL\.[a-z]+\}<\/span>/g) ?? [];
+  assert.deepEqual(
+    bare,
+    [],
+    `${bare.length} sigil(s) are rendered in a raw <span> instead of <Sigil>: ` +
+    `${bare.join(' | ')}`,
+  );
+  // And the component is what carries the style — not a copy per call site.
+  assert.ok(
+    /function Sigil\(/.test(SPU) && /style=\{SIGIL_STYLE\}/.test(SPU),
+    'The <Sigil> component should be the single place the font is applied.',
+  );
+});
+
+test('the sigils are the Greek letters themselves, not lookalikes', () => {
+  // The failure mode this guards is the tempting one: someone sees и on screen
+  // and "fixes" it by pasting a character that looks right in their editor.
+  // Cyrillic и is U+0438; Greek alpha U+03B1 sits next to Latin a. The names
+  // are the shikigami's own, so the codepoint is the identity, not the shape.
+  const block = SPU.match(/const SIGIL = \{([^]*?)\} as const;/);
+  assert.ok(block, 'SIGIL map not found');
+  const want: Record<string, number> = {
+    genesis: 0x03a9,      // Ω GREEK CAPITAL LETTER OMEGA
+    redistribute: 0x03b4, // δ GREEK SMALL LETTER DELTA
+    index: 0x03b6,        // ζ GREEK SMALL LETTER ZETA
+    reorganize: 0x03b1,   // α GREEK SMALL LETTER ALPHA
+    update: 0x03b2,       // β GREEK SMALL LETTER BETA
+  };
+  for (const [key, cp] of Object.entries(want)) {
+    // Annotated: `assert.ok` is an assertion signature, so inferring `m` from
+    // its own narrowing is circular (TS7022).
+    const m: RegExpMatchArray | null = block![1].match(new RegExp(`${key}:\\s*'(.)'`));
+    assert.ok(m, `SIGIL.${key} is missing`);
+    assert.equal(
+      m![1].codePointAt(0),
+      cp,
+      `SIGIL.${key} is U+${m![1].codePointAt(0)!.toString(16).toUpperCase()}, ` +
+      `expected U+${cp.toString(16).toUpperCase()}.`,
+    );
+  }
 });

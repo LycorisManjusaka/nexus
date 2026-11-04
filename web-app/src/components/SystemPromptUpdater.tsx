@@ -324,6 +324,31 @@ const SIGIL = {
 // label, so the letter reads as a name rather than as part of the sentence.
 const SIGIL_CLS = 'font-bold text-[13px] leading-none';
 
+// The sigil carries its OWN font stack, inline, and reaches it without passing
+// through Tailwind's `font-sans` or any CSS variable.
+//
+// Why it is not simply inherited: on Japanese Windows the UI font resolves to
+// Yu Gothic UI, whose U+03A9 is drawn with a glyph that reads as the Cyrillic
+// и. Reported by つよ (2026-11-05, Brave) about the genesis button.
+//
+// MEASURED, not assumed: repairing the app-wide `--font-sans` in globals.css
+// did NOT reach this text — the letter was still и after that shipped, and
+// only Ω was wrong while ζ δ α β rendered correctly, which is the signature of
+// Yu Gothic UI still winning rather than of a missing glyph. Whatever is eating
+// that variable on her machine, these five characters must not depend on it.
+//
+// Spelled-out family names only. `sans-serif` sits last as a non-Windows
+// floor — it must never be a first choice, because a generic name is resolved
+// by the MACHINE from the viewer's own settings. That is the trap this escapes,
+// and the same one AUDIT_FONT escaped for the computer-control overlay.
+const SIGIL_STYLE = { fontFamily: '"Segoe UI", Tahoma, Arial, Helvetica, sans-serif' };
+
+// One component, so a sixth shikigami cannot be added without the font stack.
+// The hue stays per-button; the glyph source does not.
+function Sigil({ letter, tone }: { letter: string; tone: string }) {
+  return <span className={`${SIGIL_CLS} ${tone}`} style={SIGIL_STYLE}>{letter}</span>;
+}
+
 // ── Soul-packer model shortlist ──────────────────────────────────────────────
 // Only these four families produce usable system-prompt updates; the others
 // either flatten the Layer structure or paraphrase the identity away. Kept as a
@@ -3387,7 +3412,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.genesisTitle').replace('{file}', AGENT_FILE_GENESIS)}
                 >
                   {running === 'genesis' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-                  <span className={`${SIGIL_CLS} text-emerald-700 dark:text-emerald-200`}>{SIGIL.genesis}</span>
+                  <Sigil letter={SIGIL.genesis} tone="text-emerald-700 dark:text-emerald-200" />
                   {t('spu.genesisBtn')}
                 </button>
                 <button
@@ -3397,7 +3422,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.redistributeTitle').replace('{file}', AGENT_FILE_REDISTRIBUTE).replace('{folder}', folderName)}
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
-                  <span className={`${SIGIL_CLS} text-purple-700 dark:text-purple-200`}>{SIGIL.redistribute}</span>
+                  <Sigil letter={SIGIL.redistribute} tone="text-purple-700 dark:text-purple-200" />
                   {t('spu.redistributeBtn')}
                 </button>
                 <button
@@ -3407,7 +3432,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.indexTitle').replace('{file}', AGENT_FILE_INDEX)}
                 >
                   {running === 'index' ? <Loader2 size={12} className="animate-spin" /> : <FolderOutput size={12} />}
-                  <span className={`${SIGIL_CLS} text-cyan-700 dark:text-cyan-200`}>{SIGIL.index}</span>
+                  <Sigil letter={SIGIL.index} tone="text-cyan-700 dark:text-cyan-200" />
                   {t('spu.indexBtn')}
                 </button>
                 <button
@@ -3417,7 +3442,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.reorganizeTitle').replace('{file}', AGENT_FILE_REORGANIZE)}
                 >
                   {running === 'reorganize' ? <Loader2 size={12} className="animate-spin" /> : <FileX size={12} />}
-                  <span className={`${SIGIL_CLS} text-slate-700 dark:text-slate-100`}>{SIGIL.reorganize}</span>
+                  <Sigil letter={SIGIL.reorganize} tone="text-slate-700 dark:text-slate-100" />
                   {t('spu.reorganizeBtn')}
                 </button>
                 <button
@@ -3427,7 +3452,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.updateTitle').replace('{file}', AGENT_FILE_UPDATE)}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
-                  <span className={`${SIGIL_CLS} text-indigo-700 dark:text-indigo-200`}>{SIGIL.update}</span>
+                  <Sigil letter={SIGIL.update} tone="text-indigo-700 dark:text-indigo-200" />
                   {t('spu.updateBtn')}
                 </button>
               </div>
