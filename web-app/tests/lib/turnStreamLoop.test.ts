@@ -389,3 +389,122 @@ describe('drainStreamToEnd', () => {
     assert.equal(await drainStreamToEnd(reader, 2_000), 'error');
   });
 });
+
+/**
+ * drainStreamToEnd — harvesting `turn_saved` out of the drain (2026-11-04).
+ *
+ * WHY THESE EXIST. The drain was a pure byte-sink, and that cost a full
+ * conversation re-download on every Stop: the runner publishes `turn_saved`
+ * AFTER the error frame that throws the reader into the catch, so the frame
+ * could only ever arrive here — and here threw it away. Measured p50 438,368 B
+ * of reload against a 7,891 B frame; Tsuyo reported the wait as "a few seconds"
+ * on a 4.5 MB log.
+ *
+ * What is asserted is the HANDOVER, never the application: these tests prove
+ * the frame reaches the caller, and `applyTurnSaved`'s own suite owns what
+ * happens to it (including the version gate that can still refuse it).
+ */
+describe('drainStreamToEnd — turn_saved harvest', () => {
+  const enc = new TextEncoder();
+  const savedFrame = (assistantId: string) => `data: ${JSON.stringify({
+    type: 'turn_saved',
+    readUpdatedAt: 100,
+    writtenUpdatedAt: 200,
+    assistant: { id: assistantId, role: 'assistant', content: '' },
+    user: { id: 'u1', role: 'user', content: 'hi' },
+  })}\n\n`;
+
+  const readerOf = (chunks: (Uint8Array | string)[]) => {
+    let i = 0;
+    return {
+      async read() {
+        if (i < chunks.length) return { done: false, value: chunks[i++] };
+        return { done: true, value: undefined };
+      },
+      async cancel() {},
+      releaseLock() {},
+    } as unknown as ReadableStreamDefaultReader<Uint8Array | string>;
+  };
+
+  it('hands a turn_saved frame to the caller and still reports closed', async () => {
+    const got: unknown[] = [];
+    const outcome = await drainStreamToEnd(
+      readerOf([enc.encode(savedFrame('a1')), enc.encode('data: [DONE]\n\n')]),
+      2_000,
+      (ev) => { got.push(ev); },
+    );
+    // Draining is still the job: harvesting must not change the outcome the
+    // caller branches on.
+    assert.equal(outcome, 'closed');
+    assert.equal(got.length, 1);
+    assert.equal((got[0] as { assistant: { id: string } }).assistant.id, 'a1');
+    // Normalised, not raw: the caller feeds this straight to applyTurnSaved.
+    assert.equal((got[0] as { writtenUpdatedAt: number }).writtenUpdatedAt, 200);
+  });
+
+  it('reassembles a frame split across chunk boundaries', async () => {
+    // The whole reason createSseReader is used rather than a per-chunk parse.
+    // A frame straddling a boundary is the normal case on a real HTTP body,
+    // and a naive parser drops it in silence.
+    const whole = savedFrame('a2');
+    const cut = Math.floor(whole.length / 2);
+    const got: unknown[] = [];
+    await drainStreamToEnd(
+      readerOf([enc.encode(whole.slice(0, cut)), enc.encode(whole.slice(cut))]),
+      2_000,
+      (ev) => { got.push(ev); },
+    );
+    assert.equal(got.length, 1);
+    assert.equal((got[0] as { assistant: { id: string } }).assistant.id, 'a2');
+  });
+
+  it('ignores every other frame type', async () => {
+    const got: unknown[] = [];
+    await drainStreamToEnd(
+      readerOf([
+        enc.encode(`data: ${JSON.stringify({ type: 'text', content: 'late words' })}\n\n`),
+        enc.encode(`data: ${JSON.stringify({ type: 'error', error: 'aborted' })}\n\n`),
+        enc.encode('data: [DONE]\n\n'),
+      ]),
+      2_000,
+      (ev) => { got.push(ev); },
+    );
+    // The 2026-10-30 rule is unchanged for everything but the one frame that
+    // states what was written: parting words are still discarded.
+    assert.equal(got.length, 0);
+  });
+
+  it('refuses a turn_saved that cannot name the message it wrote', async () => {
+    const got: unknown[] = [];
+    await drainStreamToEnd(
+      readerOf([enc.encode(`data: ${JSON.stringify({ type: 'turn_saved', assistant: {} })}\n\n`)]),
+      2_000,
+      (ev) => { got.push(ev); },
+    );
+    // normaliseTurnSaved returns null; a null must not reach the caller as a
+    // frame, because "which message" would fall back to "some message".
+    assert.equal(got.length, 0);
+  });
+
+  it('survives malformed JSON without turning a clean close into an error', async () => {
+    const got: unknown[] = [];
+    const outcome = await drainStreamToEnd(
+      readerOf([enc.encode('data: {not json\n\n'), enc.encode(savedFrame('a3'))]),
+      2_000,
+      (ev) => { got.push(ev); },
+    );
+    // If harvesting could throw, the caller would see 'error' and reload —
+    // exactly the slow path this change exists to remove.
+    assert.equal(outcome, 'closed');
+    assert.equal(got.length, 1);
+  });
+
+  it('stays a pure byte-sink when no listener is passed', async () => {
+    // The old two-argument call must behave exactly as it did: no decoder, no
+    // parser, no observable difference.
+    assert.equal(
+      await drainStreamToEnd(readerOf([enc.encode(savedFrame('a4'))]), 2_000),
+      'closed',
+    );
+  });
+});

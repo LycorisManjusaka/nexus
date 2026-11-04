@@ -41,6 +41,7 @@ import {
   type TurnEventDeps,
 } from './turnEventReducer';
 import type { TurnAccState } from './turnAccState';
+import { normaliseTurnSaved, type TurnSavedEvent } from './turnSaved';
 
 /**
  * Side-channel hooks that are NOT state. Dropping them changes what a screen
@@ -200,14 +201,51 @@ export const RELAY_DRAIN_TIMEOUT_MS = 10_000;
  * Draining to the end restores it, with no second mechanism to drift from the
  * first (a poll on `updatedAt` would have been one).
  *
- * Discards rather than applies: whatever arrives after the throw is the
- * producer's parting words, and the conversation reload that follows is the
- * authority on what the turn actually produced.
+ * Discards rather than applies — with ONE exception, `turn_saved`.
+ *
+ * ⚠ AMENDED 2026-11-04. The blanket discard was written on 2026-10-30, when
+ * "the conversation reload that follows is the authority" was simply true:
+ * re-reading disk was the only way to learn what a turn produced. The
+ * `turn_saved` frame (2026-11-01) is not parting words — it is the runner
+ * STATING what it just wrote, version-gated at apply time, and the runner
+ * publishes one on a stop for exactly this purpose ("the tab may patch rather
+ * than re-download", commitUnfinished). Dropping it here meant every Stop fell
+ * through to a full reload: MEASURED p50 438,368 B against a 7,891 B frame, and
+ * Tsuyo's largest log is 4.5 MB — the seconds she reported waiting after the
+ * button visibly responded. Harvesting it does not APPLY anything; it hands the
+ * frame to the caller, whose existing version gate decides.
  */
 export async function drainStreamToEnd(
   reader: ReadableStreamDefaultReader<Uint8Array | string>,
   timeoutMs: number = RELAY_DRAIN_TIMEOUT_MS,
+  onSaved?: (ev: TurnSavedEvent) => void,
 ): Promise<'closed' | 'timeout' | 'error'> {
+  // Only built when somebody is listening: a drain with no `onSaved` must stay
+  // the pure byte-sink it has always been.
+  const dec = onSaved ? new TextDecoder() : null;
+  const sse = onSaved ? createSseReader() : null;
+  const harvest = (value: Uint8Array | string) => {
+    if (!onSaved || !sse) return;
+    try {
+      // `stream: true` because a frame can straddle a chunk boundary mid-UTF-8;
+      // createSseReader holds the partial frame for the same reason one level up.
+      const text = typeof value === 'string' ? value : dec!.decode(value, { stream: true });
+      for (const payload of sse.push(text)) {
+        if (isSseDone(payload)) continue;
+        let data: unknown;
+        try { data = JSON.parse(payload); } catch { continue; }
+        if (!data || typeof data !== 'object') continue;
+        const d = data as Record<string, unknown>;
+        if (d.type !== 'turn_saved') continue;
+        const ev = normaliseTurnSaved(d);
+        if (ev) onSaved(ev);
+      }
+    } catch {
+      // Harvesting is a bonus, draining is the job. A throw in here must never
+      // turn a clean 'closed' into an 'error' — the caller would then reload,
+      // which is precisely the slow path this exists to avoid.
+    }
+  };
   let timer: ReturnType<typeof setTimeout> | null = null;
   // ONE expiry promise for the whole drain, not one per read: a fresh timer
   // per iteration would reset the bound on every chunk, so a producer that
@@ -218,7 +256,11 @@ export async function drainStreamToEnd(
   try {
     while (true) {
       const next = await Promise.race([
-        reader.read().then((r) => (r.done ? 'closed' as const : 'more' as const)),
+        reader.read().then((r) => {
+          if (r.done) return 'closed' as const;
+          if (r.value !== undefined) harvest(r.value);
+          return 'more' as const;
+        }),
         expiry,
       ]);
       if (next === 'more') continue;

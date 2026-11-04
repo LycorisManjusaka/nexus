@@ -12,7 +12,7 @@ import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptReso
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { mintTurnId } from '@/lib/turnName';
-import { runTurnStream, drainStreamToEnd } from '@/lib/turnStreamLoop';
+import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
@@ -3465,7 +3465,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // the state from BEFORE the turn every time, and a manual reload showed
       // the right thing every time. Three symptoms, one race, and the lie was
       // in the sentence that explained why no wait was needed.
-      if (reader) await drainStreamToEnd(reader);
+      // Third argument added 2026-11-04: keep the runner's `turn_saved` if one
+      // arrives during the drain. Without it a Stop could never patch — the
+      // frame is published AFTER the error frame that threw us in here, so it
+      // only ever arrives on this side of the throw — and every stop paid for a
+      // full re-download of the conversation.
+      if (reader) await drainStreamToEnd(reader, RELAY_DRAIN_TIMEOUT_MS, (ev) => { saved.frame = ev; });
       // A stop is not a failure. Returns 'stopped' rather than 'ran' so the
       // caller does not read it as a completed turn.
       if (stopPressedRef.current) return 'stopped';

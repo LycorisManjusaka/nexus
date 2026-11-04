@@ -1360,8 +1360,14 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
             (parsed by TTS / MD export / agent log). Old logs that still
             carry `msg.name = "User"` (or the current sentinel `"Anonymous"`)
             simply don't render it here. */}
-        {!isUser && msg.name && (
-          <span className="font-semibold text-foreground/80">{msg.name}</span>
+        {/* The being's name falls back to the folder it lives in. `msg.name` is
+            baked in at save time, but messages written between the runner
+            migration (2026-10-30) and its fix (2026-11-04) carry none, and an
+            imported log may name a DIFFERENT being — so a stored name always
+            wins, and the folder only fills the gap. Same shape as the SPU's
+            `m.name || subjectName`. */}
+        {!isUser && (msg.name || folderName) && (
+          <span className="font-semibold text-foreground/80">{msg.name || folderName}</span>
         )}
         {/* Model + thinking-mode tag emitted by the backend's
             `model_selected` SSE event on every AI message. Stored as
