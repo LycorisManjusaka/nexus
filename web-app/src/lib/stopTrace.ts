@@ -33,7 +33,7 @@
  * decided to stand up. The numbers come back from whoever presses the button.
  */
 
-export type StopStage = 'press' | 'reach' | 'close' | 'apply';
+export type StopStage = 'press' | 'post' | 'reach' | 'close' | 'apply';
 
 export interface StopTrace {
   /** Wall-clock ms at each milestone, in the order they can occur. */
@@ -60,7 +60,28 @@ export function noteStopHow(trace: StopTrace, how: 'patch' | 'reload'): StopTrac
   return { ...trace, how };
 }
 
-const SPANS: ReadonlyArray<{ from: StopStage; to: StopStage; key: string }> = [
+/**
+ * Spans when the stop POST was timed (the ordinary press). `reach` is split so
+ * "the press took a while to get there" and "the server took a while to let go
+ * of the stream" cannot hide inside one number — MEASURED 2026-11-04 on 謡_13,
+ * two presses under identical conditions: reach 1.17s then 7.14s, while save
+ * held at 42ms and apply at 0ms both times. A span that swings 6x while its
+ * neighbours do not move is two different things added together.
+ */
+const SPANS_POSTED: ReadonlyArray<{ from: StopStage; to: StopStage; key: string }> = [
+  { from: 'press', to: 'post', key: 'send' },
+  { from: 'post', to: 'reach', key: 'abort' },
+  { from: 'reach', to: 'close', key: 'save' },
+  { from: 'close', to: 'apply', key: 'apply' },
+];
+
+/**
+ * Spans when there was no POST to time — the press arrived before the turn had
+ * a name, so `pendingStop` carried it and the fetch happened elsewhere. Keeping
+ * the undivided `reach` here is the point: an absent measurement must not read
+ * as a fast one.
+ */
+const SPANS_PENDING: ReadonlyArray<{ from: StopStage; to: StopStage; key: string }> = [
   { from: 'press', to: 'reach', key: 'reach' },
   { from: 'reach', to: 'close', key: 'save' },
   { from: 'close', to: 'apply', key: 'apply' },
@@ -78,7 +99,8 @@ export interface StopSpan {
  */
 export function stopSpans(trace: StopTrace): StopSpan[] {
   const out: StopSpan[] = [];
-  for (const s of SPANS) {
+  const spans = trace.at.post === undefined ? SPANS_PENDING : SPANS_POSTED;
+  for (const s of spans) {
     const a = trace.at[s.from];
     const b = trace.at[s.to];
     if (a === undefined || b === undefined) continue;

@@ -1018,11 +1018,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
    * fresh function each render would land in runOnRunner's dependency list
    * and re-arm the auto-trigger effect on every render.
    */
-  const postStop = useCallback((convoId: string, turnId: string) => {
+  const postStop = useCallback((convoId: string, turnId: string, onPosted?: () => void) => {
     fetch('/api/chat/active', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ convoId, turnId, event: 'stop' }),
-    }).catch(() => { /* best-effort; the caller has already torn down its view */ });
+    })
+      // `onPosted` is the gauge, passed in rather than read from a ref so the
+      // "closes over nothing" above stays true.
+      .then(() => { onPosted?.(); })
+      .catch(() => { /* best-effort; the caller has already torn down its view */ });
   }, []);
   // Is the screen known to be behind what is on disk?
   //
@@ -3579,6 +3583,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setStockNote({
           text: `${t('chat.stop.trace')} ${formatStopTrace(tr, {
             reach: t('chat.stop.span.reach'),
+            send: t('chat.stop.span.send'),
+            abort: t('chat.stop.span.abort'),
             save: t('chat.stop.span.save'),
             apply: t('chat.stop.span.apply'),
             patch: t('chat.stop.how.patch'),
@@ -4184,7 +4190,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // See lib/pendingStop.ts for why the rule is not six lines here.
     const plan = planStopPress(activeTurnKeyRef.current, loading);
     pendingStopRef.current = plan.remember;
-    if (plan.post) postStop(plan.post.convoId, plan.post.turnId);
+    // GAUGE, stage 2 of 5: the stop request came back. Everything before this
+    // is network and route dispatch; everything after it, up to the error
+    // frame, is the server holding on to the stream.
+    if (plan.post) postStop(plan.post.convoId, plan.post.turnId, () => {
+      if (stopTraceRef.current) {
+        stopTraceRef.current = markStop(stopTraceRef.current, 'post', Date.now());
+      }
+    });
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;

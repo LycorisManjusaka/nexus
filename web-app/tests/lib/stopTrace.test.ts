@@ -11,12 +11,44 @@ import {
 
 const LABELS = {
   reach: '到達',
+  send: '伝達',
+  abort: '巻戻し',
   save: '保存',
   apply: '反映',
   patch: 'パッチ',
   reload: '再取得',
   incomplete: '未完',
 };
+
+// The split that found the root. MEASURED on 謡_13, 2026-11-04: press→post
+// 87-98ms three times, post→reach 7.02-7.14s three times. Undivided, `reach`
+// read as one swinging number and three fixes were aimed at the wrong half.
+test('a timed POST splits reach into delivery and the server unwind', () => {
+  let tr = beginStopTrace(1000);
+  tr = markStop(tr, 'post', 1090);    // the stop request came back
+  tr = markStop(tr, 'reach', 8110);   // the stream only let go 7s later
+  tr = markStop(tr, 'close', 8150);
+  tr = markStop(tr, 'apply', 8150);
+  assert.deepEqual(stopSpans(tr), [
+    { key: 'send', ms: 90 },
+    { key: 'abort', ms: 7020 },
+    { key: 'save', ms: 40 },
+    { key: 'apply', ms: 0 },
+  ]);
+  assert.equal(stopTotalMs(tr), 7150);
+});
+
+// A press that beat the turn's name has no POST of its own to time. The
+// undivided span must survive, because an absent measurement reading as a fast
+// one is the failure mode this whole gauge exists to prevent.
+test('without a POST mark the undivided reach span is kept', () => {
+  let tr = beginStopTrace(1000);
+  tr = markStop(tr, 'reach', 8000);
+  tr = markStop(tr, 'close', 8040);
+  tr = markStop(tr, 'apply', 8040);
+  assert.deepEqual(stopSpans(tr).map(s => s.key), ['reach', 'save', 'apply']);
+  assert.match(formatStopTrace(tr, LABELS), /到達/);
+});
 
 test('spans localise the wait to one of three places', () => {
   let tr = beginStopTrace(1000);
