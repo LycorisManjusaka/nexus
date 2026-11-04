@@ -4372,6 +4372,36 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let cancelled = false;
     const read = async () => {
       if (cancelled || loading) return;
+      // ── NOT WHILE THE CONVERSATION IS STILL ARRIVING ───────────────────
+      //
+      // ⚠ REPORTED 2026-11-04 (津代): open a SECOND tab on Cairn_60 while a
+      // turn is running and it shows the conversation up to the last SAVED
+      // message — no sent bubble, no streaming reply — while the tool-activity
+      // line and the title's ● both say a turn is in flight. The same test on
+      // Default (two tabs, same port, mid-turn, even opened late) was perfect
+      // every time. Both facts are one race, and the thing that differs is
+      // SIZE.
+      //
+      // The load at line ~1620 streams the whole log and ENDS in an
+      // unconditional `setMessages(loadedMessages)` — disk state applied
+      // wholesale, by design. This effect runs on mount in parallel with it and
+      // its probe is one small request. On a small conversation the load lands
+      // first and the attach paints on top of it; on a multi-megabyte one the
+      // attach wins, `turnPlan` appends the user bubble and the placeholder,
+      // and seconds later the load replaces the array and erases both.
+      //
+      // It does not repair itself, which is why it looks like a dead tab rather
+      // than a flicker: `attachedTurnRef` is marked BEFORE the attach and kept
+      // on every outcome but 'failed', so this turn is never attached again.
+      // The subscription stays open and live frames keep arriving — they just
+      // paint into a `watchId` whose message is no longer in `messages`. Hence
+      // tool activity (separate state) still moving while the bubbles never
+      // appear.
+      //
+      // Deferring costs nothing: the load is what makes the painted bubbles
+      // meaningful (they are appended to the on-disk history), and `read` is
+      // re-run the moment it finishes because `convoIsLoading` is a dep below.
+      if (convoIsLoading) return;
       // ── CATCH UP WITH DISK FIRST ───────────────────────────────────────
       // A watch whose reload could not reach the server left this screen
       // showing a turn that has since been finished and written by the
@@ -4514,8 +4544,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       window.removeEventListener('online', read);
       document.removeEventListener('visibilitychange', onVisible);
     };
+    // `convoIsLoading` is load-bearing, not cosmetic: it is what re-runs the
+    // probe when the conversation finishes arriving, which is the only moment
+    // a late-opened tab may safely attach. Removing it reinstates the race
+    // above — silently, and only on big conversations.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [convoId, loading]);
+  }, [convoId, loading, convoIsLoading]);
 
   // Leaving (conversation switch, tab close) must not leave this tab's entry
   // behind — another tab would be told a turn is running for up to the TTL.
