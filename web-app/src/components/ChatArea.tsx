@@ -4721,12 +4721,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     }));
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    // The ROSTER decides which "[Name]:" headers the reader will accept as
+    // message boundaries, so the writer has to know it too — same list the
+    // import flow builds in Sidebar (folder entity + character_map). Without
+    // it an unrecognised tag becomes a header that is not a boundary, and the
+    // turn merges upward on re-import (speakerHeader.ts: 56.4% → 96.9%).
+    //
+    // A FAILED FETCH PASSES `undefined`, NOT `[]`. Undefined means "roster
+    // unknown" and keeps the old behaviour; an empty array would mean "roster
+    // known and empty" and turn every header into Anonymous — a network blip
+    // must not silently rewrite who spoke.
+    let roster: string[] | undefined;
+    try {
+      const r = await fetch('/api/chara/list');
+      if (r.ok) {
+        const d = await r.json();
+        roster = [folderName, 'User', 'Anonymous', ...(d.characters || [])
+          .map((c: any) => c?.name)
+          .filter((n: any): n is string => typeof n === 'string' && n.trim().length > 0)];
+      }
+    } catch {}
     // ⚠ DEFAULT ON since 2026-11-04 (津代: "毎回あれつけるのうんざりなの").
     // `??` and not `||`: an explicit false must still be false. The matching
     // `?? true` is in SettingsModal — the two have to agree, or the checkbox
     // says one thing and the file written says another.
-    const md = exportToMarkdown(messages, folderName, saveThinkingToLog, globalSettings?.saveTimestampsToMd ?? true);
+    const md = exportToMarkdown(messages, folderName, saveThinkingToLog, globalSettings?.saveTimestampsToMd ?? true, roster);
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { estimateTokensForModel } from './tokenEstimate';
-import { speakerNameOf } from './speakerTag';
+import { exportHeaderName } from './speakerHeader';
 
 // Format a numeric (ms) timestamp as the app's "[YYYY-MM-DD HH:MM:SS]" tag in
 // LOCAL time — identical to the dateTimeVisibility formatter used elsewhere, so
@@ -11,7 +11,14 @@ function formatTimestampTag(ts: number): string {
   return `[${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}]`;
 }
 
-export function exportToMarkdown(messages: any[], customAiName?: string, saveThinking = false, saveTimestamps = false) {
+/**
+ * `roster` is the set of names `parseMarkdown` will accept as boundaries — the
+ * folder's entity plus character_map, assembled by the caller. Pass it and an
+ * unrecognised speaker tag falls back to "Anonymous" so the header is always a
+ * real boundary; omit it and the old behaviour stands (see speakerHeader.ts for
+ * the measurement: 56.4% → 96.9% of conversations round-trip exactly).
+ */
+export function exportToMarkdown(messages: any[], customAiName?: string, saveThinking = false, saveTimestamps = false, roster?: string[]) {
   let md = '';
   messages.forEach(m => {
     let content = m.content || '';
@@ -75,7 +82,13 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
       // "[Name]:" line (a pasted transcript), which is a real boundary in this
       // dialect, so the turn splits — identical counts old and new. The
       // remaining 4 are unclassified. This is better, not finished.
-      header = speakerNameOf(content);
+      //
+      // 2026-11-04, second measurement (津代 asked why the name appears twice):
+      // the header is ALSO where this export was losing turns. See
+      // speakerHeader.ts — an unrecognised tag is not a weak header, it is no
+      // header, and the turn merges upward. `exportHeaderName` keeps the tag
+      // when the roster knows it and falls back to Anonymous when it does not.
+      header = exportHeaderName(content, roster);
       md += `[${header}]:\n\n${tsLine}${content.trim()}\n\n`;
     }
   });
