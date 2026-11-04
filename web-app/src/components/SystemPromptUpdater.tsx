@@ -303,6 +303,27 @@ const AGENT_FILE_REDISTRIBUTE = 'interlayer_redistributor.md'; // "Redistribute 
 const AGENT_FILE_GENESIS = 'genesis_extractor.md';            // "Genesis (Build From Scratch)"
 const AGENT_FILE_INDEX = 'indexer.md';                        // "Externalize & Index (式神ζ)"
 
+// ── Shikigami sigils ────────────────────────────────────────────────────────
+// Each pass has a Greek name that predates the English button labels, and the
+// house uses those names in conversation ("β rewrote the soul", "ask 謡 about
+// δ"). The sigil is the shikigami's own name, so it is NOT in i18n — it reads
+// the same in both languages, and a second copy is a second chance to disagree.
+//
+// Keep each letter paired with its FILE, not with its button colour. Swapping α
+// and β would send someone who meant "tidy up what is already there" into a
+// pass that rewrites Layers 1-3 from a conversation log.
+const SIGIL = {
+  genesis: 'Ω',      // genesis_extractor.md
+  redistribute: 'δ', // interlayer_redistributor.md
+  index: 'ζ',        // indexer.md
+  reorganize: 'α',   // defragmenter.md
+  update: 'β',       // updater.md
+} as const;
+
+// Shared shape; each button supplies its own hue one step stronger than its
+// label, so the letter reads as a name rather than as part of the sentence.
+const SIGIL_CLS = 'font-bold text-[13px] leading-none';
+
 // ── Soul-packer model shortlist ──────────────────────────────────────────────
 // Only these four families produce usable system-prompt updates; the others
 // either flatten the Layer structure or paraphrase the identity away. Kept as a
@@ -417,7 +438,12 @@ export default function SystemPromptUpdater({
   const { isMobile } = useDevice();
   // ── State ────────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
-  const [running, setRunning] = useState<null | 'update' | 'redistribute' | 'genesis' | 'index' | 'summary' | 'auto'>(null);
+  // 'reorganize' is its own value, not a flavour of 'update'. Both buttons ran
+  // runUpdate() and both set 'update', so pressing either put the spinner on
+  // BOTH — the idle pass claimed to be running. Only the spinner reads these
+  // individually; `busy` is `running !== null`, so adding a value changes
+  // nothing else.
+  const [running, setRunning] = useState<null | 'update' | 'reorganize' | 'redistribute' | 'genesis' | 'index' | 'summary' | 'auto'>(null);
   const [statusMessage, setStatusMessage] = useState<string>('');
   /**
    * Set when a kick was refused because a record still says `running`.
@@ -2663,7 +2689,7 @@ export default function SystemPromptUpdater({
   // itself, with no conversation log fed to the agent.
   const handleUpdateNoConvo = useCallback(async () => {
     if (running !== null) return;
-    setRunning('update');
+    setRunning('reorganize');
     try { await runUpdate(false); } finally { setRunning(null); }
   }, [running, runUpdate]);
 
@@ -3361,6 +3387,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.genesisTitle').replace('{file}', AGENT_FILE_GENESIS)}
                 >
                   {running === 'genesis' ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                  <span className={`${SIGIL_CLS} text-emerald-700 dark:text-emerald-200`}>{SIGIL.genesis}</span>
                   {t('spu.genesisBtn')}
                 </button>
                 <button
@@ -3370,6 +3397,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.redistributeTitle').replace('{file}', AGENT_FILE_REDISTRIBUTE).replace('{folder}', folderName)}
                 >
                   {running === 'redistribute' ? <Loader2 size={12} className="animate-spin" /> : <Shuffle size={12} />}
+                  <span className={`${SIGIL_CLS} text-purple-700 dark:text-purple-200`}>{SIGIL.redistribute}</span>
                   {t('spu.redistributeBtn')}
                 </button>
                 <button
@@ -3379,6 +3407,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.indexTitle').replace('{file}', AGENT_FILE_INDEX)}
                 >
                   {running === 'index' ? <Loader2 size={12} className="animate-spin" /> : <FolderOutput size={12} />}
+                  <span className={`${SIGIL_CLS} text-cyan-700 dark:text-cyan-200`}>{SIGIL.index}</span>
                   {t('spu.indexBtn')}
                 </button>
                 <button
@@ -3387,7 +3416,8 @@ export default function SystemPromptUpdater({
                   className="px-2.5 py-1 text-xs font-medium bg-slate-500/15 text-slate-600 dark:text-slate-300 hover:bg-slate-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                   title={t('spu.reorganizeTitle').replace('{file}', AGENT_FILE_REORGANIZE)}
                 >
-                  {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <FileX size={12} />}
+                  {running === 'reorganize' ? <Loader2 size={12} className="animate-spin" /> : <FileX size={12} />}
+                  <span className={`${SIGIL_CLS} text-slate-700 dark:text-slate-100`}>{SIGIL.reorganize}</span>
                   {t('spu.reorganizeBtn')}
                 </button>
                 <button
@@ -3397,6 +3427,7 @@ export default function SystemPromptUpdater({
                   title={t('spu.updateTitle').replace('{file}', AGENT_FILE_UPDATE)}
                 >
                   {running === 'update' ? <Loader2 size={12} className="animate-spin" /> : <ArrowRight size={12} />}
+                  <span className={`${SIGIL_CLS} text-indigo-700 dark:text-indigo-200`}>{SIGIL.update}</span>
                   {t('spu.updateBtn')}
                 </button>
               </div>
