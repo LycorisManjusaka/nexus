@@ -38,6 +38,8 @@ export const UI_STRINGS_EN: Record<string, string> = {
   // ── App shell ────────────────────────────────────────────────────────────
   'app.welcome.title': 'Welcome to NEXUS',
   'app.welcome.subtitle': 'Select or create a conversation to start',
+  'app.welcome.pickEntity': 'Pick a being in the left panel to begin.',
+  'app.welcome.openGuide': 'Open the guide',
   'app.welcome.newChat': 'New Chat',
   'app.cloneFailed': 'Could not clone this conversation ({status}). You are still in the original one — try again.',
 
@@ -424,7 +426,6 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'are left untouched.\n\n',
   'sidebar.loading': 'Loading conversations…',
   'sidebar.noHistory': 'No history in {folder}.',
-  'sidebar.thisFolder': 'this being',
   'sidebar.inactive': '(inactive)',
   // Shown only when a summary file matches no conversation title. Layer 4 is
   // built by walking conversations, so such a file is never read and would
@@ -1832,6 +1833,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
   // ── App shell ────────────────────────────────────────────────────────────
   'app.welcome.title': 'NEXUS へようこそ',
   'app.welcome.subtitle': '会話を選ぶか、新しく作成してください',
+  'app.welcome.pickEntity': '左のパネルから存在を選んでください。',
+  'app.welcome.openGuide': 'ガイドを開く',
   'app.welcome.newChat': '新しい会話',
   'app.cloneFailed': 'この会話を複製できませんでした（{status}）。元の会話のままです。もう一度試してください。',
 
@@ -2196,7 +2199,6 @@ export const UI_STRINGS_JA: Record<string, string> = {
     '戻すのは一番上の行だけで、その下の部分は履歴として触りません。\n\n',
   'sidebar.loading': '会話を読み込んでいます…',
   'sidebar.noHistory': '{folder} には会話がありません。',
-  'sidebar.thisFolder': 'この存在',
   'sidebar.inactive': '（非アクティブ）',
   'sidebar.orphanSummaries.title': '対応する会話がない要約（{count}件）',
   'sidebar.orphanSummaries.body':

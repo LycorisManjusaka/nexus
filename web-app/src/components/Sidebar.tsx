@@ -1162,9 +1162,14 @@ export default function Sidebar({
             </div>
           </div>
         )}
-        {filteredConvos.length === 0 && !conversationsLoading && (
+        {/* "No conversations in X" needs an X. With no entity selected — the
+            bare-root landing, see lib/rootLanding.ts — the fallback rendered
+            "this being has no conversations", which states something about a
+            being nobody picked. The main pane already says what to do here, so
+            this says nothing. */}
+        {filteredConvos.length === 0 && !conversationsLoading && activeFolder && (
           <div className="text-center mt-10 text-xs text-muted-foreground italic px-4">
-            {t('sidebar.noHistory').replace('{folder}', activeFolder?.name || t('sidebar.thisFolder'))}
+            {t('sidebar.noHistory').replace('{folder}', activeFolder.name)}
           </div>
         )}
       </div>

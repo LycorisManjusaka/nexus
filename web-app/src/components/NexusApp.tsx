@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
 import type { DeepLink } from '@/lib/deepLink';
 import { nextConversationTitle, newerNumberedSibling, pickLatestConversation } from '@/lib/convoNaming';
+import { initialFolderSelection } from '@/lib/rootLanding';
 import { resolveSoulGeneration, newerSiblingTitleInOrder, titleForGeneration } from '@/lib/soulGeneration';
 import { confirmIfBusy } from '@/lib/unloadGuard';
 import { loadBuildTag } from '@/lib/buildVersion';
@@ -225,14 +226,17 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           pendingLinkRef.current = null;
           setPendingScrollMessageId(null);
         }
-        const savedFolder = navGet('nexus_lastFolderId');
-        if (linked) {
-          setActiveFolderId(linked.id);
-        } else if (savedFolder && data.find((f: any) => f.id === savedFolder)) {
-          setActiveFolderId(savedFolder);
-        } else if (data.length > 0) {
-          setActiveFolderId(data[0].id);
-        }
+        // A bare root URL selects nothing — the rule and its reasoning live in
+        // lib/rootLanding.ts. Returning null leaves activeFolderId as it is,
+        // which on a cold load is null (welcome pane) and on a later refetch
+        // (folder created/renamed/deleted) means "don't move the reader".
+        const pick = initialFolderSelection({
+          arrivedViaDeepLink: !!deepLink,
+          linkedFolderId: linked?.id ?? null,
+          rememberedFolderId: navGet('nexus_lastFolderId'),
+          folderIds: data.map((f: any) => f.id),
+        });
+        if (pick) setActiveFolderId(pick);
       }
     } catch (e) { }
   };
@@ -930,6 +934,27 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
             fetchFolders={fetchFolders}
             onCloneWithSystemPrompt={cloneChatWithSystemPrompt}
           />
+        ) : !activeFolder && folders.length > 0 ? (
+          // Bare root URL on an install that already has inhabitants — nothing
+          // is auto-opened (see fetchFolders for why). Deliberately NOT the full
+          // guide: the guide below is for a first-time reader who has no
+          // identity yet. Whoever stands here has a populated sidebar already
+          // and needs exactly one thing — where to click. The guide stays one
+          // button away for the case where that reader is new anyway.
+          <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-4 px-8 text-center">
+            <h1 className="text-2xl font-semibold">
+              {translate('app.welcome.title', globalSettings.language)}
+            </h1>
+            <p className="text-muted-foreground max-w-md">
+              {translate('app.welcome.pickEntity', globalSettings.language)}
+            </p>
+            <button
+              onClick={() => setIsGuideOpen(true)}
+              className="px-5 py-2 border border-border rounded-full text-sm hover:bg-muted transition-colors"
+            >
+              {translate('app.welcome.openGuide', globalSettings.language)}
+            </button>
+          </div>
         ) : (
           // Empty state. The old "Welcome to NEXUS + New Chat" panel was a dead
           // end for a first-time reader: with no identity yet, New Chat has
