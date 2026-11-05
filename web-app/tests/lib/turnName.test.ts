@@ -136,3 +136,72 @@ test('a minted id round-trips through resolveTurnName as a proposal', () => {
   assert.equal(d.turnId, id);
   assert.equal(d.source, 'proposed');
 });
+
+// ── plain HTTP: the context where randomUUID does not exist ──────────────────
+//
+// SHIPPED BROKEN IN 146d0ab, FOUND FROM THE PILOT'S PHONE (2026-11-05).
+// `mintTurnId` called `crypto.randomUUID()`, which is SECURE-CONTEXT ONLY.
+// Over `http://192.168.10.2:3003` the property is absent, so sending threw
+// `crypto.randomUUID is not a function` and no message could leave the tab.
+// Nothing here caught it because every test, and both dev servers, run where
+// the API exists. These tests run the function in the context that broke.
+
+function withCrypto<T>(replacement: unknown, fn: () => T): T {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', {
+    value: replacement,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return fn();
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'crypto', original);
+    else delete (globalThis as { crypto?: unknown }).crypto;
+  }
+}
+
+test('mints over plain HTTP — crypto exists but randomUUID does not', () => {
+  // Exactly what a phone on http:// sees: getRandomValues is present (it is
+  // NOT secure-context gated), randomUUID is simply missing.
+  const plainHttpCrypto = {
+    getRandomValues<T extends ArrayBufferView>(a: T): T {
+      const v = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      for (let i = 0; i < v.length; i++) v[i] = (i * 37 + 11) & 0xff;
+      return a;
+    },
+  };
+  const ids = withCrypto(plainHttpCrypto, () =>
+    Array.from({ length: 20 }, () => mintTurnId()),
+  );
+  for (const id of ids) assert.equal(isWellFormedTurnId(id), true, `bad id: ${id}`);
+});
+
+test('mints with no crypto object at all', () => {
+  // Belt and braces: the id is a Map key and a header value, never a secret,
+  // so a turn must still be namable even where the whole interface is absent.
+  const ids = withCrypto(undefined, () =>
+    Array.from({ length: 20 }, () => mintTurnId()),
+  );
+  for (const id of ids) assert.equal(isWellFormedTurnId(id), true, `bad id: ${id}`);
+  assert.equal(new Set(ids).size > 1, true, 'fallback produced one repeated id');
+});
+
+test('mintTurnId never reads crypto.randomUUID', () => {
+  // The direct regression guard. A future edit that reaches for randomUUID
+  // again — the obvious thing to write — fails here instead of on a phone.
+  let touched = false;
+  const spy = {
+    getRandomValues<T extends ArrayBufferView>(a: T): T {
+      const v = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+      for (let i = 0; i < v.length; i++) v[i] = i;
+      return a;
+    },
+    get randomUUID() {
+      touched = true;
+      return () => '00000000-0000-4000-8000-000000000000';
+    },
+  };
+  withCrypto(spy, () => mintTurnId());
+  assert.equal(touched, false, 'mintTurnId reached for the secure-context-only API');
+});

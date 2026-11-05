@@ -55,6 +55,43 @@ export function isWellFormedTurnId(s: unknown): s is string {
 }
 
 /**
+ * Six characters of [0-9a-z], never via `crypto.randomUUID`.
+ *
+ * ⚠ REGRESSION, SHIPPED 146d0ab AND REPORTED FROM THE PILOT'S PHONE (2026-11-05).
+ *
+ * `crypto.randomUUID` is SECURE-CONTEXT ONLY. `https://` and `localhost` have
+ * it; `http://192.168.10.2:3003` does not — the property is simply absent, so
+ * the call is a TypeError that takes the whole send path down with it. Every
+ * install reached by IP (the pilot's phone, Lizard-kun's phone, the work PC)
+ * could not send a single message; this house never saw it because 3000/3001
+ * are opened on localhost, which the browser treats as secure.
+ *
+ * That is this house's OLDEST shape of bug, not a new one — see
+ * `plain-http-missing-browser-apis.md`: on plain HTTP `navigator.clipboard`,
+ * Client Hints, Wake Lock and `navigator.mediaDevices` all vanish the same way,
+ * and `lib/clipboard.ts` exists because of it. I wrote this line knowing that
+ * rule and still measured only from localhost.
+ *
+ * `crypto.getRandomValues` is NOT secure-context gated (it predates the policy
+ * and is specified on the plain `Crypto` interface), so it is the right primitive
+ * here. `Math.random` remains as a last resort: this id is a Map key and a header
+ * value, never a secret, so unpredictability is not the property being bought —
+ * non-collision is, and a turn only has to be unique against the handful of
+ * turns live in one conversation inside one millisecond.
+ */
+function randomTurnSuffix(): string {
+  const c: Crypto | undefined = globalThis.crypto;
+  if (c && typeof c.getRandomValues === 'function') {
+    const bytes = new Uint8Array(4);
+    c.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(36).padStart(2, '0'))
+      .join('')
+      .slice(0, 6);
+  }
+  return Math.random().toString(36).slice(2, 8).padEnd(6, '0');
+}
+
+/**
  * Mint a name. ONE implementation, usable from both sides of the wire — the
  * tick route minted its own with the comment "same shape ChatArea uses for a
  * turn it POSTs itself", which is a duplicated derivation wearing a note that
@@ -62,7 +99,7 @@ export function isWellFormedTurnId(s: unknown): s is string {
  * above is the shape both honour.
  */
 export function mintTurnId(): string {
-  return `turn_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`;
+  return `turn_${Date.now().toString(36)}_${randomTurnSuffix()}`;
 }
 
 /** Where the name this turn will answer to came from. */
