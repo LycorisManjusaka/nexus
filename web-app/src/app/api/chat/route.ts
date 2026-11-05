@@ -324,6 +324,7 @@ import { buildOpenAiToolReplay } from '@/lib/toolHistory';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
 import { ensureLmStudioLaunched, getLocalModelsMeta, loadLocalModel } from '@/lib/localModels';
+import { localReasoningEffort, maxContinuationsFor, shouldReportLoadFailure } from '@/lib/localTurnPolicy';
 import {
   runBrowserTool, BROWSER_TOOL_NAMES,
   browserToolsClaude, browserToolsGemini, browserToolsOpenAI,
@@ -8241,6 +8242,11 @@ export async function POST(req: Request) {
       const glmPreservedThinking =
         isGLM && !useDigitalOcean &&
         (isGLM53Wire || modelParams.qwenEnableThinking !== false);
+      // Set when the pre-load below fails, emitted once the stream is open.
+      // Declared out here because `enqueue` does not exist yet at this point —
+      // this whole section still runs on the plain request/response path and
+      // can `return NextResponse.json(...)`.
+      let localLoadWarning = '';
       // ── Local (LM Studio) — auto-launch + model resolution + pre-load ─────
       // The "No models loaded" / "fetch failed" instability had two causes:
       //   1. LM Studio wasn't running (fetch failed).
@@ -8253,6 +8259,22 @@ export async function POST(req: Request) {
       // get silently truncated to LM Studio's default.
       if (isLocal) {
         const lm = await getLocalModelsMeta();
+        // The SECOND silent path to an unintended context. When the catalogue
+        // comes back empty — `lms` missing from the PATH of the account the
+        // server runs as, LM Studio restarting, the CLI's own server not up —
+        // this whole block is skipped, so no `lms load` is attempted and the
+        // request below runs on whatever JIT gives it. `lm.error` was already
+        // being returned by getLocalModelsMeta and read by nobody.
+        if (!Array.isArray(lm.models) || lm.models.length === 0) {
+          const why = lm.error ? `: ${lm.error}` : '';
+          localLoadWarning = language === 'ja'
+            ? `LM Studio のモデル一覧を取得できませんでした${why}`
+              + ` — コンテキスト長を指定した読み込みを飛ばしたので、`
+              + `このターンは LM Studio 側の既定で走ります。`
+            : `Could not read LM Studio's model list${why}`
+              + ` — the context-length load was skipped, so this turn runs on`
+              + ` whatever LM Studio defaults to.`;
+        }
         if (Array.isArray(lm.models) && lm.models.length > 0) {
           const requested = localModel && localModel !== 'local-model' ? localModel : '';
           const isValid = !!requested && lm.models.includes(requested);
@@ -8276,7 +8298,23 @@ export async function POST(req: Request) {
             // observed taking correctly once the model was resident. A second
             // branch here would be a second answer to "how does an aborted
             // local turn end", and the existing one is the measured-good one.
-            await loadLocalModel(localModel, targetCtx, turnAbort.signal);
+            const loadRes = await loadLocalModel(localModel, targetCtx, turnAbort.signal);
+            // The return value used to be DISCARDED here — see
+            // shouldReportLoadFailure in lib/localTurnPolicy.ts for what that
+            // cost. Not fatal, deliberately: a smaller context still answers
+            // short messages, and killing the turn would take away the one
+            // thing that still works. The failure becomes VISIBLE instead,
+            // which is also the only instrument that reaches a machine or an
+            // account I cannot log into.
+            if (shouldReportLoadFailure(loadRes)) {
+              localLoadWarning = language === 'ja'
+                ? `LM Studio へのモデル読み込み（${targetCtx} トークン）が失敗しました: ${loadRes.message}`
+                  + ` — このターンは LM Studio 側の既定のコンテキスト長で走ります。`
+                  + `長いメッセージが「コンテキストが足りない」で拒否されたら、原因はこれです。`
+                : `Loading the model into LM Studio at ${targetCtx} tokens failed: ${loadRes.message}`
+                  + ` — this turn runs at whatever context LM Studio defaults to.`
+                  + ` If a long message gets rejected for exceeding the context size, this is why.`;
+            }
           }
           // Read the catalog's vision flag for the resolved model (not gated on
           // `loaded` — the flag is known from `lms ls` whether in VRAM or not).
@@ -8854,18 +8892,26 @@ export async function POST(req: Request) {
         }
       }
 
-      // NOTE: No "prevent thinking" switch for local models. There is no
-      // portable, reliable way to force a local GGUF to skip its reasoning
-      // phase via the OpenAI-compatible API:
-      //   • chat_template_kwargs.enable_thinking → makes some models fail to
-      //     load (Jinja template can't render the extra kwarg → 400).
+      // CORRECTED 2026-11-06. This block used to read "No 'prevent thinking'
+      // switch for local models … no portable, reliable way", and that
+      // conclusion is now FALSE: LM Studio honours the standard
+      // `reasoning_effort: 'none'` server-side. The switch is wired near the
+      // isOpenAI reasoning_effort branch — see the measurement table there.
+      //
+      // The alternatives that note rejected were re-measured and still fail:
+      //   • chat_template_kwargs.enable_thinking → returns 200 and changes
+      //     NOTHING (reasoning still 155 chars). The old note predicted a 400;
+      //     the real failure is silent, which is worse and is why "does it
+      //     400?" was the wrong question to ask of it.
       //   • `/no_think` text soft switch → only works when the GGUF's embedded
       //     chat template implements the parsing for it; many conversions and
       //     fine-tunes ship a template without it, so it's ignored.
       //   • Prefilled closed <think></think> → LM Studio's chat-completions
       //     does not continue a trailing assistant message, so it doesn't carry.
-      // Thinking on local models is therefore left to the model/template itself
-      // (choose a non-thinking model/quant to avoid it).
+      //
+      // Kept rather than deleted: the same three routes get proposed again
+      // every time a model starts thinking when nobody asked it to, and two of
+      // them are measured dead ends.
 
 
       const effectiveLocalTemp = modelParams.temperature ?? 0.7;
@@ -9237,6 +9283,14 @@ export async function POST(req: Request) {
           }
         }
 
+        // ── Local (LM Studio): thinking OFF via reasoning_effort ─────────────
+        // Single source + the four-model measurement table + why ON sends
+        // nothing: lib/localTurnPolicy.ts.
+        if (isLocal) {
+          const localEffort = localReasoningEffort(modelParams.qwenEnableThinking);
+          if (localEffort) requestBody.reasoning_effort = localEffort;
+        }
+
         // ── Web search ──────────────────────────────────────────────────────
         // SUPERSEDED by the universal NEXUS web tools (web_search + web_fetch,
         // added to `localTools` above and dispatched in the tool loop below).
@@ -9514,7 +9568,15 @@ export async function POST(req: Request) {
             return;
           }
 
-          const MAX_CONTINUATIONS = 2;
+          // Rounds of "you were cut off at the token cap, keep going".
+          // Why local gets 12 and paid providers get 2: lib/localTurnPolicy.ts.
+          const MAX_CONTINUATIONS = maxContinuationsFor(isLocal);
+          // First thing on the wire, before any model output: a turn running
+          // at an unintended context is the explanation for whatever goes
+          // wrong afterwards, so it has to arrive BEFORE the symptom.
+          if (localLoadWarning) {
+            try { enqueue({ type: 'notice', content: localLoadWarning }); } catch {}
+          }
           const MAX_TOOL_ITERATIONS = MAX_TOOL_ROUNDS;
           const repeatGuard = makeRepeatGuard();
           let toolStopNotice = '';
@@ -10205,8 +10267,16 @@ export async function POST(req: Request) {
                     type: agentReadOnlyTools ? 'notice' : 'text',
                     content: (agentReadOnlyTools ? '' : '\n\n')
                       + (language === 'ja'
-                          ? `⚠️ _[出力がトークン上限に達して切れました（継続 ${attempt}/${MAX_CONTINUATIONS} 回のあとも未完）。]_`
-                          : `⚠️ _[Response hit the token limit and is still unfinished after ${attempt}/${MAX_CONTINUATIONS} continuation(s).]_`),
+                          ? `⚠️ _[出力がトークン上限に達して切れました（継続 ${attempt}/${MAX_CONTINUATIONS} 回のあとも未完）。${
+                              isLocal
+                                ? '思考が出力の余地を使い切るとこうなります。モデルパネルの「思考モード」を切ると、このモデルは思考なしで答えます。'
+                                : ''
+                            }]_`
+                          : `⚠️ _[Response hit the token limit and is still unfinished after ${attempt}/${MAX_CONTINUATIONS} continuation(s).${
+                              isLocal
+                                ? ' This is what it looks like when reasoning consumes the whole output budget. Turning OFF Thinking Mode in the model panel makes this model answer without reasoning.'
+                                : ''
+                            }]_`),
                   });
                 }
                 break;
