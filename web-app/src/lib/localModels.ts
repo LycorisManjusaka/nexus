@@ -1,9 +1,28 @@
 import { exec, spawn, type ChildProcess } from 'child_process';
+import { existsSync } from 'fs';
 import { promisify } from 'util';
 import { loadKeys } from './fsStorage';
 import { killTree } from './shellTool';
+import { resolveLmsCommand } from './lmsPath';
 
 const execAsync = promisify(exec);
+
+/**
+ * How to invoke the LM Studio CLI from THIS account. See lib/lmsPath.ts for
+ * why a bare `lms` is not enough and what it cost when it was all we had.
+ *
+ * Resolved per call rather than cached: the check is one existsSync, the call
+ * sites are user-initiated (opening the model panel, starting a turn), and a
+ * cache would hold "not installed" across an install that happens while the
+ * server is up.
+ */
+function lms(): string {
+  return resolveLmsCommand({
+    platform: process.platform,
+    home: process.env.USERPROFILE || process.env.HOME || '',
+    exists: existsSync,
+  });
+}
 
 export type ExecOutcome =
   | { kind: 'done'; stdout: string; stderr: string }
@@ -153,7 +172,7 @@ export async function getLocalModelsMeta(): Promise<{ models: string[]; meta: Lo
   let lmsCliAvailable = false;
 
   try {
-    const { stdout: lsOut } = await execAsync('lms ls --json', { timeout: 4000 });
+    const { stdout: lsOut } = await execAsync(`${lms()} ls --json`, { timeout: 4000 });
     lsData = JSON.parse(lsOut);
     lmsCliAvailable = true;
   } catch {
@@ -162,7 +181,7 @@ export async function getLocalModelsMeta(): Promise<{ models: string[]; meta: Lo
 
   if (lmsCliAvailable) {
     try {
-      const { stdout: psOut } = await execAsync('lms ps --json', { timeout: 4000 });
+      const { stdout: psOut } = await execAsync(`${lms()} ps --json`, { timeout: 4000 });
       psData = JSON.parse(psOut);
     } catch {}
   }
@@ -277,7 +296,7 @@ export async function loadLocalModel(
   //
   // An ABORT here is fatal though, and that asymmetry is the point: a failure
   // means "carry on and load", a Stop means there is no turn left to load for.
-  const unloaded = await run('lms unload --all', 30000, signal);
+  const unloaded = await run(`${lms()} unload --all`, 30000, signal);
   if (unloaded.kind === 'aborted') {
     return { ok: false, aborted: true, message: 'Stopped before the model was loaded.' };
   }
@@ -287,7 +306,7 @@ export async function loadLocalModel(
   // offload ratio when the flag is omitted, which is safer on machines whose
   // VRAM is smaller than the model. `-c` is the context window the caller
   // resolved from the conversation's "Context window" setting.
-  const cmd = `lms load "${modelKey}" -c ${ctx} --yes`;
+  const cmd = `${lms()} load "${modelKey}" -c ${ctx} --yes`;
 
   const loaded = await run(cmd, 120000, signal);
   if (loaded.kind === 'aborted') {

@@ -4,7 +4,7 @@ import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
-import { type ThinkTagState, newThinkTagState, splitThinkTags } from '@/lib/thinkTagSplitter';
+import { type ThinkTagState, newThinkTagState, splitThinkTags, enterThinkFromPrefill } from '@/lib/thinkTagSplitter';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
 import { describeAudio } from '@/lib/earsBridge';
@@ -9283,11 +9283,19 @@ export async function POST(req: Request) {
           }
         }
 
-        // ── Local (LM Studio): thinking OFF via reasoning_effort ─────────────
-        // Single source + the four-model measurement table + why ON sends
-        // nothing: lib/localTurnPolicy.ts.
+        // ── Local (LM Studio): reasoning_effort ──────────────────────────────
+        // Single source + the measurement tables (four models for 'none', a
+        // five-value sweep for the rest) + why the default sends nothing at
+        // all: lib/localTurnPolicy.ts.
+        //
+        // Reads its OWN field. It briefly read `qwenEnableThinking` (shipped
+        // 2026-11-06 and corrected the same day) — a checkbox the Local panel
+        // has never shown, so no local conversation could set it and the only
+        // way to get a value in there was to switch an existing chat over from
+        // another family. That is a toggle nobody could reach doing something
+        // nobody asked for.
         if (isLocal) {
-          const localEffort = localReasoningEffort(modelParams.qwenEnableThinking);
+          const localEffort = localReasoningEffort(modelParams.localEffort);
           if (localEffort) requestBody.reasoning_effort = localEffort;
         }
 
@@ -9416,6 +9424,20 @@ export async function POST(req: Request) {
         };
         const emitThought = (t: string) => {
           if (!t) return;
+          // The ONE place reasoning text is accumulated, whichever channel it
+          // arrived on — `delta.reasoning_content` routes through here too.
+          // Why it has to be accumulated at all: a round cut off mid-thought
+          // has to be able
+          // to hand the model back its own reasoning as the continuation
+          // prefill. Until 2026-11-06 only the reasoning_content arm did this,
+          // so thought that arrived inside <think> tags was displayed and then
+          // forgotten — leaving `cumulativeReasoningText` empty. Two distinct
+          // failures came out of that: a tag-speaking model cut off while
+          // thinking hit the "nothing visible and nothing thought" break and
+          // gave up without continuing at all; and once the prefill fix below
+          // routes round 2 into this channel, round 3 would otherwise prefill
+          // round 1's thought again and loop on it.
+          reasoningText += t;
           betrayalSend(controller, { type: 'thought', content: t });
         };
 
@@ -9464,7 +9486,10 @@ export async function POST(req: Request) {
             harvestSources(choice?.message);
             const delta = choice?.delta;
             harvestSources(delta);
-            if (delta?.reasoning_content) { reasoningText += delta.reasoning_content; emitThought(delta.reasoning_content); }
+            // `emitThought` does the accumulating now (2026-11-06) — adding it
+            // here too would bill every reasoning_content chunk TWICE into the
+            // continuation prefill and Kimi's echo.
+            if (delta?.reasoning_content) emitThought(delta.reasoning_content);
             if (delta?.content) processContent(delta.content);
             if (Array.isArray(delta?.tool_calls)) {
               for (const tc of delta.tool_calls) {
@@ -10340,6 +10365,13 @@ export async function POST(req: Request) {
               if (!prefillContent.trim()) {
                 if (cumulativeReasoningText.trim()) {
                   prefillContent = `<think>\n${cumulativeReasoningText}`;
+                  // We just opened a think block in the conversation we are
+                  // sending. The model will answer from inside it, and the
+                  // opening tag will NOT come back down the stream — so the
+                  // splitter has to be told, or it reads the rest of the
+                  // reasoning (and the `</think>` that closes it) as the
+                  // visible answer. Measured 2026-11-06; see the function.
+                  enterThinkFromPrefill(tagState);
                 } else {
                   // Nothing visible AND nothing thought — a continuation round
                   // would just yield another empty turn. Stop instead of

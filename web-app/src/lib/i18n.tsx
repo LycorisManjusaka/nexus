@@ -1512,7 +1512,12 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'model.local.notLoaded': '{model} (not loaded)',
   'model.local.ctxLabel': 'Context window (tokens)',
   'model.local.ctxHelp':
-    'Match this to what you loaded in LM Studio. Used for token budgeting only — the actual limit is enforced by LM Studio.',
+    'Every turn reloads the model with `lms load -c <this value>`. It overrides whatever the LM Studio GUI has remembered for that model.',
+  'model.local.effortLabel': 'Reasoning depth (reasoning_effort)',
+  'model.local.effortDefault': '— default (send no such field) —',
+  'model.local.effortNone': 'none (no reasoning)',
+  'model.local.effortHelp':
+    'none is measured on four Gemma 4 builds — reasoning drops to zero. low / medium / high depend on the GGUF template; on Gemma 4 all three were indistinguishable from sending nothing.',
 
   'model.temp': 'Temperature ({v})',
   'model.topP': 'Top P ({v})',
@@ -3235,7 +3240,12 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'model.local.notLoaded': '{model}（未読み込み）',
   'model.local.ctxLabel': '文脈ウィンドウ（トークン）',
   'model.local.ctxHelp':
-    'LM Studio で読み込んだ設定に合わせてください。トークンの見積もりにのみ使われます — 実際の上限は LM Studio 側で決まります。',
+    'ターンのたびに `lms load -c <この値>` でモデルを読み込み直します。LM Studio の GUI で保存した設定より、この値が優先されます。',
+  'model.local.effortLabel': '思考の深さ（reasoning_effort）',
+  'model.local.effortDefault': '— 既定（この項目を送らない）—',
+  'model.local.effortNone': 'none（思考させない）',
+  'model.local.effortHelp':
+    'none は Gemma 4 の4ビルドで測定済み — 思考がゼロになります。low / medium / high は GGUF のテンプレート次第で、Gemma 4 では3つとも差が出ませんでした（送らない場合と同じ分岐）。',
 
   'model.temp': 'Temperature（{v}）',
   'model.topP': 'Top P（{v}）',

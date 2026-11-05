@@ -16,26 +16,38 @@ import {
 // local reasoning off. That was true when written (2026-06-08) and is now
 // false; the measurement table lives in lib/localTurnPolicy.ts.
 
-// ── Thinking switch ──────────────────────────────────────────────────────────
+// ── Reasoning depth selector ─────────────────────────────────────────────────
+//
+// First shipped the same day as a BOOLEAN read off `qwenEnableThinking`, which
+// was wrong in a way no test could see: the Local model panel has never shown
+// that checkbox, so the switch existed on the wire and nowhere on screen. The
+// instruction "turn thinking off in the model panel" could not be carried out.
+// It now reads its own field, which the Local panel actually renders.
 
-test('thinking OFF sends reasoning_effort none', () => {
-  assert.equal(localReasoningEffort(false), 'none');
+test('every effort value the selector offers reaches the wire', () => {
+  for (const v of ['none', 'low', 'medium', 'high']) {
+    assert.equal(localReasoningEffort(v), v);
+  }
 });
 
-test('thinking ON sends NO field — the wire stays byte-identical', () => {
-  // This is the clause that keeps every existing local conversation on exactly
-  // the request it has today. Returning 'high' here would push a new field at
-  // every model in the catalogue, including ones that never reason and have
-  // never been measured with it.
-  assert.equal(localReasoningEffort(true), undefined);
-});
-
-test('absent toggle counts as ON, not as OFF', () => {
-  // `undefined` means the toggle was never saved for this conversation. The
-  // house default for thinking is ON, so a `!thinkingEnabled` test here would
-  // silently disable reasoning for every local chat predating the toggle —
-  // a behaviour change nobody asked for, applied to the oldest logs first.
+test('the default choice sends NO field — the wire stays byte-identical', () => {
+  // The empty string is what the selector's first option submits, and it has
+  // to mean "send nothing", not "send some default depth". This is the clause
+  // that keeps every pre-selector local conversation on exactly the request it
+  // has today; returning 'high' here would push a new field at every model in
+  // the catalogue, including ones that never reason and have never been
+  // measured with it.
+  assert.equal(localReasoningEffort(''), undefined);
   assert.equal(localReasoningEffort(undefined), undefined);
+});
+
+test('an unrecognised saved value falls back to sending nothing', () => {
+  // Saved logs are data, and data outlives the code that wrote it. A value
+  // from an older or newer build must not be forwarded to the provider
+  // unchecked — LM Studio 400s on an unknown enum, which would turn a stale
+  // setting into a conversation that cannot send at all.
+  assert.equal(localReasoningEffort('minimal'), undefined);
+  assert.equal(localReasoningEffort('NONE'), undefined);
 });
 
 // ── Continuation ceiling ─────────────────────────────────────────────────────

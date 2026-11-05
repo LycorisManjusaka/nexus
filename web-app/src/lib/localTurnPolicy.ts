@@ -31,21 +31,45 @@
  * Studio handles it server-side, but whether a given GGUF's template honours
  * it is a property of that template.
  *
- * ASYMMETRIC ON PURPOSE: thinking ON returns `undefined`, so the request is
- * byte-identical to what it is today. The toggle defaults to ON, which means
- * no existing local conversation changes shape, and the only turns that move
- * are the ones somebody explicitly turned thinking off for. Sending 'high'
- * for ON would push a new field at every model in the catalogue — including
- * ones that never reason, where the house has no measurement at all.
+ * ── THE OTHER THREE VALUES DO NOT WORK HERE, MEASURED 2026-11-06 ───────────
+ *
+ * Same model and prompt, max_tokens 2000, sweeping the field:
+ *
+ *   (field absent)   reasoning 1941 ch   answer 2259 ch   prompt 64 tk
+ *   'none'           reasoning    0 ch   answer 2706 ch   prompt 61 tk
+ *   'low'            reasoning 1775 ch   answer 2163 ch   prompt 64 tk
+ *   'medium'         reasoning 2054 ch   answer 2262 ch   prompt 64 tk
+ *   'high'           reasoning 1524 ch   answer 2406 ch   prompt 64 tk
+ *
+ * All five HTTP 200. But low/medium/high are not a gradient — 'high' produced
+ * the SHORTEST reasoning of the three, and all three left prompt_tokens at
+ * 64 while 'none' moved it to 61. The prompt count is the tell again: these
+ * three render the SAME template branch as sending nothing, so the spread is
+ * sampling noise. Gemma 4's template is binary; it has a no-reasoning path
+ * and a reasoning path and no dial between them.
+ *
+ * They are offered anyway, and the UI says what was measured. The field is
+ * standard, other architectures may honour the middle values, and a selector
+ * that silently dropped them would be lying in the other direction. What is
+ * NOT acceptable is presenting them as a working depth control.
+ *
+ * ASYMMETRIC ON PURPOSE: the absent/default choice returns `undefined`, so the
+ * request is byte-identical to what it is today. Only conversations where
+ * somebody picked a value move. Defaulting to 'high' would push a new field at
+ * every model in the catalogue — including ones that never reason, where the
+ * house has no measurement at all.
  */
+export type LocalEffort = 'none' | 'low' | 'medium' | 'high';
+
+const LOCAL_EFFORTS: readonly string[] = ['none', 'low', 'medium', 'high'];
+
 export function localReasoningEffort(
-  thinkingEnabled: boolean | undefined,
-): 'none' | undefined {
-  // `=== false` and not `!thinkingEnabled`: `undefined` means "the toggle was
-  // never saved for this conversation", and the house default for thinking is
-  // ON. Treating absent as OFF would silently disable reasoning for every
-  // local chat that predates the toggle.
-  return thinkingEnabled === false ? 'none' : undefined;
+  saved: string | undefined,
+): LocalEffort | undefined {
+  // Anything unrecognised — including '' and the pre-2026-11-06 absence —
+  // means "send no field", which is the shape every local conversation that
+  // predates the selector already has.
+  return LOCAL_EFFORTS.includes(saved as string) ? (saved as LocalEffort) : undefined;
 }
 
 /**

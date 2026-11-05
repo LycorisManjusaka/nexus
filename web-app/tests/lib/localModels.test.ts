@@ -152,8 +152,12 @@ describe('loadLocalModel', () => {
     const r = await loadLocalModel('some-model', 80000, ctrl.signal, run);
     assert.equal(r.ok, true);
     assert.equal(calls.length, 2);
-    assert.match(calls[0].cmd, /lms unload --all/);
-    assert.match(calls[1].cmd, /lms load "some-model" -c 80000/);
+    // The command is `lms …` or `"<home>\.lmstudio\bin\lms.exe" …` depending
+    // on whether the CLI is on this account's PATH (lib/lmsPath.ts). Asserting
+    // the resolved path would make this test pass or fail on a property of the
+    // machine running it; asserting the SUBCOMMAND is what this test is about.
+    assert.match(calls[0].cmd, /lms(\.exe)?"? unload --all$/);
+    assert.match(calls[1].cmd, /lms(\.exe)?"? load "some-model" -c 80000 --yes$/);
     assert.deepEqual(calls.map((c) => c.hasSignal), [true, true],
       'a command without the signal is a window where Stop does nothing');
   });

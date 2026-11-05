@@ -140,3 +140,46 @@ export function splitThinkTags(
 function markText(state: ThinkTagState, t: string): void {
   if (!state.sawText && t.trim().length > 0) state.sawText = true;
 }
+
+/**
+ * Enter the state a continuation prefill has already put the MODEL in.
+ *
+ * The continuation round for a reply that ran out of room mid-thought sends
+ * `{role:'assistant', content:'<think>\n' + the thought so far}`. From the
+ * model's side that is an OPEN think block, and it writes accordingly. But
+ * the opening tag is in the message WE sent, so it never comes back down the
+ * stream — and this splitter, which only ever watches the stream, starts the
+ * round believing it is reading prose.
+ *
+ * MEASURED 2026-11-06 (Lizard-kun's report, gemma-4-26b-a4b-it-ultra-
+ * uncensored-heretic on LM Studio). Same prompt both rounds:
+ *
+ *   round 1 (cut at the cap)   reasoning_content 277 ch   content 0 ch
+ *   round 2 (prefilled, free)  reasoning_content 0 ch     content 3257 ch
+ *
+ * and round 2's content was the rest of the SAME thought, then `</think>`,
+ * then the real answer:
+ *
+ *   "…me and Location.\n\n(This matches the provided good response).</think>
+ *    To solve this problem, we need to determine when and where…"
+ *
+ * So the bytes were right and well-formed the whole time — what was wrong was
+ * only which channel the house put them on. Everything before that close tag
+ * went out as visible text (reasoning in the answer), and the close tag itself
+ * was read as prose. Two more rounds of that and the turn dies at the cap with
+ * the user looking at raw chain-of-thought.
+ *
+ * Note what this does NOT need: a provider list, or any knowledge of how the
+ * thought arrived. LM Studio hands reasoning over in `reasoning_content` and
+ * never emits a literal `<think>`, so the latch in splitThinkTags cannot have
+ * fired. The justification here is not "this provider uses tags" — it is "WE
+ * just wrote an opening tag into the conversation", which is true of whoever
+ * is on the other end.
+ */
+export function enterThinkFromPrefill(state: ThinkTagState): void {
+  state.inThink = true;
+  // Latched for the same reason splitThinkTags latches: once the close tag
+  // lands, a model that opens a SECOND block must still be understood, and
+  // without this the stream would look like plain prose by then.
+  state.usesThinkTags = true;
+}

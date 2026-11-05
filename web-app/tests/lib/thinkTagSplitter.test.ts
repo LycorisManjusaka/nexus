@@ -19,7 +19,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { newThinkTagState, splitThinkTags } from '../../src/lib/thinkTagSplitter';
+import { newThinkTagState, splitThinkTags, enterThinkFromPrefill } from '../../src/lib/thinkTagSplitter';
 
 /** Built from pieces so this file never contains the literal tag as text. */
 const OPEN = '<' + 'think' + '>';
@@ -138,5 +138,80 @@ describe('THE ARTEFACT SHAPE — long CJK prose, cut mid-sentence, then the tag'
 
   it('A2 same, one character at a time (worst case for the tail logic)', () => {
     expect((tail + rest).split(''), tail + rest, '');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONTINUATION PREFILL (2026-11-06)
+//
+// A reply cut off mid-thought is continued by sending the model
+// `{role:'assistant', content:'<think>\n' + the thought so far}`. The model
+// answers from INSIDE that block, so the opening tag never comes back down the
+// stream and the splitter would otherwise read the rest of the reasoning —
+// including the `</think>` that ends it — as the visible answer.
+//
+// Measured against gemma-4-26b-a4b-it-ultra-uncensored-heretic on LM Studio:
+// round 1 produced 277 chars of reasoning_content and ZERO content; round 2,
+// prefilled, produced 3257 chars of content that ran "…(This matches the
+// provided good response).</think>To solve this problem, we need to…".
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Same as `split`, but the state starts where a `<think>` prefill left it. */
+function splitAfterPrefill(chunks: string[]): { text: string; thought: string } {
+  const st = newThinkTagState();
+  enterThinkFromPrefill(st);
+  let text = '';
+  let thought = '';
+  for (const c of chunks) {
+    splitThinkTags(st, c, (t: string) => { text += t; }, (t: string) => { thought += t; });
+  }
+  if (st.textTail) {
+    if (st.inThink) thought += st.textTail;
+    else text += st.textTail;
+  }
+  return { text, thought };
+}
+
+describe('CONTINUATION — the stream resumes inside a think block we opened', () => {
+  it('P1 the measured shape: rest of the thought, close tag, then the answer', () => {
+    assert.deepEqual(
+      splitAfterPrefill(['(This matches the provided good response).' + CLOSE + 'To solve this problem,']),
+      { text: 'To solve this problem,', thought: '(This matches the provided good response).' },
+    );
+  });
+
+  it('P2 without the prefill state the SAME bytes become the visible answer', () => {
+    // The bug, stated as a test: this is what the user was shown — raw chain
+    // of thought with a literal close tag sitting in the middle of the reply.
+    const { text, thought } = split(['(This matches the provided good response).' + CLOSE + 'To solve this problem,']);
+    assert.equal(thought, '');
+    assert.ok(text.includes(CLOSE));
+    assert.ok(text.startsWith('(This matches'));
+  });
+
+  it('P3 a round that is STILL thinking keeps every byte in the thought channel', () => {
+    // Round 2 can hit the cap too. Nothing may surface as an answer, or the
+    // next prefill is built from reasoning that was mislabelled as prose.
+    assert.deepEqual(
+      splitAfterPrefill(['still working through the second train', ' and its speed']),
+      { text: '', thought: 'still working through the second train and its speed' },
+    );
+  });
+
+  it('P4 the close tag may straddle a chunk boundary', () => {
+    assert.deepEqual(
+      splitAfterPrefill(['thinking</thi', 'nk>answer']),
+      { text: 'answer', thought: 'thinking' },
+    );
+  });
+
+  it('P5 a SECOND block after the close is still understood', () => {
+    // enterThinkFromPrefill latches `usesThinkTags` for this: once the first
+    // close lands, prose has been emitted, and without the latch the next
+    // opening tag would be read as ordinary text.
+    assert.deepEqual(
+      splitAfterPrefill(['part one' + CLOSE + 'answer A' + OPEN + 'part two' + CLOSE + 'answer B']),
+      { text: 'answer A' + 'answer B', thought: 'part one' + 'part two' },
+    );
   });
 });

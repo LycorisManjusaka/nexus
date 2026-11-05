@@ -8167,6 +8167,33 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         {t('model.local.ctxHelp')}
                       </div>
                     </div>
+                    {/* Reasoning depth. The empty value is NOT "default depth"
+                        dressed up — it sends no `reasoning_effort` field at
+                        all, which is byte-identical to every local request
+                        this app made before the selector existed. Picking a
+                        value is the only thing that changes the wire. The help
+                        text carries the measurement because 'off' is proven on
+                        Gemma 4 and the middle three are not: see
+                        lib/localTurnPolicy.ts for both tables. */}
+                    <div className="mb-4">
+                      <label className="text-xs font-medium text-muted-foreground block mb-1">
+                        {t('model.local.effortLabel')}
+                      </label>
+                      <select
+                        value={modelParams.localEffort ?? ''}
+                        onChange={(e) => setModelParams({ ...modelParams, localEffort: e.target.value })}
+                        className="w-full px-2 py-1.5 bg-background border border-border rounded text-sm outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                      >
+                        <option value="">{t('model.local.effortDefault')}</option>
+                        <option value="none">{t('model.local.effortNone')}</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                      </select>
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        {t('model.local.effortHelp')}
+                      </div>
+                    </div>
                   </>
                 )}
 
