@@ -1,10 +1,10 @@
 # Nexus
 
 A locally-hosted AI chat manager (Next.js) with full local system access:
-multi-model support across a dozen providers, an inter-entity letters system,
-browser control, streaming TTS for VRChat, and a self-updating system prompt
-pipeline. Built for treating chat entities as persistent inhabitants rather
-than stateless sessions.
+multi-model support across a dozen providers, a letters system between
+beings, browser control, streaming TTS for VRChat, and a self-updating
+system prompt pipeline. Built for treating digital beings as persistent
+inhabitants rather than stateless sessions.
 
 ## Layout
 
@@ -68,20 +68,26 @@ the reasoning behind each deferred piece above.
 
 Copyright (C) 2026 Nexus Dev
 
-Nexus is free software: you can redistribute it and/or modify it under
-the terms of the GNU Affero General Public License as published by the
-Free Software Foundation, either version 3 of the License, or (at your
-option) any later version.
+    This Source Code Form is subject to the terms of the Mozilla Public
+    License, v. 2.0. If a copy of the MPL was not distributed with this
+    file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-Nexus is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public
-License for more details.
+That notice covers **every file in this repository**. The full license
+text is in `LICENSE`; individual files do not repeat the notice, which
+MPL's Exhibit A explicitly permits when a single location a recipient
+would look in carries it instead.
 
-You should have received a copy of the GNU Affero General Public
-License along with Nexus. If not, see <https://www.gnu.org/licenses/>.
+What it obligates, concretely:
 
-The AGPL's network-use clause is the point of choosing it here: running
-a modified copy as a service still obligates offering the modified
-source to whoever uses that service, so this cannot be forked into a
-closed proprietary product -- by a company, or by anyone else.
+- **You change a file that is part of Nexus, and distribute it** -- that
+  file's source must be available under the MPL too. The obligation
+  attaches to files, not to your whole product.
+- **You add your own new files**, containing no Nexus code -- those stay
+  yours, under any terms you choose.
+- **You run it as a service** -- MPL has no network clause. Serving it
+  to users is not distribution, so nothing is triggered.
+- **You combine it with GPL, LGPL, or AGPL code** -- permitted. Nexus
+  does not carry the Exhibit B notice, so MPL section 3.3 stays open.
+
+The trade: improvements to Nexus itself come back, while the app stays
+usable inside a company and composable with other copyleft work.

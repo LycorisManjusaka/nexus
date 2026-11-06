@@ -30,8 +30,8 @@ export const runtime = 'nodejs';
 function isExempt(pathname: string): boolean {
   // Build output and dev-overlay plumbing. These must stay open or the login
   // page itself cannot paint (it needs its own JS/CSS to render the form).
-  // They carry no conversation data — the bundle is the AGPL source this house
-  // intends to publish, and nothing in local_data is served from here.
+  // They carry no conversation data — the bundle is the MPL-2.0 source this
+  // house intends to publish, and nothing in local_data is served from here.
   if (pathname.startsWith('/_next/')) return true;
   if (pathname.startsWith('/__nextjs')) return true;
   if (pathname === '/favicon.ico') return true;

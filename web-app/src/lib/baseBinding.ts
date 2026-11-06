@@ -30,7 +30,7 @@
 // telling the truth about what goes out. The server is the single authority.
 //
 // This is NOT presented as a security boundary and must not be described as
-// one. The source is AGPL — anyone who reads this file learns how to lift it.
+// one. The source is MPL-2.0 — anyone who reads this file learns to lift it.
 // What it buys is that lifting it is a deliberate act performed outside the
 // product: not a checkbox, not a settings file, not a request body.
 //
