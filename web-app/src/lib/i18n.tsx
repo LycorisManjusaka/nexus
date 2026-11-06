@@ -63,6 +63,18 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'guide.title': 'Nexus — User Guide',
   'guide.open': 'User guide',
   'guide.close': 'Close',
+  // On a phone the index and a page occupy the same place, so "Contents" is
+  // both the heading and the button back to it. On desktop it is only the
+  // heading of the left column.
+  'guide.contents': 'Contents',
+  'guide.back': 'Back to contents',
+  'guide.search.ph': 'Search the guide',
+  'guide.search.clear': 'Clear search',
+  // "not searching" and "found nothing" are different states — the first shows
+  // the index, the second shows this line. Rendering them the same makes a
+  // typo look like a broken guide.
+  'guide.search.none': 'Nothing found for “{q}”',
+  'guide.search.hits': '{n} matches',
 
   // ── Preferences: chrome ──────────────────────────────────────────────────
   'settings.title': 'Preferences',
@@ -1889,6 +1901,17 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'guide.title': 'Nexus — 使い方',
   'guide.open': '使い方',
   'guide.close': '閉じる',
+  // 携帯では一覧とページが同じ場所に出るので、「目次」は見出しとボタンの
+  // 両方を兼ねる。PC では左の列の見出しとしてだけ使われる。
+  'guide.contents': '目次',
+  'guide.back': '目次へ戻る',
+  'guide.search.ph': 'ガイド内を検索',
+  'guide.search.clear': '検索をやめる',
+  // 「検索していない」と「見つからなかった」は別の状態 —— 前者は目次を出し、
+  // 後者はこの行を出す。同じ見た目にすると、打ち間違いが「ガイドが壊れた」に
+  // 見える。
+  'guide.search.none': '「{q}」は見つかりませんでした',
+  'guide.search.hits': '{n} 件',
 
   // ── Preferences: chrome ──────────────────────────────────────────────────
   // 「設定」は会話設定・フォルダ設定とも区別がつかなかった。英語側は
