@@ -33,7 +33,7 @@
 // speaker in ~2000 messages, while the body — written verbatim — still carries
 // "[先輩]" on its first line. The index gets vaguer; the text loses nothing.
 
-import { readSpeakerTag, ANONYMOUS_SPEAKER } from './speakerTag';
+import { readSpeakerTag, writeSpeakerTag, ANONYMOUS_SPEAKER } from './speakerTag';
 
 /** Fold full-width digits, trim, lowercase — same rule as `parseMarkdown`. */
 function normName(s: string): string {
@@ -51,6 +51,58 @@ export function isRecognisedHeader(header: string, roster: string[]): boolean {
   const valid = new Set(roster.filter(Boolean).map(normName));
   const parts = header.split(/[,、]/).map(normName).filter(Boolean);
   return parts.length > 0 && parts.every((p) => valid.has(p));
+}
+
+/**
+ * Will the reader put this header back into the body as a "[Name]" tag?
+ *
+ * THE ONE PREDICATE BOTH SIDES ASK. The writer drops the body's leading tag
+ * only when the reader is going to re-inject it, and the reader re-injects only
+ * what the writer would have dropped. Written once so they cannot disagree:
+ * if these two conditions were spelled out separately, one of them gaining a
+ * clause would turn export → import into a silent delete or a silent double.
+ *
+ * Two headers are excluded, and both exclusions already existed in
+ * `parseMarkdown`:
+ *
+ *   "Anonymous" / "User" — a roster statement, not a name somebody typed. The
+ *     app never writes those tags into a body, so re-injecting one would invent
+ *     a speaker that the original message did not name.
+ *   a comma/、-joined header — the old multi-speaker shape. Nothing writes it
+ *     any more, but .md files on disk carry it, and there is no single tag to
+ *     give back.
+ */
+export function headerIsReinjected(header: string): boolean {
+  const h = (header || '').trim();
+  if (!h) return false;
+  if (h === 'User' || h === ANONYMOUS_SPEAKER) return false;
+  return !h.includes(',') && !h.includes('、');
+}
+
+/**
+ * Give a body back the speaker tag its "[Name]:" header carries — what the .md
+ * reader does, as one function, so the writer can ask the same question.
+ *
+ * THE SKIP CLAUSE IS LOAD-BEARING AND IT IS NOT AN OPTIMISATION. A body that
+ * already opens with this very tag must be left alone, because three different
+ * files legitimately contain one:
+ *
+ *   - a .md exported in the verbatim window (2026-11-04 → 11-06), where the
+ *     writer lifted the name into the header and left the body untouched
+ *   - a hand-written file where somebody typed the name under the header
+ *   - a message whose tag could not be dropped exactly (see exportToMarkdown)
+ *
+ * MEASURED 2026-11-06: with the clause, 265 of 288 verbatim-window exports
+ * round-trip; without it, all 265 come back with the name twice. The clause
+ * costs the message that genuinely said its name twice — 19 of 9,858 named user
+ * messages, 0.19% — and `exportToMarkdown` buys even those back by refusing to
+ * strip when this function would not restore the text exactly.
+ */
+export function restoreSpeakerTag(body: string, header: string): string {
+  const h = (header || '').trim();
+  if (!headerIsReinjected(h)) return body;
+  if (readSpeakerTag(body).name === h) return body;
+  return writeSpeakerTag(body, h);
 }
 
 /**

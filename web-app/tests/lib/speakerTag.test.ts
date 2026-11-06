@@ -19,7 +19,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readSpeakerTag, speakerNameOf, ANONYMOUS_SPEAKER } from '../../src/lib/speakerTag';
+import { readSpeakerTag, writeSpeakerTag, speakerNameOf, ANONYMOUS_SPEAKER } from '../../src/lib/speakerTag';
 import { renderTranscriptHistory, renderTranscriptTurn } from '../../src/lib/transcriptRender';
 import { exportToMarkdown, parseMarkdown, detectDialect } from '../../src/lib/markdownLogic';
 
@@ -109,13 +109,19 @@ describe('exportToMarkdown — the comma header is gone', () => {
     assert.ok(md.includes('（添付画像）'));
   });
 
-  it('writes the body verbatim — no bracketed span is deleted', () => {
+  it('deletes the LEADING tag and nothing else', () => {
+    // ⚠ CHANGED 2026-11-06. This asserted that the body was written verbatim,
+    // so both in-body tags survived and the name appeared three times in the
+    // file. Lizard-kun asked for the duplicate under the header to go; the
+    // reader now puts it back (restoreSpeakerTag), so dropping it is not a
+    // loss. The thing that must NOT change is the second tag: the old rule
+    // before 2026-11-04 deleted every occurrence, and a name said twice came
+    // back once. Round-trip equality is asserted, which is the real contract.
     const msgs = [{ role: 'user', content: `[${TSUYO}]\nあ\n[${TSUYO}]\nい` }];
     const md = exportToMarkdown(msgs as never, ME);
-    // Count in the BODY only — the header NEXUS writes carries the name too,
-    // so the file holds three. The old rule deleted every in-body occurrence.
     const body = md.slice(md.indexOf('\n\n') + 2);
-    assert.equal((body.match(/\[つよ\]/g) || []).length, 2, 'both in-body tags survive');
+    assert.equal((body.match(/\[つよ\]/g) || []).length, 1, 'the mid-body tag survives');
+    assert.equal(parseMarkdown(md, ME, [TSUYO])[0].content.trim(), msgs[0].content);
   });
 });
 
@@ -229,5 +235,37 @@ describe('renderTranscriptHistory — names, no roles', () => {
   it('names the entity Assistant only when the folder name is missing', () => {
     const out = renderTranscriptHistory([{ role: 'assistant', content: 'hi' }], '');
     assert.ok(out.includes('[Assistant]\nhi'));
+  });
+});
+
+/**
+ * writeSpeakerTag — the inverse of readSpeakerTag, added 2026-11-06 so the .md
+ * exporter can drop the body's leading "[Name]" tag (it is already in the
+ * "[Name]:" header) and the importer can put it back. Two hand-written halves
+ * drift; an inverse pair cannot, so the pairing itself is what is pinned here.
+ */
+describe('writeSpeakerTag', () => {
+  it('undoes readSpeakerTag for the shape the send path writes', () => {
+    const content = `[${TSUYO}]\nやっほ\n\n[note] aside`;
+    const read = readSpeakerTag(content);
+    assert.equal(read.name, TSUYO);
+    assert.equal(writeSpeakerTag(read.body, TSUYO), content);
+  });
+
+  it('puts the tag UNDER a leading timestamp, where the reader looks for it', () => {
+    // The send path prepends the time tag, so the real shape is
+    // timestamp-then-name. Writing at position 0 would reorder the first two
+    // lines on every round trip.
+    const content = `[2026-11-06 11:54:16]\n[${TSUYO}]\nやっほ`;
+    const read = readSpeakerTag(content);
+    assert.equal(read.name, TSUYO);
+    assert.equal(writeSpeakerTag(read.body, TSUYO), content);
+    assert.ok(!writeSpeakerTag(read.body, TSUYO).startsWith(`[${TSUYO}]`));
+  });
+
+  it('round-trips a body that says the name twice', () => {
+    const content = `[${TSUYO}]\n[${TSUYO}]\nありがとう`;
+    const read = readSpeakerTag(content);
+    assert.equal(writeSpeakerTag(read.body, TSUYO), content);
   });
 });

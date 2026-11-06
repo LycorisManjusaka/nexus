@@ -72,6 +72,25 @@ export function nextStickState(m: ScrollMetrics, threshold = STICK_THRESHOLD_PX)
   return isNearBottom(m, threshold);
 }
 
+/**
+ * Jump the viewport to the bottom in ONE frame.
+ *
+ * `behavior: 'auto'` overrides the container's `scroll-smooth` class on
+ * purpose, and that is the whole reason this is a function instead of two
+ * copies of one line: an animated jump has midpoints, and a midpoint is
+ * positionally identical to a user reading upward, so the magnet would detach
+ * itself mid-animation. Every caller has to pass `'auto'`; one that forgets
+ * re-opens the bug `nextStickState` was written to avoid.
+ *
+ * The parameter is structural, not `HTMLElement`, so the tests can call it.
+ */
+export function jumpToBottom(el: {
+  scrollHeight: number;
+  scrollTo: (opts: { top: number; behavior: 'auto' }) => void;
+}): void {
+  el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+}
+
 export type AutoScrollInput = {
   /** Is the magnet currently attached (set by the last scroll event)? */
   stick: boolean;

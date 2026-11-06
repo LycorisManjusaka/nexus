@@ -12,7 +12,7 @@ import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptReso
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { mintTurnId } from '@/lib/turnName';
-import { shouldAutoScroll, nextStickState } from '@/lib/scrollMagnet';
+import { shouldAutoScroll, nextStickState, jumpToBottom } from '@/lib/scrollMagnet';
 import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
 import {
   type StopTrace, beginStopTrace, markStop, noteStopHow, formatStopTrace,
@@ -2622,6 +2622,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Which deep-link target has already been handled. Declared above both scroll
   // effects because the auto-scroll below has to know a link is still pending.
   const scrolledToRef = useRef<string | null>(null);
+  // Set by the deep-link effect while it is still chasing its target; calling it
+  // stops the chase. Held in a ref because `handleSend` needs to stop it and is
+  // defined far from the effect that owns it.
+  const releaseDeepLinkRef = useRef<(() => void) | null>(null);
   const deepLinkScrollPending = !!scrollToMessageId && scrolledToRef.current !== scrollToMessageId;
   // Transient "copied ✓" feedback for the link buttons ('convo' | message id).
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
@@ -2640,12 +2644,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         lengthIncreased: messages.length > prevMessagesLengthRef.current,
         deepLinkPending: deepLinkScrollPending,
       });
-      // `behavior: 'auto'` overrides the container's `scroll-smooth` class on
-      // purpose. An animated jump has midpoints, and a midpoint is positionally
-      // identical to a user reading upward — the magnet would detach itself
-      // mid-animation. Jumping in one frame means every scroll event we cause
-      // reports the bottom, so position alone is a sufficient signal.
-      if (go) el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+      if (go) jumpToBottom(el);
     }
     prevMessagesLengthRef.current = messages.length;
   }, [messages, loading, deepLinkScrollPending]);
@@ -2769,6 +2768,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     const release = () => { cancelled = true; };
     container?.addEventListener('wheel', release, { passive: true });
     container?.addEventListener('touchstart', release, { passive: true });
+    // …and SENDING wins too. A send is a deliberate move to the bottom, but it
+    // is not a wheel or a touch, so without this the chase above sees the new
+    // message change the layout and re-centres the linked message — pulling the
+    // viewport back up out from under the reply that was just asked for. The
+    // window is up to 6s wide, which is exactly when someone follows a link and
+    // then types.
+    releaseDeepLinkRef.current = release;
 
     const ro = new ResizeObserver(recentre);
     if (container) {
@@ -2788,6 +2794,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       clearTimeout(clearRing);
       container?.removeEventListener('wheel', release);
       container?.removeEventListener('touchstart', release);
+      if (releaseDeepLinkRef.current === release) releaseDeepLinkRef.current = null;
     };
   }, [scrollToMessageId, messages.length, onScrolledToMessage]);
 
@@ -3824,6 +3831,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     opts?: { mode?: 'interject' | 'send'; from?: string }
   ) => {
     if (!text.trim() && attachments.length === 0) return;
+
+    // ── Sending re-attaches the magnet, unconditionally ─────────────────────
+    // Asked for by Lizard-kun 2026-11-06: "送るタイミングで真下じゃなければ違和感
+    // がある". Pressing send is an explicit statement that you are done reading
+    // back and want to watch what happens next, so it overrides a magnet the
+    // reader detached earlier — the one case where position is NOT the whole
+    // story.
+    //
+    // Both lines are needed and neither is redundant. The ref re-arms the
+    // magnet so the reply keeps following; the jump happens NOW because an
+    // interjection changes neither `messages` nor `loading`, and the effect
+    // that would otherwise scroll is keyed on exactly those.
+    //
+    // Placed above the interjection / stock branches so EVERY path out of
+    // handleSend gets it: from the sender's side all three are "I sent a
+    // message", and a rule that only covered new turns would feel arbitrary
+    // precisely when a turn is already running.
+    releaseDeepLinkRef.current?.();
+    stickToBottomRef.current = true;
+    if (scrollRef.current) jumpToBottom(scrollRef.current);
 
     // A turn is in flight → this message is a mid-turn INTERJECTION, not a new
     // message. It's delivered to the running turn at its next tool-loop step

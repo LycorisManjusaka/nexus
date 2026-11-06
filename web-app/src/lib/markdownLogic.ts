@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { estimateTokensForModel } from './tokenEstimate';
-import { exportHeaderName } from './speakerHeader';
+import { exportHeaderName, headerIsReinjected, restoreSpeakerTag } from './speakerHeader';
+import { readSpeakerTag } from './speakerTag';
 
 // Format a numeric (ms) timestamp as the app's "[YYYY-MM-DD HH:MM:SS]" tag in
 // LOCAL time — identical to the dateTimeVisibility formatter used elsewhere, so
@@ -44,13 +45,15 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
       md += entry;
     } else {
       // Header = the ONE speaker this message names (its leading "[Name]"
-      // tag), or "Anonymous" when it names none. The body is written VERBATIM.
+      // tag), or "Anonymous" when it names none. That ONE tag is then dropped
+      // from the body, because the reader puts it back — `headerIsReinjected`
+      // is the single predicate both sides ask, so the pair cannot drift.
       //
-      // WHY NOTHING IS STRIPPED FROM THE BODY ANY MORE. The old rule collected
-      // every bracketed span in the message and treated all of them as
-      // speakers: one tag was lifted into the header and deleted from the body
-      // (every occurrence, so a name said twice came back once), and two or
-      // more were comma-joined into "[つよ, ふわふわ, 関係ないこと]:".
+      // WHY THE TAG IS DROPPED AND EVERY OTHER BRACKET IS NOT. The old rule
+      // collected every bracketed span in the message and treated all of them
+      // as speakers: one tag was lifted into the header and deleted from the
+      // body EVERYWHERE it appeared (so a name said twice came back once), and
+      // two or more were comma-joined into "[つよ, ふわふわ, 関係ないこと]:".
       //
       // That join is a DATA LOSS, not a cosmetic one. `parseMarkdown` accepts a
       // multi-speaker header only when EVERY comma-separated part is a
@@ -59,15 +62,33 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
       // and the turn silently merges into the one above it. Reported by つよ,
       // who hits it in daily use.
       //
-      // Writing the body verbatim is also the only shape that round-trips: the
-      // reader re-injects a "[Name]" tag only when the body carries no brackets
-      // at all, so a body we had stripped came back with one tag where it
-      // started with two. Verbatim means export → import → export is a fixed
-      // point in every case measured (named, unnamed, multi-speaker, repeated).
+      // Writing the body VERBATIM was the first fix (2026-11-04) and it did
+      // round-trip, but it showed a single-speaker turn's name twice — once in
+      // the header NEXUS writes, once in the body the sender wrote. Lizard-kun
+      // asked for the duplicate to go (2026-11-06): "２つ目の「[つよ]」はすご
+      // く重複してて、簡単に避けられる".
       //
-      // The cost is that a single-speaker turn now shows its name twice — once
-      // in the header NEXUS writes, once in the body the sender wrote. That is
-      // the honest split: the header is our index, the body is their text.
+      // It is avoidable now because the reader's re-injection stopped being
+      // conditional on the body's OTHER brackets. It used to fire only when the
+      // body carried no bracket at all, which is why stripping was a loss back
+      // then: a body with any bracketed aside came back with the tag gone.
+      // `restoreSpeakerTag` is one function both sides call, and
+      // `read/writeSpeakerTag` are an inverse pair, so the drop is exactly undone.
+      //
+      // MEASURED 2026-11-06, the same harness as below, every conversation in
+      // the house (319; 288 carry a bracketed user body):
+      //
+      //   VERBATIM (2026-11-04)  279/288 round-trip exactly (96.9%)
+      //   THIS                   279/288 round-trip exactly (96.9%)
+      //
+      // The SAME NINE conversations fail, with the same classification (6 split
+      // into more messages, 2 differ in text, 1 in whitespace) — the failing set
+      // is identical file-for-file, not merely the same size. The duplicate name
+      // is gone at no cost to the round trip.
+      //
+      // And it fixed a second thing by accident. Reading a .md written during
+      // the verbatim window with this reader was measured both ways: 23/288
+      // before the skip clause in `restoreSpeakerTag`, 279/288 with it.
       //
       // MEASURED 2026-11-04 on this house's real logs — all 940 user messages
       // carrying two or more bracketed spans, both implementations handed the
@@ -89,7 +110,31 @@ export function exportToMarkdown(messages: any[], customAiName?: string, saveThi
       // header, and the turn merges upward. `exportHeaderName` keeps the tag
       // when the roster knows it and falls back to Anonymous when it does not.
       header = exportHeaderName(content, roster);
-      md += `[${header}]:\n\n${tsLine}${content.trim()}\n\n`;
+      const tag = readSpeakerTag(content);
+      // Drop the leading tag only when it is the very name going into the
+      // header AND the reader will re-inject that header. `header !== tag.name`
+      // means the roster did not recognise the tag and the header fell back to
+      // Anonymous — then nothing was lifted, so nothing may be dropped.
+      //
+      // THEN PROVE IT, PER MESSAGE. The last clause runs the reader's own
+      // `restoreSpeakerTag` on the stripped body and keeps the tag only when
+      // the result is the text we started with. Without it the strip is exact
+      // for the shape the send path writes and LOSSY for three others, each
+      // found by measuring rather than by thinking:
+      //
+      //   "[X] body"       tag and text on one line → back as "[X]\nbody"  (51)
+      //   "[X]\n > quote"  leading space eaten by the reader's own trim()
+      //   "[X]\n[X]\nbody" name said twice → one of the two disappears   (19)
+      //
+      // Enumerating those as negative conditions would leave the fourth shape —
+      // whichever it is — silently lossy. Asking "can I put this back?" has no
+      // fourth shape. A message that fails the check is written verbatim and
+      // still shows its name twice, which is the honest answer: the duplicate
+      // goes away exactly where removing it is provably reversible, and that is
+      // every message this app sends.
+      const canDrop = !!tag.name && tag.name === header && headerIsReinjected(header)
+        && restoreSpeakerTag(tag.body.trim(), header) === content.trim();
+      md += `[${header}]:\n\n${tsLine}${(canDrop ? tag.body : content).trim()}\n\n`;
     }
   });
   return md.trim() + '\n';
@@ -430,20 +475,19 @@ export function parseMarkdown(markdown: string, customAiName?: string, validUser
       }
     }
 
+    // Put the speaker tag back into the body. `headerIsReinjected` is the SAME
+    // predicate `exportToMarkdown` asks before dropping it (speakerHeader.ts),
+    // and `writeSpeakerTag` is the inverse of the `readSpeakerTag` that dropped
+    // it — so export → import is exact, including a body whose first line is a
+    // timestamp and a body carrying other bracketed spans.
+    //
+    // WHAT CHANGED 2026-11-06. This used to re-inject only when the body held
+    // NO bracket anywhere, which made the body's OTHER brackets decide whether
+    // the speaker's name survived: a message carrying any bracketed aside came
+    // back with the tag gone. `restoreSpeakerTag` asks about the first tag only
+    // — the one place a speaker can be — so an aside no longer votes.
     if (role === 'user') {
-      const isMultiple = currentHeader.includes(',') || currentHeader.includes('、');
-      // Mirror the app's specific behavior: the plain "Anonymous" username
-      // (or legacy "User", from .md files exported before the rename) is
-      // never injected as a "[Anonymous]"/"[User]" tag — identity flows
-      // through [username] tags only for named users. A "[Anonymous]:" or
-      // "[User]:" header therefore stays untagged.
-      const isPlainUser = currentHeader.trim() === 'User' || currentHeader.trim() === 'Anonymous';
-      if (!isMultiple && !isPlainUser) {
-        const hasTags = /\[.*?\]/.test(finalContent);
-        if (!hasTags) {
-          finalContent = `[${currentHeader.trim()}]\n${finalContent}`;
-        }
-      }
+      finalContent = restoreSpeakerTag(finalContent, currentHeader);
     }
 
     // Timestamp: ONLY what the file actually carried. When the source .md has no

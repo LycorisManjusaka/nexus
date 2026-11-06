@@ -6,6 +6,7 @@ import {
   nextStickState,
   shouldAutoScroll,
   STICK_THRESHOLD_PX,
+  jumpToBottom,
 } from '@/lib/scrollMagnet';
 
 // ── The report these tests exist for ─────────────────────────────────────
@@ -98,4 +99,26 @@ test('a pending deep link outranks the magnet', () => {
   assert.equal(shouldAutoScroll({
     stick: true, generating: true, lengthIncreased: true, deepLinkPending: true,
   }), false);
+});
+
+/**
+ * jumpToBottom — extracted 2026-11-06 when a second caller appeared (the
+ * unconditional jump on send, asked for by Lizard-kun: "送るタイミングで真下
+ * じゃなければ違和感がある").
+ *
+ * The reason it is a function and not two copies of one line is the `'auto'`:
+ * an animated jump has midpoints, and a midpoint is positionally identical to
+ * a reader scrolling up, so `nextStickState` would detach the magnet in the
+ * middle of our own animation. A caller that forgets re-opens that bug.
+ */
+test('jumpToBottom asks for the bottom in one frame, never a smooth scroll', () => {
+  const calls: any[] = [];
+  jumpToBottom({ scrollHeight: 4200, scrollTo: (o) => calls.push(o) });
+  assert.deepEqual(calls, [{ top: 4200, behavior: 'auto' }]);
+});
+
+test('jumpToBottom still targets the bottom when there is nothing to scroll', () => {
+  const calls: any[] = [];
+  jumpToBottom({ scrollHeight: 0, scrollTo: (o) => calls.push(o) });
+  assert.deepEqual(calls, [{ top: 0, behavior: 'auto' }]);
 });

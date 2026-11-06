@@ -75,6 +75,27 @@ export function readSpeakerTag(content: string): SpeakerTag {
   };
 }
 
+/**
+ * Put a speaker tag back on a message body — the inverse of `readSpeakerTag`.
+ *
+ * `readSpeakerTag(writeSpeakerTag(body, name))` returns `{name, body}` for every
+ * body measured, and that round-trip is the whole point: the .md exporter lifts
+ * the tag into the "[Name]:" header and drops it from the body, and the importer
+ * puts it back. Two hand-written halves drift; an inverse pair cannot.
+ *
+ * The tag goes AFTER any leading "[YYYY-MM-DD …]" stack, not at the very front,
+ * because that is where the reader looks for it (the send path prepends the time
+ * tag, so the real shape is timestamp-then-name). Writing it at position 0 would
+ * put the name ABOVE a timestamp that used to sit above it — a round trip that
+ * silently reorders the first two lines.
+ */
+export function writeSpeakerTag(body: string, name: string): string {
+  const raw = body || '';
+  const afterTs = stripLeadingTimestamps(raw);
+  const prefixLen = raw.length - afterTs.length;
+  return `${raw.slice(0, prefixLen)}[${name}]\n${afterTs}`;
+}
+
 /** The speaker name to show for a user message — its own tag, or "Anonymous". */
 export function speakerNameOf(content: string): string {
   return readSpeakerTag(content).name || ANONYMOUS_SPEAKER;
