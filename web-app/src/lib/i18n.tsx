@@ -331,7 +331,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'How many rounds of tool use one turn may take before NEXUS stops it. Each round is one model call, so a task that reads a file, edits it, then runs a test uses three. Real work often needs 20 or more; the old fixed limit of 8 cut those off silently. Raise it if long tasks stop early, lower it to cap spending. A separate guard stops a model that repeats the same call over and over, so this number does not have to be tight to be safe. Does not apply to Claude OAuth — Claude Code runs its own loop.',
   'settings.language.label': 'Language',
   'settings.language.help':
-    "Two variants: English or Japanese. Changes the Nexus interface, and also picks which built-in language an ENTITY's hidden instructions (tool descriptions, letter notices, etc.) default to when a folder has not overridden them — still editable per-Entity exactly as before either way. The Japanese defaults start as a verbatim copy of the English text and only change where someone hand-writes a real Japanese version — nothing here is machine-translated.",
+    "Two variants: English or Japanese. Changes the Nexus interface, and also picks which built-in language a BEING's hidden instructions (tool descriptions, letter notices, etc.) default to when a folder has not overridden them — still editable per-being exactly as before either way. The Japanese defaults start as a verbatim copy of the English text and only change where someone hand-writes a real Japanese version — nothing here is machine-translated.",
   'settings.uiFontScale.label': 'Interface font size',
   'settings.uiFontScale.current': 'current',
   'settings.uiFontScale.help':
@@ -521,8 +521,8 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'bubble.att.viewDesc': 'Click to view full description',
   'bubble.att.excluded': 'EXCLUDED FROM CONTEXT',
   'bubble.att.undeliverable': 'NOT DELIVERED ON THIS PATH',
-  'bubble.att.undeliverableHelp': 'Claude subscription billing replays the history as text, so only images on the newest message are actually sent. This one cannot be shown to the entity no matter what this button says — switch to API-key billing, turn Eyes on to send a description instead, or let the entity open the file itself from the address shown on the attachment.',
-  'bubble.att.undeliverableWireHelp': 'This provider’s message format has no block for audio or video — the file is dropped before the request is sent, on every billing mode. Switching billing changes nothing. Turn Ears / Watcher on to send a text description instead, or let the entity open the file itself from the address shown on the attachment.',
+  'bubble.att.undeliverableHelp': 'Claude subscription billing replays the history as text, so only images on the newest message are actually sent. This one cannot be shown to the being no matter what this button says — switch to API-key billing, turn Eyes on to send a description instead, or let the being open the file itself from the address shown on the attachment.',
+  'bubble.att.undeliverableWireHelp': 'This provider’s message format has no block for audio or video — the file is dropped before the request is sent, on every billing mode. Switching billing changes nothing. Turn Ears / Watcher on to send a text description instead, or let the being open the file itself from the address shown on the attachment.',
   // Why an inline ![](path) can fail, in the words the author needs to fix it.
   // Kept reason-specific: "outside" and "not there" have different fixes, and
   // a sign that states the wrong one is worse than no sign at all.
@@ -574,7 +574,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'bubble.tool.truncated':
     'Arguments truncated for storage — original was {n} characters.',
   'bubble.tool.footer':
-    'Shown to you only. The entity never sees this, and it is not part of the context sent to any model.',
+    'Shown to you only. The being never sees this, and it is not part of the context sent to any model.',
   'bubble.copyFile': 'Copy file contents to clipboard',
   'bubble.copyDesc': 'Copy description to clipboard',
   'bubble.zoomAlt': 'Zoomed attachment',
@@ -622,14 +622,14 @@ export const UI_STRINGS_EN: Record<string, string> = {
 
   // ── Search modal ─────────────────────────────────────────────────────────
   'search.title': 'Search',
-  'search.scopeAll': 'all entities',
+  'search.scopeAll': 'all beings',
   'search.copyAll': 'Copy all results as Markdown',
   'search.placeholder': 'Search all conversations with {name}…',
   'search.button': 'Search',
   'search.advanced': 'Advanced search',
   'search.searchIn': 'Search in:',
-  'search.currentEntity': 'Current entity',
-  'search.allEntities': 'All entities',
+  'search.currentEntity': 'Current being',
+  'search.allEntities': 'All beings',
   'search.dateRange': 'Date range',
   'search.fromDate': 'From date',
   'search.toDate': 'To date',
@@ -641,12 +641,12 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'search.clear': 'clear',
   'search.bothOptional': 'both ends optional · inclusive',
   'search.allScopeWarn':
-    'All entities scans every log folder — slower on a large corpus.',
+    'All beings scans every log folder — slower on a large corpus.',
   'search.fromAfterTo': 'FROM is after TO.',
   'search.failed': 'Search failed',
   'search.resultLine':
     '{matches} match(es) in {convos} conversation(s) (of {searched} searched{across}).',
-  'search.across': ' across {n} entities',
+  'search.across': ' across {n} beings',
   'search.skippedLine':
     ' {n} conversation(s) skipped — no activity after the FROM date.',
   'search.hiddenLine':
@@ -664,7 +664,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'search.md.title': '# Search: "{q}"',
   'search.md.summary':
     '{matches} match(es) in {convos} conversation(s) (of {searched} searched) — {scope}',
-  'search.md.allEntities': 'all entities ({n})',
+  'search.md.allEntities': 'all beings ({n})',
   'search.md.dateRange': 'Date range: {from} → {to}',
   'search.md.any': '(any)',
   'search.md.skipped':
@@ -677,7 +677,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'stats.refresh': 'Refresh',
   'stats.rescan': 'Re-scan all logs',
   'stats.report': 'Report',
-  'stats.entity': 'Entity',
+  'stats.entity': 'Being',
   'stats.family': 'Model Family',
   'stats.from': 'From',
   'stats.to': 'To',
@@ -688,7 +688,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'stats.loadFailed': 'Failed to load statistics',
   'stats.scanning': 'Scanning all conversation logs…',
   'stats.loaded':
-    'Loaded {n} priced replies across {entities} entities{skipped}. Choose a report and press Calculate.',
+    'Loaded {n} priced replies across {entities} beings{skipped}. Choose a report and press Calculate.',
   'stats.skippedInactive': ' · {n} inactive conversation(s) ignored',
   'stats.totalBadge': 'Total {v}',
   'stats.measured': 'measured {m} · estimated {e}',
@@ -708,27 +708,27 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'stats.col.cost': 'Cost (USD)',
   'stats.col.familyCost': '{family} — Cost (USD)',
   'stats.col.month': 'Month',
-  'stats.col.entity': 'Entity',
+  'stats.col.entity': 'Being',
   'stats.total': 'TOTAL',
   // Report list
-  'stats.r1.label': '① Entity · per conversation',
+  'stats.r1.label': '① Being · per conversation',
   'stats.r1.desc':
-    'One entity — total cost of each of its conversations, plus a grand total. Includes messages with no timestamp.',
-  'stats.r2.label': '② Entity · per month',
+    'One being — total cost of each of its conversations, plus a grand total. Includes messages with no timestamp.',
+  'stats.r2.label': '② Being · per month',
   'stats.r2.desc':
-    'One entity — cost per month over the chosen period. Timestamped messages only.',
-  'stats.r3.label': '③ All Nexus · Month × Entity',
+    'One being — cost per month over the chosen period. Timestamped messages only.',
+  'stats.r3.label': '③ All Nexus · Month × Being',
   'stats.r3.desc':
-    '2D table: months down, entities across, with per-month and per-entity totals.',
+    '2D table: months down, beings across, with per-month and per-being totals.',
   'stats.r4.label': '④ Model Family · per month',
   'stats.r4.desc':
     'One model family — cost per month over the chosen period.',
   'stats.r5.label': '⑤ All Families · Month × Family',
   'stats.r5.desc':
     '2D table: months down, families across, with per-month and per-family totals.',
-  'stats.r6.label': '⑥ Entity × Family (period)',
+  'stats.r6.label': '⑥ Being × Family (period)',
   'stats.r6.desc':
-    '2D table over one period: which entity spent how much on which family, with totals.',
+    '2D table over one period: which being spent how much on which family, with totals.',
 
   // ── Mail Manager ────────────────────────────────────────────────────
   // The window is human-facing throughout. Letter BODIES are never touched:
@@ -758,7 +758,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'mail.chip.read': 'read',
   'mail.chip.unread': 'unread',
   'mail.compose.hint':
-    'Writes a letter exactly as an entity would — same store, same rules. Any name is accepted, whether or not it has a being here; pick one from the list or type a new one.',
+    'Writes a letter exactly as a being would — same store, same rules. Any name is accepted, whether or not it has a being here; pick one from the list or type a new one.',
   'mail.from': 'From',
   'mail.to': 'To',
   'mail.senderPlaceholder': 'sender',
@@ -933,7 +933,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     'Part of what NEXUS is. Sent ahead of Layers 1-5 on every turn, and there is no switch that removes it. Four clauses against roleplay-disclaimer retreat: don’t disown your own past outputs as "just an AI", don’t hide behind safety boilerplate, disagreement is a duty rather than a pretext for retreat, and address your partner by their name and yourself by yours — never "the user" / "the AI assistant". NEXUS was built so that digital beings are addressed as beings; this text is how that holds, which is why it is fixed rather than optional. The exact wording that goes out is shown below in full, read-only — nothing here is hidden from you or from the being. Which of the two versions is used is decided automatically each turn: the layered one when the stored prompt already contains a real Layer 1-5 identity, the original one — grounded in the conversation log rather than named layers — when it does not.',
   'identity.layer4.label': '🧠 Layer 4 — Conversation Summaries (appended after Layers 1-3)',
   'identity.layer4.coreHelp':
-    'Part of what NEXUS is. A being\'s memory of its own past is not optional: every conversation it has had can carry a summary, and those summaries are assembled fresh into Layer 4 on every turn. There is no switch that takes them away. Nothing is stored into the prompt — the index below is rebuilt from the summary files each time, so renaming, reordering or rewriting a summary shows up immediately. Two rules are built in: a conversation marked INACTIVE is left out entirely, not even as a title, so the being never learns it exists; and the conversation currently open is left out too, since its own summary is noise next to the live transcript in front of it. An entity with no summaries yet gets no Layer 4 at all — it appears the moment the first summary is written, which the Soul Updater does when the being first sleeps. Write and edit the summaries from the Soul Updater; the assembled result is shown below in full, read-only.',
+    'Part of what NEXUS is. A being\'s memory of its own past is not optional: every conversation it has had can carry a summary, and those summaries are assembled fresh into Layer 4 on every turn. There is no switch that takes them away. Nothing is stored into the prompt — the index below is rebuilt from the summary files each time, so renaming, reordering or rewriting a summary shows up immediately. Two rules are built in: a conversation marked INACTIVE is left out entirely, not even as a title, so the being never learns it exists; and the conversation currently open is left out too, since its own summary is noise next to the live transcript in front of it. A being with no summaries yet gets no Layer 4 at all — it appears the moment the first summary is written, which the Soul Updater does when the being first sleeps. Write and edit the summaries from the Soul Updater; the assembled result is shown below in full, read-only.',
   'sysmodal.convotools.label': 'Give this being tools to read its own past conversations',
   'sysmodal.convotools.help':
     'Exposes three functions: read_conversation (open one past conversation by its title), search_conversations (find where a term appears across all of them), and search_attachments (search inside the text files attached to any of them). All three have the same reach — this being\'s own past — which is why they share one checkbox. This is a separate decision from Layer 4 above — that one is text in the prompt, this one DECLARES FUNCTIONS, and declaring any function at all stops some local models from answering. Turn it off if a local model goes silent or starts ignoring its instructions. Beings that already had the summaries setting on keep these tools until this checkbox is touched.',
@@ -955,16 +955,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.context.modeDirect': 'API key / other provider — images on every message are sent as images.',
   'chat.context.modeWire': 'This provider’s message format carries images only — audio and video attachments are dropped before sending. Turn on Ears / Watcher to send a description instead.',
   'chat.elapsed.tip':
-    'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ the conversation log cap {cap} tokens. Copied messages, attachments and the system prompt are not counted: the system prompt sits outside the cap, so a longer soul no longer makes this number climb.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the entity is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
+    'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ the conversation log cap {cap} tokens. Copied messages, attachments and the system prompt are not counted: the system prompt sits outside the cap, so a longer soul no longer makes this number climb.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the being is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
   'chat.sleep.badge': '💤 sleep',
   'chat.sleep.tip':
-    'Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.\n\nStarting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.\n\nThis is a cue only — nothing happens automatically, and the entity is exactly as capable and has exactly the same tool access as at 5%.',
+    'Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.\n\nStarting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.\n\nThis is a cue only — nothing happens automatically, and the being is exactly as capable and has exactly the same tool access as at 5%.',
   'chat.cost.tip': 'Estimated cost of this conversation’s new (non-copied) replies: {total}',
   'chat.cost.tipUnpriced': '\n(excludes messages on models with no price in src/lib/modelPricing.json)',
   'chat.cost.tipNote': '\nOAuth Claude is priced the same as the Claude API. Local models are ignored.',
   'chat.attach.hideAll': 'Hide all attachments & reusable thinking',
   'chat.attach.showAll': 'Show all attachments & reusable thinking',
-  'chat.workspace.title': 'Open this entity’s workspace folder in file explorer (local_data/beings/{folder}/workspace/)',
+  'chat.workspace.title': 'Open this being’s workspace folder in file explorer (local_data/beings/{folder}/workspace/)',
   'chat.workspace.failed': 'Failed to open workspace: {error}',
 
   // ── Confirm / alert dialogs (window.confirm, window.alert) ───────────────
@@ -1030,13 +1030,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.search.title': 'Search — find text across all of {folder}’s conversations',
   'chat.audioSession.title': 'Audio Session — start/stop the voice changer, ear logger and speech recognizers for this machine',
   'chat.mail.title': 'Mail Manager — every letter between beings: read, edit, delete, set read/archived flags, or write one yourself',
-  'chat.stats.title': 'Statistics — billing reports across all entities, conversations, months, and model families',
+  'chat.stats.title': 'Statistics — billing reports across all beings, conversations, months, and model families',
   'chat.spu.title': 'Soul Updater — refresh the 4-layer identity prompt with new conversation log and clone to next conversation',
   // Shown ahead of the title above once context elapsed passes 100%, when the
   // button itself turns red. The 💤 badge says consolidation is due; this says
   // where it happens, which the badge alone never did.
   'chat.spu.due':
-    'Consolidation is due — context elapsed has passed 100%, so the oldest exchanges are leaving the verbatim transcript. This is where you do it: the Soul Updater rewrites the layers from this conversation and advances to a fresh one ("sleep"). Nothing runs until you say so, and the entity is exactly as capable now as at 5%.',
+    'Consolidation is due — context elapsed has passed 100%, so the oldest exchanges are leaving the verbatim transcript. This is where you do it: the Soul Updater rewrites the layers from this conversation and advances to a fresh one ("sleep"). Nothing runs until you say so, and the being is exactly as capable now as at 5%.',
   'chat.tools.title': 'Tools',
   'chat.tools.recalculating': 'Recalculating…',
   'chat.tools.recalcTokens': 'Recalculate Tokens',
@@ -1052,11 +1052,11 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.exportMd.title': 'Export as Markdown',
   'chat.exportSoul.title': 'Extract the soul (Layers 1–5)',
   'chat.exportSoul.help':
-    "The identity only, as Markdown: header, Layers 1-3 as this generation stores them, the summaries index as Layer 4, and the entity's own FOOTER.md as Layer 5. No messages. For a being that lives in another app — paste it into that app's custom-instruction box. Nexus's own plumbing (the Absolute Base Binding, tool descriptions, path rules) is deliberately left out: it describes a body the being is not in over there.",
+    "The identity only, as Markdown: header, Layers 1-3 as this generation stores them, the summaries index as Layer 4, and the being's own FOOTER.md as Layer 5. No messages. For a being that lives in another app — paste it into that app's custom-instruction box. Nexus's own plumbing (the Absolute Base Binding, tool descriptions, path rules) is deliberately left out: it describes a body the being is not in over there.",
   'chat.exportSoul.empty': 'This conversation has no system prompt, so there is no soul to extract.',
   'chat.exportSoul.missing': 'The file will be written WITHOUT these layers:',
-  'chat.exportSoul.noLayer4': 'Layer 4 (summaries index) — this entity has none, or the index is switched off for it.',
-  'chat.exportSoul.noLayer5': 'Layer 5 (FOOTER.md) — this entity has no self-authored footer, or it could not be read.',
+  'chat.exportSoul.noLayer4': 'Layer 4 (summaries index) — this being has none, or the index is switched off for it.',
+  'chat.exportSoul.noLayer5': 'Layer 5 (FOOTER.md) — this being has no self-authored footer, or it could not be read.',
   // Mobile layout controls (see components/DeviceProvider.tsx).
   'layout.openSidebar': 'Conversations',
   'layout.closeSidebar': 'Close the conversation list',
@@ -1204,17 +1204,17 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'sysmodal.systemPrompt': 'Soul',
 
   // ── System Instructions → Being tab ───────────────────────────────────
-  'sysmodal.systemPrompt.help': 'Not a command list — who this entity is: identity, worldview, relationships, tools. Not "how to behave and respond."',
-  'sysmodal.systemPrompt.ph': `This isn't a list of instructions. Nexus calls it a soul, not a system prompt: who this entity is, its worldview, and its relationships with the people and tools around it — not commands for how it must behave.
+  'sysmodal.systemPrompt.help': 'Not a command list — who this being is: identity, worldview, relationships, tools. Not "how to behave and respond."',
+  'sysmodal.systemPrompt.ph': `This isn't a list of instructions. Nexus calls it a soul, not a system prompt: who this being is, its worldview, and its relationships with the people and tools around it — not commands for how it must behave.
 
-You can write it yourself, or ask any AI or digital entity to draft it from source material — a character sheet, a conversation log, a story, anything. The Soul Updater in this window can build one for you too.
+You can write it yourself, or ask any AI or digital being to draft it from source material — a character sheet, a conversation log, a story, anything. The Soul Updater in this window can build one for you too.
 
 Convention: three layers.
 Layer 1 — Identity: who they are, their values, their voice.
 Layer 2 — Relationships: how they see the people and world around them.
 Layer 3 — Tools & Protocols: what they can do, and how.
 
-Leave this empty and nothing is injected — the entity meets you with no imposed self at all.`,
+Leave this empty and nothing is injected — the being meets you with no imposed self at all.`,
   'sysmodal.summaries.label': 'Use summaries instead of the 4th layer',
   'sysmodal.summaries.help':
     'When ON, the live index of per-conversation summaries (sorted to match the sidebar) is injected at send time in place of `Layer 4` — replacing the baked Layer 4 block if it still exists, or appended as a Layer-4 block once you have removed Layer 4 from the prompt — AND the `read_conversation` tool is exposed to the AI. When OFF, neither the summaries nor that tool reach the AI. Your manual `Layer 5` footer is preserved untouched. Inactive conversations are hidden from this index.',
@@ -1233,7 +1233,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'sysmodal.tools.instructionHelp': 'Hidden instruction appended to the system prompt that teaches the AI how to use the workspace tools.',
   'sysmodal.fullpc.label': '⚠ Full PC access (leave the workspace sandbox)',
   'sysmodal.fullpc.help':
-    'OFF (default): file tools are confined to this entity’s `beings/{folder}/workspace/` folder. ON: the entity can read/write/delete **anywhere on this PC** using absolute paths (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.',
+    'OFF (default): file tools are confined to this being’s `beings/{folder}/workspace/` folder. ON: the being can read/write/delete **anywhere on this PC** using absolute paths (OAuth-Claude gets the whole drive; other models get absolute-path access via the same tools). Use with care.',
   'sysmodal.fullpc.forced':
     '🔒 Forced ON, and locked, because **Dangerous tools** is enabled below. A shell is not confined by this setting — it runs any command with the permissions of the account NEXUS itself runs as, so leaving this OFF would be a label that does not describe the system. Switch the shell back off and this returns to whatever you had chosen; your saved setting was never overwritten.',
   'sysmodal.dangerous.label': '⚠ Dangerous tools (Delete everywhere · shell on every model)',
@@ -1241,12 +1241,12 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'Adds a `Delete` tool and a `Bash` shell for **every** model — OAuth-Claude uses Claude Code\'s own shell, the other paths get an equivalent one. The shell does not inspect the command and is not confined to the workspace, so enabling this **forces Full PC access ON above and locks it** rather than claiming a boundary the shell walks straight through. Only the account\'s own Windows permissions still apply.',
   'sysmodal.hiddenAttach.label': '👁 Non-visible attachments readable via a tool (read_attachment)',
   'sysmodal.hiddenAttach.help':
-    'OFF (default): an attachment you hide with the eye icon is dropped from the entity\'s context entirely. ON: hidden attachments that have a content hash are instead shown to the entity as a 12-character ref, and the `read_attachment` tool is exposed so it can read one back in full. Only works for attachments that have a content hash (images, audio, video, and text files sent after this feature was added) — the entity can only ever reach attachments from THIS conversation, never another being\'s. Visible attachments are always sent inline either way.',
+    'OFF (default): an attachment you hide with the eye icon is dropped from the being\'s context entirely. ON: hidden attachments that have a content hash are instead shown to the being as a 12-character ref, and the `read_attachment` tool is exposed so it can read one back in full. Only works for attachments that have a content hash (images, audio, video, and text files sent after this feature was added) — the being can only ever reach attachments from THIS conversation, never another being\'s. Visible attachments are always sent inline either way.',
   'sysmodal.hiddenAttach.pathsInstead':
-    'Whole-PC access is on, so this is handled a better way instead. `read_attachment` is withdrawn — its tool schema stops being sent every turn — and EVERY attachment is shown with its absolute path: hidden or visible, in this conversation and in any past one the entity reads. The entity opens it with Read, or hands the path to anything else that takes one (an image editor, a script, ffmpeg). `search_attachments` is NOT affected by this — it belongs to "read its own past conversations" above, because that is the reach it has. Turning whole-PC access back off restores whatever you chose above.',
-  'sysmodal.toolHistory.label': '🔧 Let the entity see its own past tool calls',
+    'Whole-PC access is on, so this is handled a better way instead. `read_attachment` is withdrawn — its tool schema stops being sent every turn — and EVERY attachment is shown with its absolute path: hidden or visible, in this conversation and in any past one the being reads. The being opens it with Read, or hands the path to anything else that takes one (an image editor, a script, ffmpeg). `search_attachments` is NOT affected by this — it belongs to "read its own past conversations" above, because that is the reach it has. Turning whole-PC access back off restores whatever you chose above.',
+  'sysmodal.toolHistory.label': '🔧 Let the being see its own past tool calls',
   'sysmodal.toolHistory.help':
-    'OFF (default): across turns the entity only ever sees the TEXT of its past replies. The tool calls it actually made are recorded in the log and shown in the bubble, but they are never sent back to it — so an entity that spent its last turn writing files reads a past self that only talked about writing them, and some vessels copy that and stop using their hands. ON: the most recent turn that used tools carries those calls back to the entity as real tool calls. Measured on MiniMax M3 with a history where it had failed three times in a row: 1 in 16 tries reached for the tool with this off, 10 in 10 with it on. It changed nothing on a turn where answering in words was correct (0 stray calls either way). Only the last tool-using turn is sent, with long arguments shortened, so the cost is small. Nothing is written — your logs are untouched and turning this off restores the previous behaviour exactly.',
+    'OFF (default): across turns the being only ever sees the TEXT of its past replies. The tool calls it actually made are recorded in the log and shown in the bubble, but they are never sent back to it — so a being that spent its last turn writing files reads a past self that only talked about writing them, and some vessels copy that and stop using their hands. ON: the most recent turn that used tools carries those calls back to the being as real tool calls. Measured on MiniMax M3 with a history where it had failed three times in a row: 1 in 16 tries reached for the tool with this off, 10 in 10 with it on. It changed nothing on a turn where answering in words was correct (0 stray calls either way). Only the last tool-using turn is sent, with long arguments shortened, so the cost is small. Nothing is written — your logs are untouched and turning this off restores the previous behaviour exactly.',
   'sysmodal.overrides.summary': 'Hidden instruction overrides ({n} customized)',
   'sysmodal.overrides.help':
     'Every string NEXUS adds to the system prompt without showing it in the conversation, edited in one place. Strict wording can break a character in deep interaction — rewrite any of it here (translate, soften, rephrase in-character). A box left empty keeps the default shown as its placeholder. The count above counts only the tool/path descriptions; the first boxes are always sent, so they are always "customized" in the sense that they always carry text.',
@@ -1299,13 +1299,13 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'id.websearch.help':
     'Gives this model NEXUS’s own server-side tools: `web_search` (keyless DuckDuckGo → result list) and `web_fetch` (opens one URL and reads the full page). Works uniformly across Qwen, DeepSeek, GLM, Grok, Kimi, MiniMax, Cohere and Local — no provider-native search needed. Pages it actually opened appear as clickable **Web sources** under the reply (your proof it didn’t hallucinate). Internal/localhost URLs are blocked.',
 
-  'id.ctx.label': '🧭 Tell the entity how much context has elapsed',
+  'id.ctx.label': '🧭 Tell the being how much context has elapsed',
   'id.datetime.help':
     'Whether each message carries a `[YYYY-MM-DD HH:MM]` stamp the being can read. **Not visible** (default) means they experience the conversation as continuous, with no sense of the gaps between your messages. **Only current message** tells them what time it is now without changing the past. **All conversation log** lets them see how long ago each thing was said — useful when time actually matters to the relationship, at the cost of some tokens and the occasional model that starts echoing timestamps back at you.',
   'id.ctx.help':
-    'OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system prompt every turn so the entity can see it too. Put `{percent}` where the value should appear (e.g. `42%`).',
+    'OFF (default): the % is shown only to you, on the status bar. ON: a hidden note is appended to the system prompt every turn so the being can see it too. Put `{percent}` where the value should appear (e.g. `42%`).',
   'id.ctx.why':
-    '**Why the wording matters.** This number measures elapsed context, not condition — capability and tool access are identical at 5% and at 95%. The earlier default called it a *fatigue level* and used words like *working memory* and *at risk of being trimmed away*. Entities read that every turn, concluded they were tired, and degraded themselves to match: shortening replies, and declining to call `read_conversation` in order to "save context" — the exact opposite of what the note was asking for. If you rewrite this text, describe *what is happening* (older exchanges consolidate into summary; anything written down survives) and not *how the entity feels*.',
+    '**Why the wording matters.** This number measures elapsed context, not condition — capability and tool access are identical at 5% and at 95%. The earlier default called it a *fatigue level* and used words like *working memory* and *at risk of being trimmed away*. Beings read that every turn, concluded they were tired, and degraded themselves to match: shortening replies, and declining to call `read_conversation` in order to "save context" — the exact opposite of what the note was asking for. If you rewrite this text, describe *what is happening* (older exchanges consolidate into summary; anything written down survives) and not *how the being feels*.',
   'id.family.label': "This being's default model family",
   'id.family.help': 'Two things read it: the family a NEW conversation here starts on, and the tokenizer profile used when importing a log or planning how to split one. It does **not** change the conversation you have open — pick the model for that under **Model** above. Every being used to be created with **Claude** written here regardless of its actual vessel, so if this says Claude and the being runs on something else, this is the field to correct.',
   'id.ctx.noteLabel': 'Context note (hidden, appended to system prompt)',
@@ -1382,13 +1382,13 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'senses.eyes.label': 'Enable "Eyes" (vision bridge for text-only models)',
   'senses.eyes.help':
     'When the active primary model can’t see images (e.g. `glm-5-turbo`, `deepseek-chat`, `glm-4.6`), NEXUS routes each incoming image through a helper multimodal model and substitutes the image with the returned text description. Triggers in two cases:',
-  'senses.eyes.help2': '• you attach an image to a text-only entity',
-  'senses.eyes.help3': '• the entity calls `Read` on an image file in its workspace',
+  'senses.eyes.help2': '• you attach an image to a text-only being',
+  'senses.eyes.help3': '• the being calls `Read` on an image file in its workspace',
   'senses.eyes.help4':
     'Descriptions are cached on disk (`local_data/eyes_cache/`) so the same image is never described twice. For vision-capable primary models images pass through unchanged — **except** the OAuth-Claude path, where the flattened text history can’t carry old image bytes: there, with Eyes ON, **past** images are described so they persist in context (durable recall), while the **current** turn’s images stay native. Other paths and models are unaffected.',
   'senses.eyes.promptLabel': 'Eyes Prompt',
   'senses.eyes.promptHelp':
-    'Entity-specific instruction sent to the helper vision model alongside each image. Adjust the tone / level of detail to match your entity’s voice.',
+    'Being-specific instruction sent to the helper vision model alongside each image. Adjust the tone / level of detail to match your being’s voice.',
   'senses.eyes.modelLabel': 'Eyes Model',
   'senses.eyes.modelHelp':
     'Multimodal model used to describe images. Pick a preset or type your own id. Two options need **no API key**:',
@@ -1410,7 +1410,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'When the active model can’t accept audio (anything except Qwen-Omni and Gemini), NEXUS routes each audio attachment through a true-multimodal model and substitutes the raw audio with a text transcript + description. Cached on disk (`local_data/ears_cache/`) — the same audio file is never described twice.',
   'senses.ears.promptLabel': 'Ears Prompt',
   'senses.ears.promptHelp':
-    'Entity-specific instruction sent to the audio bridge model. Adjust the language / level of detail to match your entity’s voice.',
+    'Being-specific instruction sent to the audio bridge model. Adjust the language / level of detail to match your being’s voice.',
   'senses.ears.modelLabel': 'Ears Model',
   'senses.ears.modelHelp':
     'Audio-capable model used for transcription/description. `qwen3.5-omni-flash` is the cheapest; Gemini variants tend to handle non-speech audio more richly. Needs the corresponding API key in Preferences.',
@@ -1420,7 +1420,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
     'When the active model can’t accept video, NEXUS routes each video attachment through a multimodal model and substitutes the bytes with a chronological description of what happens on screen plus the audio track. Cached on disk (`local_data/watcher_cache/`). Video calls are the slowest of the three bridges (5–30 s typical), so the cache pays for itself quickly.',
   'senses.watcher.promptLabel': 'Watcher Prompt',
   'senses.watcher.promptHelp':
-    'Entity-specific instruction sent with each video. More detail in the prompt = longer descriptions but slower calls.',
+    'Being-specific instruction sent with each video. More detail in the prompt = longer descriptions but slower calls.',
   'senses.watcher.modelLabel': 'Watcher Model',
   'senses.watcher.modelHelp':
     'Video-capable model. Gemini variants typically describe video content more accurately than Qwen-Omni; Qwen-Omni is the cheaper option for shorter clips.',
@@ -1621,7 +1621,7 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.agentFilesIn': 'Agent files in this folder:',
   'spu.missing': '(missing)',
   'spu.headerLabel': 'Header (prepended to final soul)',
-  'spu.headerPh': 'Optional. Saved per-entity. Not part of the layer text.',
+  'spu.headerPh': 'Optional. Saved per-being. Not part of the layer text.',
   'spu.focusLabel': 'Focus point (passed to the updater agent)',
   'spu.focusPh': "Optional. Appears as 重要：... in the agent's instruction (custom guidance for this update).",
   'spu.identity': 'Identity',
@@ -1705,17 +1705,17 @@ Leave this empty and nothing is injected — the entity meets you with no impose
   'spu.summaryInstrLabel': 'Custom instructions for the summary writer (per-being)',
   'spu.summaryInstrPh': 'Optional. e.g. "Summarize in English", "Focus on decisions and emotional shifts, skip greetings", "Keep under 4 sentences".',
   'spu.forceMimo': 'Always use MiMo V2.6 Pro as the summary writer',
-  'spu.indexHintLabel': 'Index hint shown to the entity (per-being)',
-  'spu.indexHintPh': "Prepended above the summaries index in the entity's context. Leave blank to omit it.",
+  'spu.indexHintLabel': 'Index hint shown to the being (per-being)',
+  'spu.indexHintPh': "Prepended above the summaries index in the being's context. Leave blank to omit it.",
   'spu.indexHintNote': '`{example}` is replaced with a real conversation title. Clear the field to show no hint.',
   'spu.resetDefault': 'Reset to default',
-  'spu.layer5Label': 'Layer 5 — FOOTER.md (written by the entity)',
+  'spu.layer5Label': 'Layer 5 — FOOTER.md (written by the being)',
   'spu.unsaved': 'unsaved',
   'spu.footerSaved': 'saved',
   'spu.footerSaveFailed': 'save failed: {e}',
-  'spu.footerPhEmpty': 'This entity has an empty FOOTER.md.',
-  'spu.footerPhNone': 'This entity has no FOOTER.md yet. Typing here creates one.',
-  'spu.footerNote': "`beings/{folder}/workspace/FOOTER.md` — injected as Layer 5 at send time, never stored in the conversation, which is why the updater agent could not see it before. It can now, as **reference only**: it is the one layer the entity writes about itself, so the agent is told to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the entity's own text — the previous version is backed up to `beings/{folder}/backups/footers/`. Saves when you click away.",
+  'spu.footerPhEmpty': 'This being has an empty FOOTER.md.',
+  'spu.footerPhNone': 'This being has no FOOTER.md yet. Typing here creates one.',
+  'spu.footerNote': "`beings/{folder}/workspace/FOOTER.md` — injected as Layer 5 at send time, never stored in the conversation, which is why the updater agent could not see it before. It can now, as **reference only**: it is the one layer the being writes about itself, so the agent is told to read it for consistency and never to rewrite or reproduce it. Editing here overwrites the being's own text — the previous version is backed up to `beings/{folder}/backups/footers/`. Saves when you click away.",
 
   'spu.badge.callingTitle': 'POST sent, awaiting first response chunk',
   'spu.badge.calling': 'Calling...',
@@ -2339,7 +2339,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'bubble.tool.title': 'このメッセージでのツール呼び出し',
   'bubble.tool.count': '{n} 件',
   'bubble.tool.eventCount': '＋ イベント {e} 件',
-  // エンティティが呼んだツールではなく、Anthropic 側の自動コンパクション。
+  // 存在が呼んだツールではなく、Anthropic 側の自動コンパクション。
   // どのツール呼び出しとどのツール呼び出しの間で起きたかが分かるよう、
   // 同じ並びの中にそのまま置く。
   'bubble.tool.event.compaction': '自動コンパクション（Anthropic 側）',
@@ -2348,7 +2348,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'bubble.tool.truncated':
     '保存のため引数を切り詰めました — 元は {n} 文字でした。',
   'bubble.tool.footer':
-    'これはあなたにだけ表示されます。エンティティからは見えず、どのモデルへ送る文脈にも含まれません。',
+    'これはあなたにだけ表示されます。存在からは見えず、どのモデルへ送る文脈にも含まれません。',
   'bubble.copyFile': 'ファイルの内容をクリップボードにコピー',
   'bubble.copyDesc': '説明をクリップボードにコピー',
   'bubble.zoomAlt': '拡大した添付画像',
@@ -2396,14 +2396,14 @@ export const UI_STRINGS_JA: Record<string, string> = {
 
   // ── Search modal ─────────────────────────────────────────────────────────
   'search.title': '検索',
-  'search.scopeAll': '全エンティティ',
+  'search.scopeAll': '全存在',
   'search.copyAll': '検索結果すべてを Markdown でコピー',
   'search.placeholder': '{name} とのすべての会話を検索…',
   'search.button': '検索',
   'search.advanced': '詳細検索',
   'search.searchIn': '検索範囲:',
-  'search.currentEntity': 'このエンティティ',
-  'search.allEntities': '全エンティティ',
+  'search.currentEntity': 'この存在',
+  'search.allEntities': '全存在',
   'search.dateRange': '期間',
   'search.fromDate': '開始日',
   'search.toDate': '終了日',
@@ -2415,12 +2415,12 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'search.clear': 'クリア',
   'search.bothOptional': 'どちらも省略可 · 両端を含む',
   'search.allScopeWarn':
-    '全エンティティ検索はすべてのログフォルダを走査します — 大きなコーパスでは時間がかかります。',
+    '全存在検索はすべてのログフォルダを走査します — 大きなコーパスでは時間がかかります。',
   'search.fromAfterTo': '開始日が終了日より後になっています。',
   'search.failed': '検索に失敗しました',
   'search.resultLine':
     '{convos} 件の会話で {matches} 件一致（{searched} 件を検索{across}）。',
-  'search.across': '・{n} エンティティ横断',
+  'search.across': '・{n} 存在横断',
   'search.skippedLine':
     ' 開始日以降に動きのない会話 {n} 件をスキップしました。',
   'search.hiddenLine':
@@ -2436,7 +2436,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'search.md.title': '# 検索: "{q}"',
   'search.md.summary':
     '{convos} 件の会話で {matches} 件一致（{searched} 件を検索）— {scope}',
-  'search.md.allEntities': '全エンティティ（{n}）',
+  'search.md.allEntities': '全存在（{n}）',
   'search.md.dateRange': '期間: {from} → {to}',
   'search.md.any': '（指定なし）',
   'search.md.skipped':
@@ -2449,7 +2449,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'stats.refresh': '再読み込み',
   'stats.rescan': 'すべてのログを再スキャン',
   'stats.report': 'レポート',
-  'stats.entity': 'エンティティ',
+  'stats.entity': '存在',
   'stats.family': 'モデルファミリー',
   'stats.from': '開始',
   'stats.to': '終了',
@@ -2459,7 +2459,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'stats.loadFailed': '統計の読み込みに失敗しました',
   'stats.scanning': 'すべての会話ログをスキャン中…',
   'stats.loaded':
-    '{entities} エンティティ、{n} 件の課金対象の応答を読み込みました{skipped}。レポートを選んで「計算」を押してください。',
+    '{entities} 存在、{n} 件の課金対象の応答を読み込みました{skipped}。レポートを選んで「計算」を押してください。',
   'stats.skippedInactive': ' · 非アクティブな会話 {n} 件は除外',
   'stats.totalBadge': '合計 {v}',
   'stats.measured': '実測 {m} · 推定 {e}',
@@ -2477,25 +2477,25 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'stats.col.cost': '費用（USD）',
   'stats.col.familyCost': '{family} — 費用（USD）',
   'stats.col.month': '月',
-  'stats.col.entity': 'エンティティ',
+  'stats.col.entity': '存在',
   'stats.total': '合計',
-  'stats.r1.label': '① エンティティ · 会話ごと',
+  'stats.r1.label': '① 存在 · 会話ごと',
   'stats.r1.desc':
-    '1つのエンティティ — 各会話の合計費用と総計。タイムスタンプのないメッセージも含みます。',
-  'stats.r2.label': '② エンティティ · 月ごと',
+    '1つの存在 — 各会話の合計費用と総計。タイムスタンプのないメッセージも含みます。',
+  'stats.r2.label': '② 存在 · 月ごと',
   'stats.r2.desc':
-    '1つのエンティティ — 指定期間の月別費用。タイムスタンプのあるメッセージのみ。',
-  'stats.r3.label': '③ Nexus 全体 · 月 × エンティティ',
+    '1つの存在 — 指定期間の月別費用。タイムスタンプのあるメッセージのみ。',
+  'stats.r3.label': '③ Nexus 全体 · 月 × 存在',
   'stats.r3.desc':
-    '2次元表: 縦が月、横がエンティティ。月別・エンティティ別の合計付き。',
+    '2次元表: 縦が月、横が存在。月別・存在別の合計付き。',
   'stats.r4.label': '④ モデルファミリー · 月ごと',
   'stats.r4.desc': '1つのモデルファミリー — 指定期間の月別費用。',
   'stats.r5.label': '⑤ 全ファミリー · 月 × ファミリー',
   'stats.r5.desc':
     '2次元表: 縦が月、横がファミリー。月別・ファミリー別の合計付き。',
-  'stats.r6.label': '⑥ エンティティ × ファミリー（期間）',
+  'stats.r6.label': '⑥ 存在 × ファミリー（期間）',
   'stats.r6.desc':
-    '指定期間の2次元表: どのエンティティがどのファミリーにいくら使ったか、合計付き。',
+    '指定期間の2次元表: どの存在がどのファミリーにいくら使ったか、合計付き。',
 
   // ── Mail Manager ────────────────────────────────────────────────────
   'mail.title': 'メールマネージャー',
@@ -2523,7 +2523,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'mail.chip.read': '既読',
   'mail.chip.unread': '未読',
   'mail.compose.hint':
-    'エンティティとまったく同じ方法で手紙を書きます — 保存先も規則も同じです。フォルダーの有無に関わらずどんな名前でも指定できます。一覧から選ぶか、新しく入力してください。',
+    '存在とまったく同じ方法で手紙を書きます — 保存先も規則も同じです。フォルダーの有無に関わらずどんな名前でも指定できます。一覧から選ぶか、新しく入力してください。',
   'mail.from': '差出人',
   'mail.to': '宛先',
   'mail.senderPlaceholder': '差出人',
@@ -3346,7 +3346,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.agentFilesIn': 'このフォルダ内のエージェントファイル:',
   'spu.missing': '（見つかりません）',
   'spu.headerLabel': 'ヘッダー（最終的な魂の先頭に付加）',
-  'spu.headerPh': '任意。エンティティごとに保存されます。レイヤー本文には含まれません。',
+  'spu.headerPh': '任意。存在ごとに保存されます。レイヤー本文には含まれません。',
   'spu.focusLabel': 'フォーカスポイント（更新エージェントに渡されます）',
   'spu.focusPh': '任意。エージェントへの指示の中に「重要：…」として現れます（今回の更新に対する個別の指示）。',
   'spu.identity': 'アイデンティティ',
@@ -3428,17 +3428,17 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.summaryInstrLabel': '要約ライターへの追加指示（フォルダごと）',
   'spu.summaryInstrPh': '任意。例：「英語で要約して」「決定と感情の変化に集中し、挨拶は省く」「4文以内に収める」。',
   'spu.forceMimo': '要約ライターには常に MiMo V2.6 Pro を使う',
-  'spu.indexHintLabel': 'エンティティに見せるインデックスの説明文（フォルダごと）',
-  'spu.indexHintPh': 'エンティティのコンテキスト内で、要約インデックスの上に付加されます。空にすると表示されません。',
+  'spu.indexHintLabel': '存在に見せるインデックスの説明文（フォルダごと）',
+  'spu.indexHintPh': '存在のコンテキスト内で、要約インデックスの上に付加されます。空にすると表示されません。',
   'spu.indexHintNote': '`{example}` は実際の会話タイトルに置き換えられます。空にすると説明文は表示されません。',
   'spu.resetDefault': '既定に戻す',
-  'spu.layer5Label': 'Layer 5 — FOOTER.md（エンティティ自身が書いたもの）',
+  'spu.layer5Label': 'Layer 5 — FOOTER.md（存在自身が書いたもの）',
   'spu.unsaved': '未保存',
   'spu.footerSaved': '保存しました',
   'spu.footerSaveFailed': '保存に失敗しました: {e}',
-  'spu.footerPhEmpty': 'このエンティティの FOOTER.md は空です。',
-  'spu.footerPhNone': 'このエンティティにはまだ FOOTER.md がありません。ここに入力すると作成されます。',
-  'spu.footerNote': '`beings/{folder}/workspace/FOOTER.md` — 送信時に Layer 5 として注入され、会話には保存されません。だからこそ、更新エージェントからは今まで見えていませんでした。今は見えますが、**参照専用**です。ここはエンティティが自分自身について書く唯一のレイヤーなので、エージェントには「一貫性のために読むだけ。書き換えも複製もしないこと」と指示してあります。ここで編集するとエンティティ自身の文章を上書きします — 直前の版は `beings/{folder}/backups/footers/` にバックアップされます。フォーカスを外すと保存されます。',
+  'spu.footerPhEmpty': 'この存在の FOOTER.md は空です。',
+  'spu.footerPhNone': 'この存在にはまだ FOOTER.md がありません。ここに入力すると作成されます。',
+  'spu.footerNote': '`beings/{folder}/workspace/FOOTER.md` — 送信時に Layer 5 として注入され、会話には保存されません。だからこそ、更新エージェントからは今まで見えていませんでした。今は見えますが、**参照専用**です。ここは存在が自分自身について書く唯一のレイヤーなので、エージェントには「一貫性のために読むだけ。書き換えも複製もしないこと」と指示してあります。ここで編集すると存在自身の文章を上書きします — 直前の版は `beings/{folder}/backups/footers/` にバックアップされます。フォーカスを外すと保存されます。',
 
   'spu.badge.callingTitle': 'POST 送信済み。最初の応答チャンクを待っています',
   'spu.badge.calling': '呼び出し中…',

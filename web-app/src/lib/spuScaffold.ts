@@ -102,7 +102,7 @@ export function buildUpdateUserMsg(a: UpdateScaffoldArgs): string {
 
   const footerBlock = a.entityFooter.trim()
     ? [
-        L ? `=== Reference: Layer 5 (the entity's own signature, FOOTER.md) ===`
+        L ? `=== Reference: Layer 5 (the being's own signature, FOOTER.md) ===`
           : `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
         L ? `*Reference-only. This is the only layer written by the subject itself — do not rewrite, regenerate, or include it in your output.*`
           : `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
@@ -264,7 +264,7 @@ export function buildRedistributeUserMsg(a: RedistributeScaffoldArgs): string {
 
   const footerBlock = a.entityFooter.trim()
     ? [
-        L ? `=== Reference: Layer 5 (the entity's own signature, FOOTER.md) ===`
+        L ? `=== Reference: Layer 5 (the being's own signature, FOOTER.md) ===`
           : `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
         L ? `*Reference-only. This is the only layer written by the subject itself — do not rewrite, regenerate, or include it in your output.*`
           : `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
@@ -372,7 +372,7 @@ export function buildIndexUserMsg(a: IndexScaffoldArgs): string {
 
   const footerBlock = a.entityFooter.trim()
     ? [
-        L ? `=== Reference: Layer 5 (the entity's own signature, FOOTER.md) ===`
+        L ? `=== Reference: Layer 5 (the being's own signature, FOOTER.md) ===`
           : `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
         L ? `*Reference-only. This is the only layer written by the subject itself — do not rewrite, regenerate, or include it in your output.*`
           : `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
@@ -552,11 +552,11 @@ export function buildSummaryUserMsg(a: SummaryScaffoldArgs): string {
 
   const footerBlock = a.entityFooter.trim()
     ? [
-        L ? `=== Reference: Layer 5 (the entity's own signature, FOOTER.md) ===`
+        L ? `=== Reference: Layer 5 (the being's own signature, FOOTER.md) ===`
           : `=== 参考：第5層（本人が自分で書いた署名・FOOTER.md） ===`,
         L ? `*Reference-only. This is the only layer written by the subject itself — do not rewrite, regenerate, or include it in your output.*`
           : `※参照専用。これは対象自身が書いた唯一の層であり、書き換え・再生成・出力への含有を固く禁ずる。`,
-        L ? `Read it only to make sure the summary does not contradict the entity's self-understanding.`
+        L ? `Read it only to make sure the summary does not contradict the being's self-understanding.`
           : `要約が本人の自己認識と矛盾しないようにするためだけに読むこと。`,
         a.entityFooter.trim(),
         ``,

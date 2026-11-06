@@ -497,7 +497,7 @@ export default function Sidebar({
             console.warn(
               `[md-import] "${file.name}" → 0 messages, SKIPPED. Reason: ${reason}.\n` +
               `  Headers in file: ${diag.headersFound.length ? diag.headersFound.map(h => `${h.recognized ? '✓' : '✗'} "${h.text}"`).join(', ') : '(none)'}\n` +
-              `  Recognized names (folder entity + "Anonymous"/"User" + character_map): ${diag.recognizedNames.map(n => `"${n}"`).join(', ')}\n` +
+              `  Recognized names (folder being + "Anonymous"/"User" + character_map): ${diag.recognizedNames.map(n => `"${n}"`).join(', ')}\n` +
               `  Fix: rename the header to "${activeFolder.name}", add the speaker to character_map.json, or use "Anonymous".`
             );
             // Carry the head along with the reason: "no header matched" tells

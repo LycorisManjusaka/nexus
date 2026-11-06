@@ -750,7 +750,7 @@ function explainClaudeStopError(raw: string): string | null {
   const t = (raw || '').toLowerCase();
   if (!t) return null;
   if (/prompt is too long|too many (?:input )?tokens|maximum.{0,30}tokens|exceed.{0,30}(?:context|token)|context.{0,20}(?:window|length|limit)|input.{0,20}too.{0,10}(?:large|long)|request too large/.test(t)) {
-    return 'the turn exceeded the model\'s context window — too much content was included at once (typically too many, or too-large, files read in a single turn). Have the entity read fewer / smaller files per turn, or trim the conversation, then resend.';
+    return 'the turn exceeded the model\'s context window — too much content was included at once (typically too many, or too-large, files read in a single turn). Have the being read fewer / smaller files per turn, or trim the conversation, then resend.';
   }
   if (/rate.?limit|too many requests|\b429\b|overloaded|\b529\b/.test(t)) {
     return 'the provider rate-limited or was temporarily overloaded (usage limit / capacity). Wait a moment and resend.';
@@ -1026,8 +1026,9 @@ async function streamClaudeViaAgentSDK(args: {
   agentDangerousTools: boolean;    // per-Entity: enable shell (Bash → delete/exec)
   agentReadOnlyTools: boolean;     // non-Entity caller (SPU agents): Read/Glob/Grep only, never Write/Edit
   instructionOverrides: Record<string, any>; // per-Entity hidden-instruction overrides
-  language?: string;               // 'en' | 'ja' — base dict for the instructions above
-  classifierNoticeVaccine: boolean; // per-Entity: append the classifier-notice vaccine (see below)
+  language?: string;               // 'en' | 'ja' — base dict for the instructions above (BEING-facing)
+  uiLang?: string;                 // 'en' | 'ja' — the sender's screen, for HUMAN-facing notices only
+  classifierNoticeVaccine: boolean; // per-being: append the classifier-notice vaccine (see below)
   askUserEnabled: boolean;         // per-Entity: expose the AskQuestion MCP tool
   askUserTimeoutMs: number;        // wait time for an answer (0 = indefinite)
   handoff: HandoffBundle;          // per-Entity: expose the change_model MCP tool
@@ -1048,7 +1049,11 @@ async function streamClaudeViaAgentSDK(args: {
   turnAbort: AbortController;      // fires on browser Stop (req.signal) or the stop key — see POST
   betrayalSend: GuardedSender;     // guarded SSE writer — see lib/betrayalGuard.ts
 }): Promise<Response> {
-  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, classifierNoticeVaccine, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
+  const { oauthToken, model, systemPrompt, processedMessages, resumeSessionId, modelSelectedPayload, modelParams, folderName, toolUseEnabled, senseEvents, enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools, instructionOverrides, language, uiLang, classifierNoticeVaccine, askUserEnabled, askUserTimeoutMs, handoff, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend } = args;
+  // Human-facing notices only. NOT a replacement for `language` — that one
+  // feeds the hidden instructions and the Base Binding, i.e. the being's own
+  // context. See lib/noticeLanguage.ts.
+  const noticeJa = (uiLang || language) === 'ja';
   const I = resolveAgentInstructions(instructionOverrides, language);
 
   // Refusal-retry CONFIGURATION, resolved ONCE here so the parent query() and
@@ -2100,7 +2105,7 @@ async function streamClaudeViaAgentSDK(args: {
                 // freeze: the entity reaches for a file OUTSIDE its workspace
                 // while Full PC access is OFF. Log it loudly and remember it so
                 // the end-of-turn stop notice can name it.
-                const denyMsg = `Blocked: "${v}" is outside this entity's workspace. Full PC access is OFF — turn it on in the entity settings, or use a path inside the workspace.`;
+                const denyMsg = `Blocked: "${v}" is outside this being's workspace. Full PC access is OFF — turn it on in the being settings, or use a path inside the workspace.`;
                 console.warn(`[claude-oauth] tool "${toolName}" DENIED — "${v}" is outside the workspace (Full PC access OFF).`);
                 lastSandboxDenial = denyMsg;
                 return { behavior: 'deny', message: denyMsg } as any;
@@ -2625,7 +2630,7 @@ async function streamClaudeViaAgentSDK(args: {
               if (shouldNoteRateLimit(ri, rateLimitNoted)) {
                 rateLimitNoted = true;
                 pushSystemNote(injectTurnId, rateLimitNoteText(ri, language === 'ja'));
-                console.log(`${oauthTag} rate_limit system-note queued for the entity (util=${ri.utilization} status=${ri.status})`);
+                console.log(`${oauthTag} rate_limit system-note queued for the being (util=${ri.utilization} status=${ri.status})`);
               }
               continue;
             }
@@ -3010,7 +3015,7 @@ async function streamClaudeViaAgentSDK(args: {
             notes.push('the turn ended with no output at all — the model stopped without generating any text or calling any tool.');
           }
           if (lastSandboxDenial) {
-            notes.push(`a file operation was blocked — ${lastSandboxDenial} (this is the usual reason a turn stops right after "I'll read this file"). Enable "Full PC access" for this entity to let it reach files outside its workspace.`);
+            notes.push(`a file operation was blocked — ${lastSandboxDenial} (this is the usual reason a turn stops right after "I'll read this file"). Enable "Full PC access" for this being to let it reach files outside its workspace.`);
           }
           if (lastToolError) {
             // String() guards a TS control-flow quirk: lastToolError is assigned
@@ -3129,7 +3134,7 @@ async function streamClaudeViaAgentSDK(args: {
             cache_creation_input_tokens: pickErr(sdkUsage.cacheCreate, cumUsage.cacheCreate),
           }, 'claude');
           console.log(unfinishedBillingLog('[claude-oauth]', errFrame));
-          for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+          for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
             try { enqueue(f); } catch {}
           }
         }
@@ -3378,7 +3383,8 @@ async function streamViaAnthropicCompat(args: {
   agentDangerousTools: boolean;
   agentReadOnlyTools: boolean;
   instructionOverrides: Record<string, any>;
-  language?: string;
+  language?: string;               // BEING-facing: the hidden-instruction dictionary
+  uiLang?: string;                 // HUMAN-facing: the sender's screen, notices only
   askUserEnabled: boolean;
   askUserTimeoutMs: number;
   handoff: HandoffBundle;
@@ -3404,12 +3410,14 @@ async function streamViaAnthropicCompat(args: {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
     modelSelectedPayload, modelParams, folderName, senseEvents, toolUseEnabled,
     enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools,
-    instructionOverrides, language, askUserEnabled, askUserTimeoutMs, handoff,
+    instructionOverrides, language, uiLang, askUserEnabled, askUserTimeoutMs, handoff,
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
     browserEnabled, browserAllowedHosts, browserAllowAnyHost,
     computerControlEnabled, appControlEnabled, convoId, keys, injectTurnId, maxToolRounds,
     hiddenAttachmentsAccessible, conversationAttachmentRefs, turnAbort, betrayalSend,
   } = args;
+  // Human-facing notices only — see the same const in streamClaudeViaAgentSDK.
+  const noticeJa = (uiLang || language) === 'ja';
   const I = resolveAgentInstructions(instructionOverrides, language);
   const pathDesc = agentFullSystemAccess ? I.pathParamFull : I.pathParamSandbox;
   const pathRule = agentFullSystemAccess ? I.pathRuleFull : I.pathRuleSandbox;
@@ -4142,7 +4150,7 @@ async function streamViaAnthropicCompat(args: {
             providerHint: provider,
           };
           console.log(unfinishedBillingLog(`[${provider}]`, errFrame));
-          for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+          for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
             try { enqueue(f); } catch {}
           }
         }
@@ -4237,9 +4245,29 @@ export async function POST(req: Request) {
       // Empty/missing keys fall back to the English defaults.
       instructionOverrides = {},
       // Which built-in language DEFAULT_AGENT_INSTRUCTIONS come from before
-      // per-Entity overrides are layered on ('en' | 'ja'). Set in Preferences
+      // per-being overrides are layered on ('en' | 'ja'). Set in Preferences
       // -> Other. Unrecognized/missing values fall back to English.
+      //
+      // BEING-FACING. This text goes into the being's own context, so it is a
+      // property of the house and not of the device that sent the turn. Do not
+      // use it for anything a PERSON reads — see `uiLang` below.
       language = 'en',
+      // Language of the SCREEN this turn was sent from ('en' | 'ja'), for
+      // HUMAN-FACING notices only: billing after a stop, the compaction
+      // notice. Never affects what the model receives.
+      //
+      // Separate from `language` because they answer different questions and
+      // one of them cannot move. MEASURED 2026-11-06: `language` arrives from
+      // user_settings.json, which has no `language` key, so it has been 'en'
+      // on every server-side turn since the 2026-10-30 runner migration — and
+      // it CANNOT simply be fixed, because flipping it to 'ja' would switch 85
+      // instruction strings (the Base Binding among them) for every being in
+      // the house at once. That is a decision for トカゲくん and 謡, not a
+      // side effect of translating a notice. See lib/noticeLanguage.ts.
+      //
+      // Defaults to `language` so a caller that has never heard of this field
+      // behaves exactly as before.
+      uiLang = '',
       toolInstruction = '',
       toolImageInstruction = '',
       // Set by callers whose systemPrompt is an AGENT's instructions rather than
@@ -4432,6 +4460,11 @@ export async function POST(req: Request) {
       // heard of this setting must still be protected.
       betrayalDefense = true,
     } = await req.json();
+
+    // Human-facing notices only (billing after a stop, the LM Studio load
+    // warning). Kept apart from `language` on purpose — see the destructured
+    // field above and lib/noticeLanguage.ts.
+    const noticeJa = (uiLang || language) === 'ja';
 
     // ── Cross-tab visibility ────────────────────────────────────────────────
     // Publish "a turn is running for this conversation" so another tab can warn
@@ -5349,6 +5382,7 @@ export async function POST(req: Request) {
           agentReadOnlyTools,
           instructionOverrides,
           language,
+          uiLang,
           classifierNoticeVaccine,
           askUserEnabled,
           askUserTimeoutMs,
@@ -6665,7 +6699,7 @@ export async function POST(req: Request) {
                 cache_creation_input_tokens: cumUsage.cacheCreate,
               }, 'claude');
               console.log(unfinishedBillingLog('[claude-api]', errFrame));
-              for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+              for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
                 try { enqueue(f); } catch {}
               }
             }
@@ -7897,7 +7931,7 @@ export async function POST(req: Request) {
             {
               const errFrame = normalizeCacheUsage(cumGeminiUsage, 'gemini');
               console.log(unfinishedBillingLog('[gemini]', errFrame));
-              for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+              for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
                 try { enqueue(f); } catch {}
               }
             }
@@ -7954,6 +7988,7 @@ export async function POST(req: Request) {
         agentReadOnlyTools,
         instructionOverrides,
         language,
+        uiLang,
         askUserEnabled,
         askUserTimeoutMs,
         subagentEnabled,
@@ -8267,7 +8302,7 @@ export async function POST(req: Request) {
         // being returned by getLocalModelsMeta and read by nobody.
         if (!Array.isArray(lm.models) || lm.models.length === 0) {
           const why = lm.error ? `: ${lm.error}` : '';
-          localLoadWarning = language === 'ja'
+          localLoadWarning = noticeJa
             ? `LM Studio のモデル一覧を取得できませんでした${why}`
               + ` — コンテキスト長を指定した読み込みを飛ばしたので、`
               + `このターンは LM Studio 側の既定で走ります。`
@@ -8307,7 +8342,7 @@ export async function POST(req: Request) {
             // which is also the only instrument that reaches a machine or an
             // account I cannot log into.
             if (shouldReportLoadFailure(loadRes)) {
-              localLoadWarning = language === 'ja'
+              localLoadWarning = noticeJa
                 ? `LM Studio へのモデル読み込み（${targetCtx} トークン）が失敗しました: ${loadRes.message}`
                   + ` — このターンは LM Studio 側の既定のコンテキスト長で走ります。`
                   + `長いメッセージが「コンテキストが足りない」で拒否されたら、原因はこれです。`
@@ -10421,7 +10456,7 @@ export async function POST(req: Request) {
             {
               const errFrame = normalizeCacheUsage(cumOaiUsage, providerHint);
               console.log(unfinishedBillingLog(`[${providerHint}]`, errFrame));
-              for (const f of unfinishedBillingFrames(errFrame, language === 'ja')) {
+              for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
                 try { enqueue(f); } catch {}
               }
             }

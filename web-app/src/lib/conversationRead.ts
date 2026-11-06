@@ -272,7 +272,7 @@ export async function readConversationByName(
   const all = await listLogs();
   const logs = all.filter((l: any) => l.folderName === folderName);
   if (logs.length === 0) {
-    return { ok: false, error: `No conversations found in this entity.` };
+    return { ok: false, error: `No conversations found in this being.` };
   }
 
   // Prefer an exact normalized title match; fall back to a contains-match.
@@ -312,7 +312,7 @@ export async function readConversationByName(
   await sweepMirrors(mirrorDir, expected);
 
   if (!hit) {
-    return { ok: false, error: `No conversation named "${name}" was found in this entity.` };
+    return { ok: false, error: `No conversation named "${name}" was found in this being.` };
   }
 
   // Privacy guard — inactive conversations are non-public and must be refused.

@@ -911,7 +911,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'appActKeepBackgroundParam', label: 'Tool: app_act — "keep_background" parameter' },
   { key: 'webSearchDesc', label: 'Tool: web_search — description' },
   { key: 'webFetchDesc', label: 'Tool: web_fetch — description' },
-  { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-Entity rule)' },
+  { key: 'audioSessionNotice', label: 'Audio Session: what-it-does notice (fixed, before the per-being rule)' },
   // REMOVED FROM THIS LIST 2026-10-01 — `absoluteBaseBinding` and
   // `absoluteBaseBindingInitial`. The Binding is burned in (lib/baseBinding.ts)
   // and the route uses the BUILT-IN text, ignoring any override, so leaving

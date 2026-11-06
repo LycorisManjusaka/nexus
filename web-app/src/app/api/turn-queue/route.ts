@@ -156,6 +156,7 @@ export async function POST(req: Request) {
           // A rerun/continue came from a BUTTON on a message, so there is a
           // screen behind it and that screen's installation should answer.
           host: await installationId(),
+          uiLang: typeof body.uiLang === 'string' ? body.uiLang : '',
         });
         return NextResponse.json({ ok: true, id: r.item.id, position: r.position });
       }
@@ -179,7 +180,16 @@ export async function POST(req: Request) {
         // `system` item has no screen to belong to — those are exactly the
         // items the store-level host flag is still for, so they are left
         // un-addressed on purpose (see QueueItem.host).
-        ...(kind === 'user_message' ? { host: await installationId() } : {}),
+        // `uiLang` follows the same rule, one step further: a notice about this
+        // message is read by whoever typed it, so it comes back in the language
+        // their screen was speaking. An item with no screen gets no language
+        // and falls back to the stored setting (see lib/noticeLanguage.ts).
+        ...(kind === 'user_message'
+          ? {
+              host: await installationId(),
+              uiLang: typeof body.uiLang === 'string' ? body.uiLang : '',
+            }
+          : {}),
       });
       return NextResponse.json({ ok: true, id: r.item.id, position: r.position });
     }

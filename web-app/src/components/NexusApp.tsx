@@ -225,7 +225,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           ? data.find((f: any) => f.name === pendingLinkRef.current!.folderName)
           : null;
         if (pendingLinkRef.current && !linked) {
-          setDeepLinkError(`No entity named "${pendingLinkRef.current.folderName}".`);
+          setDeepLinkError(`No being named "${pendingLinkRef.current.folderName}".`);
           pendingLinkRef.current = null;
           setPendingScrollMessageId(null);
         }

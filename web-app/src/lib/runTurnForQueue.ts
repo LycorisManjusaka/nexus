@@ -72,6 +72,7 @@ import { describeProviderError } from '@/lib/providerErrors';
 import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 import { planRebase } from '@/lib/saveRebase';
 import { undeliveredNotice } from '@/lib/undeliveredInjection';
+import { noticeLanguage } from '@/lib/noticeLanguage';
 import type { DrainedInjection } from '@/lib/injectMessage';
 
 /** What the runner could not do itself. */
@@ -290,6 +291,14 @@ export async function runTurnForQueue(
   if (!log) {
     return { ok: false, stage: 'no-log', reason: `no log on disk for ${convoId}`, consumedIds: [] };
   }
+
+  // Language for every notice this pass can produce — resolved ONCE, from the
+  // batch, so the three notice sites below cannot drift apart. Read the items
+  // and not `deps.globalSettings.language`: that field is `user_settings.json`,
+  // which has no `language` key, so all three sites had been pinned to English
+  // since the 2026-10-30 runner migration even though each had a hand-written
+  // Japanese version. See lib/noticeLanguage.ts for the measurement.
+  const noticeJa = noticeLanguage(items, deps.globalSettings as { language?: string } | null) === 'ja';
 
   // Only the leading run of one shape. A command cannot merge with text, and
   // taking the claim whole would make composeBatch skip the command while the
@@ -641,7 +650,7 @@ export async function runTurnForQueue(
   };
 
   /**
-   * Attach "your interjection never reached the entity" to the reply, when one
+   * Attach "your interjection never reached the being" to the reply, when one
    * was left over.
    *
    * MUST only be called at the turn's LAST save — the read is destructive, and
@@ -650,15 +659,14 @@ export async function runTurnForQueue(
    *
    * The notice channel, not the message body: `notices` is not in
    * `buildSlimHistory`'s allowlist, so this reaches the reader and never
-   * reaches the model. The entity being told "a message you never received was
+   * reaches the model. Telling the being "a message you never received was
    * lost" would be an instruction to act on something it cannot see.
    */
   const withUndelivered = (assistant: Record<string, unknown>): Record<string, unknown> => {
     if (!deps.takeUndelivered) return assistant;
     let notice: string | null = null;
     try {
-      const lang = (deps.globalSettings as { language?: string } | null)?.language;
-      notice = undeliveredNotice(deps.takeUndelivered(deps.injectTurnId), lang === 'ja');
+      notice = undeliveredNotice(deps.takeUndelivered(deps.injectTurnId), noticeJa);
     } catch {
       // Never let the report cost the reply. A throw here would lose a
       // generated answer over a warning about a lost one.
@@ -824,7 +832,14 @@ export async function runTurnForQueue(
     // itself. Passing the id anyway keeps one name for the thing across the
     // browser path and this one.
     const body = buildTurnRequestBody(
-      { ...shell, messages: slim as unknown as SlimHistoryMessage[] },
+      {
+        ...shell,
+        messages: slim as unknown as SlimHistoryMessage[],
+        // Human-facing notices the ROUTE produces (billing after a stop, the
+        // compaction notice) follow the sender's screen, not the house
+        // instruction language. Same resolution as the runner's own three.
+        uiLang: noticeJa ? 'ja' : 'en',
+      },
       {
         ...(plan.continueFromMessageId ? { continueFromMessageId: plan.continueFromMessageId } : {}),
         ...(plan.handoffFrom ? { handoffFrom: plan.handoffFrom } : {}),
@@ -919,12 +934,11 @@ export async function runTurnForQueue(
     // message and consumes the batch — the same ending the stream-level stop
     // takes, so an auto-trigger cannot re-fire what someone just cancelled.
     if (deps.wasStopped?.() === true) {
-      const lang = (deps.globalSettings as { language?: string } | null)?.language;
       // A DIFFERENT sentence from the stream-level stop on purpose: there, text
       // exists and the notice says how far it got. Here nothing was sent, and
       // that the turn cost nothing is the fact a reader wants.
       acc.notices.push(
-        lang === 'ja'
+        noticeJa
           ? 'このターンは送信される前に停止されました。モデルは呼ばれていません。'
           : 'Turn stopped before it was sent — the model was never called.',
       );
@@ -973,9 +987,8 @@ export async function runTurnForQueue(
         // buildSlimHistory's allowlist, so this reaches the reader and never
         // reaches the model (a stop explanation replayed as context would
         // teach the model about being stopped).
-        const lang = (deps.globalSettings as { language?: string } | null)?.language;
         acc.notices.push(
-          lang === 'ja'
+          noticeJa
             ? 'このターンは停止されました。返答はここまでです。'
             : 'Turn stopped by request — this reply is as far as it got.',
         );

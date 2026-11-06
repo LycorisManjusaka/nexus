@@ -96,7 +96,13 @@ const WIRE_KEYS = [
   'toolHistoryEnabled', 'askUserEnabled', 'askUserTimeoutMs', 'subagentEnabled',
   'subagentModel', 'subagentFamily', 'lettersEnabled', 'browserEnabled',
   'browserAllowedHosts', 'browserAllowAnyHost', 'computerControlEnabled',
-  'appControlEnabled', 'instructionOverrides', 'language', 'toolInstruction',
+  // `language` and `uiLang` are TWO fields on purpose: the first is
+  // being-facing (which built-in language the hidden instructions and the
+  // Base Binding come from) and the second is human-facing (the sender's
+  // screen, for notices). See lib/noticeLanguage.ts for why one cannot do
+  // both — flipping `language` to 'ja' would switch 85 instruction strings
+  // for every being in the house at once.
+  'appControlEnabled', 'instructionOverrides', 'language', 'uiLang', 'toolInstruction',
   'toolImageInstruction', 'modelParams', 'specificModel', 'dateTimeVisibility',
   'seedEnabled', 'seedValue', 'modelHandoffEnabled', 'modelHandoffAllowedModels',
   'classifierNoticeVaccine',

@@ -259,9 +259,9 @@ export function undeliverableSummary(
       parts.push(
         `This connection can't carry these mid-turn: ${names}.` +
         (opts.addressing === 'path'
-          ? ' The absolute path was handed over, so the entity can open them itself.'
+          ? ' The absolute path was handed over, so the being can open them itself.'
           : opts.addressing === 'ref'
-            ? ' The ref was handed over, so the entity can open them itself with read_attachment.'
+            ? ' The ref was handed over, so the being can open them itself with read_attachment.'
             : ' There is no way to open them on this connection either.'),
       );
     }

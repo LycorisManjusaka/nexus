@@ -1,4 +1,4 @@
-// Telling the sender when a mid-turn interjection never reached the entity.
+// Telling the sender when a mid-turn interjection never reached the being.
 //
 // WHY THIS CAN HAPPEN AT ALL
 // An interjection is delivered at a TOOL-CALL BOUNDARY — that is the only seam
@@ -19,8 +19,8 @@
 // present the notice is also the recovery path: copy it, send it again.
 //
 // WHAT IS NOT CLAIMED
-// This says the note was not delivered. It does NOT say why the entity made no
-// further tool call — that is not knowable from here, and "the entity ignored
+// This says the note was not delivered. It does NOT say why the being made no
+// further tool call — that is not knowable from here, and "the being ignored
 // you" would be a false reading of a turn that simply ended.
 //
 // A notice is screen-only (never saved, never sent to the model), so this is
@@ -74,8 +74,8 @@ export function undeliveredNotice(drained: DrainedInjection | null | undefined, 
   } else {
     lines.push(
       texts.length > 1
-        ? `⚠️ ${texts.length} interjections never reached the entity.`
-        : '⚠️ Your interjection never reached the entity.',
+        ? `⚠️ ${texts.length} interjections never reached the being.`
+        : '⚠️ Your interjection never reached the being.',
     );
     lines.push('An interjection can only be handed over at a tool-call boundary. This turn made no tool call after yours arrived, so there was nowhere to put it.');
     if (media.length > 0) {

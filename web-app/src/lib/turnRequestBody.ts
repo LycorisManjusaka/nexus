@@ -98,6 +98,12 @@ export interface TurnRequestInput {
   appControlEnabled: boolean;
 
   instructionOverrides: Record<string, string>;
+  /**
+   * 'ja' | 'en' — the language of the SCREEN this turn was sent from, for
+   * human-facing notices only. Optional: a caller with no screen behind it
+   * omits it and the body falls back to the house `language`.
+   */
+  uiLang?: string;
   toolInstruction: string;
   toolImageInstruction: string;
   modelParams: Record<string, unknown>;
@@ -205,7 +211,18 @@ export function buildTurnRequestBody(
     computerControlEnabled: input.computerControlEnabled,
     appControlEnabled: input.appControlEnabled,
     instructionOverrides: input.instructionOverrides,
+    // BEING-FACING. Picks which built-in language the hidden instructions
+    // default to (85 keys in DEFAULT_AGENT_INSTRUCTIONS_JA, the Base Binding
+    // among them), so it goes into the being's own context and must stay
+    // house-wide — flipping it per device would change a being's tool
+    // descriptions by phone-vs-desktop and break prompt caching each time.
     language: g?.language || 'en',
+    // HUMAN-FACING, and deliberately a second field. A notice is never sent to
+    // the model and is read by whoever sent the message, so it follows that
+    // person's screen. Supplied by the runner from the queued item's `uiLang`;
+    // absent ⇒ fall back to `language` so no call site has to special-case it.
+    // See lib/noticeLanguage.ts for the measurement that separated the two.
+    uiLang: input.uiLang || g?.language || 'en',
     toolInstruction: input.toolInstruction,
     toolImageInstruction: input.toolImageInstruction,
     modelParams: {

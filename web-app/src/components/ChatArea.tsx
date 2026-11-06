@@ -41,7 +41,7 @@ import { applyTurnSaved, type TurnSavedEvent } from '@/lib/turnSaved';
 import { retiredModelLabel } from '@/lib/retiredModels';
 import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
-import { useT, Tx, renderRich } from '@/lib/i18n';
+import { useT, useLanguage, Tx, renderRich } from '@/lib/i18n';
 import { isNumberedIdentityTitle } from '@/lib/convoNaming';
 import { effectiveFullAccess, fullAccessForcedByShell, conversationToolsEnabled } from '@/lib/agentCapabilities';
 import {
@@ -469,6 +469,9 @@ function modelOnFamilySwitch(
 
 export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, newerLogTitle, soulGeneration }: any) {
   const t = useT();
+  // Stamped onto every queued message so a server-generated notice about it
+  // comes back in the language this screen is reading (see lib/noticeLanguage.ts).
+  const uiLanguage = useLanguage();
   const [messages, setMessages] = useState<any[]>([]);
   const [title, setTitle] = useState('New Conversation');
   // The `<identity>_<n>` name the sidebar gave this conversation at creation.
@@ -3016,6 +3019,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'enqueue', being: folderName, convoId, from, text, attachments,
+          // The language THIS screen is rendering in, so a notice about this
+          // message comes back in it. `useLanguage()` and not
+          // globalSettings.language: the context value is what the UI actually
+          // painted with, and a notice that disagrees with the surrounding
+          // interface is the one thing this field exists to prevent.
+          uiLang: uiLanguage,
         }),
       });
       const d = await res.json().catch(() => null);
@@ -3051,7 +3060,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       const res = await fetch('/api/turn-queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'enqueue', being: folderName, convoId, kind, targetMsgId }),
+        body: JSON.stringify({ action: 'enqueue', being: folderName, convoId, kind, targetMsgId, uiLang: uiLanguage }),
       });
       const d = await res.json().catch(() => null);
       if (!res.ok || !d?.ok) {
@@ -6081,7 +6090,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 <span className="w-2 h-2 bg-primary rounded-full animate-bounce"></span>
               </div>
               <div className="flex flex-col gap-0.5">
-                {/* "<Entity> is using <model> to <action>…"
+                {/* "<Being> is using <model> to <action>…"
                     It used to read "<Family> is <action>ing…" — which named the
                     wrong actor. The entity is who acts; the model is what it
                     acts THROUGH, and naming the family ("Claude") also hid which
@@ -6694,7 +6703,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.ctx.noteLabel')}</label>
                     {/* Read-only HERE, editable in the overrides panel below.
                         The switch stays with the feature (this is the decision
-                        "does the entity get told"); the TEXT moved to the one
+                        "does the being get told"); the TEXT moved to the one
                         place all hidden instruction text is written, so there
                         is no second editable copy to drift from the first.
                         Still shown, because a decision you can flip should let

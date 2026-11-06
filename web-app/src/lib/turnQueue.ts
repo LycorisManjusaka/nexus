@@ -155,6 +155,24 @@ export interface QueueItem {
    */
   host?: string;
   /**
+   * UI language of the screen this was typed on — 'ja' | 'en' (2026-11-06).
+   *
+   * Carried for the same reason as `host`, one step further: the installation
+   * whose screen you typed into is the one that answers, so the language that
+   * screen was speaking is the language a NOTICE about this message comes back
+   * in. A notice is never sent to the model, so this is a human-facing choice
+   * and belongs to the sender, not to the house.
+   *
+   * It is deliberately NOT the same field as `body.language` in a turn request.
+   * That one picks which built-in language a being's hidden instructions
+   * default to — it goes into the being's own context and must stay house-wide.
+   * See lib/noticeLanguage.ts for the measurement that separated them.
+   *
+   * Absent ⇒ no screen (letter, timer), or an item queued before this field.
+   * Both fall back to the stored setting and then to English.
+   */
+  uiLang?: string;
+  /**
    * Set when a runner CLAIMED this item, ran a pass, and gave it back without
    * consuming it (2026-11-04, F20 — つよ).
    *
@@ -321,7 +339,7 @@ function isItemFile(name: string): boolean {
 export async function enqueue(
   being: string,
   convoId: string,
-  draft: { kind?: QueueItemKind; from: string; payload: unknown; host?: string },
+  draft: { kind?: QueueItemKind; from: string; payload: unknown; host?: string; uiLang?: string },
   opts?: Opts
 ): Promise<{ item: QueueItem; position: number }> {
   if (!being || !convoId) throw new Error('turnQueue.enqueue: being and convoId are required');
@@ -340,6 +358,10 @@ export async function enqueue(
   // to an absent key anyway, but writing the key conditionally says so out loud.
   const host = (draft.host || '').trim();
   if (host) item.host = host;
+  // Same rule as `host`: written only when there is one, so an item with no
+  // screen behind it keeps the shape it had before the field existed.
+  const uiLang = (draft.uiLang || '').trim();
+  if (uiLang) item.uiLang = uiLang;
 
   // `wx` so a repeated id (impossible in practice) fails loudly instead of
   // overwriting a queued message.

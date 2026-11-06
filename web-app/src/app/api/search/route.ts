@@ -27,7 +27,7 @@ export async function POST(req: Request) {
 
     if (scope === 'all') {
       const folders = await listSearchableFolders();
-      if (folders.length === 0) return NextResponse.json({ error: 'No entities to search' }, { status: 400 });
+      if (folders.length === 0) return NextResponse.json({ error: 'No beings to search' }, { status: 400 });
       return NextResponse.json(await searchFolders(folders, String(query), opts));
     }
 

@@ -99,6 +99,15 @@ export type TurnInputDefaults = Pick<TurnRequestInput, TurnInputDefaultKeys>;
  *   dateTimeVisibility      ChatArea: `defaultDateTimeVisibility || 'all'`.
  *   claudeAuthMode          ChatArea: `oauthIsDefault ? 'oauth' : 'api-key'`
  *                           — depends on whether an API key exists.
+ *   uiLang                  the language of the SCREEN that sent the turn,
+ *                           carried on the queue item. No constant can be
+ *                           right: a default of 'en' here is the bug this
+ *                           field was added to fix (lib/noticeLanguage.ts),
+ *                           and a default of 'ja' would mistranslate a notice
+ *                           for every other reader. The body falls back to
+ *                           the house `language` when a caller omits it, so
+ *                           the absence is answered one layer down rather
+ *                           than guessed here.
  *
  * Listed rather than silently omitted: a gap in a defaults table reads
  * exactly like a field nobody needed.
@@ -111,6 +120,7 @@ export const SUPPLIED_BY_CALLER = [
   'modelParams',
   'dateTimeVisibility',
   'claudeAuthMode',
+  'uiLang',
 ] as const;
 
 export const TURN_INPUT_DEFAULTS: TurnInputDefaults = {

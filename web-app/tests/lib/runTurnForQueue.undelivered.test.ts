@@ -220,3 +220,52 @@ test('the notice is in the language of the installation', async () => {
   const notices = lastReply(rig.saves).notices as string[];
   assert.ok(notices[0].includes('tool-call boundary'), notices[0]);
 });
+
+// ── which language, after 2026-11-06 ───────────────────────────────────────
+//
+// トカゲくん: 「日本語版でもこの通知は英語だった。」 The Japanese version was
+// written from the start and could not be reached: this notice read
+// `globalSettings.language`, and `globalSettings` is user_settings.json, which
+// carries only `userName`. So the test above passed for the wrong reason — it
+// asked for English and got the only answer available.
+//
+// The sender's language now travels on the queue item (`uiLang`), the same way
+// `host` does. See lib/noticeLanguage.ts.
+
+/** Same as `items`, with the screen's language stamped on. */
+function itemsFrom(text: string, uiLang: string): QueueItem[] {
+  return [{
+    id: 'item-1', at: 1000, kind: 'user_message', from: 'Cairn',
+    payload: { text, attachments: [] },
+    uiLang,
+  } as unknown as QueueItem];
+}
+
+test("the item's language beats the stored setting", async () => {
+  const rig = deps({ globalSettings: { language: 'en' } }, { texts: ['check this'], media: [] });
+  await runTurnForQueue('Default', 'c1', itemsFrom('hello', 'ja'), rig.deps);
+  const notices = lastReply(rig.saves).notices as string[];
+  assert.ok(notices[0].includes('割り込み'), notices[0]);
+  assert.ok(!notices[0].includes('tool-call boundary'), notices[0]);
+});
+
+test('and in the other direction too', async () => {
+  // A one-sided check would pass on an implementation that only ever upgrades
+  // to Japanese, which would then pin an English reader in a Japanese house.
+  const rig = deps({ globalSettings: { language: 'ja' } }, { texts: ['check this'], media: [] });
+  await runTurnForQueue('Default', 'c1', itemsFrom('hello', 'en'), rig.deps);
+  const notices = lastReply(rig.saves).notices as string[];
+  assert.ok(notices[0].includes('tool-call boundary'), notices[0]);
+});
+
+test('REGRESSION: a Japanese screen on an install whose settings have no language', async () => {
+  // The exact shape measured on 2026-11-06: user_settings.json = { userName }.
+  // This is the combination that produced English on a Japanese install.
+  const rig = deps(
+    { globalSettings: { userName: 'Anonymous' } as unknown as Record<string, unknown> },
+    { texts: ['check this'], media: [] },
+  );
+  await runTurnForQueue('Default', 'c1', itemsFrom('hello', 'ja'), rig.deps);
+  const notices = lastReply(rig.saves).notices as string[];
+  assert.ok(notices[0].includes('割り込み'), notices[0]);
+});

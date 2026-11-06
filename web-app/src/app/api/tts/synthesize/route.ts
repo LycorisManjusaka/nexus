@@ -262,7 +262,7 @@ async function synthesizeSegment(text: string, engine: number | string, char_idx
 
       const queryUrl = `${base}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`;
       if (queryUrl.length > LONG_QUERY_WARN_BYTES) {
-        console.warn(`[tts] AivisSpeech audio_query URL is ${queryUrl.length} bytes for ${text.length} chars — long enough to be rejected by the engine's HTTP layer. Consider turning Context mode off for this entity, or shortening the chunk.`);
+        console.warn(`[tts] AivisSpeech audio_query URL is ${queryUrl.length} bytes for ${text.length} chars — long enough to be rejected by the engine's HTTP layer. Consider turning Context mode off for this being, or shortening the chunk.`);
       }
       const queryRes = await fetch(queryUrl, { method: 'POST' });
       if (!queryRes.ok) {
