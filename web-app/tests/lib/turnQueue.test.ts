@@ -92,6 +92,74 @@ describe('turnQueue: ordering and shape', () => {
     assert.deepEqual(texts(await pending(being, CONVO, opts)), ['one', 'two', 'three']);
   });
 
+  /**
+   * The regression this pair exists for (MEASURED 2026-11-01, fixed
+   * 2026-11-07): FIFO lives in the FILENAME (`pendingWithErrors` does
+   * `names.sort()`), so two items stamped with the same millisecond used to tie
+   * and fall through to comparing uuids — a coin flip. 'returns items
+   * oldest-first' above caught it roughly 1 run in 3. These two make the same
+   * defect deterministic.
+   *
+   * WHY THE CLOCK IS FROZEN, and not just a fast burst: my first version of
+   * this test queued 24 items back to back and asserted FIFO, on the theory
+   * that a burst lands inside one tick. MEASURED: it does not. One enqueue
+   * costs several ms here because it ends with `pending()`, which re-reads every
+   * sibling — so the burst spans ~24 separate milliseconds and a BROKEN build
+   * passes it. A frozen clock is the only form that reproduces the condition
+   * (same `at`) on demand. 5th time this week an instrument of mine accused
+   * working code, or in this case excused broken code.
+   *
+   * AND THE FREEZE IS AT THE REAL READING, not a far-future constant. My first
+   * attempt froze at 4_000_000_000_000 so the counter could not already be past
+   * it — and that pushed `lastAt` to the year 2096 for the REST OF THE PROCESS,
+   * which failed the next two scenarios ("at 4000000000048 is not now"). That
+   * is a real property of the fix, now written down where it lives: `nextAt`
+   * cannot come back from a clock that jumped forward. Freezing at `now` keeps
+   * the condition under test (one repeated reading) without the side effect.
+   */
+  it('keeps FIFO when every item lands in the same millisecond', async () => {
+    const want = Array.from({ length: 24 }, (_, i) => `m${String(i).padStart(2, '0')}`);
+    const realNow = Date.now;
+    const frozen = realNow();
+    Date.now = () => frozen;
+    try {
+      for (const text of want) await put(text);
+    } finally {
+      Date.now = realNow;
+    }
+    assert.deepEqual(texts(await pending(being, CONVO, opts)), want);
+  });
+
+  it('never stamps two items with the same `at`, even on a frozen clock', async () => {
+    const realNow = Date.now;
+    const frozen = realNow();
+    Date.now = () => frozen;
+    let ats: number[];
+    try {
+      for (let i = 0; i < 24; i++) await put(`m${i}`);
+      ats = (await pending(being, CONVO, opts)).map((i) => i.at);
+    } finally {
+      Date.now = realNow;
+    }
+    // Strictly increasing, not merely non-decreasing. Equal stamps ARE the
+    // defect: `sort()` on the names is what has to tell two items apart.
+    for (let i = 1; i < ats.length; i++) {
+      assert.ok(ats[i] > ats[i - 1], `item ${i} stamped ${ats[i]} after ${ats[i - 1]}`);
+    }
+  });
+
+  /**
+   * The other half of the monotonic claim: `at` must stay a TIME, not drift off
+   * into a counter. A burst can run a few ms ahead of the clock; it may not run
+   * minutes ahead. Without this, `nextAt` could return `lastAt + 1000` and
+   * every ordering test above would still pass.
+   */
+  it('stays close to the real clock', async () => {
+    await put('one');
+    const [item] = await pending(being, CONVO, opts);
+    assert.ok(Math.abs(item.at - Date.now()) < 5_000, `at ${item.at} is not now`);
+  });
+
   it('keeps the sender label per item — a batch must say who each is from', async () => {
     await put('from him', 'Lizard-kun');
     await put('from her', 'Pilot');

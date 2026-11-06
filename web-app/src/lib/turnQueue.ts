@@ -116,7 +116,16 @@ export function itemIsForThisInstallation(
 export interface QueueItem {
   /** Unique per item. Also the ack/dedupe handle for the enqueuer. */
   id: string;
-  /** Epoch ms at enqueue. FIFO is by this value, ties broken by `id`. */
+  /**
+   * Epoch ms at enqueue, made strictly monotonic per process (see `nextAt`).
+   *
+   * CORRECTION 2026-11-07: this said "FIFO is by this value, ties broken by
+   * `id`". There are no ties any more — and the old sentence described the
+   * DEFECT as if it were the design. `id` is a uuid, so "broken by `id`" meant
+   * "broken at random"; two items stamped in one millisecond came back in
+   * either order. The guarantee now is that `at` never repeats, so the
+   * filename sort it feeds is a real order.
+   */
   at: number;
   kind: QueueItemKind;
   /**
@@ -294,6 +303,56 @@ export const LEASE_NAME = '.lease';
 /** Item files are `<padded at>-<id>.json`; 15 digits keeps ms epoch sortable. */
 const AT_PAD = 15;
 
+/**
+ * The last `at` this process handed out.
+ *
+ * MEASURED 2026-11-01, fixed 2026-11-07: FIFO is carried entirely by the
+ * filename (`pendingWithErrors` does `names.sort()`), so two items stamped with
+ * the SAME millisecond fall back to comparing their uuids — i.e. a coin flip.
+ * `turnQueue.test.ts` enqueues three items back to back and asserts
+ * oldest-first; it caught this roughly 1 in 3 runs. The test is right and was
+ * never loosened: a queue that reorders is a real defect, and now that the
+ * repository is public a suite that fails 1 run in 3 reads as "this project is
+ * broken".
+ *
+ * Why monotonic `at` and not a sequence number in the filename: lines 587 and
+ * 646 recover an item's id by SLICING the name at a fixed offset (`AT_PAD + 1`).
+ * Adding a field would silently shift that cut and corrupt every id read back
+ * from disk, including for items already on disk. Making `at` itself monotonic
+ * keeps the filename shape byte-identical, so nothing that parses it changes.
+ *
+ * Cost: an item can carry an `at` up to a few ms ahead of the wall clock. The
+ * only consumer that displays it rounds to the second (ChatArea's "arrived at
+ * HH:MM:SS"), so that is invisible. Bonus: this also survives a clock that
+ * steps backwards (NTP), which `Date.now()` alone does not.
+ *
+ * THE ASYMMETRY, found by the test that proves this (2026-11-07): a clock that
+ * steps BACKWARD is absorbed, a clock that jumps FORWARD is not. Once `lastAt`
+ * has been set to some future reading, every later item in this process is
+ * `lastAt + 1` — it never returns to the wall clock. A test that froze
+ * `Date.now()` at the year 2096 made the next two scenarios stamp items in
+ * 2096 ("at 4000000000048 is not now"). In production that needs NTP to jump
+ * the clock forward, which is rarer than a step back and costs only the
+ * displayed second, so it is accepted rather than defended: recovering would
+ * mean deciding how big a gap is "a jump" rather than "a long idle", and that
+ * threshold cannot be measured from inside one process.
+ *
+ * LIMIT, stated out loud: this is per-process. 3000 and 3001 are separate Node
+ * processes on one shared local_data, so two installs stamping the same
+ * conversation in the same millisecond can still tie. A human cannot send twice
+ * in one millisecond, and the programmatic senders (being-to-being messages,
+ * mail, timers) all run from the one runner — so there is no path today that
+ * reaches it. If one appears, the fix is a lock, not a bigger counter.
+ */
+let lastAt = 0;
+
+/** `Date.now()`, but never equal to or behind the previous call. */
+function nextAt(): number {
+  const now = Date.now();
+  lastAt = now > lastAt ? now : lastAt + 1;
+  return lastAt;
+}
+
 function beingsRoot(opts?: Opts): string {
   return opts?.beingsDir || BEINGS_DIR;
 }
@@ -348,7 +407,8 @@ export async function enqueue(
 
   const item: QueueItem = {
     id: crypto.randomUUID(),
-    at: Date.now(),
+    // Monotonic, not `Date.now()` — see `nextAt`. The filename carries FIFO.
+    at: nextAt(),
     kind: draft.kind || 'user_message',
     from: draft.from || '',
     payload: draft.payload ?? null,
