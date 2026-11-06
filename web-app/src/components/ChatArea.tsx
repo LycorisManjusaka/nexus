@@ -12,6 +12,7 @@ import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptReso
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { mintTurnId } from '@/lib/turnName';
+import { shouldAutoScroll, nextStickState } from '@/lib/scrollMagnet';
 import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
 import { uiProbe } from '@/lib/uiProbe';  // ⚠ TEMPORARY (F32) — remove with the probes
 import {
@@ -1133,6 +1134,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Token count for the tool instruction when tool-use is enabled, otherwise 0.
   const [attachmentInstructionTokens, setAttachmentInstructionTokens] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Scroll magnet: is the viewport close enough to the bottom that new content
+  // should pull it down? Starts attached — a conversation opens at its end.
+  // Lives in a ref, not state, because the auto-scroll effect reads it during
+  // a render it must not itself trigger. See src/lib/scrollMagnet.ts.
+  const stickToBottomRef = useRef(true);
   const initialMount = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const handleSendRef = useRef<any>(null);
@@ -2621,22 +2627,46 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Transient "copied ✓" feedback for the link buttons ('convo' | message id).
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
-  // Scroll to bottom only when new messages arrive or AI is generating
+  // ── Auto-scroll (magnet) ─────────────────────────────────────────────────
+  // Follow new content down ONLY while the magnet is attached, i.e. while the
+  // viewport is near the bottom. Scrolled up to read earlier messages? Then
+  // the next chunk no longer yanks the view back. Decision logic and the
+  // reasoning behind the threshold live in src/lib/scrollMagnet.ts.
   useEffect(() => {
-    if (scrollRef.current) {
-      const isGenerating = loading;
-      const lengthIncreased = messages.length > prevMessagesLengthRef.current;
-
-      // A pending deep-link scroll owns the viewport. Without this guard the
-      // initial load (0 → N messages) counts as "length increased", slams to the
-      // bottom, and the link's smooth scroll then animates all the way back up
-      // through a long conversation.
-      if ((isGenerating || lengthIncreased) && !deepLinkScrollPending) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      }
+    const el = scrollRef.current;
+    if (el) {
+      const go = shouldAutoScroll({
+        stick: stickToBottomRef.current,
+        generating: loading,
+        lengthIncreased: messages.length > prevMessagesLengthRef.current,
+        deepLinkPending: deepLinkScrollPending,
+      });
+      // `behavior: 'auto'` overrides the container's `scroll-smooth` class on
+      // purpose. An animated jump has midpoints, and a midpoint is positionally
+      // identical to a user reading upward — the magnet would detach itself
+      // mid-animation. Jumping in one frame means every scroll event we cause
+      // reports the bottom, so position alone is a sufficient signal.
+      if (go) el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
     }
     prevMessagesLengthRef.current = messages.length;
   }, [messages, loading, deepLinkScrollPending]);
+
+  // Re-attach the magnet when the conversation changes. A fresh conversation
+  // opens at its end, so carrying a detached magnet across the switch would
+  // leave the new one refusing to follow its own first reply.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+  }, [convoId]);
+
+  const handleListScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = nextStickState({
+      scrollHeight: el.scrollHeight,
+      scrollTop: el.scrollTop,
+      clientHeight: el.clientHeight,
+    });
+  }, []);
 
   // ── Close/reload guard ───────────────────────────────────────────────────
   // A reload or tab close mid-generation destroys the turn: the auto-save
@@ -5968,7 +5998,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           Written as `px-6 pt-6` + an explicit `pb-*` rather than `p-6 pb-*` so
           that no two padding utilities compete and the result does not depend
           on Tailwind's sort order. Size comes from `bubbleActionBar.ts`. */}
-      <div className={`flex-1 overflow-y-auto ${isMobile ? `px-6 pt-6 ${MOBILE_LIST_PAD_BOTTOM}` : 'p-6'} scroll-smooth custom-scrollbar`} ref={scrollRef}>
+      <div className={`flex-1 overflow-y-auto ${isMobile ? `px-6 pt-6 ${MOBILE_LIST_PAD_BOTTOM}` : 'p-6'} scroll-smooth custom-scrollbar`} ref={scrollRef} onScroll={handleListScroll}>
         {/* This gutter is what the per-message action bar hangs in on mobile —
             it must stay >= the bar's height, or the bar covers the next
             message with no error anywhere. Same single source. */}
