@@ -11,6 +11,7 @@ import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
+import { resolveAudioSessionRule } from '@/lib/audioSessionRule';
 import { mintTurnId } from '@/lib/turnName';
 import { shouldAutoScroll, nextStickState, jumpToBottom } from '@/lib/scrollMagnet';
 import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
@@ -83,6 +84,17 @@ const MAX_JS_STRING_LENGTH = 536_870_888;
 // Below the hard ceiling but close enough that the next attachment is likely
 // to be fatal. Used to warn while saving still works, and to gate sending.
 const SAVE_SIZE_WARN_THRESHOLD = Math.floor(MAX_JS_STRING_LENGTH * 0.9);
+
+/**
+ * Header controls that exist and work but that nobody uses: the Tools menu
+ * (recalculate tokens / convert PNGs / strip timestamps — one-off repairs) and
+ * Live Session (Gemini native audio, which wants a fresh look at the models
+ * before anyone is told to rely on it). Hidden rather than deleted ahead of
+ * the public release, 2026-11-06, at Lizard-kun's request: both will come
+ * back, and deleting them would also delete the handlers, menus and modals
+ * that the rest of this file still references. Flip to `true` to restore.
+ */
+const SHOW_RETIRED_HEADER_CONTROLS = false;
 
 // ── This tab's identity ──────────────────────────────────────────────────────
 // Sent with every turn so the server-side turn registry can tell a tab whether
@@ -775,15 +787,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // poll fired once and injected the kohai/ear_log "[Name] text" merge into the
   // input box even though the conversation actually has VRChat OFF.
   const [vrchatMode, setVrchatMode] = useState(false);
-  const [vrchatRule, setVrchatRule] = useState(defaultVrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]");
+  // Starts EMPTY, not seeded with the default — see resolveAudioSessionRule.
+  // An empty box is what makes the placeholder visible, which is the only
+  // signal that says "nothing is stored here, this is the built-in text".
+  const [vrchatRule, setVrchatRule] = useState(defaultVrchatRule || '');
+  const audioRuleFallback = t('behavior.audio.ruleDefault');
   // Fixed factual notice ("what this mode actually does") composed AHEAD of the
   // per-Entity `vrchatRule` behavioral text everywhere vrchatRule is used below.
   // Still per-Entity overridable via instructionOverrides.audioSessionNotice —
   // "customizable" per the design, just correct-by-default rather than blank.
   const audioSessionRuleText = useMemo(() => {
     const notice = (instructionOverrides['audioSessionNotice'] || DEFAULT_AGENT_INSTRUCTIONS.audioSessionNotice || '').trim();
-    return notice ? `${notice}\n\n${vrchatRule}`.trim() : vrchatRule;
-  }, [instructionOverrides, vrchatRule]);
+    const rule = resolveAudioSessionRule(vrchatRule, defaultVrchatRule, audioRuleFallback);
+    return notice ? `${notice}\n\n${rule}`.trim() : rule;
+  }, [instructionOverrides, vrchatRule, defaultVrchatRule, audioRuleFallback]);
   const [localAiName, setLocalAiName] = useState(aiName);
   const [firstOriginalMessageId, setFirstOriginalMessageId] = useState<string | null>(null);
   // When true, the NEXT message added to the conversation (regardless of role)
@@ -1890,7 +1907,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setInstructionOverrides(pick('instructionOverrides', {}));
         setDateTimeVisibility(defaultDateTimeVisibility || 'all');
         setVrchatMode(defaultVrchatMode || false);
-        setVrchatRule(defaultVrchatRule || "[RULE: 添付した画像を文脈に、単純な画像解説は禁止/あなたはバーチャル世界の存在として隣で振る舞う事/英字禁止(外来語はカタカナ)／出力の長さは入力に合わせること／長文禁止]");
+        setVrchatRule(defaultVrchatRule || '');
         setLocalAiName(aiName);
         setFirstOriginalMessageId(null);
         setFirstOriginalIsNext(false);
@@ -5649,7 +5666,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             <Layers size={16} />
           </button>
-          <div className="relative">
+          {/* Tools menu and Live Session: HIDDEN, not removed (2026-11-06).
+              Neither is in use — the three maintenance actions behind the
+              wrench are one-off repairs, and Live Session needs a fresh look
+              at the native-audio models before anyone relies on it. A control
+              that is shown but unusable teaches a new reader that the app is
+              broken, which costs more than a missing button. Both blocks stay
+              wired and compiled so turning them back on is deleting one
+              `false &&`; the handlers, menus and modals below are untouched. */}
+          {SHOW_RETIRED_HEADER_CONTROLS && <div className="relative">
             <button
               onClick={() => setToolsOpen(v => !v)}
               className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
@@ -5699,10 +5724,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 </div>
               </>
             )}
-          </div>
-          <button onClick={() => setLiveOpen(true)} className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors" title={t('chat.live.title')}>
+          </div>}
+          {SHOW_RETIRED_HEADER_CONTROLS && <button onClick={() => setLiveOpen(true)} className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors" title={t('chat.live.title')}>
             <Radio size={16} />
-          </button>
+          </button>}
           <button onClick={() => setIsPromptModalOpen(true)} className="p-1.5 text-muted-foreground hover:text-indigo-500 transition-colors" title={t('chat.editPrompt.title')}>
             <Settings2 size={16} />
           </button>
@@ -7670,9 +7695,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     <p className="text-xs text-muted-foreground mb-2">
                       {t('behavior.audio.ruleHelp')}
                     </p>
+                    {/* The placeholder is the exact text that goes out when
+                        this is left empty — not an example of one. Showing a
+                        sample here would make an empty field unreadable: the
+                        reader could not tell which text the being receives. */}
                     <textarea
                       value={vrchatRule}
                       onChange={(e) => setVrchatRule(e.target.value)}
+                      placeholder={audioRuleFallback}
                       className="w-full min-h-[100px] p-3 bg-background border border-border rounded-xl text-sm font-mono resize-none focus:ring-2 focus:ring-indigo-500/50 outline-none"
                     />
                   </div>

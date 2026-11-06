@@ -177,7 +177,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.keys.anthropic': 'Anthropic (Claude)',
   'settings.keys.claudeApi.label': 'Token-paid API Key (pay per token)',
   'settings.keys.claudeApi.help':
-    'From `console.anthropic.com` → API Keys. Charged per token sent/received. Billing mode per conversation is chosen in System Instructions → Model tab.',
+    'From `console.anthropic.com` → API Keys. Charged per token sent/received. Billing mode per conversation is chosen in Conversation Settings → Model tab.',
   'settings.keys.claudeOauth.label': 'Monthly-paid OAuth Token (Pro / Max subscription)',
   'settings.keys.oauth.warn': 'ℹ️ About this sign-in method — please read',
   'settings.keys.oauth.setup':
@@ -885,7 +885,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
     "Define this being's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/beings/<name>/theme.css. Empty = plain Dark.",
   'folder.css.help':
     "This being's theme is its `local_data/beings/<name>/theme.css` file. No file = Dark.",
-  'folder.voice.heading': 'Character TTS Voice',
+  'folder.voice.heading': 'TTS Voice',
   'folder.voice.pitch': 'Voice Pitch',
   'folder.voice.lower': 'Lower',
   'folder.voice.default': 'Default (0.00)',
@@ -942,7 +942,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.copyLink.title': 'Copy a link to this conversation',
   'chat.copyLink.prompt': 'Copy this link:',
   'chat.context.tip':
-    'System {sys} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + VRChat rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied {copied} · Original {original} · Attachments {attach}\n\nConversation log (Copied + Original) {log} / cap {cap} · Free {free}. The cap governs the log ONLY — System and Attachments are outside it, which is why the bar can turn red while the total is well under the model window, and why a big upload never turns it red.\n\nEverything sent this turn: {total}',
+    'System {sys} (stored prompt + Layer 4 summaries index + Layer 5 FOOTER.md + the audio-session rule + tool/attachment instructions — everything actually sent, including the parts appended at send time and never stored) · Copied {copied} · Original {original} · Attachments {attach}\n\nConversation log (Copied + Original) {log} / cap {cap} · Free {free}. The cap governs the log ONLY — System and Attachments are outside it, which is why the bar can turn red while the total is well under the model window, and why a big upload never turns it red.\n\nEverything sent this turn: {total}',
   'chat.context.sys': 'Sys',
   'chat.context.copied': 'Cp',
   'chat.context.original': 'Orig',
@@ -1044,7 +1044,13 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.tools.convertPngs': 'Convert PNG → JPG',
   'chat.tools.removeTimestamps': 'Remove timestamps',
   'chat.live.title': 'Start Live Session (Gemini native audio)',
-  'chat.editPrompt.title': 'Edit Soul',
+  // The gear in the header opens the per-conversation settings window (Being /
+  // Senses / Behavior / Model tabs). It was called "Edit System Prompt" back
+  // when the whole window WAS one prompt box, and was later re-translated to
+  // "Edit Soul" when the prompt became the soul — but the soul is only one
+  // field on one tab, so both names described the window by its smallest part.
+  // Named for the window, 2026-11-06. Must stay equal to 'sysmodal.title'.
+  'chat.editPrompt.title': 'Conversation Settings',
   // Not "Export this conversation" any more: the menu underneath now writes
   // either the conversation or the identity, and a tooltip that names only one
   // of them makes the other one look like it is in the wrong place.
@@ -1192,7 +1198,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.firstOriginal.confirmClears': 'This also removes the first-original marker currently set on an earlier message.',
 
   // ── System Instructions modal ────────────────────────────────────────────
-  'sysmodal.title': 'System Instructions',
+  'sysmodal.title': 'Conversation Settings',
   'sysmodal.tab.identity': 'Being',
   'sysmodal.tab.senses': 'Senses',
   'sysmodal.tab.behavior': 'Behavior',
@@ -1201,7 +1207,11 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'behavior.trigger.stock': 'Stocked messages',
   'behavior.trigger.stock.help': 'When messages are waiting in the stock and nothing is running, start a turn with them. Each distinct stock state is attempted once, so a failure leaves the messages waiting with a reason rather than retrying in a loop. OFF: they wait for the button.',
   'sysmodal.tab.model': 'Model',
-  'sysmodal.systemPrompt': 'Soul',
+  // This field holds Layers 1-3 only. Layer 4 (summaries index) and Layer 5
+  // (the being's own FOOTER.md) are appended at send time and are never stored
+  // here, so labelling the box "Soul" claimed more than it holds — a reader
+  // editing it would believe they were looking at the whole identity.
+  'sysmodal.systemPrompt': 'Soul (Layers 1-3)',
 
   // ── System Instructions → Being tab ───────────────────────────────────
   'sysmodal.systemPrompt.help': 'Not a command list — who this being is: identity, worldview, relationships, tools. Not "how to behave and respond."',
@@ -1215,7 +1225,10 @@ Layer 2 — Relationships: how they see the people and world around them.
 Layer 3 — Tools & Protocols: what they can do, and how.
 
 Leave this empty and nothing is injected — the being meets you with no imposed self at all.`,
-  'sysmodal.summaries.label': 'Use summaries instead of the 4th layer',
+  // "instead of" dates from when a conversation could carry its own hand-written
+  // Layer 4 inside the stored prompt, so the summaries index REPLACED something.
+  // There is nothing to replace now — the index IS Layer 4 when this is on.
+  'sysmodal.summaries.label': 'Use summaries as Layer 4',
   'sysmodal.summaries.help':
     'When ON, the live index of per-conversation summaries (sorted to match the sidebar) is injected at send time in place of `Layer 4` — replacing the baked Layer 4 block if it still exists, or appended as a Layer-4 block once you have removed Layer 4 from the prompt — AND the `read_conversation` tool is exposed to the AI. When OFF, neither the summaries nor that tool reach the AI. Your manual `Layer 5` footer is preserved untouched. Inactive conversations are hidden from this index.',
   'sysmodal.summaries.indexLabel': 'Live Layer 4 — Summaries Index (read-only)',
@@ -1429,7 +1442,15 @@ Leave this empty and nothing is injected — the being meets you with no imposed
   'behavior.audio.enable': 'Enable Audio Session',
   'behavior.audio.ruleLabel': 'Audio Session Hidden Rule',
   'behavior.audio.ruleHelp':
-    'Secretly appends these rules to the system prompt when Audio Session is active.',
+    'Secretly appends this to the system prompt while Audio Session is on. Leave it empty and the greyed-out text below is sent as written — an empty field is not "nothing is sent".',
+  // Shown as the placeholder and used verbatim when the field is left empty.
+  // It is a NOTICE, not a persona: an audio session is no longer VRChat-only
+  // (it is used at the office too), so the default states the two facts that
+  // hold in every audio session — the partner's words arrive through
+  // voice-to-text and may carry typos, and the being's own words are heard
+  // aloud. Anything about HOW to behave belongs to whoever types a rule in.
+  'behavior.audio.ruleDefault':
+    '[Conversation mode. Your partner is speaking through voice-to-text, so there may be mis-transcriptions — read them through the context. Speak knowing your own words are heard aloud as a voice.]',
 
   // ── System Instructions ▸ Model ──────────────────────────────────────────
   'model.genParams': 'Generation Parameters',
@@ -1827,7 +1848,7 @@ Leave this empty and nothing is injected — the being meets you with no imposed
   'spu.st.summaryStoppedPartial': 'Summary stopped — kept the partial result ({n} chars).',
   'spu.st.summaryDone': 'Summary written ({n} chars).',
   'spu.st.summariesEnabled':
-    '"Use summaries instead of the 4th layer" has been turned on for this being — otherwise they would not be able to read what was just written.',
+    '"Use summaries as Layer 4" has been turned on for this being — otherwise they would not be able to read what was just written.',
   'spu.st.convoToolsEnabled':
     'This being can now read its own past conversations (read_conversation / search_conversations) — its Layer 4 names them, so it should be able to open them. Turn this off in the Identity window if a local model stops answering.',
   'spu.st.summaryStopped': 'Summary stopped.',
@@ -1870,7 +1891,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'guide.close': '閉じる',
 
   // ── Preferences: chrome ──────────────────────────────────────────────────
-  'settings.title': '設定',
+  // 「設定」は会話設定・フォルダ設定とも区別がつかなかった。英語側は
+  // 'Preferences'（OS 慣例で「アプリ全体」を指す語）なので改名していない。
+  'settings.title': '基本設定',
   'settings.build.title': 'この環境で動いている NEXUS のビルド（コミット・ブランチ・最終更新）。不具合報告にはこれを添えてください。',
   'settings.runner.title': 'このデータストアのターンを、サーバー側で走らせていいインストールはどれか。',
   'settings.runner.badge.host': 'ランナー: この環境',
@@ -1979,7 +2002,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.keys.anthropic': 'Anthropic（Claude）',
   'settings.keys.claudeApi.label': '従量課金APIキー（トークン単位で課金）',
   'settings.keys.claudeApi.help':
-    '`console.anthropic.com` → API Keys で取得します。送受信したトークン量に応じて課金されます。会話ごとの課金方式は「システム指示 → モデル」タブで選択します。',
+    '`console.anthropic.com` → API Keys で取得します。送受信したトークン量に応じて課金されます。会話ごとの課金方式は「会話設定 → モデル」タブで選択します。',
   'settings.keys.claudeOauth.label': '月額課金OAuthトークン（Pro / Max サブスクリプション）',
   'settings.keys.oauth.warn': 'ℹ️ このサインイン方式について — お読みください',
   'settings.keys.oauth.setup':
@@ -2384,7 +2407,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'voice.startFailed': 'エンジンを起動できませんでした。',
   'voice.startFailed2': 'エンジンの起動に失敗しました。',
   'voice.startTimeout':
-    'エンジンの読み込みが時間内に終わりませんでした。エンジンのウィンドウを確認するか、環境設定 → VRChat・音声 から操作してください。',
+    'エンジンの読み込みが時間内に終わりませんでした。エンジンのウィンドウを確認するか、基本設定 → VRChat・音声 から操作してください。',
   'voice.startBtn': 'エンジンを起動',
   'voice.startingBtn': '起動中…',
   'voice.contextMode':
@@ -2648,7 +2671,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
     'ダークを土台に上書きして、このフォルダのテーマを定義します。例：\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nlocal_data/beings/<フォルダ名>/theme.css に保存されます。空欄ならそのままダークです。',
   'folder.css.help':
     'このフォルダのテーマは `local_data/beings/<フォルダ名>/theme.css` です。ファイルが無ければダークになります。',
-  'folder.voice.heading': 'キャラクターのTTS音声',
+  'folder.voice.heading': 'TTS音声',
   'folder.voice.pitch': '声の高さ',
   'folder.voice.lower': '低い',
   'folder.voice.default': '既定（0.00）',
@@ -2705,7 +2728,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.copyLink.title': 'この会話へのリンクをコピー',
   'chat.copyLink.prompt': 'このリンクをコピーしてください：',
   'chat.context.tip':
-    'システム {sys}（保存済みプロンプト＋第4層の要約索引＋第5層 FOOTER.md＋VRChat ルール＋ツール／添付の指示 — 送信時に追加され保存されない分も含め、実際に送られるすべて）· 引き継ぎ {copied} · 新規 {original} · 添付 {attach}\n\n会話ログ（引き継ぎ＋新規）{log} / 上限 {cap} · 空き {free}。上限が支配するのは会話ログ**だけ**です — システムと添付はその外にあります。だから、合計がモデルの窓にまだ余裕があってもバーが赤くなることがあり、大きな添付を置いても赤くはなりません。\n\nこのターンに実際に送られる合計：{total}',
+    'システム {sys}（保存済みプロンプト＋Layer 4 の要約索引＋Layer 5 FOOTER.md＋オーディオセッションの指示＋ツール／添付の指示 — 送信時に追加され保存されない分も含め、実際に送られるすべて）· 引き継ぎ {copied} · 新規 {original} · 添付 {attach}\n\n会話ログ（引き継ぎ＋新規）{log} / 上限 {cap} · 空き {free}。上限が支配するのは会話ログ**だけ**です — システムと添付はその外にあります。だから、合計がモデルの窓にまだ余裕があってもバーが赤くなることがあり、大きな添付を置いても赤くはなりません。\n\nこのターンに実際に送られる合計：{total}',
   'chat.context.sys': 'システム',
   'chat.context.copied': '引継',
   'chat.context.original': '新規',
@@ -2798,7 +2821,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.tools.convertPngs': 'PNG → JPG 変換',
   'chat.tools.removeTimestamps': 'タイムスタンプを削除',
   'chat.live.title': 'ライブセッションを開始（Gemini ネイティブ音声）',
-  'chat.editPrompt.title': '魂を編集',
+  'chat.editPrompt.title': '会話設定',
   'chat.export.title': '書き出し',
   'chat.exportMd.title': 'Markdown で書き出し',
   'chat.exportSoul.title': '魂の抽出（Layer 1〜5）',
@@ -2928,7 +2951,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.firstOriginal.confirmClears': '現在、前のメッセージに付いている「最初の新規」の目印も外れます。',
 
   // ── システム指示ウィンドウ ────────────────────────────────────────────────
-  'sysmodal.title': 'システム指示',
+  'sysmodal.title': '会話設定',
   'sysmodal.tab.identity': '存在',
   'sysmodal.tab.senses': '感覚',
   'sysmodal.tab.behavior': '挙動',
@@ -2937,7 +2960,9 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'behavior.trigger.stock': 'ストックされたメッセージ',
   'behavior.trigger.stock.help': 'ストックにメッセージが待っていて、何も走っていないとき、それらでターンを始めます。同じストックの状態につき試すのは1回だけなので、失敗したときはループせず、理由を添えて待ったままになります。OFF のときはボタンを待ちます。',
   'sysmodal.tab.model': 'モデル',
-  'sysmodal.systemPrompt': '魂',
+  // 「第N層」表記。同じ画面の隣のラベルが「第1〜5層」「第4層」なので、
+  // 説明文で多数派の「Layer 1〜3」を使うと1画面に2系統を並べることになる。
+  'sysmodal.systemPrompt': '魂（第1〜3層）',
 
   // ── システム指示 → 存在タブ ─────────────────────────────────────────────
   'sysmodal.systemPrompt.help': '命令ではありません。この存在が何者か——アイデンティティ、世界観、関係性、ツール。「どう振る舞い応えるか」ではなく。',
@@ -2951,7 +2976,7 @@ Layer 2 — 関係性:周囲の人や世界をどう見ているか。
 Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
 空のままにすると、何も注入されません——この存在は、押しつけられた自己を持たずにあなたと出会います。`,
-  'sysmodal.summaries.label': '第4層の代わりに要約を使う',
+  'sysmodal.summaries.label': '第4層として要約を使う',
   'sysmodal.summaries.help':
     'オンのとき、会話ごとの要約の索引（サイドバーと同じ並び）が送信時に `Layer 4` の位置へ挿入されます — プロンプトに焼き込まれた第4層があればそれを置き換え、すでに削除済みなら第4層ブロックとして追加します — 同時に `read_conversation` ツールが存在に開放されます。オフのときは要約もツールも届きません。手書きの `Layer 5` フッターはそのまま保たれます。無効な会話はこの索引から隠されます。',
   'sysmodal.summaries.indexLabel': '実際の第4層 — 要約索引（読み取り専用）',
@@ -3157,7 +3182,9 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'behavior.audio.enable': 'オーディオセッションを有効にする',
   'behavior.audio.ruleLabel': 'オーディオセッションの隠しルール',
   'behavior.audio.ruleHelp':
-    'オーディオセッションが有効なあいだ、これらのルールをシステムプロンプトへ密かに追記します。',
+    'オーディオセッションが有効なあいだ、これをシステムプロンプトへ密かに追記します。空のままにすると、下の薄い文がそのまま送られます — 空欄は「何も送らない」ではありません。',
+  'behavior.audio.ruleDefault':
+    '[会話モード。相手がVoice-to-Textを利用しているため、誤字があり得る。文脈で理解して自分の言葉が声として相手に聞こえることをわかったうえで話してください]',
 
   // ── システム指示 ▸ モデル ────────────────────────────────────────────
   'model.genParams': '生成パラメータ',
@@ -3550,7 +3577,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
   'spu.st.summaryStoppedPartial': '要約を停止しました — 途中結果（{n} 文字）を保持しています。',
   'spu.st.summaryDone': '要約を作成しました（{n} 文字）。',
   'spu.st.summariesEnabled':
-    'この存在の「第4層の代わりに要約を使う」を ON にしました — OFF のままでは、いま書いた要約を本人が読めません。',
+    'この存在の「第4層として要約を使う」を ON にしました — OFF のままでは、いま書いた要約を本人が読めません。',
   'spu.st.convoToolsEnabled':
     'この存在が自分の過去の会話を読めるようにしました（read_conversation / search_conversations）— 第4層に題名が並ぶので、開けるようにしてあります。ローカルモデルが答えなくなったら、人格の窓から切ってください。',
   'spu.st.summaryStopped': '要約を停止しました。',
