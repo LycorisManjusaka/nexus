@@ -35,17 +35,15 @@ NEXUSは、働き手がAIになっても規則は変わらない、という前�
 ```powershell
 git clone https://github.com/LycorisManjusaka/nexus.git
 cd nexus
-.\install.ps1
+.\INSTALL.bat
 ```
 
-続けて:
+Node.js が無ければ入れて、依存を入れて、ブラウザ操作が使う Chromium を落として、`local_data/` の種を置いて、そのままアプリを起動する。サーバーが答えた時点でブラウザが [http://localhost:3000](http://localhost:3000) を開く。
 
-```powershell
-cd web-app
-npm run dev
-```
+次からは `.\RUN.bat`（または `cd web-app; npm run dev`）で起動する。
 
-[http://localhost:3000](http://localhost:3000) を開く。
+> **`install.ps1` を直接ではなく、`INSTALL.bat` を実行する。** Windows は既定でPowerShellスクリプトの実行を禁止している（`Get-ExecutionPolicy` → `Restricted`）ので、素のマシンでは `.\install.ps1` が「このシステムではスクリプトの実行が無効になっているため」で止まる。`INSTALL.bat` は、そのファイル一つに対して `-ExecutionPolicy Bypass` を渡すだけの二行の包みだ。`.bat` を使いたくなければ自分で渡せばいい：
+> `powershell -ExecutionPolicy Bypass -File .\install.ps1`
 
 サイドバーの **使い方** ボタンでアプリの中の案内が開く。初回起動・睡眠・道具・声・肖像・配色・データの置き場所が全部書いてあって、全ページを横断して検索できる。日本語で読める。
 

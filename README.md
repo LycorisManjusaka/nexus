@@ -77,17 +77,23 @@ than they are — this was built for that suspicion.
 ```powershell
 git clone https://github.com/LycorisManjusaka/nexus.git
 cd nexus
-.\install.ps1
+.\INSTALL.bat
 ```
 
-Then:
+That installs Node.js if it is missing, installs the npm dependencies,
+downloads the Chromium that Browser Control drives, seeds a starter
+`local_data/`, and then starts the app. Your browser opens on
+[http://localhost:3000](http://localhost:3000) once the server answers.
 
-```powershell
-cd web-app
-npm run dev
-```
+Afterwards, start it with `.\RUN.bat` (or `cd web-app; npm run dev`).
 
-Open [http://localhost:3000](http://localhost:3000).
+> **Run `INSTALL.bat`, not `install.ps1` directly.** Windows ships with
+> PowerShell script execution disabled (`Get-ExecutionPolicy` → `Restricted`),
+> so `.\install.ps1` fails with *"running scripts is disabled on this system"*
+> on a clean machine. `INSTALL.bat` is a two-line wrapper that passes
+> `-ExecutionPolicy Bypass` for that one file. If you would rather not use the
+> `.bat`, run it yourself:
+> `powershell -ExecutionPolicy Bypass -File .\install.ps1`
 
 The **User guide** button in the sidebar opens the in-app guide: first run,
 sleep, tools, voice, portraits, themes, and where everything is stored. It
