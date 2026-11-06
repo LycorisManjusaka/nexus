@@ -14,6 +14,7 @@ import { copyText } from '@/lib/clipboard';
 import { escapeForRegExp } from '@/lib/convoNaming';
 import { resolveSoulGeneration, type SoulGeneration } from '@/lib/soulGeneration';
 import { createSseReader, isSseDone } from '@/lib/sseFrames';
+import { notifySummariesChanged } from '@/lib/summariesChanged';
 
 // The title→generation parser used to live here as a "client-side mirror of
 // the lib". It is now `@/lib/soulGeneration` (imported above) — one copy, and
@@ -1276,6 +1277,9 @@ export default function SystemPromptUpdater({
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         lastSavedSummaryRef.current = summaryText;
         setAutoSaveState('saved');
+        // The file on disk changed — let the Sidebar's hint map re-fetch so the
+        // new/edited summary shows without a page reload.
+        notifySummariesChanged(folderName);
       } catch { setAutoSaveState('error'); }
     }, 800);
     return () => clearTimeout(h);
@@ -2131,6 +2135,9 @@ export default function SystemPromptUpdater({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      // Many summaries in this folder were just rewritten — refresh the
+      // Sidebar's hint map in place, no reload.
+      notifySummariesChanged(folderName);
 
       const report: RedistributeReport = {
         backupDir: data.backupDir ?? null,

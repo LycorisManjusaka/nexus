@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, HelpCircle, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
@@ -17,6 +17,7 @@ import IdentityDropdown from './IdentityDropdown';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations } from '@/lib/deepLink';
 import { nextConversationTitle } from '@/lib/convoNaming';
+import { onSummariesChanged } from '@/lib/summariesChanged';
 import {
   DEFAULT_MAX_CONVERSATION_LOG,
   LOG_CAP_UNIT,
@@ -140,23 +141,42 @@ export default function Sidebar({
   // against the viewport instead.
   const [hoveredConvo, setHoveredConvo] = useState<{ id: string; top: number; left: number } | null>(null);
 
-  useEffect(() => {
-    const name = activeFolder?.name;
+  // One fetch of every summary in a folder. `clear` wipes the map first so a
+  // slow fetch can never paint the PREVIOUS folder's summaries against this
+  // folder's titles (folder change); a refresh-in-place after a write skips the
+  // clear so the hint never flickers to empty. The seq guard makes the LATEST
+  // fetch win — a folder switch, or a second write-notification arriving during
+  // this request, must not let a stale response overwrite a newer one.
+  const summaryFetchSeq = useRef(0);
+  const fetchFolderSummaries = useCallback(async (name: string, opts?: { clear?: boolean }) => {
+    const seq = ++summaryFetchSeq.current;
     if (!name) { setFolderSummaries({}); return; }
-    let cancelled = false;
-    // Clear first so a slow fetch can never show the PREVIOUS folder's
-    // summaries against this folder's titles.
-    setFolderSummaries({});
-    (async () => {
-      try {
-        const res = await fetch(`/api/summaries?folder=${encodeURIComponent(name)}&mode=all`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && data?.summaries) setFolderSummaries(data.summaries);
-      } catch { /* preview is optional — a failed fetch just means no tooltip */ }
-    })();
-    return () => { cancelled = true; };
-  }, [activeFolder?.name]);
+    if (opts?.clear) setFolderSummaries({});
+    try {
+      const res = await fetch(`/api/summaries?folder=${encodeURIComponent(name)}&mode=all`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (seq === summaryFetchSeq.current && data?.summaries) setFolderSummaries(data.summaries);
+    } catch { /* preview is optional — a failed fetch just means no tooltip */ }
+  }, []);
+
+  // Fetch when the folder changes.
+  useEffect(() => {
+    fetchFolderSummaries(activeFolder?.name || '', { clear: true });
+  }, [activeFolder?.name, fetchFolderSummaries]);
+
+  // Re-fetch when a summary is written anywhere in THIS tab — the "Write
+  // Summary" button, a summary-pane auto-save, or "Redistribute Layers 1-4".
+  // A freshly created hint then appears with no page reload (reported
+  // 2026-11-06, トカゲくん: the summary looked uncreated until a reload). Only
+  // when the signal names the folder on screen; a write for another entity
+  // cannot change these hints.
+  useEffect(() => {
+    return onSummariesChanged((folder) => {
+      const name = activeFolder?.name;
+      if (name && folder === name) fetchFolderSummaries(name);
+    });
+  }, [activeFolder?.name, fetchFolderSummaries]);
 
   // Must stay identical to summaryKey() in lib/summaryStorage.ts. That module
   // can't be imported here (it pulls in fs/path) so the rule is duplicated;
