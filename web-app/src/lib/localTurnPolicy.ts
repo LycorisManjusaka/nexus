@@ -8,8 +8,9 @@
  * The `reasoning_effort` value to put on an LM Studio request, or `undefined`
  * to send no such field at all.
  *
- * MEASURED 2026-11-06 on LM Studio's /v1/chat/completions, four Gemma 4
- * builds, identical prompt ("What is 17 + 26?"), each loaded at ctx 80128:
+ * MEASURED 2026-11-06 on LM Studio 0.4.28b2 (llama.cpp backend 2.70.0),
+ * /v1/chat/completions, four Gemma 4 builds, identical prompt
+ * ("What is 17 + 26?"), each loaded at ctx 80128:
  *
  *   model                                          baseline          reasoning_effort:'none'
  *   huihui-...-abliterated-i1                      151 ch / 66 tk    0 ch / 3 tk
@@ -26,10 +27,31 @@
  * template down its no-reasoning branch, so the thinking preamble was never
  * emitted. Nothing is injected into the conversation.
  *
- * Scope of the claim: Gemma 4 family only. Other architectures (Qwen, Llama,
- * Mistral derivatives) are UNMEASURED here — the field is standard and LM
- * Studio handles it server-side, but whether a given GGUF's template honours
- * it is a property of that template.
+ * Scope of the claim: Gemma 4 family only, on the version named above. Other
+ * architectures (Qwen, Llama, Mistral derivatives) are UNMEASURED here — the
+ * field is standard and LM Studio handles it server-side, but whether a given
+ * GGUF's template honours it is a property of that template.
+ *
+ * THE VERSION IS PART OF THE SCOPE, not decoration. The route carried the
+ * opposite claim — "no portable way to turn local reasoning off" — measured
+ * 2026-06-08 on LM Studio ~0.4.12, and it was TRUE then. What changed was not
+ * the models: the heretic GGUF Lizard-kun used to talk through has been
+ * byte-identical on disk since 2026-05-07, a month BEFORE that measurement.
+ * The tool moved under it — `.lmstudio/.internal/historical-version-info.json`
+ * records 0.4.12 -> 0.4.28 and three config migrations, two of which name the
+ * two symptoms directly (`v0_4_16_b2_defaultContextLength8192`, and
+ * `v0_4_17_b3_copyJinjaPredictionPromptTemplateToLoad` — the layer where a
+ * template's reasoning branch is selected).
+ *
+ * So: a universal negative about a third party's tool is a READING, and this
+ * one went stale in five months without anyone touching this repo. Name the
+ * version so the next reader can compare it to their own instead of treating
+ * the sentence as a property of the world. See
+ * beings/Cairn/workspace/claims-with-no-expiry.md for the full post-mortem,
+ * including the sharper half: the old comment also predicted the error code
+ * (`chat_template_kwargs` would 400). It returns 200 and leaves thinking
+ * unchanged — so a test written from that prediction could never have caught
+ * the change. Do not write predicted errors into a dead-end note.
  *
  * ── THE OTHER THREE VALUES DO NOT WORK HERE, MEASURED 2026-11-06 ───────────
  *
