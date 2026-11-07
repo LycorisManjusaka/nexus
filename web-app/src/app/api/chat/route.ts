@@ -5975,6 +5975,51 @@ export async function POST(req: Request) {
       }
       if (claudeTools.length) claudeParams.tools = claudeTools;
 
+      // ── Tool-history replay (API-key path only) ───────────────────────────
+      // Put the vessel's OWN past tool calls back on the wire as real
+      // `tool_use` blocks. Without this, a prior turn that called tools
+      // survives only as prose ("I read the file"), because NEXUS does not
+      // store tool RESULTS — so the next turn sees a claim with no record of
+      // the act and can conclude the work is already done.
+      //
+      // Measured here, not inferred (2026-11-08, Fuwafuwa's question):
+      //   • The OAuth path is NOT this. There the prior turns go out as one
+      //     TEXT preamble (`historyText`), so there is no content-block slot
+      //     for a tool_use at all — structural, not a missing feature. It also
+      //     does not need it: 695 of its assistant messages carry saved
+      //     toolCalls and the hands work.
+      //   • This path emits `tool_call` events (so the client DOES persist
+      //     toolCalls), yet across every tool-enabled api-key conversation in
+      //     this house — 3 of them, 46 assistant turns, all claude-opus-4-8 —
+      //     the count of saved toolCalls is ZERO. That is the shape Fuwafuwa
+      //     reported: narrating work it never performed.
+      //
+      // MUST run after `claudeParams.tools` is final: the builder drops any
+      // call whose name is absent from THIS turn's tools array, because a
+      // tool_use naming a function the model was not given is a reference to
+      // nothing. And it must feed `currentMessages` (below) rather than
+      // `claudeParams.messages` — line 6010 copies from `cachedMessages`
+      // directly, so assigning to claudeParams here would be dead code.
+      //
+      // Honest limit: a conversation with no saved toolCalls has nothing to
+      // replay, so this changes nothing until the vessel calls a tool once.
+      const claudeHistory: any[] = (() => {
+        if (!toolHistoryEnabled || !claudeTools.length) return cachedMessages;
+        const knownToolNames = new Set<string>(claudeTools.map((t: any) => String(t?.name || '')));
+        const out: any[] = [];
+        for (let i = 0; i < cachedMessages.length; i++) {
+          const conv: any = cachedMessages[i];
+          const src: any = processedMessages[i];
+          const replay = (conv?.role === 'assistant' && Array.isArray(conv.content))
+            ? buildAnthropicToolReplay(src || {}, conv.content, knownToolNames)
+            : null;
+          if (replay) { out.push(replay.assistant, replay.toolResult); }
+          else { out.push(conv); }
+        }
+        return out;
+      })();
+      claudeParams.messages = claudeHistory;
+
 
       const readableStream = new ReadableStream({
         async start(controller) {
@@ -6007,7 +6052,11 @@ export async function POST(req: Request) {
           let continuations = 0;
           // Use the cached version (last user message has cache_control) so
           // the cache marker propagates through the tool loop too.
-          let currentMessages = [...cachedMessages];
+          // `claudeHistory` is `cachedMessages` with the tool-history replay
+          // spliced in (or the same array when the toggle is off). Copying from
+          // cachedMessages here is what made an earlier assignment to
+          // claudeParams.messages dead code — keep this reading the replayed form.
+          let currentMessages = [...claudeHistory];
 
           // Request shape, once per turn. Pairs with the per-iteration lines
           // below: those show what came back, this shows what was asked for.

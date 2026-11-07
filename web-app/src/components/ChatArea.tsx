@@ -7058,7 +7058,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 )}
               </div>
 
-              {/* ── Replay the entity's own past tool calls ───────────────────
+              {/* ── Replay the being's own past tool calls ────────────────────
                   Shown for every family whose history assembly can put the
                   prior tool calls back on the wire. That was the OpenAI-compatible
                   list only UNTIL 2026-11-07, when the Anthropic surface got its
@@ -7067,9 +7067,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   this medicine is for — so they belong here now. Omitting them
                   was the bug Fuwafuwa caught: the replay shipped, but a hidden
                   checkbox meant toolHistoryEnabled could never be turned on, so
-                  it never ran. Still excluded: Claude (OAuth path, no replay)
-                  and Gemini (calls the tool regardless of broken history, 3/3). */}
-              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'Minimax' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local' || localAiName === 'Kimi' || localAiName === 'MiMo') && (
+                  it never ran.
+
+                  CLAUDE IS TWO PATHS, and the line before 2026-11-08 said
+                  "Claude (OAuth path, no replay)" — naming one of them as if it
+                  were the family. The api-key path builds Anthropic content
+                  blocks and now carries the replay, so it is listed; the OAuth
+                  path sends prior turns as ONE text preamble and has no
+                  content-block slot for a tool_use, so it is not (and does not
+                  need one — measured: 695 of its assistant messages carry saved
+                  toolCalls, and Fuwafuwa reports its hands are fine).
+
+                  Still excluded: Gemini (calls the tool regardless of broken
+                  history, 3/3). */}
+              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'Minimax' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local' || localAiName === 'Kimi' || localAiName === 'MiMo' || (localAiName === 'Claude' && claudeAuthMode === 'api-key')) && (
                 <div>
                   <label className="flex items-start gap-2 cursor-pointer">
                     <input
