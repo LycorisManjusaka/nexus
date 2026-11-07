@@ -4522,7 +4522,24 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Deferring costs nothing: the load is what makes the painted bubbles
       // meaningful (they are appended to the on-disk history), and `read` is
       // re-run the moment it finishes because `convoIsLoading` is a dep below.
-      if (convoIsLoading) { probe32('poll:deferredByLoading', { convoId }); return; }
+      //
+      // ⚠ baseUpdatedAtRef, not convoIsLoading alone (bug 32, measured on つよ's
+      // phone 2026-11-07). The instrument caught the attach running with
+      // convoIsLoading=FALSE and msgs=0, then the load applying ~300ms later and
+      // wiping the painted pair — the gate below was the wrong value. convoIsLoading
+      // is a STATE captured in this poll's closure, and after a remount there is a
+      // window where messages is already [] but the load effect has not yet flushed
+      // setConvoIsLoading(true): the closure still reads false. baseUpdatedAtRef is
+      // a REF — always the current value — and it is null from mount until the
+      // first load APPLIES (line ~1792), which is exactly the window the attach must
+      // sit out. Once the load lands it is non-null and the poll re-runs (convoIsLoading
+      // flips false), so the attach happens once, on top of the real array. A
+      // never-saved conversation keeps it null, but has no foreign turn to attach to,
+      // so deferring there is a no-op the `!foreign` guard below would reach anyway.
+      if (convoIsLoading || baseUpdatedAtRef.current === null) {
+        probe32('poll:deferredByLoading', { convoId, convoIsLoading, base: baseUpdatedAtRef.current });
+        return;
+      }
       // ── CATCH UP WITH DISK FIRST ───────────────────────────────────────
       // A watch whose reload could not reach the server left this screen
       // showing a turn that has since been finished and written by the
