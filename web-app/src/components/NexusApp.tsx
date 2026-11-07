@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import Sidebar from '@/components/Sidebar';
 import ChatArea from '@/components/ChatArea';
 import SettingsModal from '@/components/SettingsModal';
+import StatsModal from '@/components/StatsModal';
+import MailModal from '@/components/MailModal';
 import { UserGuidePane, UserGuideModal } from '@/components/UserGuide';
 import { v4 as uuidv4 } from 'uuid';
 import { orderFolderConversations, buildDeepLink } from '@/lib/deepLink';
@@ -71,6 +73,23 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   const [currentConvoId, setCurrentConvoId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  // Mail and Statistics are about the house, not the open conversation, so they
+  // live here — rendered once, reachable from the Sidebar even on the welcome
+  // screen where no ChatArea exists. They used to sit in ChatArea's per-chat
+  // header, which hid them whenever no being was open.
+  const [isMailOpen, setIsMailOpen] = useState(false);
+  const [isStatsOpen, setIsStatsOpen] = useState(false);
+  const [mailUnread, setMailUnread] = useState(0);
+  useEffect(() => {
+    // One cheap read on mount so waiting mail shows in the Sidebar badge
+    // without opening the window. Best-effort: a failure just leaves it hidden.
+    let cancelled = false;
+    fetch('/api/letters')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled && d) setMailUnread(d.unread || 0); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   // NOTE: the context-management keys (now maxConversationLog and
   // autoTrimCopiedMessages, plus maxTokensPerLayer) were moved out of
   // globalSettings into per-folder settings (Folder Settings → Context
@@ -867,6 +886,9 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
         onToggleActive={toggleChatActive}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGuide={() => setIsGuideOpen(true)}
+        onOpenMail={() => setIsMailOpen(true)}
+        onOpenStats={() => setIsStatsOpen(true)}
+        mailUnread={mailUnread}
         folders={folders}
         setFolders={setFolders}
         activeFolderId={activeFolderId}
@@ -1035,6 +1057,11 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
           onClose={() => setIsGuideOpen(false)}
         />
       )}
+
+      {/* Rendered unconditionally — each self-gates on `open`. MailModal also
+          reports its unread count back up so the Sidebar badge stays live. */}
+      <StatsModal open={isStatsOpen} onClose={() => setIsStatsOpen(false)} />
+      <MailModal open={isMailOpen} onClose={() => setIsMailOpen(false)} onUnreadChange={setMailUnread} />
     </div>
     </LanguageProvider>
   );

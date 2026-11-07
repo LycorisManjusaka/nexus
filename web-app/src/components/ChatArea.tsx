@@ -6,7 +6,7 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, BarChart3, Search, AudioLines, Link2, Check, Mail, Menu, MoreHorizontal } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, Search, AudioLines, Link2, Check, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
@@ -21,9 +21,7 @@ import {
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
-import StatsModal from './StatsModal';
 import SearchModal from './SearchModal';
-import MailModal from './MailModal';
 import TtsStatusBar, { createTtsStatusStore } from './TtsStatusBar';
 import AudioSessionModal from './AudioSessionModal';
 import { v4 as uuidv4 } from 'uuid';
@@ -5125,12 +5123,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
-  const [statsOpen, setStatsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [mailOpen, setMailOpen] = useState(false);
-  // Unread count for the header badge. Refreshed whenever the Mail Manager
-  // loads, and once on mount so waiting mail is visible without opening it.
-  const [mailUnread, setMailUnread] = useState(0);
+  // Mail and Statistics moved to the Sidebar (NexusApp owns their state and
+  // modals now) — they are house-wide, not per-conversation, and belong where
+  // they stay reachable from the welcome screen. 2026-11-07.
   // Live TTS pipeline state, reported up by whichever MessageBubble is speaking.
   // One conversation speaks at a time, so a single slot is enough — a newer play
   // simply replaces the old reading.
@@ -5165,16 +5161,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const handleTtsDismiss = React.useCallback(() => {
     ttsStoreRef.current.publish(null);
     setTtsBarVisible(false);
-  }, []);
-  useEffect(() => {
-    // One cheap read on mount so waiting mail is visible without opening the
-    // window. Best-effort: a failure just leaves the badge hidden.
-    let cancelled = false;
-    fetch('/api/letters')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (!cancelled && d) setMailUnread(d.unread || 0); })
-      .catch(() => {});
-    return () => { cancelled = true; };
   }, []);
   const [audioSessionOpen, setAudioSessionOpen] = useState(false);
 
@@ -5638,29 +5624,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           >
             <AudioLines size={16} />
           </button>
-          <button
-            onClick={() => setMailOpen(true)}
-            className="group relative p-1.5 text-muted-foreground hover:text-amber-500 transition-colors"
-            title={t('chat.mail.title')}
-          >
-            <Mail size={16} />
-            {mailUnread > 0 && (
-              // Same colour as the icons themselves — a filled amber pill read as
-              // an alert demanding action, which is not what waiting mail is. It
-              // follows the button's hover colour so the pair still moves as one.
-              // `bg-card` only so the digits don't collide with the envelope.
-              <span className="absolute -top-0.5 -right-0.5 min-w-[13px] rounded-full bg-card px-0.5 text-center text-[9px] font-semibold leading-[13px] text-muted-foreground transition-colors group-hover:text-amber-500">
-                {mailUnread > 99 ? '99+' : mailUnread}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => setStatsOpen(true)}
-            className="p-1.5 text-muted-foreground hover:text-emerald-500 transition-colors"
-            title={t('chat.stats.title')}
-          >
-            <BarChart3 size={16} />
-          </button>
+          {/* Mail and Statistics moved to the Sidebar (2026-11-07) — see the
+              note at their former state declarations above. */}
           {/* Soul Updater. Highlighted once context elapsed passes 100%, in the
               same red as the 💤 cue and off the same boolean.
               The 💤 badge announces that consolidation is due but says nothing
@@ -8631,10 +8596,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         }}
       />
 
-      <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />
-
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} folderName={folderName} />
-      <MailModal open={mailOpen} onClose={() => setMailOpen(false)} onUnreadChange={setMailUnread} />
 
       {/* Mounted only while open: the panel probes every service on mount
           (each process probe is a PowerShell spawn), so it must not run in the

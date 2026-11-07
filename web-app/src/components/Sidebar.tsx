@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, HelpCircle, X } from 'lucide-react';
+import { PlusCircle, MessageSquare, Settings, Trash2, MoreVertical, Copy, Pencil, UserRoundPlus, Edit2, Palette, Upload, Settings2, Mic, History, ArrowDown, ArrowUp, Eye, EyeOff, HelpCircle, X, Mail, BarChart3 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import VoiceSelector from './VoiceSelector';
 import {
@@ -49,6 +49,12 @@ interface SidebarProps {
   // The user guide is not about the current conversation or identity, so its
   // entry point lives up here next to Preferences, not in the chat tool row.
   onOpenGuide?: () => void;
+  // Mail and Statistics are being-independent (they span every being), so they
+  // live up here too — reachable from the welcome screen, where ChatArea's old
+  // header did not exist. `mailUnread` drives the envelope badge.
+  onOpenMail?: () => void;
+  onOpenStats?: () => void;
+  mailUnread?: number;
 
   // Global (per-machine) preferences. Read here only for
   // `alwaysShowHoverControls`, which decides whether a row's "..." menu is
@@ -79,6 +85,9 @@ export default function Sidebar({
   onToggleActive,
   onOpenSettings,
   onOpenGuide,
+  onOpenMail,
+  onOpenStats,
+  mailUnread = 0,
   folders,
   setFolders,
   activeFolderId,
@@ -829,6 +838,34 @@ export default function Sidebar({
               className="p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
             >
               <X size={20} />
+            </button>
+          )}
+          {onOpenMail && (
+            <button
+              onClick={onOpenMail}
+              title={t('chat.mail.title')}
+              aria-label={t('chat.mail.title')}
+              className="group relative p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+            >
+              <Mail size={20} />
+              {mailUnread > 0 && (
+                // Same muted colour as the icon, not an alert pill — waiting
+                // mail is not a demand for action. `bg-background` only so the
+                // digits do not collide with the envelope.
+                <span className="absolute top-0.5 right-0.5 min-w-[13px] rounded-full bg-background px-0.5 text-center text-[9px] font-semibold leading-[13px] text-muted-foreground transition-colors group-hover:text-foreground">
+                  {mailUnread > 99 ? '99+' : mailUnread}
+                </span>
+              )}
+            </button>
+          )}
+          {onOpenStats && (
+            <button
+              onClick={onOpenStats}
+              title={t('chat.stats.title')}
+              aria-label={t('chat.stats.title')}
+              className="p-2 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-all"
+            >
+              <BarChart3 size={20} />
             </button>
           )}
           {onOpenGuide && (
