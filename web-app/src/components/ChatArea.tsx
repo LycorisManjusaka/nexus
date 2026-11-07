@@ -13,7 +13,7 @@ import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { resolveAudioSessionRule } from '@/lib/audioSessionRule';
 import { mintTurnId } from '@/lib/turnName';
-import { shouldAutoScroll, nextStickState, jumpToBottom } from '@/lib/scrollMagnet';
+import { shouldAutoScroll, nextStickState, jumpToBottom, distanceFromBottom, STICK_THRESHOLD_PX } from '@/lib/scrollMagnet';
 import { runTurnStream, drainStreamToEnd, RELAY_DRAIN_TIMEOUT_MS } from '@/lib/turnStreamLoop';
 import {
   type StopTrace, beginStopTrace, markStop, noteStopHow, formatStopTrace,
@@ -2696,13 +2696,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // below it. That is the "late pair appears but scroll does not follow"
       // case Tsuyo reported on mobile. Still gated on `stick`, so reading
       // earlier messages while watching is unaffected.
-      const go = shouldAutoScroll({
+      const input = {
         stick: stickToBottomRef.current,
         generating: loading || !!foreignTurn,
         lengthIncreased: messages.length > prevMessagesLengthRef.current,
         deepLinkPending: deepLinkScrollPending,
-      });
+      };
+      const go = shouldAutoScroll(input);
+      // ⚠ TEMPORARY INSTRUMENT (bug 32 scroll tail, 2026-11-07). Tsuyo measured
+      // "it moves halfway, not to the bottom" on mobile and not at all on
+      // desktop. Three inputs decide this and reading cannot say which one was
+      // false at the moment it mattered, so the probe names it. Two lines only:
+      // a refusal (with the reason) and a jump that did NOT land at the bottom
+      // (which would mean the height grew after this effect read it — her own
+      // diagnosis). A jump that lands is silent, or streaming would write a
+      // line per frame. REMOVE with the route.
+      const before = distanceFromBottom(el);
       if (go) jumpToBottom(el);
+      if (!go) {
+        probe32('magnet:refused', { ...input, before, len: messages.length });
+      } else if (distanceFromBottom(el) > STICK_THRESHOLD_PX) {
+        probe32('magnet:short', { ...input, before, after: distanceFromBottom(el), len: messages.length });
+      }
     }
     prevMessagesLengthRef.current = messages.length;
   }, [messages, loading, foreignTurn, deepLinkScrollPending]);
@@ -2717,11 +2732,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const handleListScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    stickToBottomRef.current = nextStickState({
+    const next = nextStickState({
       scrollHeight: el.scrollHeight,
       scrollTop: el.scrollTop,
       clientHeight: el.clientHeight,
     });
+    // ⚠ TEMPORARY INSTRUMENT (bug 32 scroll tail). Only the TRANSITION, and
+    // only the detaching one: if the magnet lets go while a reply is streaming,
+    // that is the magnet detaching itself and the refusal lines downstream are
+    // a consequence, not a cause. REMOVE with the route.
+    if (stickToBottomRef.current && !next) {
+      probe32('magnet:detach', { dist: distanceFromBottom(el), scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
+    }
+    stickToBottomRef.current = next;
   }, []);
 
   // ── Close/reload guard ───────────────────────────────────────────────────
