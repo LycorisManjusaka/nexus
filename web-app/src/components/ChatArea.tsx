@@ -956,7 +956,22 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // button. State is reset every time convoId changes.
   const [convoLoadingBytes, setConvoLoadingBytes] = useState<number>(0);
   const [convoLoadingTotal, setConvoLoadingTotal] = useState<number>(0);
-  const [convoIsLoading, setConvoIsLoading] = useState<boolean>(false);
+  // ⚠ INITIAL true, not false — this is bug 32's actual fix, not cosmetic.
+  // The attach poll below reads `if (convoIsLoading) return` from the value its
+  // effect captured when it FIRST ran. At mount that is the same render as the
+  // load effect's setConvoIsLoading(true), which React has not applied yet, so
+  // an initial false lets that first read through: the attach paints the running
+  // turn's bubbles, and the load fetch — slow on a big conversation — then lands
+  // and replaces the whole array (setMessages(loadedMessages)), erasing them.
+  // The poll's dep on convoIsLoading re-attaches once the load settles, but by
+  // then a bubble was already painted and wiped — which is exactly the "a flash
+  // of the pair, then the full log arrives and the pair is gone" report (つよ,
+  // 2026-11-07), on PC and BlueStacks alike. It reproduces on a big conversation
+  // and never on Default because the race window IS the load's duration, not the
+  // network. ChatArea remounts per convoId (key in NexusApp), so this initial
+  // value guards EVERY open, including a second tab joining a turn in flight.
+  // Cleared to false the moment the load settles — the one time attaching is safe.
+  const [convoIsLoading, setConvoIsLoading] = useState<boolean>(true);
   const convoLoadAbortRef = useRef<AbortController | null>(null);
   // Set true by the conversation-load effect right before it applies the loaded
   // state. The auto-save effect consumes it to skip the one POST that the load
