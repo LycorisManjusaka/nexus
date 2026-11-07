@@ -358,7 +358,7 @@ const FAMILY_DEFAULT_MODEL: Record<string, string> = {
   Gemini: 'gemini-3.8-flash',
   Qwen: 'qwen3.8-max',
   DeepSeek: 'deepseek-v4-pro',
-  GLM: 'glm-5.3',
+  GLM: 'glm-5.3-flash',
   Grok: 'grok-4.7',
   Kimi: 'moonshotai/Kimi-K3',
   Cohere: 'command-a-reasoning-08-2025',
@@ -1180,11 +1180,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Token count for the tool instruction when tool-use is enabled, otherwise 0.
   const [attachmentInstructionTokens, setAttachmentInstructionTokens] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The list's inner content wrapper. Observed for height changes so the
+  // magnet can stay at the end while markdown, images and an in-place
+  // streaming reply lay out — none of which change `messages`.
+  const listContentRef = useRef<HTMLDivElement>(null);
   // Scroll magnet: is the viewport close enough to the bottom that new content
   // should pull it down? Starts attached — a conversation opens at its end.
   // Lives in a ref, not state, because the auto-scroll effect reads it during
   // a render it must not itself trigger. See src/lib/scrollMagnet.ts.
   const stickToBottomRef = useRef(true);
+  // The offset the magnet last SAW — its own jumps included. `nextStickState`
+  // compares against this to tell "the reader moved up" from "the bottom moved
+  // away from a viewport that never moved"; see scrollMagnet.ts for the
+  // measurement that made the difference load-bearing.
+  const lastScrollTopRef = useRef(0);
   const initialMount = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const handleSendRef = useRef<any>(null);
@@ -2712,7 +2721,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // diagnosis). A jump that lands is silent, or streaming would write a
       // line per frame. REMOVE with the route.
       const before = distanceFromBottom(el);
-      if (go) jumpToBottom(el);
+      if (go) {
+        jumpToBottom(el);
+        lastScrollTopRef.current = el.scrollTop;
+      }
       if (!go) {
         probe32('magnet:refused', { ...input, before, len: messages.length });
       } else if (distanceFromBottom(el) > STICK_THRESHOLD_PX) {
@@ -2727,7 +2739,48 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // leave the new one refusing to follow its own first reply.
   useEffect(() => {
     stickToBottomRef.current = true;
+    lastScrollTopRef.current = 0;
   }, [convoId]);
+
+  // Keep the viewport at the end while the magnet holds, as the CONTENT grows
+  // — not only when the message array changes.
+  //
+  // The effect above fires on `[messages, …]`, which is the wrong clock for
+  // two cases Tsuyo hit, both of them the same shape:
+  //
+  //   1. Opening a conversation. The array goes 0 → N once, and the jump runs
+  //      on the render where the list is still shorter than its own viewport.
+  //      "The bottom" is scrollTop 0 at that instant. Markdown, images and
+  //      fonts then lay out underneath, and nothing re-runs — so it lands
+  //      "halfway", which is exactly how she described it.
+  //   2. Watching a turn this tab did not start. The attached stream extends
+  //      the LAST message in place; the reply grows by hundreds of pixels
+  //      without the message count ever changing.
+  //
+  // A ResizeObserver on the list's own content is the honest clock for both:
+  // it fires when the thing we are trying to stay at the end of actually
+  // changes length, whatever caused it. Tsuyo proposed "scroll unconditionally
+  // for a while after opening, then hand back to the magnet" — same intent,
+  // and this is that without a duration, because a duration is a number I
+  // cannot measure (layout settles when it settles). The magnet still governs:
+  // scroll up and this stops, because `stickToBottomRef` is false.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const content = listContentRef.current;
+    if (!el || !content || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (!stickToBottomRef.current) return;
+      if (scrollToMessageId && scrolledToRef.current !== scrollToMessageId) return;
+      if (distanceFromBottom(el) === 0) return;
+      jumpToBottom(el);
+      // Record our own landing, or the scroll event it provokes would look
+      // like the reader having moved — down, so `nextStickState` keeps the
+      // magnet either way, but the offset must not go stale.
+      lastScrollTopRef.current = el.scrollTop;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [scrollToMessageId]);
 
   const handleListScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -2736,7 +2789,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       scrollHeight: el.scrollHeight,
       scrollTop: el.scrollTop,
       clientHeight: el.clientHeight,
-    });
+    }, { scrollTop: lastScrollTopRef.current, stuck: stickToBottomRef.current });
+    lastScrollTopRef.current = el.scrollTop;
     // ⚠ TEMPORARY INSTRUMENT (bug 32 scroll tail). Only the TRANSITION, and
     // only the detaching one: if the magnet lets go while a reply is streaming,
     // that is the magnet detaching itself and the refusal lines downstream are
@@ -6087,7 +6141,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         {/* This gutter is what the per-message action bar hangs in on mobile —
             it must stay >= the bar's height, or the bar covers the next
             message with no error anywhere. Same single source. */}
-        <div className={`max-w-4xl mx-auto ${isMobile ? MOBILE_MSG_GAP : 'space-y-6'}`}>
+        <div ref={listContentRef} className={`max-w-4xl mx-auto ${isMobile ? MOBILE_MSG_GAP : 'space-y-6'}`}>
           {messages.map((msg, msgIdx) => (
             // The scroll anchor for /c/<folder>/<convoId>/m/<messageId>. Wraps
             // the marker too so a linked first-original message scrolls to the

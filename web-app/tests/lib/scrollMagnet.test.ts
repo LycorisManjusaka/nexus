@@ -52,10 +52,40 @@ test('the threshold is a band, not an exact comparison', () => {
 test('a scroll event re-attaches at the bottom and detaches above it', () => {
   // Lizard-kun's two sentences, as a round trip: scrolling up releases the
   // magnet, scrolling back down makes it hold again.
-  assert.equal(nextStickState(atBottom), true);
-  assert.equal(nextStickState(scrolledUp), false);
-  // And the state is a function of position ONLY — no memory of who scrolled.
-  assert.equal(nextStickState(atBottom), nextStickState(atBottom));
+  const high = { scrollTop: 9999, stuck: true };
+  assert.equal(nextStickState(atBottom, high), true);
+  assert.equal(nextStickState(scrolledUp, high), false);
+  // Still no memory of WHO scrolled — same inputs, same answer, every time.
+  assert.equal(nextStickState(atBottom, high), nextStickState(atBottom, high));
+});
+
+/**
+ * ⚠ CORRECTION, 2026-11-07. The test above used to also assert that the state
+ * is "a function of position ONLY". That was true of the question it was
+ * written against (our own smooth-scroll midpoints) and FALSE in general, and
+ * the difference cost Tsuyo four rounds of "it still does not scroll".
+ *
+ * These are the numbers the probe wrote on this house's own tab, at the moment
+ * the magnet let go of a conversation that had just been opened:
+ *
+ *     magnet:detach dist:192.97 scrollTop:3.03 scrollHeight:1190 clientHeight:994
+ *
+ * Nobody scrolled up. `jumpToBottom` had run while the list was still shorter
+ * than its viewport — scrollTop 0 genuinely WAS the bottom then — and 196px of
+ * markdown finished laying out underneath afterwards. Position alone cannot
+ * separate that from a reader moving up; the direction of travel can.
+ */
+test('content growing below a still viewport does NOT detach the magnet', () => {
+  // Verbatim from the probe line above.
+  const grown = { scrollHeight: 1190, scrollTop: 3.03, clientHeight: 994 };
+  assert.ok(distanceFromBottom(grown) > STICK_THRESHOLD_PX, 'precondition: far from the bottom');
+  // The viewport moved DOWN by 3px (0 → 3.03) while the bottom ran away from
+  // it. Keeping the magnet is the whole fix.
+  assert.equal(nextStickState(grown, { scrollTop: 0, stuck: true }), true);
+  // Same geometry, but the reader came from further down: that IS a scroll up.
+  assert.equal(nextStickState(grown, { scrollTop: 400, stuck: true }), false);
+  // And growth must not ATTACH a magnet the reader had already released.
+  assert.equal(nextStickState(grown, { scrollTop: 0, stuck: false }), false);
 });
 
 test('streaming follows the reply down while the magnet holds', () => {

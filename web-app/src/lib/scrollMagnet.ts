@@ -57,19 +57,49 @@ export function isNearBottom(m: ScrollMetrics, threshold = STICK_THRESHOLD_PX): 
 /**
  * The magnet's next state after a scroll event.
  *
- * Deliberately a pure function of position alone — it does NOT care who
- * scrolled. An earlier draft tried to distinguish "the user scrolled" from
- * "we scrolled", with a time window to ignore our own smooth-scroll midpoints.
- * That window is unmeasurable: the duration of a CSS smooth scroll depends on
- * the distance travelled, so in a long conversation our own animation passes
- * through positions indistinguishable from a user reading upward.
+ * It does NOT care WHO scrolled — an earlier draft tried that, with a time
+ * window to ignore our own smooth-scroll midpoints, and the window is
+ * unmeasurable: the duration of a CSS smooth scroll depends on the distance
+ * travelled, so in a long conversation our own animation passes through
+ * positions indistinguishable from a user reading upward. The auto-scroll
+ * jumps in one frame instead of animating, which removes those midpoints.
  *
- * The auto-scroll therefore jumps instantly instead of animating, which
- * removes the midpoints entirely and makes position sufficient. See the call
- * site in ChatArea for why that is also the better behaviour while streaming.
+ * It does care WHICH WAY the viewport moved, and that is not the same
+ * question. MEASURED 2026-11-07, from the probe on this house's own tab:
+ *
+ *     magnet:detach dist:192.97 scrollTop:3.03 scrollHeight:1190 clientHeight:994
+ *
+ * Nobody read anything upward there. A conversation opened, `jumpToBottom`
+ * ran while the list was still shorter than its own viewport (so the bottom
+ * WAS scrollTop 0), and then 196px of markdown finished laying out below it.
+ * The viewport had not moved; the bottom had moved away from it. Position
+ * alone cannot tell that from a deliberate scroll up, and the 64px threshold
+ * exists to absorb ONE line of growth, not a whole conversation rendering.
+ * So the magnet let go of a conversation the moment it opened, and every
+ * refusal after that was a consequence.
+ *
+ * The direction separates the two cases exactly, with no new constant:
+ *
+ *   - near the bottom            -> attached (unchanged)
+ *   - moved UP, now far          -> let go. This is the only thing a reader does.
+ *   - moved DOWN or not at all   -> keep whatever it was. Growth below a still
+ *                                   viewport, and a reader heading back toward
+ *                                   the end, both land here; neither is a reason
+ *                                   to let go.
+ *
+ * `prev.scrollTop` is the offset this function was last called with (or the
+ * one we last jumped to), NOT the previous frame's — a scroll event only
+ * fires when the offset actually changes, so "not at all" arrives via the
+ * resize path in ChatArea rather than through here.
  */
-export function nextStickState(m: ScrollMetrics, threshold = STICK_THRESHOLD_PX): boolean {
-  return isNearBottom(m, threshold);
+export function nextStickState(
+  m: ScrollMetrics,
+  prev: { scrollTop: number; stuck: boolean },
+  threshold = STICK_THRESHOLD_PX,
+): boolean {
+  if (isNearBottom(m, threshold)) return true;
+  if (m.scrollTop < prev.scrollTop) return false;
+  return prev.stuck;
 }
 
 /**
