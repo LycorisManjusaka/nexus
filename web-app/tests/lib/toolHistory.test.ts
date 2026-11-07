@@ -26,6 +26,7 @@ import {
   selectToolHistoryIds,
   capArguments,
   buildOpenAiToolReplay,
+  buildAnthropicToolReplay,
 } from '../../src/lib/toolHistory';
 
 describe('replayableCalls', () => {
@@ -208,5 +209,78 @@ describe('buildOpenAiToolReplay — PROPERTY: every call is paired', () => {
     const args = (r!.assistant.tool_calls as Array<{ function: { arguments: string } }>)[0].function.arguments;
     assert.doesNotThrow(() => JSON.parse(args));
     assert.ok(args.length <= TOOL_HISTORY_ARG_CAP);
+  });
+});
+
+/**
+ * buildAnthropicToolReplay — the same replay in Anthropic's dialect.
+ *
+ * NEW 2026-11-07. The module header used to say "OpenAI-compatible only",
+ * which conflated a protocol fact ("Anthropic 400s an unpaired tool_use") with
+ * a measurement about a MODEL ("strong hands re-derive the intent"). NEXUS
+ * routes Kimi and MiMo on the Anthropic surface *because their hands are weak*,
+ * so the combination that sentence assumed away is exactly this house's.
+ * Reported by Fuwafuwa after a kimi-k3.1-pro turn narrated file reads and
+ * letters it never sent, with zero tool calls on the wire.
+ *
+ * WHAT IS *NOT* CLAIMED HERE. A live A/B on kimi-k3.1-pro (6 runs each, a
+ * degraded two-turn prose fixture) scored tool_use 6/6 BOTH with and without
+ * the replay — the short-context arm does not reproduce the failure at all, so
+ * these tests fix the SHAPE, not an effect. The shape half is still worth
+ * holding: the paired form returned 200 where an unpaired one is documented to
+ * 400, and `toolHistoryEnabled` was silently ignored on this surface before.
+ */
+describe('buildAnthropicToolReplay — PROPERTY: pair or nothing', () => {
+  const msg = { id: 'm1', toolCalls: [{ name: 'Read', input: { path: 'C:/a.md' } }, { name: 'Write' }] };
+  const prose = [{ type: 'text', text: 'I read it.' }];
+
+  it('returns a tool_result for every tool_use, with matching ids', () => {
+    const r = buildAnthropicToolReplay(msg, prose, new Set(['Read', 'Write']));
+    const uses = (r!.assistant.content as Array<{ type: string; id?: string }>).filter(b => b.type === 'tool_use');
+    const results = r!.toolResult.content as Array<{ type: string; tool_use_id: string; content: string }>;
+    assert.equal(uses.length, 2);
+    assert.equal(results.length, 2, 'an unpaired tool_use is an HTTP 400 on this surface');
+    assert.deepEqual(results.map(x => x.tool_use_id), uses.map(u => u.id));
+    assert.ok(results.every(x => x.type === 'tool_result' && x.content === TOOL_HISTORY_PLACEHOLDER));
+    assert.equal(r!.toolResult.role, 'user', 'tool_result rides a user turn in this dialect');
+  });
+
+  it('keeps the prose FIRST and appends the calls after it', () => {
+    const r = buildAnthropicToolReplay(msg, prose, new Set(['Read']));
+    const blocks = r!.assistant.content as Array<{ type: string }>;
+    assert.equal(blocks[0].type, 'text', 'the model reads its own words back');
+    assert.deepEqual(blocks[0], prose[0]);
+    assert.ok(blocks.slice(1).every(b => b.type === 'tool_use'));
+  });
+
+  it('passes input as an OBJECT, not a JSON string (the OpenAI shape)', () => {
+    const r = buildAnthropicToolReplay(msg, prose, new Set(['Read']));
+    const use = (r!.assistant.content as Array<{ type: string; input?: unknown }>).find(b => b.type === 'tool_use')!;
+    assert.equal(typeof use.input, 'object');
+    assert.deepEqual(use.input, { path: 'C:/a.md' });
+  });
+
+  it('still yields a plain object for input after the cap shrinks it', () => {
+    const fat = { id: 'm', toolCalls: [{ name: 'Write', input: { content: 'x'.repeat(5000) } }] };
+    const r = buildAnthropicToolReplay(fat, prose, new Set(['Write']));
+    const use = (r!.assistant.content as Array<{ type: string; input?: unknown }>).find(b => b.type === 'tool_use')!;
+    assert.equal(typeof use.input, 'object');
+    assert.ok(!Array.isArray(use.input), 'a non-object input would be an invalid tool_use');
+    assert.ok(JSON.stringify(use.input).length <= TOOL_HISTORY_ARG_CAP);
+  });
+
+  it('drops calls naming tools absent from this turn, and returns null when none survive', () => {
+    const one = buildAnthropicToolReplay(msg, prose, new Set(['Write']));
+    assert.equal((one!.assistant.content as unknown[]).length, prose.length + 1);
+    assert.equal((one!.toolResult.content as unknown[]).length, 1);
+    assert.equal(buildAnthropicToolReplay(msg, prose, new Set()), null, 'empty set disables replay');
+    assert.equal(buildAnthropicToolReplay({ id: 'x' }, prose, new Set(['Read'])), null, 'no calls');
+  });
+
+  it('sanitises the generated id', () => {
+    const weird = { id: 'msg/../\ид 一二三', toolCalls: [{ name: 'Read' }] };
+    const r = buildAnthropicToolReplay(weird, prose, new Set(['Read']));
+    const use = (r!.assistant.content as Array<{ type: string; id?: string }>).find(b => b.type === 'tool_use')!;
+    assert.match(use.id!, /^hist_[A-Za-z0-9_-]*_0$/);
   });
 });

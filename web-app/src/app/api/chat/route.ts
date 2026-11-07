@@ -320,7 +320,7 @@ import {
 } from '@/lib/injectMedia';
 import { runShellCommand } from '@/lib/shellTool';
 import { effectiveFullAccess } from '@/lib/agentCapabilities';
-import { buildOpenAiToolReplay } from '@/lib/toolHistory';
+import { buildOpenAiToolReplay, buildAnthropicToolReplay } from '@/lib/toolHistory';
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
 import { ensureLmStudioLaunched, getLocalModelsMeta, loadLocalModel } from '@/lib/localModels';
@@ -3386,6 +3386,9 @@ async function streamViaAnthropicCompat(args: {
   folderName: string;
   senseEvents: any[];
   toolUseEnabled: boolean;
+  // Replay the vessel's own past tool calls back to it (lib/toolHistory). The
+  // Anthropic surface needs its own builder — see buildAnthropicToolReplay.
+  toolHistoryEnabled: boolean;
   enableReadConversation: boolean;
   agentFullSystemAccess: boolean;
   agentDangerousTools: boolean;
@@ -3417,6 +3420,7 @@ async function streamViaAnthropicCompat(args: {
   const {
     provider, baseUrl, apiKey, model, systemPrompt, processedMessages,
     modelSelectedPayload, modelParams, folderName, senseEvents, toolUseEnabled,
+    toolHistoryEnabled,
     enableReadConversation, agentFullSystemAccess, agentDangerousTools, agentReadOnlyTools,
     instructionOverrides, language, uiLang, askUserEnabled, askUserTimeoutMs, handoff,
     subagentEnabled, subagentModel, subagentFamily, lettersEnabled,
@@ -3645,6 +3649,31 @@ async function streamViaAnthropicCompat(args: {
       // turn is ~$2 here, where 32k capped it at ~$0.5.
       const COMPAT_MAX_TOKENS = 131072;
 
+      // ── Replay this vessel's own past tool calls ────────────────────────
+      // Applied HERE rather than inside the message map above because the
+      // filter needs `tools`, which is built after it: a tool_use naming a
+      // function absent from this turn's `tools` array is a reference to
+      // nothing, and the failure would arrive as "the model stopped working".
+      //
+      // Splices a PAIR (assistant tool_use + user tool_result) or neither —
+      // Anthropic answers 400 to an unpaired tool_use, and that is the whole
+      // reason this needed its own builder instead of the OpenAI one.
+      //
+      // `processedMessages[i]` is the source of `toolCalls`; `anthropicMessages`
+      // is the 1:1 converted form, so index alignment is what links them. The
+      // map above is a straight `.map`, which guarantees it.
+      const knownToolNames = new Set<string>(tools.map((t: any) => String(t?.name || '')));
+      const historyMessages: any[] = [];
+      for (let i = 0; i < anthropicMessages.length; i++) {
+        const conv: any = anthropicMessages[i];
+        const src: any = processedMessages[i];
+        const replay = (toolHistoryEnabled && conv?.role === 'assistant' && Array.isArray(conv.content))
+          ? buildAnthropicToolReplay(src || {}, conv.content, knownToolNames)
+          : null;
+        if (replay) { historyMessages.push(replay.assistant, replay.toolResult); }
+        else { historyMessages.push(conv); }
+      }
+
       // One streaming call. Accumulates content blocks (text / thinking /
       // tool_use) in order so the assistant turn can be echoed back verbatim.
       const runOnce = async (msgs: any[], withTools: boolean) => {
@@ -3787,7 +3816,7 @@ async function streamViaAnthropicCompat(args: {
       };
 
       try {
-        let currentMessages = [...anthropicMessages];
+        let currentMessages = [...historyMessages];
         for (let iter = 0; iter < maxToolRounds; iter++) {
           if (turnAbort.signal.aborted) break;   // Stop must end the tool loop, not just the output
           const { assistantBlocks, stopReason, refusalStop } = await runOnce(currentMessages, true);
@@ -7990,6 +8019,7 @@ export async function POST(req: Request) {
         folderName,
         senseEvents,
         toolUseEnabled,
+        toolHistoryEnabled,
         enableReadConversation,
         agentFullSystemAccess,
         agentDangerousTools,

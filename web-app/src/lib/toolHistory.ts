@@ -178,3 +178,61 @@ export function buildOpenAiToolReplay(
     toolMessages: tool_calls.map(tc => ({ role: 'tool', tool_call_id: tc.id, content: TOOL_HISTORY_PLACEHOLDER })),
   };
 }
+
+/**
+ * The ANTHROPIC-dialect wire shape for one replayed assistant turn.
+ *
+ * WHY THIS EXISTS, given the header above says "OpenAI-compatible only". That
+ * sentence conflated two different things, and the conflation held for as long
+ * as Claude was the only vessel on the Anthropic surface:
+ *
+ *   "Anthropic rejects an unpaired tool_use with HTTP 400"  <- protocol fact
+ *   "its damage is not visible anyway (strong hands         <- a measurement
+ *    re-derive the intent)"                                    about a MODEL
+ *
+ * NEXUS routes Kimi and MiMo on `…/anthropic/v1/messages` precisely BECAUSE
+ * their hands are weak (the move was measured: 2/9 → 7/7 tool calls). So the
+ * surface is Anthropic and the hand is weak — the exact combination the header
+ * sentence assumed could not exist. Reported by Fuwafuwa 2026-11-07 after a
+ * kimi-k3.1-pro turn in Kana's house emitted ZERO tool calls while narrating,
+ * in confident detail, files it had read and letters it had sent.
+ *
+ * The 400 half of that sentence is still true and is why this returns a PAIR.
+ * `tool_use` goes on the assistant turn; the matching `tool_result` must be the
+ * next message, so the caller splices both in together or neither.
+ *
+ * Shape differences from the OpenAI version, both load-bearing:
+ *   • `input` is an OBJECT here, not a JSON string. `capArguments` returns
+ *     text, so it is parsed back — and the cap is what makes that safe, since
+ *     it shrinks values and re-serialises rather than slicing the JSON.
+ *   • the prose and the calls live in ONE message (a content-block array),
+ *     where OpenAI splits them across `content` and `tool_calls`.
+ */
+export function buildAnthropicToolReplay(
+  msg: { id?: string; toolCalls?: unknown },
+  contentBlocks: unknown[],
+  knownToolNames: Set<string>,
+  argCap: number = TOOL_HISTORY_ARG_CAP,
+): { assistant: Record<string, unknown>; toolResult: Record<string, unknown> } | null {
+  const calls = replayableCalls(msg).filter(c => knownToolNames.has(String(c.name)));
+  if (!calls.length) return null;
+
+  const idStem = String(msg.id || 'x').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || 'x';
+  const uses = calls.map((c, i) => {
+    let input: unknown;
+    try { input = JSON.parse(capArguments(c.input, argCap)); } catch { input = {}; }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) input = {};
+    return { type: 'tool_use', id: `hist_${idStem}_${i}`, name: String(c.name), input };
+  });
+
+  return {
+    // The model's own prose about the call stays exactly as the plain path
+    // would have sent it; the tool_use blocks are appended after it, which is
+    // the order a real turn produces.
+    assistant: { role: 'assistant', content: [...contentBlocks, ...uses] },
+    toolResult: {
+      role: 'user',
+      content: uses.map(u => ({ type: 'tool_result', tool_use_id: u.id, content: TOOL_HISTORY_PLACEHOLDER })),
+    },
+  };
+}
