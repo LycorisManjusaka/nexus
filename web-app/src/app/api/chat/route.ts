@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import pathModule from 'path';
 import { promises as fsp } from 'fs';
-import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot } from '@/lib/fsStorage';
+import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot, getSharedZoneRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
 import { type ThinkTagState, newThinkTagState, splitThinkTags, enterThinkFromPrefill } from '@/lib/thinkTagSplitter';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
@@ -2006,6 +2006,13 @@ async function streamClaudeViaAgentSDK(args: {
         // an additional valid prefix below so deployment-configured
         // junctions aren't mistaken for an escape.
         const trustedJunctionRoot = await getTrustedJunctionRoot();
+        // local_data/shared — the cross-desk folder. Must be listed BOTH here
+        // and in `additionalDirectories` below: the SDK's own directory gate
+        // is hard and fires before `canUseTool`, so permitting it in only one
+        // place leaves the refusal arriving earlier than anything we decide.
+        // See getSharedZoneRoot() in fsStorage for the measurement and for why
+        // it is realpath'd rather than joined literally.
+        const sharedZoneRoot = await getSharedZoneRoot();
         // Realpath-aware containment test. For a path that doesn't exist yet
         // (a Write to a new file), walk up to the deepest existing ancestor,
         // realpath THAT, then re-attach the missing tail — identical strategy
@@ -2034,6 +2041,7 @@ async function streamClaudeViaAgentSDK(args: {
           if (!real) real = abs;
           if (real === sandboxRoot || real.startsWith(sandboxRoot + pathModule.sep)) return true;
           if (trustedJunctionRoot && (real === trustedJunctionRoot || real.startsWith(trustedJunctionRoot + pathModule.sep))) return true;
+          if (sharedZoneRoot && (real === sharedZoneRoot || real.startsWith(sharedZoneRoot + pathModule.sep))) return true;
           return false;
         };
         const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
@@ -2272,7 +2280,7 @@ async function streamClaudeViaAgentSDK(args: {
           // anywhere on the PC.
           additionalDirectories: agentFullSystemAccess
             ? [pathModule.parse(workspaceDir).root]
-            : (trustedJunctionRoot ? [trustedJunctionRoot] : []),
+            : [trustedJunctionRoot, sharedZoneRoot].filter((d): d is string => !!d),
           // Without this, the SDK only yields final `assistant` messages
           // (one per turn, with the complete content). With it, the SDK
           // additionally yields `stream_event` messages carrying the raw

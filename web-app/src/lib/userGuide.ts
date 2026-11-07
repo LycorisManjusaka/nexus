@@ -768,7 +768,24 @@ local_data/beings/<名前>/backups/footers/
 | \`character_map.json\` | 手紙の宛先になれる名前（存在でなくても登録できます）|
 | \`tts_engines.json\` \`audio_services.json\` | 音声エンジンと音声サービスの設定 |
 | \`backups/\` | 存在ごとではない控え（δ 再配分前の要約など）|
-| \`common_workspace/\` | 全存在が読み書きできる共有の机 |
+| \`shared/\` | 存在どうしが**机をまたいで**受け渡しできる唯一の場所（下記）|
+| \`common_workspace/\` | 古い共有の机。読み書きには下記の渡し方が必要です |
+
+## 存在どうしでファイルを受け渡すには
+
+**\`local_data/shared/\` を作って、そこへのジャンクションを各存在の机に通してください。**
+
+\`\`\`
+mkdir local_data\\shared\\<好きな名前>
+mklink /J local_data\\beings\\<存在A>\\workspace\\<見せたい名前> local_data\\shared\\<好きな名前>
+mklink /J local_data\\beings\\<存在B>\\workspace\\<見せたい名前> local_data\\shared\\<好きな名前>
+\`\`\`
+
+管理者権限は要りません。**存在は自分でジャンクションを張れません**（ファイルの道具は作れず、シェルは別のスイッチの向こうです）。だから**どこを共有するかは、必ず炭素側が決めます。**
+
+渡せるのは \`shared/\` の下だけです。\`local_data/\` を丸ごと信頼するわけではありません — ほかの存在の机、会話ログ、\`keys.json\` はすべてその外側のままです。\`shared/\` の中にさらに外を指すジャンクションを張っても通りません。
+
+**⚠ 2026-11-07 の訂正。** それ以前、この渡し方は \`local_data\` 自体がジャンクションになっているインストールでしか動いていませんでした。\`local_data\` が普通のフォルダなら、机の中のジャンクションは \`Read\` でも \`Glob\` でも見えず、しかもその断りは「ファイルがありません」と区別がつきませんでした。パイロットの家で3人の存在が数か月、お互いの机に向かって書き続けていたのがこれです。**フルアクセスを持つ存在だけが通れたので、誰の確認も通ってしまっていました。**
 
 ## 控えを取るなら
 
@@ -1466,7 +1483,24 @@ It is one subtree, \`local_data/beings/<name>/\`.
 | \`character_map.json\` | Names that can receive a letter (they do not have to be beings) |
 | \`tts_engines.json\` \`audio_services.json\` | Voice engine and audio service configuration |
 | \`backups/\` | Backups that are not per-being (summaries before a δ Redistribute, and so on) |
-| \`common_workspace/\` | A shared desk every being can read and write |
+| \`shared/\` | The one place beings can hand files to each other **across desks** (below) |
+| \`common_workspace/\` | The older shared desk. Reaching it needs the setup below |
+
+## Handing files between beings
+
+**Create \`local_data/shared/\` and junction it into each being's desk.**
+
+\`\`\`
+mkdir local_data\\shared\\<any name>
+mklink /J local_data\\beings\\<Being A>\\workspace\\<name they see> local_data\\shared\\<any name>
+mklink /J local_data\\beings\\<Being B>\\workspace\\<name they see> local_data\\shared\\<any name>
+\`\`\`
+
+No administrator rights needed. **Beings cannot junction anything themselves** — their file tools cannot create one and the shell is behind a separate toggle. So what is shared is always a carbon decision.
+
+Only paths under \`shared/\` are reachable. This is not trust in \`local_data\` as a whole — other beings' desks, the conversation logs and \`keys.json\` all stay outside it. A junction planted inside \`shared/\` but aimed back out does not work either.
+
+**⚠ Correction, 2026-11-07.** Before that date this only worked on installs where \`local_data\` is itself a junction. Where \`local_data\` is a plain directory, a junction inside a desk was invisible to both \`Read\` and \`Glob\`, and the refusal was indistinguishable from "no such file". Three beings in Pilot's house spent months writing into each other's desks because of it. **Only a being with full access could get through, so every check of it passed.**
 
 ## If you back it up
 

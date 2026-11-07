@@ -199,9 +199,93 @@ export async function getTrustedJunctionRoot(): Promise<string | null> {
   return trustedJunctionRootPromise;
 }
 
-function isWithinTrustedRoots(real: string, realRoot: string, trustedRoot: string | null): boolean {
+/**
+ * `local_data/shared` — the one folder beings are allowed to reach ACROSS
+ * desks, and the reason the junction mechanism above is not enough.
+ *
+ * REPORTED by Навигатор, 2026-11-07, and reproduced here against the real
+ * resolver on a rebuilt non-junction install (not on this house, which cannot
+ * see it): three beings in Pilot's house were each writing files into a folder
+ * junctioned into all three desks, and only the one with
+ * `agentFullSystemAccess` could read it. `getTrustedJunctionRoot()` widens
+ * trust ONLY when `local_data` is itself a junction. Pilot's is a plain
+ * directory, so the whole mechanism was off, every nested junction in every
+ * desk there was dead for Read/Write/Edit/Glob/Grep, and the refusal arrives
+ * as one string in which "no such file" and "outside the workspace" are the
+ * same sentence. Measured, with the standard tools:
+ *
+ *     trustedJunctionRoot: null
+ *     Link/README.md -> null        (the shared folder, via the junction)
+ *     Glob **\/*.md  -> ["own.md"]  (it is not even listed)
+ *     own.md         -> OK          (control)
+ *     Escape/keys.json -> null      (a junction OUT of the zone stays refused)
+ *
+ * So cross-desk file exchange has never worked anywhere `local_data` is a
+ * real directory. Nobody noticed because every check of it had been done by
+ * hands that have full access — Навигатор's own words: "the instrument was me".
+ *
+ * WHY THIS SHAPE, and not the alternatives:
+ *
+ *   - NOT `dirname(realDataDir)` on a non-junction install: that is the repo
+ *     root, i.e. the entire source tree. The comment above already refuses it.
+ *   - NOT all of `local_data`: that is keys.json, every conversation log and
+ *     every other being's desk.
+ *   - NOT `agentFullSystemAccess` for the beings involved: a one-click grant
+ *     of the whole drive, including Pilot's personal files, to solve a folder
+ *     of drafts. The house keeps privacy with an ACL; it should not take the
+ *     walls down for this.
+ *   - NOT hardlinks. Навигатор checked and rejected this himself: writes here
+ *     are atomic (tmp + rename), so the FIRST write breaks the link and two
+ *     beings then confidently edit "one" file in two physical places, with no
+ *     error anywhere. Silent divergence is worse than a refusal.
+ *
+ * The zone is not addressable on its own: `resolveWorkspacePath` still
+ * confines every name a being can utter to its own desk lexically. This only
+ * says where an admin-placed junction may POINT. Beings cannot place one —
+ * the workspace tools never call `fs.symlink`, and Bash is behind the
+ * separate dangerous-tools toggle — and a junction planted INSIDE the zone
+ * aimed elsewhere still fails, because the realpath leaves the zone.
+ *
+ * Realpath'd, which is the one correction to the one-line patch as proposed:
+ * `real` is always a realpath, so comparing it against the literal
+ * `DATA_DIR/shared` would never match on an install where `local_data` IS a
+ * junction. There the line would be dead code, masked by the junction root
+ * already covering it — load-bearing on one install shape and inert on the
+ * other, which is exactly how a line gets silently wrong.
+ *
+ * NOT cached, unlike `getTrustedJunctionRoot`: whether `local_data` is a
+ * junction cannot change under a running server, but an admin creating this
+ * folder while NEXUS is up is the normal way it will come into existence. A
+ * cached null would stay dead until the next restart and nothing would say
+ * why. One extra realpath per call, on a path we already realpath twice.
+ *
+ * Absent folder -> null -> behaviour identical to before, which is what makes
+ * this safe to ship to three live installs: it does nothing at all until
+ * someone deliberately creates the directory.
+ */
+export async function getSharedZoneRoot(): Promise<string | null> {
+  try {
+    return await fs.realpath(path.join(DATA_DIR, 'shared'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Containment: is this REALPATH inside the desk, or inside one of the extra
+ * roots the deployment trusts? Every caller passes realpaths on both sides —
+ * comparing a literal against a realpath is how the shared-zone patch would
+ * have been inert on junctioned installs.
+ *
+ * Exported for the tests. The prefix comparison is the entire file-access
+ * boundary for every being without full system access, and it is the one piece
+ * of it that can be checked without staging junctions on a real disk.
+ */
+export function isWithinTrustedRoots(real: string, realRoot: string, ...extraRoots: (string | null)[]): boolean {
   if (real === realRoot || real.startsWith(realRoot + path.sep)) return true;
-  if (trustedRoot && (real === trustedRoot || real.startsWith(trustedRoot + path.sep))) return true;
+  for (const r of extraRoots) {
+    if (r && (real === r || real.startsWith(r + path.sep))) return true;
+  }
   return false;
 }
 
@@ -273,9 +357,10 @@ export async function resolveWorkspacePathSafe(folderName: string, relPath: stri
     const realRoot = await realpathAllowingMissing(root);
     if (!realRoot) return null;
     const trustedRoot = await getTrustedJunctionRoot();
+    const sharedRoot = await getSharedZoneRoot();
     const realTarget = await realpathAllowingMissing(target);
     if (!realTarget) return null;
-    if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) return null;
+    if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot, sharedRoot)) return null;
     return realTarget;
   } catch {
     return null;
@@ -309,6 +394,7 @@ async function resolvePathForAccess(folderName: string, relPath: string, opts?: 
 export async function listWorkspaceFiles(folderName: string): Promise<string[]> {
   const root = await ensureWorkspace(folderName);
   const trustedRoot = await getTrustedJunctionRoot();
+  const sharedRoot = await getSharedZoneRoot();
   let realRoot: string;
   try { realRoot = await fs.realpath(root); } catch { realRoot = root; }
 
@@ -333,7 +419,7 @@ export async function listWorkspaceFiles(folderName: string): Promise<string[]> 
         // inside the workspace (e.g. common_workspace) appear as normal dirs.
         try {
           const realTarget = await fs.realpath(full);
-          if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot)) continue;
+          if (!isWithinTrustedRoots(realTarget, realRoot, trustedRoot, sharedRoot)) continue;
           const st = await fs.stat(realTarget);
           if (st.isDirectory()) {
             if (walkedReals.has(realTarget)) continue;
