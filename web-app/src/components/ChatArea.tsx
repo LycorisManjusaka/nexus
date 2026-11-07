@@ -477,6 +477,20 @@ function modelOnFamilySwitch(
   return defaultModelForFamily(newAiName);
 }
 
+// ⚠ TEMPORARY INSTRUMENT (bug 32, 2026-11-07). Fire-and-forget line to the
+// server sink at /api/debug-probe. Names which full-array setMessages wiped the
+// live pair in a second tab. Remove with the route once the culprit is named.
+function probe32(label: string, extra?: Record<string, unknown>) {
+  try {
+    const port = typeof window !== 'undefined' ? window.location.port : '?';
+    fetch('/api/debug-probe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ port, label, ...extra }),
+    }).catch(() => {});
+  } catch { /* never affect the measured thing */ }
+}
+
 export default function ChatArea({ convoId, folderName, aiName, userName, defaultSystemPrompt, defaultAttachmentInstruction, defaultModelParams, defaultSpecificModel, defaultCustomAiName, defaultDateTimeVisibility, defaultVrchatMode, defaultVrchatRule, defaultLiveSessionVoice, onUpdateTitle, plannedTitle, globalSettings, claudeOAuthAvailable, bindingOptional, folders, onCloneWithSystemPrompt, fetchFolders, scrollToMessageId, onScrolledToMessage, newerLogTitle, soulGeneration }: any) {
   const t = useT();
   // Stamped onto every queued message so a server-generated notice about it
@@ -1784,6 +1798,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         const loadedMessages = dedupeMessageIds(
           (data.messages || []).map((m: any) => ({ ...m, autoPlay: false })),
         ).messages;
+        probe32('initialLoad:apply', { before: messagesRef.current.length, after: loadedMessages.length, convoId });
         setMessages(loadedMessages);
         setTitle(data.title || 'New Conversation');
         setSystemPrompt(data.systemPrompt !== undefined ? data.systemPrompt : defaultSystemPrompt);
@@ -1892,6 +1907,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         const pick = <T,>(key: string, fallback: T): T =>
           (folderSettings[key] !== undefined ? folderSettings[key] : fallback) as T;
 
+        probe32('clearEmpty:apply', { before: messagesRef.current.length, convoId });
         setMessages([]);
         // No log on disk yet — this is a conversation that has just been created
         // and not written to. `plannedTitle` is the `<identity>_<n>` name the
@@ -3134,7 +3150,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // a moment later; four callers here can do that and they leave identical
   // evidence. Remove the parameter and the console line together once the
   // overwrite is named — a probe left in is a second thing to keep true.
-  const reloadMessagesFromDisk = useCallback(async (opts?: { keepBaseIfSettingsDiffer?: boolean }): Promise<'loaded' | 'skipped' | 'unreachable'> => {
+  const reloadMessagesFromDisk = useCallback(async (opts?: { keepBaseIfSettingsDiffer?: boolean; why?: string }): Promise<'loaded' | 'skipped' | 'unreachable'> => {
     if (!convoId) return 'skipped';
     try {
       const r = await fetch(`/api/logs/${convoId}`);
@@ -3173,6 +3189,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       }
       const loaded = (data.messages as Array<Record<string, unknown> & { id?: unknown }>)
         .map((m) => ({ ...m, autoPlay: false }));
+      probe32('reloadFromDisk:apply', { why: opts?.why || '?', before: messagesRef.current.length, after: dedupeMessageIds(loaded).messages.length, convoId });
       setMessages(dedupeMessageIds(loaded).messages);
       // Learn a boundary something else resolved. The RUNNER mints the user
       // message the marker names, so the tab cannot compute it; and this
@@ -3656,6 +3673,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // Same four steps the reload does, in the same order, from the frame
         // instead of from a fetch.
         skipNextAutoSaveRef.current = true;
+        probe32('turnSavedPatch:apply', { before: messagesRef.current.length, after: dedupeMessageIds(patch.messages).messages.length, convoId });
         setMessages(dedupeMessageIds(patch.messages).messages);
         baseUpdatedAtRef.current = patch.base;
         const adopted = frame.marker
@@ -3670,7 +3688,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // patch, which is the branch below.)
         staleViewRef.current = false;
       } else {
-        staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+        staleViewRef.current = (await reloadMessagesFromDisk({ why: 'turnSaved-fallback' })) === 'unreachable';
       }
       // Cleared on BOTH branches, and after both: a reload replaces the whole
       // array so the optimistic bubbles are gone either way, and a list that
@@ -4474,6 +4492,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     let cancelled = false;
     const read = async () => {
       if (cancelled || loading) return;
+      probe32('poll:read', { convoIsLoading, msgs: messagesRef.current.length, convoId });
       // ── NOT WHILE THE CONVERSATION IS STILL ARRIVING ───────────────────
       //
       // ⚠ REPORTED 2026-11-04 (津代): open a SECOND tab on Cairn_60 while a
@@ -4503,7 +4522,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Deferring costs nothing: the load is what makes the painted bubbles
       // meaningful (they are appended to the on-disk history), and `read` is
       // re-run the moment it finishes because `convoIsLoading` is a dep below.
-      if (convoIsLoading) return;
+      if (convoIsLoading) { probe32('poll:deferredByLoading', { convoId }); return; }
       // ── CATCH UP WITH DISK FIRST ───────────────────────────────────────
       // A watch whose reload could not reach the server left this screen
       // showing a turn that has since been finished and written by the
@@ -4520,7 +4539,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // request that never completed, so a server that answered (404,
       // malformed body) is never retried.
       if (staleViewRef.current) {
-        if ((await reloadMessagesFromDisk()) !== 'unreachable') {
+        if ((await reloadMessagesFromDisk({ why: 'staleView-retry' })) !== 'unreachable') {
           staleViewRef.current = false;
           // The MESSAGES are not the only thing the outage froze. Three notes
           // were written while the network was down and all three say
@@ -4591,6 +4610,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // counter in the same synchronous run, so there is no window between a
       // local edit and the counter going up that an awaited fetch can land in.
       const mirrorKey = `${convoId}:${diskUpdatedAt}`;
+      probe32('poll:probe', { foreign: !!foreign, diskUpdatedAt, baseUpdatedAt: baseUpdatedAtRef.current, savesInFlight: savesInFlightRef.current, mirrorKey, mirrored: mirroredVersionRef.current, msgs: messagesRef.current.length, convoIsLoading, convoId });
       if (savesInFlightRef.current === 0 && mirrorKey !== mirroredVersionRef.current && shouldReloadFromDisk({
         diskUpdatedAt,
         baseUpdatedAt: baseUpdatedAtRef.current,
@@ -4601,7 +4621,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // "disk is newer" and refetch the whole log every ten seconds.
         // Correctness does not need this; a multi-megabyte conversation does.
         mirroredVersionRef.current = mirrorKey;
-        if (await reloadMessagesFromDisk({ keepBaseIfSettingsDiffer: true }) === 'unreachable') {
+        if (await reloadMessagesFromDisk({ keepBaseIfSettingsDiffer: true, why: 'mirror-poll' }) === 'unreachable') {
           staleViewRef.current = true;
           // Not actually taken — let the next poll try again.
           mirroredVersionRef.current = '';
@@ -4616,7 +4636,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       // Marked BEFORE the await, so a second probe landing mid-attach does not
       // start a second watch of the same turn.
       attachedTurnRef.current = key;
+      probe32('attach:start', { key, before: messagesRef.current.length, convoIsLoading, convoId });
       const outcome = await runOnRunner(undefined, true);
+      probe32('attach:outcome', { key, outcome, after: messagesRef.current.length, convoId });
       // Cleared ONLY on 'failed'.
       //
       //   'idle'  — the relay had nothing to give. KEEP the mark: this is the
@@ -4733,7 +4755,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (!(await enqueueCommand('rerun', msgId))) {
       // Nothing was queued, so no turn will run and nothing will reload —
       // put the screen back rather than leaving a silent truncation behind.
-      staleViewRef.current = (await reloadMessagesFromDisk()) === 'unreachable';
+      staleViewRef.current = (await reloadMessagesFromDisk({ why: 'rerun-fallback' })) === 'unreachable';
       setLoading(false);
       return;
     }
