@@ -13,9 +13,23 @@
  *
  * Run once per shape — DATA_DIR is captured at module load, so one process
  * can only measure one install.
- *   node --experimental-transform-types --import ./tests/_loader.mjs probe-sandbox.mjs plain
- *   node ... probe-sandbox.mjs other-desk
- *   node ... probe-sandbox.mjs junctioned
+ * Run from the web-app DIRECTORY, not from scripts/ — both `--import` and the
+ * script path are resolved against the cwd:
+ *   cd <install>\web-app
+ *   node --experimental-transform-types --import ./tests/_loader.mjs scripts/probe-sandbox.mjs plain
+ *   node --experimental-transform-types --import ./tests/_loader.mjs scripts/probe-sandbox.mjs other-desk
+ *   node --experimental-transform-types --import ./tests/_loader.mjs scripts/probe-sandbox.mjs junctioned
+ *
+ * No dev dependencies are needed: tests/_loader.mjs ships in the repo and
+ * Node 24 strips types itself. `npm install` does not have to have been run.
+ *
+ * MEASURED 2026-11-07, both directions, on this machine:
+ *   with    the loader + scripts/ prefix -> PASS
+ *   without the loader                   -> ERR_MODULE_NOT_FOUND "@/lib"
+ * That diagnostic names a missing PACKAGE, not a missing loader, so the first
+ * guess it invites is wrong. Reported from install 3003 by Навигатор, who read
+ * the command this header used to carry — it omitted the scripts/ prefix and
+ * said nothing about the cwd, so it could not be copied and run.
  */
 import fs from 'node:fs';
 import path from 'node:path';
