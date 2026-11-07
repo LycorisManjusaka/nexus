@@ -7,6 +7,7 @@ import {
   readSpuRunRecord,
   writeSpuRunRecord,
   clearSpuRunRecord,
+  writeSpuBillingEntry,
 } from '@/lib/systemPromptStorage';
 import { installationId } from '@/lib/runnerHost';
 // The SECOND route-to-route import in this tree (/api/runner/tick is the
@@ -174,6 +175,7 @@ export async function POST(req: Request) {
       {
         chatPost,
         writeRecord: writeSpuRunRecord,
+        writeBilling: writeSpuBillingEntry,
         onRawText: (text) => publishTurnText(relayKey, text),
         isAborted: () => stopped,
         nowMs: () => Date.now(),

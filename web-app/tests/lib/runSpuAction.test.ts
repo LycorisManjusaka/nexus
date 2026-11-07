@@ -32,6 +32,7 @@ import assert from 'node:assert/strict';
 
 import { runSpuAction } from '@/lib/runSpuAction';
 import type { SpuRunRecord } from '@/lib/spuRun';
+import type { SpuBillingEntry } from '@/lib/spuBilling';
 import { END_SENTINEL } from '@/lib/spuScaffold';
 
 const ARGS = {
@@ -80,6 +81,27 @@ function chatStub(rounds: string[][], asString = true) {
 
 function textFrame(s: string) {
   return JSON.stringify({ type: 'text', content: s });
+}
+
+function usageFrame(u: { total?: number; cached?: number; output?: number; reportedUsd?: number }) {
+  return JSON.stringify({
+    type: 'cache_usage',
+    totalInputTokens: u.total ?? 0,
+    cachedInputTokens: u.cached ?? 0,
+    uncachedInputTokens: Math.max(0, (u.total ?? 0) - (u.cached ?? 0)),
+    outputTokens: u.output ?? 0,
+    cacheCreationTokens: 0,
+    providerHint: 'oai',
+    ...(u.reportedUsd ? { reportedUsd: u.reportedUsd } : {}),
+  });
+}
+
+function billRecorder() {
+  const entries: SpuBillingEntry[] = [];
+  return {
+    entries,
+    writeBilling: async (_f: string, e: SpuBillingEntry) => { entries.push(e); },
+  };
 }
 
 function recorder() {
@@ -309,4 +331,56 @@ test('authMode is forwarded when given', async () => {
     }, recorder()),
   });
   assert.equal(body.claudeAuthMode, 'oauth');
+});
+
+// ── Billing ledger (2026-11-07) ────────────────────────────────────────────
+// The SPU run's cost used to be shown live and then thrown away. These assert
+// the ledger entry: summed across rounds, written once, present even on a run
+// that errored (the money was spent), and absent when nothing was spent.
+
+test('a run with usage writes ONE billing entry, summed across its rounds', async () => {
+  const rec = recorder();
+  const bill = billRecorder();
+  const stub = chatStub([
+    [textFrame('r1 '), usageFrame({ total: 100, cached: 20, output: 10 })],
+    [textFrame('r2' + END_SENTINEL), usageFrame({ total: 50, output: 5 })],
+  ]);
+  const r = await runSpuAction(ARGS, { ...baseDeps(stub.chatPost, rec), writeBilling: bill.writeBilling });
+  assert.equal(r.ok, true);
+  assert.equal(bill.entries.length, 1, 'exactly one ledger entry per run');
+  const e = bill.entries[0];
+  assert.equal(e.usage.totalInputTokens, 150, 'input summed across both rounds');
+  assert.equal(e.usage.cachedInputTokens, 20);
+  assert.equal(e.usage.outputTokens, 15, 'output summed across both rounds');
+  assert.equal(e.attempts, 2);
+  assert.equal(e.status, 'done');
+  assert.equal(e.runId, 'run-1');
+  assert.equal(e.action, 'update');
+  assert.equal(e.model, 'gemma');
+});
+
+test('a run that reported no usage writes no billing entry', async () => {
+  const rec = recorder();
+  const bill = billRecorder();
+  const stub = chatStub([[textFrame('text only' + END_SENTINEL)]]);
+  const r = await runSpuAction(ARGS, { ...baseDeps(stub.chatPost, rec), writeBilling: bill.writeBilling });
+  assert.equal(r.ok, true);
+  assert.equal(bill.entries.length, 0, 'no usage → no ledger noise');
+});
+
+test('a run that errors still bills what it spent before dying', async () => {
+  const rec = recorder();
+  const bill = billRecorder();
+  let call = 0;
+  const good = chatStub([[textFrame('r1 '), usageFrame({ total: 80, output: 8 })]]);
+  const chatPost: RunChat = async () => {
+    call++;
+    if (call === 1) return good.chatPost();
+    throw new Error('provider exploded');
+  };
+  const r = await runSpuAction(ARGS, { ...baseDeps(chatPost, rec), writeBilling: bill.writeBilling });
+  assert.equal(r.ok, false);
+  assert.equal(bill.entries.length, 1, 'the provider calls happened — the money was spent');
+  assert.equal(bill.entries[0].status, 'error');
+  assert.equal(bill.entries[0].usage.totalInputTokens, 80, 'round-1 usage survives the round-2 throw');
 });

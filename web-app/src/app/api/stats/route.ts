@@ -2,8 +2,12 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { resolvePrice, messageCost, effectivePrice } from '@/lib/modelPricing';
-import { BEINGS_DIR, beingLogsDir, beingSettingsFile } from '@/lib/beingPaths';
+import { BEINGS_DIR, beingLogsDir, beingSettingsFile, beingBillingDir } from '@/lib/beingPaths';
 import { makeIsOriginalIndex } from '@/lib/firstOriginal';
+import {
+  canonFamily, familyFromModelId, splitClaudeByAuth, type StatRecord,
+} from '@/lib/modelFamily';
+import { billingToStatRecord, type SpuBillingEntry } from '@/lib/spuBilling';
 
 // Full-scan billing statistics. Unlike the header-only listLogs() path, this
 // reads every active conversation in full, walks its messages in order, and
@@ -28,62 +32,10 @@ export const dynamic = 'force-dynamic';
 
 const GLOBAL_DEFAULT_MODEL = 'claude-opus-4-8';
 
-interface StatRecord {
-  entity: string;
-  convoId: string;
-  convoTitle: string;
-  ts: number | null;   // message timestamp (ms), null when the log lacks one
-  family: string;      // canonical family; Claude split into OAuth/API
-  model: string;       // resolved model id used for pricing (display form)
-  usd: number;
-  estimated: boolean;  // true = derived, false = from real cacheUsage
-  unpriced: boolean;   // model has no price row (usd forced to 0)
-}
-
-// Canonicalize the stored modelFamily string (fixes casing drift like
-// "Minimax" vs "MiniMax"; leaves unknown values untouched).
-function canonFamily(stored?: string | null): string {
-  const map: Record<string, string> = {
-    minimax: 'MiniMax', chatgpt: 'ChatGPT', openai: 'ChatGPT', claude: 'Claude',
-    gemini: 'Gemini', kimi: 'Kimi', glm: 'GLM', grok: 'Grok', qwen: 'Qwen',
-    deepseek: 'DeepSeek', cohere: 'Cohere', mimo: 'MiMo', bytedance: 'ByteDance',
-    meta: 'Meta', local: 'Local',
-  };
-  const key = (stored || '').toLowerCase().trim();
-  return map[key] || (stored || 'Unknown');
-}
-
-// Derive a family from a bare model id — used only when a message has no stored
-// modelFamily (old, pre-tagging messages priced at the entity default model).
-function familyFromModelId(id?: string | null): string {
-  const s = (id || '').toLowerCase().trim();
-  if (!s) return 'Unknown';
-  // Local LM Studio slugs: vendor/name or name@quant. moonshotai/ is the one
-  // cloud id that legitimately carries a slash — everything else with / or @ is
-  // a local GGUF and must NOT be priced.
-  if (s.includes('@')) return 'Local';
-  if (s.includes('/') && !s.startsWith('moonshotai/')) return 'Local';
-  const k = s.replace(/^moonshotai\//, '');
-  if (k.startsWith('claude-')) return 'Claude';
-  if (k.startsWith('gpt-') || k.startsWith('o1') || k.startsWith('o3') || k.startsWith('o4')) return 'ChatGPT';
-  if (k.startsWith('gemini')) return 'Gemini';
-  if (k.startsWith('kimi')) return 'Kimi';
-  if (k.startsWith('glm')) return 'GLM';
-  if (k.startsWith('grok')) return 'Grok';
-  if (k.startsWith('deepseek')) return 'DeepSeek';
-  if (k.startsWith('qwen')) return 'Qwen';
-  if (k.startsWith('minimax')) return 'MiniMax';
-  if (k.startsWith('command')) return 'Cohere';
-  if (k.startsWith('mimo')) return 'MiMo';
-  if (k.startsWith('dola-') || k.startsWith('seed-') || k.startsWith('doubao')) return 'ByteDance';
-  // Meta Model API ids. `sam-` is matched too so an old log that used the
-  // segmentation model is attributed rather than silently falling into
-  // 'Unknown' — it is not offered in the chat dropdown (it demands an
-  // input_image/input_video part), but attribution is cheap and a wrong
-  // 'Unknown' is not.
-  if (k.startsWith('muse-') || k.startsWith('sam-')) return 'Meta';
-  return 'Unknown';
-}
+// StatRecord, canonFamily and familyFromModelId moved to lib/modelFamily.ts
+// (2026-11-07) so the SPU billing ledger derives a family the SAME way a saved
+// message does — see that file. splitClaudeByAuth replaces the inline
+// `family === 'Claude' ? …` branch that used to live below.
 
 // Unicode-aware token heuristic — used ONLY to estimate the system-prompt size
 // (per-message input tokens come from the stored, accurate `tokens` field).
@@ -140,7 +92,12 @@ export async function GET() {
     // Collect every (entity, file) pair, then read in parallel. The display
     // name (what the UI and entityDefaults are keyed on) is resolved from
     // settings.json; the directory name is only the sanitized key.
+    //
+    // The billing dir is collected per being alongside logs, and NOT gated on
+    // the logs readdir succeeding: a being can have soul-update spend with an
+    // empty or missing logs folder, and gating it on logs would drop that spend.
     const files: { entity: string; full: string }[] = [];
+    const billingDirs: { entity: string; dir: string }[] = [];
     for (const d of dirs) {
       if (!d.isDirectory()) continue;
       let entity = d.name;
@@ -148,6 +105,7 @@ export async function GET() {
         const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
         if (parsed.name) entity = parsed.name;
       } catch {}
+      billingDirs.push({ entity, dir: beingBillingDir(d.name) });
       let fnames: string[] = [];
       try { fnames = await fs.readdir(beingLogsDir(d.name)); } catch { continue; }
       for (const fn of fnames) {
@@ -196,7 +154,7 @@ export async function GET() {
           if (family !== 'Local') {
             if (family === 'Claude') {
               const authMode = m.modelFamily ? taggedAuth : untaggedAuth;
-              family = authMode === 'oauth' ? 'Claude (OAuth)' : 'Claude (API)';
+              family = splitClaudeByAuth('Claude', authMode);
             }
 
             const output = (typeof m.textTokens === 'number' ? m.textTokens
@@ -239,6 +197,31 @@ export async function GET() {
         }
         running += mt;
       });
+    }));
+
+    // ── SPU billing ledger ──────────────────────────────────────────────────
+    // Soul-update spend lives outside the conversation logs (a run calls the
+    // provider up to seven times and used to be shown live and then discarded —
+    // 2026-11-07). Each ledger entry is one completed run; billingToStatRecord
+    // prices it through the SAME messageCost the message walk uses and tags the
+    // family (Claude split OAuth/API) the same way, so the client's existing
+    // filters — exclude-OAuth, last-month, estimated-off — apply unchanged
+    // (ledger records are estimated:false, real usage). A Local run returns null
+    // and is dropped, matching the message walk's Local skip.
+    await Promise.all(billingDirs.map(async ({ entity, dir }) => {
+      let fnames: string[] = [];
+      try { fnames = await fs.readdir(dir); } catch { return; }
+      await Promise.all(fnames.map(async (fn) => {
+        if (fn.startsWith('.') || !fn.endsWith('.json')) return;
+        let entry: SpuBillingEntry;
+        try {
+          let raw = await fs.readFile(path.join(dir, fn), 'utf-8');
+          if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+          entry = JSON.parse(raw);
+        } catch { return; }
+        const rec = billingToStatRecord(entry, entity);
+        if (rec) records.push(rec);
+      }));
     }));
 
     const entities = Array.from(new Set(records.map((r) => r.entity))).sort();

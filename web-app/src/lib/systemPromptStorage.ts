@@ -1,8 +1,9 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { DATA_DIR, sanitizeBeingName, beingSoulDir, beingSoulBackupsDir } from './beingPaths';
+import { DATA_DIR, sanitizeBeingName, beingSoulDir, beingSoulBackupsDir, beingBillingDir, beingBillingEntryFile } from './beingPaths';
 import { GENERATION_LABEL_RE } from './soulGeneration';
 import { atomicWriteFile } from './atomicWrite';
+import type { SpuBillingEntry } from './spuBilling';
 
 // ── Generation labels ───────────────────────────────────────────────────────
 // A soul file is `<being>_<label>.md`, and until 2026-10-24 `label` was a
@@ -283,6 +284,23 @@ export async function clearSpuRunRecord(
     if (isEnoent(e)) return false;
     throw e;
   }
+}
+
+// ── SPU billing ledger (beings/<name>/soul/billing/<runId>.json) ───────────
+// Added 2026-11-07. One immutable file per completed run, keyed by runId (a
+// uuid), so two runs — even across the two installations sharing one local_data
+// — never collide and never interleave bytes. Append-only by construction: the
+// run writes its entry once and nothing rewrites it. Atomic so the stats walk,
+// which may read mid-write, sees a whole record or no file rather than half of
+// one. See lib/spuBilling.ts for why the ledger stores raw usage, not a price.
+export async function writeSpuBillingEntry(
+  folderName: string,
+  entry: SpuBillingEntry,
+): Promise<string> {
+  const p = beingBillingEntryFile(folderName, entry.runId);
+  await fs.mkdir(beingBillingDir(folderName), { recursive: true });
+  await atomicWriteFile(p, JSON.stringify(entry, null, 2));
+  return p;
 }
 
 // ── Shift right pane -> left pane (SPU "start of a new run" contract) ──────

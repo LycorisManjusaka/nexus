@@ -59,6 +59,23 @@ export function beingSoulDir(name: string): string {
   return path.join(beingDir(name), 'soul');
 }
 
+/**
+ * The soul-updater billing ledger: beings/<name>/soul/billing/<runId>.json,
+ * one immutable file per completed SPU run. A directory of one-file-per-run
+ * (not an appended JSONL) for the reason turnQueue gives: :3000 and :3001 share
+ * one local_data, and a concurrent append can interleave two writers' bytes,
+ * where two separate files never can. Stats reads the whole directory.
+ */
+export function beingBillingDir(name: string): string {
+  return path.join(beingSoulDir(name), 'billing');
+}
+
+export function beingBillingEntryFile(name: string, runId: string): string {
+  // runId is a uuid from crypto.randomUUID (no path-hostile characters), but
+  // sanitize anyway — a billing filename must never escape its directory.
+  return path.join(beingBillingDir(name), `${sanitizeBeingName(runId)}.json`);
+}
+
 export function beingBackupsDir(name: string): string {
   return path.join(beingDir(name), 'backups');
 }

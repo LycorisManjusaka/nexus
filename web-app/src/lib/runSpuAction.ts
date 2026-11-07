@@ -24,6 +24,8 @@ import { createSseReader, isSseDone } from '@/lib/sseFrames';
 import { buildSpuChatBody } from '@/lib/spuChatBody';
 import { runSpuLoop, type SpuRunRecord, type SpuRunOutcome } from '@/lib/spuRun';
 import { END_SENTINEL, type ScaffoldLang } from '@/lib/spuScaffold';
+import { normaliseCacheUsage, type TurnCacheUsage } from '@/lib/turnEvents';
+import { addCacheUsage, billableUsage, type SpuBillingEntry } from '@/lib/spuBilling';
 
 export interface RunSpuArgs {
   folder: string;
@@ -58,6 +60,13 @@ export interface RunSpuDeps {
    */
   chatPost: (req: Request) => Promise<Response>;
   writeRecord: (folder: string, label: string, record: SpuRunRecord) => Promise<unknown>;
+  /**
+   * Append one billing entry to the being's ledger when the run ends. Optional:
+   * a run with no billable usage writes nothing, and a caller that does not want
+   * billing (a test) omits it. A write failure here must not change the run's
+   * result — the record is the durable artifact, the ledger is accounting.
+   */
+  writeBilling?: (folder: string, entry: SpuBillingEntry) => Promise<unknown>;
   /** Raw SSE text, forwarded byte-for-byte to whoever is watching. */
   onRawText?: (text: string) => void;
   /** Checked between rounds. See SpuRunDeps.isAborted. */
@@ -78,16 +87,19 @@ export type RunSpuResult =
   | { ok: false; stage: 'stream' | 'record'; reason: string; record: SpuRunRecord };
 
 /**
- * Drain one /api/chat response into its visible text.
+ * Drain one /api/chat response into its visible text AND its billing usage.
  *
- * Returns the text of THIS call only. Forwards every raw frame to `onRawText`
- * BEFORE interpreting it, so a watcher sees what killed a run as well as what
- * a run produced.
+ * Returns the text of THIS call only, plus the `cache_usage` this call reported
+ * (null if it reported none). Until 2026-11-07 the usage frame was parsed by
+ * nobody here and the money one SPU call cost vanished; the caller now sums it
+ * across rounds into the run's billing ledger. Forwards every raw frame to
+ * `onRawText` BEFORE interpreting it, so a watcher sees what killed a run as
+ * well as what a run produced.
  */
 async function drainOneCall(
   res: Response,
   onRawText: ((text: string) => void) | undefined,
-): Promise<string> {
+): Promise<{ text: string; usage: TurnCacheUsage | null }> {
   if (!res.ok || !res.body) {
     const errText = await res.text().catch(() => '');
     throw new Error(errText || `HTTP ${res.status}`);
@@ -99,6 +111,7 @@ async function drainOneCall(
   const decoder = new TextDecoder('utf-8');
   const sse = createSseReader();
   let accum = '';
+  let usage: TurnCacheUsage | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -120,10 +133,15 @@ async function drainOneCall(
         continue;
       }
       if (d.type === 'text' && typeof d.content === 'string') accum += d.content;
+      // One chat call normally emits a single cache_usage frame near its end;
+      // summed defensively through the same helper the multi-round total uses,
+      // in case a provider path ever emits more than one. normaliseCacheUsage
+      // is the one parser for this frame — not hand-read here.
+      if (d.type === 'cache_usage') usage = addCacheUsage(usage, normaliseCacheUsage(d));
       if (typeof d.error === 'string' && d.error) throw new Error(d.error);
     }
   }
-  return accum;
+  return { text: accum, usage };
 }
 
 export async function runSpuAction(
@@ -166,6 +184,35 @@ export async function runSpuAction(
   let lastCheckpoint = args.resumeText ? args.resumeText + '\n' : '';
   let lastAttempts = 0;
 
+  // Summed across every round. A stopped or errored run is billed for whatever
+  // it spent before it ended — the provider calls happened. Null until the
+  // first call reports usage; billableUsage(null) is false, so a run that died
+  // before any call returned writes no ledger entry.
+  let totalUsage: TurnCacheUsage | null = null;
+  const recordBilling = async (
+    status: 'done' | 'stopped' | 'error',
+    attempts: number,
+  ): Promise<void> => {
+    if (!deps.writeBilling || !billableUsage(totalUsage)) return;
+    const entry: SpuBillingEntry = {
+      runId,
+      action: args.action,
+      label: args.label,
+      convoId: args.convoId,
+      model: args.specificModel,
+      authMode: args.authMode === 'oauth' ? 'oauth' : 'api-key',
+      startedAt,
+      attempts,
+      status,
+      usage: totalUsage,
+    };
+    try {
+      await deps.writeBilling(args.folder, entry);
+    } catch {
+      /* accounting, not the artifact — a failed ledger write is swallowed */
+    }
+  };
+
   let outcome: SpuRunOutcome;
   try {
     outcome = await runSpuLoop(
@@ -195,7 +242,9 @@ export async function runSpuAction(
               body: JSON.stringify(body),
             }),
           );
-          return drainOneCall(res, deps.onRawText);
+          const { text, usage } = await drainOneCall(res, deps.onRawText);
+          totalUsage = addCacheUsage(totalUsage, usage);
+          return text;
         },
         // A checkpoint failure must not abandon a generation that is going
         // fine, so it is swallowed here rather than inside the loop: the loop
@@ -228,6 +277,9 @@ export async function runSpuAction(
       sawSentinel: lastCheckpoint.includes(END_SENTINEL),
       updatedAt: deps.nowMs(),
     });
+    // Before the record write, so a failed record write does not also lose the
+    // billing — they are separate files with separate failure modes.
+    await recordBilling('error', lastAttempts);
     try {
       await deps.writeRecord(args.folder, args.label, record);
     } catch (e2) {
@@ -244,6 +296,7 @@ export async function runSpuAction(
     endedBecause: outcome.endedBecause,
     updatedAt: deps.nowMs(),
   });
+  await recordBilling(record.status === 'stopped' ? 'stopped' : 'done', outcome.attempts);
   try {
     await deps.writeRecord(args.folder, args.label, record);
   } catch (e) {
