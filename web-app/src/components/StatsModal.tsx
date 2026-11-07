@@ -136,6 +136,13 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [firstDay, setFirstDay] = useState<number>(1);
+  // 2.1 — Claude OAuth runs on a subscription, not metered, so whoever reads a
+  // bill does not pay for them. Excluded by DEFAULT; the box lets them back in.
+  const [excludeOauth, setExcludeOauth] = useState<boolean>(true);
+  // 2.2 — imported / pre-tagging messages carry no real usage and are priced at
+  // notional list price (estimated=true). Those estimates are OFF by default so
+  // a bill shows only metered money; the box folds the guesses back in.
+  const [includeEstimated, setIncludeEstimated] = useState<boolean>(false);
 
   const [result, setResult] = useState<{ grid: Grid; total: number; measured: number; estimated: number; note?: string; unpricedModels: string[] } | null>(null);
   const [copied, setCopied] = useState<'' | 'tsv' | 'md'>('');
@@ -149,8 +156,9 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
       setData(j);
       if (j.entities?.length && !entity) setEntity(j.entities[0]);
       if (j.families?.length && !family) setFamily(j.families[0]);
-      if (j.minTs) setStartDate((s) => s || toDateInput(j.minTs));
-      if (j.maxTs) setEndDate((s) => s || toDateInput(j.maxTs));
+      // The period is NOT seeded from the data range here — 2.3 defaults it to
+      // last calendar month on every open (the openEffect below), which is the
+      // window a monthly bill is read against.
     } catch (e: any) {
       setError(e?.message || t('stats.loadFailed'));
     } finally {
@@ -163,7 +171,19 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  useEffect(() => { setResult(null); }, [report, entity, family, startDate, endDate, firstDay]);
+  // 2.3 — every time the window opens, default the period to LAST calendar
+  // month (its 1st to its last day), the window a monthly bill is read against.
+  // Changeable afterwards; the default returns on the next open, by decision.
+  useEffect(() => {
+    if (!open) return;
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0); // day 0 = last day of prev month
+    setStartDate(toDateInput(start.getTime()));
+    setEndDate(toDateInput(end.getTime()));
+  }, [open]);
+
+  useEffect(() => { setResult(null); }, [report, entity, family, startDate, endDate, firstDay, excludeOauth, includeEstimated]);
 
   const needs = useMemo(() => ({
     entity: report === 'entity-convos' || report === 'entity-months',
@@ -174,7 +194,13 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
 
   function calculate() {
     if (!data) return;
-    const all = data.records;
+    // 2.1 / 2.2 global pre-filters, applied before every report groups the rows:
+    //   excludeOauth (default on)   → drop subscription Claude OAuth runs
+    //   includeEstimated (default off) → drop notional-price imported messages
+    const all = data.records.filter((r) =>
+      (includeEstimated || !r.estimated) &&
+      (!excludeOauth || r.family !== 'Claude (OAuth)')
+    );
     const startTs = startDate ? startOfDay(startDate) : -Infinity;
     const endTs = endDate ? endOfDay(endDate) : Infinity;
 
@@ -389,6 +415,15 @@ export default function StatsModal({ open, onClose }: { open: boolean; onClose: 
                 <input type="number" min={1} max={28} value={firstDay} onChange={(e) => setFirstDay(Math.min(28, Math.max(1, Number(e.target.value) || 1)))} className="w-20 rounded border px-2 py-1.5 text-sm" style={inputStyle} />
               </label>
             )}
+
+            <label className="flex items-center gap-1.5 text-xs" title={t('stats.opt.excludeOauthHint')}>
+              <input type="checkbox" checked={excludeOauth} onChange={(e) => setExcludeOauth(e.target.checked)} />
+              <span>{t('stats.opt.excludeOauth')}</span>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs" title={t('stats.opt.includeEstimatedHint')}>
+              <input type="checkbox" checked={includeEstimated} onChange={(e) => setIncludeEstimated(e.target.checked)} />
+              <span>{t('stats.opt.includeEstimated')}</span>
+            </label>
 
             <button onClick={calculate} disabled={!data || loading} className="rounded bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40">
               {t('stats.calculate')}

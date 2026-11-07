@@ -696,6 +696,12 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'stats.monthStarts': 'Month starts on',
   'stats.monthStartsHint':
     'Billing cycle start day of month (1 = calendar months)',
+  'stats.opt.excludeOauth': 'Exclude Claude OAuth',
+  'stats.opt.excludeOauthHint':
+    'Claude OAuth runs on a subscription, not metered per call — excluded by default so the bill shows only what is actually charged.',
+  'stats.opt.includeEstimated': 'Include estimates',
+  'stats.opt.includeEstimatedHint':
+    'Imported / pre-tagging messages carry no real usage and are priced at notional list price. Off by default so the bill shows only metered money.',
   'stats.calculate': 'Calculate',
   'stats.loadFailed': 'Failed to load statistics',
   'stats.scanning': 'Scanning all conversation logs…',
@@ -2501,6 +2507,12 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'stats.to': '終了',
   'stats.monthStarts': '月の開始日',
   'stats.monthStartsHint': '請求サイクルの開始日（1 = 暦月）',
+  'stats.opt.excludeOauth': 'Claude OAuth を除く',
+  'stats.opt.excludeOauthHint':
+    'Claude OAuth はサブスクリプションで、呼び出しごとの従量課金ではありません。実際に請求される分だけを見られるよう、既定で除外します。',
+  'stats.opt.includeEstimated': '推定を含める',
+  'stats.opt.includeEstimatedHint':
+    '取り込んだ／タグ付け前のメッセージは実使用量を持たず、名目の定価で計上されます。請求される実額だけを見られるよう、既定ではオフです。',
   'stats.calculate': '計算',
   'stats.loadFailed': '統計の読み込みに失敗しました',
   'stats.scanning': 'すべての会話ログをスキャン中…',
