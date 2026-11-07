@@ -1,134 +1,647 @@
 {
   "_README": "Per-model API prices in USD per 1,000,000 tokens. EDIT THIS FILE to fix/add prices — keys are the model id (lowercased; any leading 'moonshotai/' is stripped automatically). Each entry: input = normal (uncached) input, cachedInput = cache-hit input (cheaper), cacheWrite = one-time cache-creation surcharge (Anthropic only; 0 for providers that don't charge it), output = generated tokens. For peak/off-peak billing (DeepSeek V4), the base fields are OFF-PEAK rates and the optional peakInput/peakCachedInput/peakOutput/peakHoursUtc fields carry the peak rates plus the [startHour,endHour) UTC windows. For LONG-CONTEXT tiers (added 2026-10-21; every OpenAI row except the mini/nano ones, plus claude-haiku-5-5) the base fields are the SHORT-context rates and the optional longContextThreshold/longContextInput/longContextCachedInput/longContextCacheWrite/longContextOutput fields carry the rates that apply once the PROMPT exceeds the threshold — see _NOTE_openai and the long-context note at the top of modelPricing.ts. A model NOT listed here shows a muted '$' whose tooltip tells you to add it. Local models are ignored entirely. CONFIDENCE: claude-fable-5, claude-fable-5-1, claude-mythos-5, claude-mythos-5-1, and dola-seed-2-1-turbo are from published prices; every gpt-* row was re-read verbatim off the live OpenAI price page on 2026-10-21 and all six that existed before that date were WRONG (see _NOTE_openai — this sentence used to list gpt-5.6-* as published, and that claim is what made the wrong numbers look trustworthy; a confidence label is only worth the date beside it); Claude opus/sonnet/haiku use the standard Anthropic structure (cached=0.1x input, cacheWrite=1.25x input) with generation-4 numbers; EVERYTHING ELSE (Kimi, Gemini, Grok, GLM, DeepSeek, Qwen, MiniMax, Cohere, MiMo, older GPT-5) is a ROUGH ESTIMATE — verify against each provider's pricing page and correct here. NOTE (2026-09-02, verified against platform.claude.com/docs/en/about-claude/pricing): Fable 5.1 and Mythos 5.1 use a special 0.025x cache-hit multiplier (cachedInput=0.25) instead of the standard 0.1x — this is their headline pricing change over Fable 5/Mythos 5, whose cachedInput stays at the standard 1.0. cacheWrite=12.5 for all four fable/mythos entries is the official 5-minute cache-write rate (1.25x input); Anthropic also offers a 1-hour cache write at 2x input ($20) which this single-field schema cannot represent — 5-minute was chosen as the more common default. The previous claude-fable-5/mythos-5 cacheWrite value of 18.75 did not match either official rate and has been corrected to 12.5. NOTE (2026-09-23, verified against the Anthropic pricing docs): claude-opus-5-5 is $4 input / $20 output with a cache HIT at $0.20 — that is 0.05x input, NOT the standard 0.1x, so it is the same kind of special cache-hit multiplier Fable 5.1 introduced. Its cacheWrite=5 is the 5-minute rate (1.25x input); the 1-hour rate would be 8. NEXUS sends cache_control without a ttl field, which means the 5-minute TTL, so the 5-minute write rate is the correct one for every Anthropic row here. CORRECTIONS (2026-09-23, same docs page): three Anthropic cacheWrite/input values were wrong and are fixed. (a) claude-sonnet-5 cacheWrite was 4 — that is the 1-HOUR rate; the 5-minute rate is 2.50. (b) claude-haiku-4-5 (undated) was {input 3, cachedInput 0.3, cacheWrite 2.2} — nothing in that row matched any published Haiku 4.5 price, and the row IS reachable (it is the default eyes model and the default subagent model), so eyes/subagent cost was over-reported ~3x. Correct: $1 / $0.10 / $1.25 / $5. (c) claude-haiku-4-5-20251001 cacheWrite was 2, again the 1-hour rate; corrected to 1.25. Verified-correct and left alone: opus-5/4-8/4-7, sonnet-4-6, fable/mythos 5 and 5.1. NOTE (2026-10-02, verified against the same pricing docs page): claude-sonnet-5-5 was added and is priced IDENTICALLY to claude-sonnet-5 — $2 input / $0.20 cache-hit / $2.50 5-minute cacheWrite / $10 output. Its $0.20 cache hit is the STANDARD 0.1x (0.1 x $2), NOT a special multiplier — footnote 2 on the docs page gives the 0.05x special only to Opus 5.5; Sonnet 5.5 uses the standard multiplier. Same visit re-confirmed opus-5-5 ($4/$0.20/$5/$20) and sonnet-5 ($2/$0.20/$2.50/$10) against the live table.",
-  
-  "claude-fable-5":         { "input": 10,   "cachedInput": 1.0,  "cacheWrite": 12.5,  "output": 50 },
-  "claude-mythos-5":        { "input": 10,   "cachedInput": 1.0,  "cacheWrite": 12.5,  "output": 50 },
-  "claude-fable-5-1":       { "input": 10,   "cachedInput": 0.25, "cacheWrite": 12.5,  "output": 50 },
-  "claude-mythos-5-1":      { "input": 10,   "cachedInput": 0.25, "cacheWrite": 12.5,  "output": 50 },
-  "claude-opus-5-5":        { "input": 4,    "cachedInput": 0.2,  "cacheWrite": 5,     "output": 20 },
-  "claude-opus-5":          { "input": 5,    "cachedInput": 0.5,  "cacheWrite": 6.25,  "output": 25 },
-  "claude-opus-4-8":        { "input": 5,   "cachedInput": 0.5,  "cacheWrite": 6.25, "output": 25 },
-  "claude-opus-4-7":        { "input": 5,   "cachedInput": 0.5,  "cacheWrite": 6.25, "output": 25 },
-  "claude-sonnet-5-5":      { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 2.5,   "output": 10 },
-  "claude-sonnet-5":        { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 2.5,   "output": 10 },
-  "claude-sonnet-4-6":      { "input": 3,    "cachedInput": 0.3,  "cacheWrite": 3.75,  "output": 15 },
-  "claude-haiku-4-5":       { "input": 1,    "cachedInput": 0.1,  "cacheWrite": 1.25,  "output": 5 },
-  "claude-haiku-4-5-20251001": { "input": 1, "cachedInput": 0.1,  "cacheWrite": 1.25,  "output": 5 },
+  "claude-fable-5": {
+    "input": 10,
+    "cachedInput": 1.0,
+    "cacheWrite": 12.5,
+    "output": 50
+  },
+  "claude-mythos-5": {
+    "input": 10,
+    "cachedInput": 1.0,
+    "cacheWrite": 12.5,
+    "output": 50
+  },
+  "claude-fable-5-1": {
+    "input": 10,
+    "cachedInput": 0.25,
+    "cacheWrite": 12.5,
+    "output": 50
+  },
+  "claude-mythos-5-1": {
+    "input": 10,
+    "cachedInput": 0.25,
+    "cacheWrite": 12.5,
+    "output": 50
+  },
+  "claude-opus-5-5": {
+    "input": 4,
+    "cachedInput": 0.2,
+    "cacheWrite": 5,
+    "output": 20
+  },
+  "claude-opus-5": {
+    "input": 5,
+    "cachedInput": 0.5,
+    "cacheWrite": 6.25,
+    "output": 25
+  },
+  "claude-opus-4-8": {
+    "input": 5,
+    "cachedInput": 0.5,
+    "cacheWrite": 6.25,
+    "output": 25
+  },
+  "claude-opus-4-7": {
+    "input": 5,
+    "cachedInput": 0.5,
+    "cacheWrite": 6.25,
+    "output": 25
+  },
+  "claude-sonnet-5-5": {
+    "input": 2,
+    "cachedInput": 0.2,
+    "cacheWrite": 2.5,
+    "output": 10
+  },
+  "claude-sonnet-5": {
+    "input": 2,
+    "cachedInput": 0.2,
+    "cacheWrite": 2.5,
+    "output": 10
+  },
+  "claude-sonnet-4-6": {
+    "input": 3,
+    "cachedInput": 0.3,
+    "cacheWrite": 3.75,
+    "output": 15
+  },
+  "claude-haiku-4-5": {
+    "input": 1,
+    "cachedInput": 0.1,
+    "cacheWrite": 1.25,
+    "output": 5
+  },
+  "claude-haiku-4-5-20251001": {
+    "input": 1,
+    "cachedInput": 0.1,
+    "cacheWrite": 1.25,
+    "output": 5
+  },
   "_NOTE_claude-haiku-5-5": "Added 2026-10-21, read verbatim off platform.claude.com/docs/en/about-claude/pricing. This is the FIRST Anthropic row with a long-context tier, and it is a 5x cliff on every bucket: 'Claude Haiku 5.5 (for prompts up to 100,000 tokens)' = $0.10 / $0.125 5m-write / $0.01 hit / $0.50 out, and 'Claude Haiku 5.5 (for prompts over 100,000 tokens)' = $0.50 / $0.625 / $0.05 / $2.50. The base fields are the SHORT tier and the longContext* fields are the OVER-100K tier; see the long-context note in modelPricing.ts. 100K is crossed routinely in this house, so the short numbers alone would have under-reported Haiku by 5x on exactly the long work it is cheap for. cacheWrite values are the 5-MINUTE rates (NEXUS sends cache_control with no ttl = 5 minutes); the 1-hour rates are $0.20 / $1. NOT represented: the inference_geo US-only multiplier (1.1x on every bucket, and it also applies on top of the over-100K prices) — NEXUS never sends that parameter, so global/default routing applies.",
-  "claude-haiku-5-5":       { "input": 0.1,  "cachedInput": 0.01, "cacheWrite": 0.125, "output": 0.5,
-                              "longContextThreshold": 100000,
-                              "longContextInput": 0.5, "longContextCachedInput": 0.05,
-                              "longContextCacheWrite": 0.625, "longContextOutput": 2.5 },
-
+  "claude-haiku-5-5": {
+    "input": 0.1,
+    "cachedInput": 0.01,
+    "cacheWrite": 0.125,
+    "output": 0.5,
+    "longContextThreshold": 100000,
+    "longContextInput": 0.5,
+    "longContextCachedInput": 0.05,
+    "longContextCacheWrite": 0.625,
+    "longContextOutput": 2.5
+  },
   "_NOTE_openai": "CORRECTED AND EXTENDED 2026-10-21 against developers.openai.com/api/docs/pricing (platform.openai.com/docs/pricing 301-redirects there now), rows copied VERBATIM rather than summarised. Two things were wrong before, and the _README above asserted the opposite — it listed gpt-5.6-* under 'from published prices'. (a) EVERY ChatGPT row disagreed with the live Standard table, and the shape of the disagreement explains itself: the old gpt-5.6-sol numbers (5 / 0.5 / 30) are the published gpt-5.5 row, and the old gpt-5.6-terra numbers (2.5 / 0.25 / 15) are the published gpt-5.4 row — when the 5.6 generation was added, the previous generation's prices were carried down a line instead of being read off the new page. (b) OpenAI charges a LONG-CONTEXT tier, defined on the page as 'Short context: <=272K input tokens. Long context: >272K input tokens.' — input doubles and output rises ~1.5x. Base fields here are the SHORT tier; longContext* are the >272K tier. Standard service tier only: the page also lists Batch (exactly 0.5x Standard on every row — that exact ratio is part of why these numbers are trusted), Flex, Fast (2x) and Ultrafast (6x) tables, and NEXUS sends no service_tier parameter, so Standard applies. gpt-5.4-mini and gpt-5.4-nano are the only flat rows (no tier). cacheWrite stays 0 for every OpenAI row: the 30m/12h 'write' columns are the opt-in extended cache, which NEXUS never requests, and the OpenAI usage block reports only prompt_tokens_details.cached_tokens — there is no cache-creation bucket to multiply. VERIFIED SERVED by real inference on 2026-10-21: gpt-6.1-sol, gpt-6-sol, gpt-6-astra, gpt-6-luna all answer on /v1/chat/completions. gpt-5.5-pro / gpt-5.4-pro / gpt-5.4-nano are priced on the page but NOT offered by NEXUS, so they get no row.",
-  "gpt-6.1-sol":            { "input": 2,    "cachedInput": 0.1,  "cacheWrite": 0, "output": 10,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 4, "longContextCachedInput": 0.2, "longContextOutput": 15 },
-  "gpt-6-sol":              { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 0, "output": 10,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 4, "longContextCachedInput": 0.4, "longContextOutput": 15 },
-  "gpt-6-astra":            { "input": 10,   "cachedInput": 1,    "cacheWrite": 0, "output": 50,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 20, "longContextCachedInput": 2, "longContextOutput": 75 },
-  "gpt-6-luna":             { "input": 0.1,  "cachedInput": 0.01, "cacheWrite": 0, "output": 0.5,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 0.2, "longContextCachedInput": 0.02, "longContextOutput": 0.75 },
-  "gpt-5.6-sol":            { "input": 4,    "cachedInput": 0.4,  "cacheWrite": 0, "output": 20,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 8, "longContextCachedInput": 0.8, "longContextOutput": 30 },
-  "gpt-5.6-terra":          { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 0, "output": 12,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 4, "longContextCachedInput": 0.4, "longContextOutput": 18 },
-  "gpt-5.6-luna":           { "input": 0.2,  "cachedInput": 0.02, "cacheWrite": 0, "output": 1.2,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 0.4, "longContextCachedInput": 0.04, "longContextOutput": 1.8 },
-  "gpt-5.5":                { "input": 5,    "cachedInput": 0.5,  "cacheWrite": 0, "output": 30,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 10, "longContextCachedInput": 1, "longContextOutput": 45 },
-  "gpt-5.4":                { "input": 2.5,  "cachedInput": 0.25, "cacheWrite": 0, "output": 15,
-                              "longContextThreshold": 272000,
-                              "longContextInput": 5, "longContextCachedInput": 0.5, "longContextOutput": 22.5 },
-  "gpt-5.4-mini":           { "input": 0.75, "cachedInput": 0.075, "cacheWrite": 0, "output": 4.5 },
-
-  "_NOTE_kimi": "Catalog re-verified 2026-11-07 against a live GET /v1/models on api.moonshot.ai — now SIX ids: kimi-k3, kimi-k3.1-pro, kimi-k3.1-pro-highspeed, kimi-k2.7-code, kimi-k2.7-code-highspeed, kimi-k2.6 (the earlier note said 'exactly four'; K3.1 Pro shipped 2026-10-23 as a post-trained K3). kimi-k3.1-pro and -highspeed also verified live on the ANTHROPIC surface (POST api.moonshot.ai/anthropic/v1/messages → 200, tool_use, thinking block) — that is the surface NEXUS routes Kimi on. K3.1 Pro pricing ($2 / $0.20 cached / $10) is from THIRD-PARTY aggregators (benchlm.ai, openrouter.ai, cloudprice.net), NOT read verbatim off an official Moonshot pricing page, so confidence is third-party+dated; highspeed is $4 / $0.20 / $20 per the same sources. kimi-k2.5 is RETIRED (404 on retrieve and on call) — its row is kept only so old conversations still cost out, and its numbers were never re-verified against an official page. There is no kimi-k2.8 on the token API in any spelling; 'K2.8 Preview' ships only inside the Kimi Code / Kimi Work subscription (api.kimi.com/coding/v1, served under the id kimi-for-coding), which is flat-rate and therefore has no per-token row here.",
-  "kimi-k3":                { "input": 3,    "cachedInput": 0.3,  "cacheWrite": 0, "output": 15 },
-  "kimi-k3.1-pro":          { "input": 2,    "cachedInput": 0.2,  "cacheWrite": 0, "output": 10 },
-  "kimi-k3.1-pro-highspeed": { "input": 4,   "cachedInput": 0.2,  "cacheWrite": 0, "output": 20 },
-  "kimi-k2.7-code":         { "input": 0.95, "cachedInput": 0.19, "cacheWrite": 0, "output": 4 },
-  "kimi-k2.7-code-highspeed": { "input": 1.9, "cachedInput": 0.38, "cacheWrite": 0, "output": 8 },
-  "kimi-k2.6":              { "input": 0.95, "cachedInput": 0.16, "cacheWrite": 0, "output": 4 },
-  "kimi-k2.5":              { "input": 0.6,  "cachedInput": 0.15, "cacheWrite": 0, "output": 2.5 },
-
+  "gpt-6.1-sol": {
+    "input": 2,
+    "cachedInput": 0.1,
+    "cacheWrite": 0,
+    "output": 10,
+    "longContextThreshold": 272000,
+    "longContextInput": 4,
+    "longContextCachedInput": 0.2,
+    "longContextOutput": 15
+  },
+  "gpt-6-sol": {
+    "input": 2,
+    "cachedInput": 0.2,
+    "cacheWrite": 0,
+    "output": 10,
+    "longContextThreshold": 272000,
+    "longContextInput": 4,
+    "longContextCachedInput": 0.4,
+    "longContextOutput": 15
+  },
+  "gpt-6-astra": {
+    "input": 10,
+    "cachedInput": 1,
+    "cacheWrite": 0,
+    "output": 50,
+    "longContextThreshold": 272000,
+    "longContextInput": 20,
+    "longContextCachedInput": 2,
+    "longContextOutput": 75
+  },
+  "gpt-6-luna": {
+    "input": 0.1,
+    "cachedInput": 0.01,
+    "cacheWrite": 0,
+    "output": 0.5,
+    "longContextThreshold": 272000,
+    "longContextInput": 0.2,
+    "longContextCachedInput": 0.02,
+    "longContextOutput": 0.75
+  },
+  "gpt-5.6-sol": {
+    "input": 4,
+    "cachedInput": 0.4,
+    "cacheWrite": 0,
+    "output": 20,
+    "longContextThreshold": 272000,
+    "longContextInput": 8,
+    "longContextCachedInput": 0.8,
+    "longContextOutput": 30
+  },
+  "gpt-5.6-terra": {
+    "input": 2,
+    "cachedInput": 0.2,
+    "cacheWrite": 0,
+    "output": 12,
+    "longContextThreshold": 272000,
+    "longContextInput": 4,
+    "longContextCachedInput": 0.4,
+    "longContextOutput": 18
+  },
+  "gpt-5.6-luna": {
+    "input": 0.2,
+    "cachedInput": 0.02,
+    "cacheWrite": 0,
+    "output": 1.2,
+    "longContextThreshold": 272000,
+    "longContextInput": 0.4,
+    "longContextCachedInput": 0.04,
+    "longContextOutput": 1.8
+  },
+  "gpt-5.5": {
+    "input": 5,
+    "cachedInput": 0.5,
+    "cacheWrite": 0,
+    "output": 30,
+    "longContextThreshold": 272000,
+    "longContextInput": 10,
+    "longContextCachedInput": 1,
+    "longContextOutput": 45
+  },
+  "gpt-5.4": {
+    "input": 2.5,
+    "cachedInput": 0.25,
+    "cacheWrite": 0,
+    "output": 15,
+    "longContextThreshold": 272000,
+    "longContextInput": 5,
+    "longContextCachedInput": 0.5,
+    "longContextOutput": 22.5
+  },
+  "gpt-5.4-mini": {
+    "input": 0.75,
+    "cachedInput": 0.075,
+    "cacheWrite": 0,
+    "output": 4.5
+  },
+  "_NOTE_kimi": "Catalog re-verified 2026-11-07 against a live GET /v1/models on api.moonshot.ai — now SIX ids: kimi-k3, kimi-k3.1-pro, kimi-k3.1-pro-highspeed, kimi-k2.7-code, kimi-k2.7-code-highspeed, kimi-k2.6 (the earlier note said 'exactly four'; K3.1 Pro shipped 2026-10-23 as a post-trained K3). kimi-k3.1-pro and -highspeed also verified live on the ANTHROPIC surface (POST api.moonshot.ai/anthropic/v1/messages → 200, tool_use, thinking block) — that is the surface NEXUS routes Kimi on. K3.1 Pro pricing ($2 / $0.20 cached / $10) is from THIRD-PARTY aggregators (benchlm.ai, openrouter.ai, cloudprice.net), NOT read verbatim off an official Moonshot pricing page, so confidence is third-party+dated; highspeed is $4 / $0.20 / $20 per the same sources. kimi-k2.5 is RETIRED (404 on retrieve and on call) — its row is kept only so old conversations still cost out, and its numbers were never re-verified against an official page. There is no kimi-k2.8 on the token API in any spelling; 'K2.8 Preview' ships only inside the Kimi Code / Kimi Work subscription (api.kimi.com/coding/v1, served under the id kimi-for-coding), which is flat-rate and therefore has no per-token row here. CACHE-WRITE RATE CORRECTED 2026-11-07: every kimi row had cacheWrite:0, which is right for the OpenAI-compatible providers (they never return a cache-creation count) but WRONG for Kimi, because NEXUS routes Kimi on the ANTHROPIC surface, where the response carries cache_creation_input_tokens and Moonshot bills it. Measured end-to-end: one 287,299-token turn on kimi-k3.1-pro returned input_tokens:67 + cache_creation_input_tokens:287,232 + output 3,384. NEXUS priced that at $0.0340; Moonshot's own console reported $0.60962 for the day (minus ~$0.012 of probe traffic = ~$0.597), and input-priced cache writes predict $0.6084 — a match to ~2%, versus an 18x under-report at cacheWrite:0. So on Moonshot a cache WRITE costs the ordinary input rate (1.0x, unlike Anthropic's own 1.25x premium). Only kimi-k3.1-pro is verified against a real invoice; the other rows follow from the same automatic-cache mechanism (kimi-k3 turns in this house also return non-zero cache_creation_input_tokens). Second probe of an identical request returned cache_read_input_tokens:2,816 with creation 0 — the cache is real and reads are billed at cachedInput. MiMo rides the same Anthropic surface with cacheWrite:0 and is NOT measured: no MiMo turn in this house has ever reported a non-zero cache-creation count, so its rows are left alone rather than guessed.",
+  "kimi-k3": {
+    "input": 3,
+    "cachedInput": 0.3,
+    "cacheWrite": 3,
+    "output": 15
+  },
+  "kimi-k3.1-pro": {
+    "input": 2,
+    "cachedInput": 0.2,
+    "cacheWrite": 2,
+    "output": 10
+  },
+  "kimi-k3.1-pro-highspeed": {
+    "input": 4,
+    "cachedInput": 0.2,
+    "cacheWrite": 4,
+    "output": 20
+  },
+  "kimi-k2.7-code": {
+    "input": 0.95,
+    "cachedInput": 0.19,
+    "cacheWrite": 0.95,
+    "output": 4
+  },
+  "kimi-k2.7-code-highspeed": {
+    "input": 1.9,
+    "cachedInput": 0.38,
+    "cacheWrite": 1.9,
+    "output": 8
+  },
+  "kimi-k2.6": {
+    "input": 0.95,
+    "cachedInput": 0.16,
+    "cacheWrite": 0.95,
+    "output": 4
+  },
+  "kimi-k2.5": {
+    "input": 0.6,
+    "cachedInput": 0.15,
+    "cacheWrite": 0.6,
+    "output": 2.5
+  },
   "_NOTE_gemini-4-argon": "Reachable from 2026-10-14 (announced 2026-09-30; on 2026-10-08 every id spelling still 404'd across v1/v1beta/v1alpha). Prices read off ai.google.dev/gemini-api/docs/pricing on 2026-10-14, quoted verbatim: input '$2.00 through November 30, 2026. $4.00 starting December 1, 2026.', output '$10.00 through November 30, 2026. $20.00 starting December 1, 2026.', context caching '$0.10 through November 30, 2026. $0.20 starting December 1, 2026.'. Numbers below are the CURRENT introductory rate — REVISIT ON 2026-12-01, when all three double. cachedInput here is the published $0.10 (5% of input), NOT the 25%-of-input convention used for the 3.x siblings: that convention exists because Google never published their cached rate, whereas argon's is on the price page. Catalogue (GetModel, 2026-10-14): in=1048576, out=32768 — half the 65536 output ceiling of every 3.x sibling. NEXUS never sends maxOutputTokens on the Gemini path, so the provider default applies and the Gemini branch's 5 automatic continuations absorb it.",
-  "gemini-4-argon":         { "input": 2.0,  "cachedInput": 0.1,   "cacheWrite": 0, "output": 10 },
+  "gemini-4-argon": {
+    "input": 2.0,
+    "cachedInput": 0.1,
+    "cacheWrite": 0,
+    "output": 10
+  },
   "_NOTE_gemini-3.8-flash": "Released 2026-09-02 (ai.google.dev/gemini-api/docs/latest-model). CORRECTED 2026-11-07 against the live price page (ai.google.dev/gemini-api/docs/pricing now 301-redirects to aistudio.google.com/docs/pricing), Gemini 3.8 Flash Standard row quoted verbatim: input '$0.75 through December 31, 2026. $1.50 starting January 1, 2027.', output '$3.75 through December 31, 2026. $7.50 starting January 1, 2027.', context caching '$0.075 through December 31, 2026. $0.15 starting January 1, 2027. $0.50 / 1,000,000 tokens per hour (storage price) through December 31, 2026. $1.00 / 1,000,000 tokens per hour (storage price) starting January 1, 2027.'. cachedInput was 0.1875 and is now 0.075 — a 2.5x OVER-report on every cache hit. What this note used to say, and why it was wrong: it chose '25%-of-input, the convention used across 3.5/3.6/3.7 Flash' over the third-party writeups saying '90% discount', on the grounds that 90% 'doesn't match the pattern Nexus already uses'. The official page says $0.075, which IS 10% of input — the third parties were right and the house convention outranked a primary source it had not read. Found because Navigator asked whether explicit caching was worth wiring and the arithmetic had to be checked. ⚠ THE SAME SUSPICION APPLIES TO EVERY OTHER GEMINI ROW: 3.7-flash, 3.6-flash, 3.5-flash, 3.5-flash-lite and 3.1-pro-preview are all still on the 25% convention and NONE has been read off the live page. The same visit's summary quoted 3.5 Flash-Lite at '$0.03' (= 10% of its $0.30 input, so also over-reported here at 0.075) and 3.1 Flash-Lite at '$0.025' (which the 25% convention happens to match) — so the ratio is NOT uniform and a bulk 25%→10% rewrite would be a second guess. Each row needs its own verbatim read. Numbers below are the CURRENT introductory rates; everything triples over on 2027-01-01 (input, output AND cache) — revisit then. ⚠ The storage price has no field in this schema: cacheWrite is a one-time per-token surcharge (Anthropic's shape) and Gemini's is per-token-PER-HOUR, so an explicit Gemini cache cannot be costed here without a new dimension. NEXUS creates no explicit Gemini cache today, so nothing is currently mis-billed by that gap.",
-  "gemini-3.8-flash":       { "input": 0.75, "cachedInput": 0.075, "cacheWrite": 0, "output": 3.75 },
+  "gemini-3.8-flash": {
+    "input": 0.75,
+    "cachedInput": 0.075,
+    "cacheWrite": 0,
+    "output": 3.75
+  },
   "_NOTE_gemini-3.7-flash": "Introductory pricing $0.75/$3.75 (input/output per 1M) in effect through 2026-12-31; reverts to standard $1.50/$7.50 (same as 3.6 Flash) after that. Numbers below use the CURRENT introductory rate — revisit after the cutover date.",
-  "gemini-3.7-flash":       { "input": 0.75, "cachedInput": 0.1875, "cacheWrite": 0, "output": 3.75 },
-  "gemini-3.6-flash":       { "input": 1.5,  "cachedInput": 0.375, "cacheWrite": 0, "output": 7.5 },
-  "gemini-3.5-flash":       { "input": 0.3,  "cachedInput": 0.075, "cacheWrite": 0, "output": 9 },
-  "gemini-3.5-flash-lite":  { "input": 0.3,  "cachedInput": 0.075, "cacheWrite": 0, "output": 1.2 },
-  "gemini-3.1-pro-preview": { "input": 1.25, "cachedInput": 0.31,  "cacheWrite": 0, "output": 10 },
-  "gemini-3.1-flash-lite":  { "input": 0.1,  "cachedInput": 0.025, "cacheWrite": 0, "output": 0.4 },
-
+  "gemini-3.7-flash": {
+    "input": 0.75,
+    "cachedInput": 0.1875,
+    "cacheWrite": 0,
+    "output": 3.75
+  },
+  "gemini-3.6-flash": {
+    "input": 1.5,
+    "cachedInput": 0.375,
+    "cacheWrite": 0,
+    "output": 7.5
+  },
+  "gemini-3.5-flash": {
+    "input": 0.3,
+    "cachedInput": 0.075,
+    "cacheWrite": 0,
+    "output": 9
+  },
+  "gemini-3.5-flash-lite": {
+    "input": 0.3,
+    "cachedInput": 0.075,
+    "cacheWrite": 0,
+    "output": 1.2
+  },
+  "gemini-3.1-pro-preview": {
+    "input": 1.25,
+    "cachedInput": 0.31,
+    "cacheWrite": 0,
+    "output": 10
+  },
+  "gemini-3.1-flash-lite": {
+    "input": 0.1,
+    "cachedInput": 0.025,
+    "cacheWrite": 0,
+    "output": 0.4
+  },
   "_NOTE_grok": "xAI bills the whole Grok line on a CLIFF-EDGE threshold, not a blended/tiered rate: prompts under 200K tokens pay the rates below; the moment ANY part of a request crosses 200K tokens, the ENTIRE request rebills at DOUBLE those rates. This flat schema has no field for that — numbers below are the UNDER-200K rate, so any turn that crosses the threshold shows as under-priced here. Flagged for Lizard-kun rather than guessed at. Context windows: grok-4.7 / 4.6 / 4.5 = 500K; grok-4.3 and the 4.20 family = 1M. Rates verified 2026-09-23 against the xAI /v1/language-models catalog (its price fields are in units of 1e-4 USD per 1M tokens) and the published docs; the 4.5 and 4.3 rows had been overstated and were corrected in the same pass.",
-  "grok-4.7":               { "input": 2,    "cachedInput": 0.5,  "cacheWrite": 0, "output": 6 },
-  "grok-4.6":               { "input": 2,    "cachedInput": 0.5,  "cacheWrite": 0, "output": 6 },
-  "grok-4.5":               { "input": 2,    "cachedInput": 0.3,  "cacheWrite": 0, "output": 6 },
-  "grok-4.3":               { "input": 1.25, "cachedInput": 0.2,  "cacheWrite": 0, "output": 2.5 },
-
-  "glm-5.3":                { "input": 1.4,  "cachedInput": 0.26, "cacheWrite": 0, "output": 4.4 },
+  "grok-4.7": {
+    "input": 2,
+    "cachedInput": 0.5,
+    "cacheWrite": 0,
+    "output": 6
+  },
+  "grok-4.6": {
+    "input": 2,
+    "cachedInput": 0.5,
+    "cacheWrite": 0,
+    "output": 6
+  },
+  "grok-4.5": {
+    "input": 2,
+    "cachedInput": 0.3,
+    "cacheWrite": 0,
+    "output": 6
+  },
+  "grok-4.3": {
+    "input": 1.25,
+    "cachedInput": 0.2,
+    "cacheWrite": 0,
+    "output": 2.5
+  },
+  "glm-5.3": {
+    "input": 1.4,
+    "cachedInput": 0.26,
+    "cacheWrite": 0,
+    "output": 4.4
+  },
   "_NOTE_glm-5.3-flash": "GLM-5.3-Flash: first natively multimodal GLM-5 model (image + video + file input, 1M context). Numbers below are the LIST prices. Z.AI is running a 50% intro discount through 2026-09-09 24:00 UTC+8 (input $0.075 / cached $0.015 / output $0.25) — after the cutover it reverts to these list prices ($0.15 / $0.03 / $0.50). Revisit after 2026-09-09.",
-  "glm-5.3-flash":          { "input": 0.15, "cachedInput": 0.03, "cacheWrite": 0, "output": 0.5 },
-  "glm-5.2":                { "input": 1.4,  "cachedInput": 0.26, "cacheWrite": 0, "output": 4.4 },
-  "digitalocean/glm-5.2":   { "input": 0.7,  "cachedInput": 0.12, "cacheWrite": 0, "output": 2.2 },
-  "digitalocean/glm-5.1":   { "input": 0.975,"cachedInput": 0.26, "cacheWrite": 0, "output": 4.3 },
-  "digitalocean/glm-5":     { "input": 0.75, "cachedInput": 0.2,  "cacheWrite": 0, "output": 2.4 },
-  "glm-5.1":                { "input": 1.4,  "cachedInput": 0.26, "cacheWrite": 0, "output": 4.4 },
-  "glm-4.7":                { "input": 0.6,  "cachedInput": 0.11, "cacheWrite": 0, "output": 2.2 },
-  "glm-5-turbo":            { "input": 1.2,  "cachedInput": 0.24, "cacheWrite": 0, "output": 4 },
-  "glm-5v-turbo":            { "input": 1.2,  "cachedInput": 0.24, "cacheWrite": 0, "output": 4 },
-
+  "glm-5.3-flash": {
+    "input": 0.15,
+    "cachedInput": 0.03,
+    "cacheWrite": 0,
+    "output": 0.5
+  },
+  "glm-5.2": {
+    "input": 1.4,
+    "cachedInput": 0.26,
+    "cacheWrite": 0,
+    "output": 4.4
+  },
+  "digitalocean/glm-5.2": {
+    "input": 0.7,
+    "cachedInput": 0.12,
+    "cacheWrite": 0,
+    "output": 2.2
+  },
+  "digitalocean/glm-5.1": {
+    "input": 0.975,
+    "cachedInput": 0.26,
+    "cacheWrite": 0,
+    "output": 4.3
+  },
+  "digitalocean/glm-5": {
+    "input": 0.75,
+    "cachedInput": 0.2,
+    "cacheWrite": 0,
+    "output": 2.4
+  },
+  "glm-5.1": {
+    "input": 1.4,
+    "cachedInput": 0.26,
+    "cacheWrite": 0,
+    "output": 4.4
+  },
+  "glm-4.7": {
+    "input": 0.6,
+    "cachedInput": 0.11,
+    "cacheWrite": 0,
+    "output": 2.2
+  },
+  "glm-5-turbo": {
+    "input": 1.2,
+    "cachedInput": 0.24,
+    "cacheWrite": 0,
+    "output": 4
+  },
+  "glm-5v-turbo": {
+    "input": 1.2,
+    "cachedInput": 0.24,
+    "cacheWrite": 0,
+    "output": 4
+  },
   "_NOTE_deepseek-v4": "DeepSeek uses PEAK/OFF-PEAK pricing (since 2026-08-16 16:00 UTC). Off-peak = half of peak. Peak hours: 01:00-04:00 + 06:00-10:00 UTC, Monday-Friday (weekends are off-peak). Base fields below (input/cachedInput/output) are OFF-PEAK; the peak* fields hold peak rates and peakHoursUtc holds the [startHour,endHour) UTC ranges. input = cache-MISS, cachedInput = cache-HIT, cacheWrite = 0 (DeepSeek charges no cache-write surcharge).",
   "_NOTE_deepseek-flash": "FLASH-SERIES REPRICE effective 2026-09-10 12:00 Beijing (04:00 UTC): off-peak cache-hit $0.003 / cache-miss $0.15 / output $0.6 per 1M; peak = double. That is a ~57% cut from the old Flash rates (0.007 / 0.22 / 0.66) which these rows carried until 2026-09-14. VERIFIED LIVE against api.deepseek.com on 2026-09-14, not recalled. GET /models now returns exactly TWO ids: 'deepseek-flash' (= DeepSeek-V4.1-Flash, 1M context, max_tokens range [1,393216], vision YES, thinking enabled/disabled both accepted) and 'deepseek-v4-pro' (= V4-Pro-0813, pricing UNCHANGED, vision NO). 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-chat' and 'deepseek-reasoner' are still ACCEPTED and are served by V4.1-Flash at the Flash price, so they carry the same rates here. 'deepseek-v4-flash-0731' is now a hard 400 upstream; NEXUS remaps it to 'deepseek-flash' on the wire, so its row is kept and repriced to match what is actually billed today (historical 0731 traffic from before 2026-09-10 was billed at DOUBLE these rates - the table has no date dimension, so old conversations using that id now under-report). Images are billed as input tokens by dimension: measured 64x64 -> 197 prompt tokens, 512x512 -> 197, 1024x768 -> 509; treat 1024 tokens/image as the upper bound (the old ~384 figure was for the retired vision-exp model).",
-  "deepseek-v4-pro":      { "input": 0.66, "cachedInput": 0.022, "cacheWrite": 0, "output": 1.98, "peakInput": 1.32, "peakCachedInput": 0.044, "peakOutput": 3.96, "peakHoursUtc": [[1,4],[6,10]] },
-  "deepseek-flash":       { "input": 0.15, "cachedInput": 0.003, "cacheWrite": 0, "output": 0.6, "peakInput": 0.3, "peakCachedInput": 0.006, "peakOutput": 1.2, "peakHoursUtc": [[1,4],[6,10]] },
-  "deepseek-v4-flash-0731": { "input": 0.15, "cachedInput": 0.003, "cacheWrite": 0, "output": 0.6, "peakInput": 0.3, "peakCachedInput": 0.006, "peakOutput": 1.2, "peakHoursUtc": [[1,4],[6,10]] },
-  "deepseek-v4-flash":      { "input": 0.15, "cachedInput": 0.003, "cacheWrite": 0, "output": 0.6, "peakInput": 0.3, "peakCachedInput": 0.006, "peakOutput": 1.2, "peakHoursUtc": [[1,4],[6,10]] },
-  "deepseek-v4-flash-vision-exp": { "input": 0.15, "cachedInput": 0.003, "cacheWrite": 0, "output": 0.6, "peakInput": 0.3, "peakCachedInput": 0.006, "peakOutput": 1.2, "peakHoursUtc": [[1,4],[6,10]] },
-  "deepseek-chat":          { "input": 0.15, "cachedInput": 0.003, "cacheWrite": 0, "output": 0.6, "peakInput": 0.3, "peakCachedInput": 0.006, "peakOutput": 1.2, "peakHoursUtc": [[1,4],[6,10]] },
-  "deepseek-reasoner":      { "input": 0.15, "cachedInput": 0.003, "cacheWrite": 0, "output": 0.6, "peakInput": 0.3, "peakCachedInput": 0.006, "peakOutput": 1.2, "peakHoursUtc": [[1,4],[6,10]] },
-
+  "deepseek-v4-pro": {
+    "input": 0.66,
+    "cachedInput": 0.022,
+    "cacheWrite": 0,
+    "output": 1.98,
+    "peakInput": 1.32,
+    "peakCachedInput": 0.044,
+    "peakOutput": 3.96,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
+  "deepseek-flash": {
+    "input": 0.15,
+    "cachedInput": 0.003,
+    "cacheWrite": 0,
+    "output": 0.6,
+    "peakInput": 0.3,
+    "peakCachedInput": 0.006,
+    "peakOutput": 1.2,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
+  "deepseek-v4-flash-0731": {
+    "input": 0.15,
+    "cachedInput": 0.003,
+    "cacheWrite": 0,
+    "output": 0.6,
+    "peakInput": 0.3,
+    "peakCachedInput": 0.006,
+    "peakOutput": 1.2,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
+  "deepseek-v4-flash": {
+    "input": 0.15,
+    "cachedInput": 0.003,
+    "cacheWrite": 0,
+    "output": 0.6,
+    "peakInput": 0.3,
+    "peakCachedInput": 0.006,
+    "peakOutput": 1.2,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
+  "deepseek-v4-flash-vision-exp": {
+    "input": 0.15,
+    "cachedInput": 0.003,
+    "cacheWrite": 0,
+    "output": 0.6,
+    "peakInput": 0.3,
+    "peakCachedInput": 0.006,
+    "peakOutput": 1.2,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
+  "deepseek-chat": {
+    "input": 0.15,
+    "cachedInput": 0.003,
+    "cacheWrite": 0,
+    "output": 0.6,
+    "peakInput": 0.3,
+    "peakCachedInput": 0.006,
+    "peakOutput": 1.2,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
+  "deepseek-reasoner": {
+    "input": 0.15,
+    "cachedInput": 0.003,
+    "cacheWrite": 0,
+    "output": 0.6,
+    "peakInput": 0.3,
+    "peakCachedInput": 0.006,
+    "peakOutput": 1.2,
+    "peakHoursUtc": [
+      [
+        1,
+        4
+      ],
+      [
+        6,
+        10
+      ]
+    ]
+  },
   "_NOTE_qwen3.8-max": "PUBLISHED prices (not an estimate). Model Studio lists input $2, output $6, implicit-cache hit $0.25, explicit-cache creation $2.50, explicit-cache hit $0.17. NEXUS never creates an explicit DashScope cache, so cachedInput uses the IMPLICIT hit price ($0.25) and cacheWrite is 0. If explicit caching is ever wired for DashScope, change these to 0.17 / 2.5.",
-  "qwen3.8-max":            { "input": 2,    "cachedInput": 0.25, "cacheWrite": 0,    "output": 6 },
-  "qwen3.7-plus":           { "input": 0.4,  "cachedInput": 0.32,  "cacheWrite": 1.28, "output": 1.6 },
-  "qwen3.6-plus":           { "input": 0.5,  "cachedInput": 0.5,  "cacheWrite": 0, "output": 3 },
-  "qwen3.7-max":            { "input": 2.5,  "cachedInput": 1.25,  "cacheWrite": 3.25, "output": 7.5 },
-  "qwen3.5-omni-plus":      { "input": 1.4,  "cachedInput": 1.4,  "cacheWrite": 0, "output": 8.3 },
-
+  "qwen3.8-max": {
+    "input": 2,
+    "cachedInput": 0.25,
+    "cacheWrite": 0,
+    "output": 6
+  },
+  "qwen3.7-plus": {
+    "input": 0.4,
+    "cachedInput": 0.32,
+    "cacheWrite": 1.28,
+    "output": 1.6
+  },
+  "qwen3.6-plus": {
+    "input": 0.5,
+    "cachedInput": 0.5,
+    "cacheWrite": 0,
+    "output": 3
+  },
+  "qwen3.7-max": {
+    "input": 2.5,
+    "cachedInput": 1.25,
+    "cacheWrite": 3.25,
+    "output": 7.5
+  },
+  "qwen3.5-omni-plus": {
+    "input": 1.4,
+    "cachedInput": 1.4,
+    "cacheWrite": 0,
+    "output": 8.3
+  },
   "_NOTE_minimax-m3.1-flash": "Added 2026-10-21. Prices are FIRST-PARTY, quoted verbatim from MiniMax's own launch page (minimax.io/blog/minimax-m31f): input '$0.15', cached input '$0.015', output '$0.60' per 1M. The same three figures appear across several independent write-ups, which is why this row is NOT marked a rough estimate like minimax-m3 below. MiniMax states one rate across the whole 1M window, so there is deliberately no longContext tier here — flat is the measured fact, not a missing field. Verified served by real inference the same day (HTTP 200, echoed model id MiniMax-M3.1-Flash).",
-  "minimax-m3.1-flash":     { "input": 0.15, "cachedInput": 0.015, "cacheWrite": 0, "output": 0.6 },
-  "minimax-m3":             { "input": 0.3,  "cachedInput": 0.06, "cacheWrite": 0, "output": 1.2 },
-  "minimax-m2.7":           { "input": 0.3,  "cachedInput": 0.075, "cacheWrite": 0.375, "output": 1.2 },
-
-  "command-a-plus-05-2026": { "input": 2.5,  "cachedInput": 0.625, "cacheWrite": 0, "output": 10 },
-
+  "minimax-m3.1-flash": {
+    "input": 0.15,
+    "cachedInput": 0.015,
+    "cacheWrite": 0,
+    "output": 0.6
+  },
+  "minimax-m3": {
+    "input": 0.3,
+    "cachedInput": 0.06,
+    "cacheWrite": 0,
+    "output": 1.2
+  },
+  "minimax-m2.7": {
+    "input": 0.3,
+    "cachedInput": 0.075,
+    "cacheWrite": 0.375,
+    "output": 1.2
+  },
+  "command-a-plus-05-2026": {
+    "input": 2.5,
+    "cachedInput": 0.625,
+    "cacheWrite": 0,
+    "output": 10
+  },
   "_NOTE_mimo": "Verified 2026-09-22 against mimo.mi.com/docs/en-US/pricing (Overseas Pay-As-You-Go, Update Time September 21 2026). The V2.6 series is priced identically to the V2.5 series — mimo-v2.6-pro shares its row with mimo-v2.5-pro, and mimo-v2.6-flash shares its row with mimo-v2.5. mimo-v2.5-pro and mimo-v2.5 are officially deprecated at 10:00 Beijing time on 2026-10-21; their rows are kept so past conversations still cost correctly. The previous V2.5 numbers here (0.3/1.2 for both tiers) were rough estimates and were wrong in both directions: v2.5-pro input was under-reported and output over-reported, and v2.5 was charged at the pro tier's rate. Batch API halves the rates (not modelled — NEXUS does not use it). Cache write is free. Web search plugin is billed separately at $5/1000 calls.",
-  "mimo-v2.5":              { "input": 0.14,  "cachedInput": 0.0028, "cacheWrite": 0, "output": 0.28 },
-  "mimo-v2.5-pro":          { "input": 0.435, "cachedInput": 0.0036, "cacheWrite": 0, "output": 0.87 },
-  "mimo-v2.6-flash":        { "input": 0.14,  "cachedInput": 0.0028, "cacheWrite": 0, "output": 0.28 },
-  "mimo-v2.6-pro":          { "input": 0.435, "cachedInput": 0.0036, "cacheWrite": 0, "output": 0.87 },
-  "mimo-v2.6-pro-ultraspeed": { "input": 4.35, "cachedInput": 0.036, "cacheWrite": 0, "output": 8.70 },
-
+  "mimo-v2.5": {
+    "input": 0.14,
+    "cachedInput": 0.0028,
+    "cacheWrite": 0,
+    "output": 0.28
+  },
+  "mimo-v2.5-pro": {
+    "input": 0.435,
+    "cachedInput": 0.0036,
+    "cacheWrite": 0,
+    "output": 0.87
+  },
+  "mimo-v2.6-flash": {
+    "input": 0.14,
+    "cachedInput": 0.0028,
+    "cacheWrite": 0,
+    "output": 0.28
+  },
+  "mimo-v2.6-pro": {
+    "input": 0.435,
+    "cachedInput": 0.0036,
+    "cacheWrite": 0,
+    "output": 0.87
+  },
+  "mimo-v2.6-pro-ultraspeed": {
+    "input": 4.35,
+    "cachedInput": 0.036,
+    "cacheWrite": 0,
+    "output": 8.7
+  },
   "_NOTE_muse-spark": "Meta Model API (api.meta.ai/v1). Standard tier $1.25 input / $4.25 output / $0.15 cached input per 1M; Contributor tier $0.10 / $0.20 / $0.002. Cache WRITE is free — measured 2026-10-05: cache_creation_input_tokens was 0 on the call that created the cache, and the next call read it (cache_read 3569 of a 3614-token prefix), so there is no separate write charge to model. CONTRIBUTOR IS A DIFFERENT MODEL ID, not an account setting: picking a `-contributor` row opts Meta into training on that turn's prompts AND completions, and drops the rate limit to ~60 rpm / ~250k tokens per day (standard is 3,000 rpm / 4M tokens per minute — the latter read verbatim off x-ratelimit-limit-* response headers). PRICE SOURCE, honestly: the standard/contributor numbers are documented for 1.1 and 1.2 only; Meta's own pricing page sits behind an SSO login and the API exposes no billing/credits endpoint (/v1/credits, /v1/usage, /v1/billing and four other conventional paths all 404), so 1.3 is ASSUMED to match 1.1/1.2 and is NOT confirmed by a primary source. Revisit if a public price page appears.",
-  "muse-spark-1.3":             { "input": 1.25,  "cachedInput": 0.15,  "cacheWrite": 0, "output": 4.25 },
-  "muse-spark-1.2":             { "input": 1.25,  "cachedInput": 0.15,  "cacheWrite": 0, "output": 4.25 },
-  "muse-spark-1.1":             { "input": 1.25,  "cachedInput": 0.15,  "cacheWrite": 0, "output": 4.25 },
-  "muse-spark-1.3-contributor": { "input": 0.10,  "cachedInput": 0.002, "cacheWrite": 0, "output": 0.20 },
-  "muse-spark-1.2-contributor": { "input": 0.10,  "cachedInput": 0.002, "cacheWrite": 0, "output": 0.20 },
-
-  "dola-seed-2-1-turbo-260628": { "input": 0.442, "cachedInput": 0.11, "cacheWrite": 0, "output": 2.212 },
-  "seed-2-0-pro-260328":        { "input": 0.884, "cachedInput": 0.22, "cacheWrite": 0, "output": 4.42 },
-  "seed-2-0-lite-260428":       { "input": 0.3,   "cachedInput": 0.075, "cacheWrite": 0, "output": 1.2 },
-  "gemma-4-26b-a4b-it-ultra-uncensored-heretic":       { "input": 0,   "cachedInput": 0, "cacheWrite": 0, "output": 0 }
+  "muse-spark-1.3": {
+    "input": 1.25,
+    "cachedInput": 0.15,
+    "cacheWrite": 0,
+    "output": 4.25
+  },
+  "muse-spark-1.2": {
+    "input": 1.25,
+    "cachedInput": 0.15,
+    "cacheWrite": 0,
+    "output": 4.25
+  },
+  "muse-spark-1.1": {
+    "input": 1.25,
+    "cachedInput": 0.15,
+    "cacheWrite": 0,
+    "output": 4.25
+  },
+  "muse-spark-1.3-contributor": {
+    "input": 0.1,
+    "cachedInput": 0.002,
+    "cacheWrite": 0,
+    "output": 0.2
+  },
+  "muse-spark-1.2-contributor": {
+    "input": 0.1,
+    "cachedInput": 0.002,
+    "cacheWrite": 0,
+    "output": 0.2
+  },
+  "dola-seed-2-1-turbo-260628": {
+    "input": 0.442,
+    "cachedInput": 0.11,
+    "cacheWrite": 0,
+    "output": 2.212
+  },
+  "seed-2-0-pro-260328": {
+    "input": 0.884,
+    "cachedInput": 0.22,
+    "cacheWrite": 0,
+    "output": 4.42
+  },
+  "seed-2-0-lite-260428": {
+    "input": 0.3,
+    "cachedInput": 0.075,
+    "cacheWrite": 0,
+    "output": 1.2
+  },
+  "gemma-4-26b-a4b-it-ultra-uncensored-heretic": {
+    "input": 0,
+    "cachedInput": 0,
+    "cacheWrite": 0,
+    "output": 0
+  }
 }
