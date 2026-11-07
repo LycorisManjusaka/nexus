@@ -105,20 +105,42 @@ export function nextStickState(
 /**
  * Jump the viewport to the bottom in ONE frame.
  *
- * `behavior: 'auto'` overrides the container's `scroll-smooth` class on
- * purpose, and that is the whole reason this is a function instead of two
- * copies of one line: an animated jump has midpoints, and a midpoint is
- * positionally identical to a user reading upward, so the magnet would detach
- * itself mid-animation. Every caller has to pass `'auto'`; one that forgets
- * re-opens the bug `nextStickState` was written to avoid.
+ * An animated jump has midpoints, and a midpoint is positionally identical to
+ * a reader moving upward, so the magnet would let go of itself part-way down.
+ * That is the whole reason this is a function and not two copies of one line.
+ *
+ * ⚠ IT HAS TO BE `'instant'`, AND IT WAS `'auto'` UNTIL 2026-11-07. The comment
+ * here used to claim that `'auto'` "overrides the container's scroll-smooth
+ * class on purpose". That is backwards. In CSSOM View, `'auto'` means *use the
+ * element's computed `scroll-behavior`* — and the message list carries
+ * Tailwind's `scroll-smooth`, so every "one-frame jump" this function has ever
+ * performed was in fact a smooth animation. `'instant'` is the value that
+ * actually forces the jump.
+ *
+ * Measured, from the probe, opening a 530 KB conversation:
+ *
+ *     magnet:short stick:true lengthIncreased:true before:96813 after:96813
+ *
+ * `before` and `after` are the distance from the bottom either side of the
+ * call. They are the same number: the viewport did not move at all, because
+ * the animation had not started yet when the next line read the position. Then
+ * the animation crawled through 96,813px of conversation, firing scroll events
+ * at every position on the way — the exact midpoints this function was written
+ * to abolish. Tsuyo described it as "it moves halfway, not to the bottom";
+ * halfway is what an interrupted 96,000px animation looks like.
+ *
+ * So the wrong value re-opened the bug, and the comment asserting the right
+ * one was the reason nobody looked. Kept as a correction rather than a quiet
+ * edit: this is the second time this week a sentence of mine outlived the
+ * thing it described.
  *
  * The parameter is structural, not `HTMLElement`, so the tests can call it.
  */
 export function jumpToBottom(el: {
   scrollHeight: number;
-  scrollTo: (opts: { top: number; behavior: 'auto' }) => void;
+  scrollTo: (opts: { top: number; behavior: 'instant' }) => void;
 }): void {
-  el.scrollTo({ top: el.scrollHeight, behavior: 'auto' });
+  el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
 }
 
 export type AutoScrollInput = {

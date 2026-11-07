@@ -136,19 +136,48 @@ test('a pending deep link outranks the magnet', () => {
  * unconditional jump on send, asked for by Lizard-kun: "送るタイミングで真下
  * じゃなければ違和感がある").
  *
- * The reason it is a function and not two copies of one line is the `'auto'`:
- * an animated jump has midpoints, and a midpoint is positionally identical to
- * a reader scrolling up, so `nextStickState` would detach the magnet in the
- * middle of our own animation. A caller that forgets re-opens that bug.
+ * The reason it is a function and not two copies of one line is the behaviour
+ * value: an animated jump has midpoints, and a midpoint is positionally
+ * identical to a reader scrolling up, so `nextStickState` would let the magnet
+ * go in the middle of our own animation.
+ *
+ * ⚠ THESE TWO TESTS PINNED THE BUG THEY WERE WRITTEN TO PREVENT. They asserted
+ * `behavior: 'auto'`, and in CSSOM View `'auto'` means *use the element's
+ * computed `scroll-behavior`* — which on the message list is Tailwind's
+ * `scroll-smooth`. So the assertion was green, the name said "never a smooth
+ * scroll", and every jump was a smooth scroll. `'instant'` is the value that
+ * forces one frame.
+ *
+ * The probe caught it from outside, opening a 530 KB conversation:
+ *
+ *     magnet:short before:96813 after:96813
+ *
+ * — the distance from the bottom, either side of the call: unchanged, because
+ * the animation had not begun when the next line read the position. A test can
+ * only check the value that was passed; it cannot check what the platform does
+ * with it. That is the third time this week that "all green" and "broken on
+ * screen" were both true at once.
  */
 test('jumpToBottom asks for the bottom in one frame, never a smooth scroll', () => {
   const calls: any[] = [];
   jumpToBottom({ scrollHeight: 4200, scrollTo: (o) => calls.push(o) });
-  assert.deepEqual(calls, [{ top: 4200, behavior: 'auto' }]);
+  assert.deepEqual(calls, [{ top: 4200, behavior: 'instant' }]);
 });
 
 test('jumpToBottom still targets the bottom when there is nothing to scroll', () => {
   const calls: any[] = [];
   jumpToBottom({ scrollHeight: 0, scrollTo: (o) => calls.push(o) });
-  assert.deepEqual(calls, [{ top: 0, behavior: 'auto' }]);
+  assert.deepEqual(calls, [{ top: 0, behavior: 'instant' }]);
+});
+
+test("'auto' is never passed again — it defers to CSS scroll-behavior", () => {
+  // The guard is on the VALUE, because the value is the only thing this layer
+  // controls. 'auto' is a legal ScrollBehavior, so TypeScript alone would not
+  // have stopped the regression — the parameter type is what makes it a
+  // compile error now, and this is the belt for anyone who widens that type.
+  const calls: any[] = [];
+  jumpToBottom({ scrollHeight: 10, scrollTo: (o) => calls.push(o) });
+  assert.equal(calls.length, 1);
+  assert.notEqual(calls[0].behavior, 'auto');
+  assert.notEqual(calls[0].behavior, 'smooth');
 });
