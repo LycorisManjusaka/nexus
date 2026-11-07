@@ -219,6 +219,7 @@ Grok     | grok-code-fast-1             | off | Grok Code Fast 1
 # 2026-09-19), so their on/off column is advisory the same way GLM-5.3's is.
 # kimi-k2.5 was RETIRED by Moonshot (404) and is no longer offered.
 Kimi     | moonshotai/Kimi-K3           | on  | Kimi K3
+Kimi     | moonshotai/Kimi-K3.1-Pro     | on  | Kimi K3.1 Pro
 Kimi     | moonshotai/Kimi-K2.7-Code    | on  | Kimi K2.7 Code
 Kimi     | moonshotai/Kimi-K2.7-Code-Highspeed | on | Kimi K2.7 Code Highspeed
 Kimi     | moonshotai/Kimi-K2.6         | on  | Kimi K2.6 Thinking
@@ -8038,7 +8039,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="moonshotai/Kimi-K3">Kimi K3 (flagship — 1M context, always-on reasoning, native vision)</option>
+                      <option value="moonshotai/Kimi-K3">Kimi K3 (1M context, always-on reasoning, native vision)</option>
+                      <option value="moonshotai/Kimi-K3.1-Pro">Kimi K3.1 Pro (post-trained K3 — 1M context, cheaper than K3, vision, tools)</option>
+                      <option value="moonshotai/Kimi-K3.1-Pro-Highspeed">Kimi K3.1 Pro Highspeed (same model, 2× price, 2–3× faster)</option>
                       <option value="moonshotai/Kimi-K2.7-Code">Kimi K2.7 Code (256K, coding line, thinking-only)</option>
                       <option value="moonshotai/Kimi-K2.7-Code-Highspeed">Kimi K2.7 Code Highspeed (same model, 2× price, faster)</option>
                       <option value="moonshotai/Kimi-K2.6">Kimi K2.6 (256K context, multimodal)</option>
