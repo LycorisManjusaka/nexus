@@ -2687,16 +2687,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   useEffect(() => {
     const el = scrollRef.current;
     if (el) {
+      // `generating` is OR'd with `foreignTurn`: a tab WATCHING a turn it did
+      // not start must follow the growing reply exactly like the tab that
+      // started it does. The attached stream extends the last message IN PLACE
+      // (no length change), and this tab's own `loading` can already be false
+      // in the window between the load applying and the attach streaming — so
+      // without this the viewport sat still above a reply that kept extending
+      // below it. That is the "late pair appears but scroll does not follow"
+      // case Tsuyo reported on mobile. Still gated on `stick`, so reading
+      // earlier messages while watching is unaffected.
       const go = shouldAutoScroll({
         stick: stickToBottomRef.current,
-        generating: loading,
+        generating: loading || !!foreignTurn,
         lengthIncreased: messages.length > prevMessagesLengthRef.current,
         deepLinkPending: deepLinkScrollPending,
       });
       if (go) jumpToBottom(el);
     }
     prevMessagesLengthRef.current = messages.length;
-  }, [messages, loading, deepLinkScrollPending]);
+  }, [messages, loading, foreignTurn, deepLinkScrollPending]);
 
   // Re-attach the magnet when the conversation changes. A fresh conversation
   // opens at its end, so carrying a detached magnet across the switch would
