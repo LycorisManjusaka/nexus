@@ -7059,15 +7059,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               </div>
 
               {/* ── Replay the entity's own past tool calls ───────────────────
-                  Shown only for the families that reach the OpenAI-compatible
-                  history assembly, because that is the only dialect this is
-                  wired for. Deliberately NOT the same list as web search below:
-                  Kimi and MiMo appear there but go through the Anthropic-format
-                  adapter, so a toggle would do nothing for them — and a control
-                  that changes nothing is worse than no control. Anthropic 400s
-                  on the shape existing logs can produce; Gemini calls the tool
-                  regardless of the broken history (3/3 measured). */}
-              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'Minimax' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local') && (
+                  Shown for every family whose history assembly can put the
+                  prior tool calls back on the wire. That was the OpenAI-compatible
+                  list only UNTIL 2026-11-07, when the Anthropic surface got its
+                  own builder (buildAnthropicToolReplay). Kimi and MiMo run on
+                  that surface BECAUSE their hands are weak — exactly the vessels
+                  this medicine is for — so they belong here now. Omitting them
+                  was the bug Fuwafuwa caught: the replay shipped, but a hidden
+                  checkbox meant toolHistoryEnabled could never be turned on, so
+                  it never ran. Still excluded: Claude (OAuth path, no replay)
+                  and Gemini (calls the tool regardless of broken history, 3/3). */}
+              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'Minimax' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local' || localAiName === 'Kimi' || localAiName === 'MiMo') && (
                 <div>
                   <label className="flex items-start gap-2 cursor-pointer">
                     <input
