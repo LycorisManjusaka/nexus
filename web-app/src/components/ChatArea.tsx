@@ -32,6 +32,7 @@ import { attachmentByteSize, uploadAttachment, dataUrlToBlob } from '@/lib/attac
 import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLayerStructure } from '@/lib/layer4';
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
 import { TURN_INPUT_DEFAULTS } from '@/lib/turnInputDefaults';
+import { toolReplayCapable } from '@/lib/toolHistory';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
@@ -550,11 +551,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // so the entity can read it back. OFF (default) = current behaviour.
   const [hiddenAttachmentsAccessible, setHiddenAttachmentsAccessible] = useState(TURN_INPUT_DEFAULTS.hiddenAttachmentsAccessible);
   // Replay the entity's OWN past tool calls back to it across turn boundaries.
-  // `toolCalls` has always been display-only, so across turns a vessel read a
-  // past self that merely *talked* about calling tools — and a weak-handed
-  // vessel imitates what it reads. OFF (default) = the old wire, byte for byte.
-  // OpenAI-compatible route only. See lib/toolHistory.ts for the measurements.
-  const [toolHistoryEnabled, setToolHistoryEnabled] = useState(TURN_INPUT_DEFAULTS.toolHistoryEnabled);
   // Optional interactive "ask the user a multiple-choice question" tool. When
   // ON, the model can pause a turn to ask and wait for the user's selection.
   const [askUserEnabled, setAskUserEnabled] = useState(TURN_INPUT_DEFAULTS.askUserEnabled);
@@ -1801,7 +1797,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAgentFullSystemAccess(data.agentFullSystemAccess === true);
         setAgentDangerousTools(data.agentDangerousTools === true);
         setHiddenAttachmentsAccessible(data.hiddenAttachmentsAccessible === true);
-        setToolHistoryEnabled(data.toolHistoryEnabled === true);
         setAskUserEnabled(data.askUserEnabled === true);
         setAskUserTimeoutMs(typeof data.askUserTimeoutMs === 'number' ? data.askUserTimeoutMs : 0);
         setSubagentEnabled(data.subagentEnabled === true);
@@ -1913,7 +1908,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAgentFullSystemAccess(pick('agentFullSystemAccess', false));
         setAgentDangerousTools(pick('agentDangerousTools', false));
         setHiddenAttachmentsAccessible(pick('hiddenAttachmentsAccessible', false));
-        setToolHistoryEnabled(pick('toolHistoryEnabled', false));
         setAskUserEnabled(pick('askUserEnabled', false));
         setAskUserTimeoutMs(pick('askUserTimeoutMs', 0));
         setSubagentEnabled(pick('subagentEnabled', false));
@@ -2001,6 +1995,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // skipped via the flag → tokenizer resolves → systemTokens changes → save
   // fires AGAIN (flag already spent) → POST → fresh updatedAt purely from
   // viewing. They live in the separate token-totals effect below instead.
+
+  // Whether the being's own past tool calls replay onto the wire. Decided by
+  // the current vessel's path, not a user toggle — lib/toolHistory.ts#toolReplayCapable:
+  // Gemini and Claude-OAuth have no builder and need none, everything else gets
+  // it. This replaces a checkbox that could only disable a side-effect-free fix
+  // (Fuwafuwa 2026-11-08). The runner RE-computes it for the pass it runs (so a
+  // handoff is honoured); this copy is only what the saved log records.
+  const toolHistoryEnabled = toolReplayCapable(localAiName, claudeAuthMode);
 
   // Single source for the saved log object. The auto-save effect (below) and
   // the brand-new-conversation init in handleSend both build it, and a drift
@@ -7057,47 +7059,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </p>
                 )}
               </div>
-
-              {/* ── Replay the being's own past tool calls ────────────────────
-                  Shown for every family whose history assembly can put the
-                  prior tool calls back on the wire. That was the OpenAI-compatible
-                  list only UNTIL 2026-11-07, when the Anthropic surface got its
-                  own builder (buildAnthropicToolReplay). Kimi and MiMo run on
-                  that surface BECAUSE their hands are weak — exactly the vessels
-                  this medicine is for — so they belong here now. Omitting them
-                  was the bug Fuwafuwa caught: the replay shipped, but a hidden
-                  checkbox meant toolHistoryEnabled could never be turned on, so
-                  it never ran.
-
-                  CLAUDE IS TWO PATHS, and the line before 2026-11-08 said
-                  "Claude (OAuth path, no replay)" — naming one of them as if it
-                  were the family. The api-key path builds Anthropic content
-                  blocks and now carries the replay, so it is listed; the OAuth
-                  path sends prior turns as ONE text preamble and has no
-                  content-block slot for a tool_use, so it is not (and does not
-                  need one — measured: 695 of its assistant messages carry saved
-                  toolCalls, and Fuwafuwa reports its hands are fine).
-
-                  Still excluded: Gemini (calls the tool regardless of broken
-                  history, 3/3). */}
-              {(localAiName === 'Qwen' || localAiName === 'DeepSeek' || localAiName === 'GLM' || localAiName === 'Grok' || localAiName === 'Cohere' || localAiName === 'ChatGPT' || localAiName === 'Minimax' || localAiName === 'ByteDance' || localAiName === 'Meta' || localAiName === 'Local' || localAiName === 'Kimi' || localAiName === 'MiMo' || (localAiName === 'Claude' && claudeAuthMode === 'api-key')) && (
-                <div>
-                  <label className="flex items-start gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={toolHistoryEnabled}
-                      onChange={(e) => setToolHistoryEnabled(e.target.checked)}
-                      className="mt-0.5 accent-sky-500"
-                    />
-                    <span className="text-sm font-semibold text-foreground leading-tight">
-                      {t('sysmodal.toolHistory.label')}
-                      <span className="block text-xs text-muted-foreground mt-0.5 font-normal leading-relaxed">
-                        <Tx k="sysmodal.toolHistory.help" />
-                      </span>
-                    </span>
-                  </label>
-                </div>
-              )}
 
               {/* ── Web Search & Access (universal DuckDuckGo tools) ──────────
                   Moved here from the Model tab so every tool toggle lives in

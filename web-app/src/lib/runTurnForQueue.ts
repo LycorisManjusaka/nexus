@@ -53,6 +53,7 @@
  * The hop now runs here — see the pass chain below.
  */
 
+import { toolReplayCapable } from '@/lib/toolHistory';
 import { buildSlimHistory, type SlimHistoryMessage } from '@/lib/slimHistory';
 import { buildTurnRequestBody } from '@/lib/turnRequestBody';
 import { turnInputFromLog } from '@/lib/turnInputFromLog';
@@ -817,13 +818,22 @@ export async function runTurnForQueue(
       folderDefaults: deps.folderDefaults,
       vesselOverride: plan.vessel,
     });
+    // Tool-call replay is decided by the wire path of THIS pass — shell.aiName
+    // honours a handoff override — not by the log's saved toggle. See
+    // lib/toolHistory.ts#toolReplayCapable: Gemini and Claude-OAuth have no
+    // builder, everything else gets it. So a change_model onto a replay-capable
+    // vessel gets replay even on a log written under a different one.
+    const canReplay = toolReplayCapable(
+      shell.aiName,
+      typeof log.claudeAuthMode === 'string' ? log.claudeAuthMode : undefined,
+    );
     const slim = buildSlimHistory(plan.history, {
       hiddenAttachmentsAccessible: log.hiddenAttachmentsAccessible === true,
       attachmentPathsVisible: effectiveFullAccess(
         log.agentFullSystemAccess === true,
         log.agentDangerousTools === true,
       ),
-      toolHistoryEnabled: log.toolHistoryEnabled === true,
+      toolHistoryEnabled: canReplay,
       saveThinkingToLog: log.saveThinkingToLog === true,
       turnAiName: shell.aiName,
     });
@@ -835,6 +845,10 @@ export async function runTurnForQueue(
       {
         ...shell,
         messages: slim as unknown as SlimHistoryMessage[],
+        // Replay capability follows this pass's vessel, not shell's saved value
+        // (turnInputFromLog read that from the log). Same canReplay the slim
+        // history above used, so the wire and the server-side replay gate agree.
+        toolHistoryEnabled: canReplay,
         // Human-facing notices the ROUTE produces (billing after a stop, the
         // compaction notice) follow the sender's screen, not the house
         // instruction language. Same resolution as the runner's own three.

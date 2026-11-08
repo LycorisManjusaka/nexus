@@ -48,7 +48,6 @@ export type TurnInputDefaultKeys =
   | 'agentFullSystemAccess'
   | 'agentDangerousTools'
   | 'hiddenAttachmentsAccessible'
-  | 'toolHistoryEnabled'
   | 'askUserEnabled'
   | 'askUserTimeoutMs'
   | 'subagentEnabled'
@@ -108,6 +107,12 @@ export type TurnInputDefaults = Pick<TurnRequestInput, TurnInputDefaultKeys>;
  *                           the house `language` when a caller omits it, so
  *                           the absence is answered one layer down rather
  *                           than guessed here.
+ *   toolHistoryEnabled      whether the being's past tool calls replay — now
+ *                           computed from the wire path (lib/toolHistory.ts#
+ *                           toolReplayCapable), not a saved toggle, so no
+ *                           constant fits. ChatArea derives it from the vessel
+ *                           for the saved log; the runner recomputes it for the
+ *                           pass it runs (honouring a handoff).
  *
  * Listed rather than silently omitted: a gap in a defaults table reads
  * exactly like a field nobody needed.
@@ -121,6 +126,7 @@ export const SUPPLIED_BY_CALLER = [
   'dateTimeVisibility',
   'claudeAuthMode',
   'uiLang',
+  'toolHistoryEnabled',
 ] as const;
 
 export const TURN_INPUT_DEFAULTS: TurnInputDefaults = {
@@ -128,7 +134,6 @@ export const TURN_INPUT_DEFAULTS: TurnInputDefaults = {
   agentFullSystemAccess: false,
   agentDangerousTools: false,
   hiddenAttachmentsAccessible: false,
-  toolHistoryEnabled: false,
   askUserEnabled: false,
   askUserTimeoutMs: 0,
   subagentEnabled: false,

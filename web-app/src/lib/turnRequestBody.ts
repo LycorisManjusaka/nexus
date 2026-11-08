@@ -82,7 +82,11 @@ export interface TurnRequestInput {
   agentFullSystemAccess: boolean;
   agentDangerousTools: boolean;
   hiddenAttachmentsAccessible: boolean;
-  toolHistoryEnabled: boolean;
+  // Whether the being's past tool calls replay. Computed from the wire path
+  // (lib/toolHistory.ts#toolReplayCapable), not a saved toggle, so it is
+  // SUPPLIED_BY_CALLER — the runner and ChatArea both derive it. Optional with a
+  // false fallback: an omitting caller gets the old no-replay wire, the safe way.
+  toolHistoryEnabled?: boolean;
   askUserEnabled: boolean;
   askUserTimeoutMs: number | string;
   subagentEnabled: boolean;
@@ -193,7 +197,7 @@ export function buildTurnRequestBody(
     agentFullSystemAccess: input.agentFullSystemAccess,
     agentDangerousTools: input.agentDangerousTools,
     hiddenAttachmentsAccessible: input.hiddenAttachmentsAccessible,
-    toolHistoryEnabled: input.toolHistoryEnabled,
+    toolHistoryEnabled: input.toolHistoryEnabled ?? false,
     askUserEnabled: input.askUserEnabled,
     askUserTimeoutMs: Number(input.askUserTimeoutMs) || 0,
     subagentEnabled: input.subagentEnabled,

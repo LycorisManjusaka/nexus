@@ -27,6 +27,7 @@ import {
   capArguments,
   buildOpenAiToolReplay,
   buildAnthropicToolReplay,
+  toolReplayCapable,
 } from '../../src/lib/toolHistory';
 
 describe('replayableCalls', () => {
@@ -282,5 +283,29 @@ describe('buildAnthropicToolReplay — PROPERTY: pair or nothing', () => {
     const r = buildAnthropicToolReplay(weird, prose, new Set(['Read']));
     const use = (r!.assistant.content as Array<{ type: string; id?: string }>).find(b => b.type === 'tool_use')!;
     assert.match(use.id!, /^hist_[A-Za-z0-9_-]*_0$/);
+  });
+});
+
+describe('toolReplayCapable — which wire paths can replay (replaces the checkbox)', () => {
+  // The side effects are measured near-zero (window 1, capped args, placeholder
+  // result, 0/6 spurious on the reverse fixture), so there is no OFF switch any
+  // more — capability is decided by the PATH. Two paths opt out.
+  it('Gemini never replays (no builder; it calls the tool regardless)', () => {
+    assert.equal(toolReplayCapable('Gemini'), false);
+    assert.equal(toolReplayCapable('Gemini', 'api-key'), false, 'Gemini stays out whatever the auth field says');
+  });
+
+  it('Claude replays ONLY on the api-key path (OAuth has no content-block slot)', () => {
+    assert.equal(toolReplayCapable('Claude', 'api-key'), true);
+    assert.equal(toolReplayCapable('Claude', 'oauth'), false);
+    assert.equal(toolReplayCapable('Claude', undefined), false, 'unknown auth resolves the safe way');
+    assert.equal(toolReplayCapable('Claude'), false);
+  });
+
+  it('every other family replays unconditionally, ignoring the claude-only auth field', () => {
+    for (const name of ['Qwen', 'DeepSeek', 'GLM', 'Grok', 'Cohere', 'ChatGPT', 'Minimax', 'ByteDance', 'Meta', 'Local', 'Kimi', 'MiMo']) {
+      assert.equal(toolReplayCapable(name), true, `${name} should replay`);
+      assert.equal(toolReplayCapable(name, 'oauth'), true, `${name} ignores the claude-only auth field`);
+    }
   });
 });

@@ -38,8 +38,10 @@ import path from 'path';
 
 const ROUTE = path.join(process.cwd(), 'src', 'app', 'api', 'chat', 'route.ts');
 const CHAT_AREA = path.join(process.cwd(), 'src', 'components', 'ChatArea.tsx');
+const RUNNER = path.join(process.cwd(), 'src', 'lib', 'runTurnForQueue.ts');
 const route = fs.readFileSync(ROUTE, 'utf-8');
 const chatArea = fs.readFileSync(CHAT_AREA, 'utf-8');
+const runner = fs.readFileSync(RUNNER, 'utf-8');
 
 describe('source — the tool-history replay is reachable where it is offered', () => {
   it('the Claude api-key path sends the REPLAYED array, not the raw one', () => {
@@ -76,23 +78,37 @@ describe('source — the tool-history replay is reachable where it is offered', 
     );
   });
 
-  it('every surface wired in the route can also be switched on in the UI', () => {
-    // The 2026-11-07 bug verbatim: the route consumed toolHistoryEnabled for
-    // Kimi/MiMo while the checkbox had no branch for them, so the flag was
-    // permanently false. Claude is listed with its auth mode because only the
-    // api-key path has a content-block slot for a tool_use; the OAuth path
-    // sends prior turns as one text preamble.
-    for (const name of ['Kimi', 'MiMo']) {
-      assert.ok(
-        chatArea.includes(`localAiName === '${name}'`),
-        `${name} runs the Anthropic replay in the route but has no branch in `
-        + 'the toolHistory checkbox gate — it could never be enabled.',
-      );
-    }
+  it('replay capability is computed from the path, not left to a toggle', () => {
+    // 2026-11-08 (Fuwafuwa): the checkbox was removed. It could be left OFF,
+    // which only disabled a side-effect-free fix. Replay is now decided by
+    // toolReplayCapable, computed in the runner from THIS pass's vessel
+    // (shell.aiName, honouring a handoff) and fed to BOTH the client-side
+    // history gate and the server-side body — so slimHistory and the route gate
+    // agree. The old reachability defect (a surface wired in the route with no
+    // UI branch) is structurally gone: there is no per-surface UI branch to
+    // forget. WHICH paths opt out is pinned in tests/lib/toolHistory.test.ts.
+    assert.match(
+      runner,
+      /const canReplay = toolReplayCapable\(/,
+      'the runner must compute replay capability from the path, not read a saved toggle',
+    );
+    const fed = (runner.match(/toolHistoryEnabled: canReplay/g) || []).length;
     assert.ok(
-      chatArea.includes("(localAiName === 'Claude' && claudeAuthMode === 'api-key')"),
-      'The Claude api-key path carries the replay, so its checkbox must be '
-      + 'reachable — and ONLY for api-key, since OAuth has no slot for it.',
+      fed >= 2,
+      'canReplay must reach BOTH buildSlimHistory and the request body so the '
+      + `wire and the server-side gate agree (found ${fed} of 2).`,
+    );
+    // ChatArea derives it the same way (for the saved log) and no longer renders
+    // a checkbox the user could switch off.
+    assert.match(
+      chatArea,
+      /toolReplayCapable\(localAiName, claudeAuthMode\)/,
+      'ChatArea must derive replay capability from the path, not a state toggle',
+    );
+    assert.doesNotMatch(
+      chatArea,
+      /sysmodal\.toolHistory\.label/,
+      'the toolHistory checkbox must be gone — leaving it is the OFF trap this change removes',
     );
   });
 

@@ -60,6 +60,39 @@ export const TOOL_HISTORY_ARG_CAP = 600;
 /** What a replayed call's result says, because none was ever stored. */
 export const TOOL_HISTORY_PLACEHOLDER = '(result not recorded)';
 
+/**
+ * Whether this turn's wire path can replay the vessel's own past tool calls.
+ * Computed from the PATH, not from a user toggle — the toggle this replaces was
+ * a trap. The medicine's side effects are measured near-zero: a window of one
+ * recent turn (TOOL_HISTORY_WINDOW), arguments capped (TOOL_HISTORY_ARG_CAP), a
+ * placeholder result level with a real one (10/10), and 0/6 spurious calls on
+ * the reverse fixture (task already done, prose is the correct answer). With no
+ * cost to being on, an OFF switch only lets someone disable a working fix for a
+ * weak-handed vessel — Fuwafuwa 2026-11-08: "if there is no side effect, the
+ * medicine-off state is meaningless too."
+ *
+ * Two paths have no builder and need none:
+ *   • Gemini — accepts an unpaired tool_use but calls the tool regardless of a
+ *     broken history (3/3 measured). ONE live hallucination-instead-of-acting
+ *     was seen in this house over Gemini's whole run (Fuwafuwa 2026-11-08):
+ *     rare, not zero — "3/3" was never "always" — but too rare to justify a
+ *     Gemini-dialect builder that does not exist yet.
+ *   • Claude OAuth — prior turns go as ONE text preamble, so there is no
+ *     content-block slot for a tool_use; and its hands are fine (695 saved
+ *     toolCalls on the api-key path's sibling).
+ *
+ * Everything else gets it: the OpenAI-compatible families, the Anthropic
+ * surface (Kimi, MiMo), and Claude on the api-key path.
+ *
+ * `claudeAuthMode` undefined means the Claude path is unknown, which resolves
+ * the safe way (false) — the same direction OAuth takes.
+ */
+export function toolReplayCapable(aiName: string, claudeAuthMode?: string): boolean {
+  if (aiName === 'Gemini') return false;
+  if (aiName === 'Claude') return claudeAuthMode === 'api-key';
+  return true;
+}
+
 export type StoredToolCall = { name?: string; input?: unknown; kind?: string };
 
 /**
