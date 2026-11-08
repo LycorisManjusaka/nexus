@@ -33,7 +33,7 @@ import { appendLayer4Index, appendLayer5Footer, prependIdentityPreamble, hasLaye
 import { selectBaseBindingText, shouldInjectLayer4 } from '@/lib/baseBinding';
 import { TURN_INPUT_DEFAULTS } from '@/lib/turnInputDefaults';
 import { toolReplayCapable } from '@/lib/toolHistory';
-import { BASE_MODEL_FAMILIES } from '@/lib/beingVessel';
+import { BASE_MODEL_FAMILIES, defaultModelForFamily, modelBelongsToFamily, folderModelForFamily } from '@/lib/beingVessel';
 import { AGENT_INSTRUCTION_LABELS, AGENT_INSTRUCTION_LABELS_JA, DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_AGENT_INSTRUCTIONS_JA } from '@/lib/agentInstructions';
 import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
@@ -346,80 +346,15 @@ function buildAllModelsFill(localModels: string[], localError: string | null): s
   return out;
 }
 
-// ── Base Model Family → default model ────────────────────────────────────────
-// One table, four call sites. Before this existed, each site carried its own
-// fallback and they disagreed: initial state said claude-sonnet-4-5, the
-// conversation loader said claude-opus-4-8, the family dropdown said something
-// else again, and the sidebar-sync effect had no fallback at all — so a folder
-// with a family but no saved model landed on an EMPTY model and the chat was
-// unusable until the model was picked by hand. That last one was the bug.
-//
-// `Local` is deliberately empty: the list comes from whatever LM Studio has
-// loaded, so there is no sane default to guess.
-const FAMILY_DEFAULT_MODEL: Record<string, string> = {
-  Claude: 'claude-opus-5',
-  Gemini: 'gemini-3.8-flash',
-  Qwen: 'qwen3.8-max',
-  DeepSeek: 'deepseek-v4-pro',
-  GLM: 'glm-5.3-flash',
-  Grok: 'grok-4.7',
-  Kimi: 'moonshotai/Kimi-K3',
-  Cohere: 'command-a-reasoning-08-2025',
-  Minimax: 'MiniMax-M3',
-  ChatGPT: 'gpt-5.6-terra',
-  MiMo: 'mimo-v2.6-pro',
-  ByteDance: 'seed-2-0-pro-260328',
-  // Standard tier on purpose. The `-contributor` id is 12.5x cheaper on input
-  // but lets Meta train on the prompts AND completions of every turn it runs,
-  // so it is never a default — it has to be picked by hand.
-  Meta: 'muse-spark-1.3',
-  Local: '',
-};
-
-// The Base Model Families, in picker order, live in @/lib/beingVessel — the
-// family select here and the vessel derivation that replaced the per-being
-// `settings.aiName` must agree on what counts as a family, so the list is one
-// value in one place. Kept separate from FAMILY_DEFAULT_MODEL's keys on
-// purpose: that map's order is incidental, and `Local` has no default model but
-// must still be pickable.
-
-/** Default model id for a Base Model Family. Unknown family → Claude's default. */
-function defaultModelForFamily(aiName: string): string {
-  if (aiName === 'Local') return '';
-  return FAMILY_DEFAULT_MODEL[aiName] ?? FAMILY_DEFAULT_MODEL.Claude;
-}
-
-/** Does an already-selected model id belong to this family? Used so switching
- *  family only overwrites the model when the current one doesn't fit. */
-function modelBelongsToFamily(model: string | undefined | null, aiName: string): boolean {
-  const m = (model || '').toLowerCase();
-  if (!m) return false;
-  switch (aiName) {
-    case 'Claude':     return m.includes('claude');
-    case 'Gemini':     return m.includes('gemini');
-    case 'Qwen':       return m.startsWith('qwen');
-    case 'DeepSeek':   return m.startsWith('deepseek');
-    case 'GLM':        return m.startsWith('glm') || m.startsWith('digitalocean/glm');
-    case 'Grok':       return m.startsWith('grok');
-    case 'Kimi':       return m.includes('kimi');
-    case 'Cohere':     return m.startsWith('command-');
-    case 'Minimax':    return m.startsWith('minimax');
-    case 'ChatGPT':    return m.startsWith('gpt');
-    case 'MiMo':       return m.startsWith('mimo');
-    case 'ByteDance':  return m.startsWith('seed');
-    // Meta ids are `muse-*` (`sam-*` exists on the same API but is not offered
-    // here — it requires an input_image/input_video part, so it is not a chat
-    // model). `dola-seed-*` belongs to ByteDance and is matched above.
-    case 'Meta':       return m.startsWith('muse-');
-    // A local model id is anything that isn't one of the cloud families above.
-    // `digitalocean/` is called out separately because it hosts several
-    // families, not just GLM.
-    case 'Local':      return !m.startsWith('digitalocean/')
-      && !['Claude', 'Gemini', 'Qwen', 'DeepSeek', 'GLM', 'Grok', 'Kimi', 'Cohere', 'Minimax', 'ChatGPT', 'MiMo', 'ByteDance', 'Meta']
-        .some((f) => modelBelongsToFamily(model, f));
-    default:           return false;
-  }
-}
+// Every judgement about a model family lives in @/lib/beingVessel, imported
+// above: what counts as a family (BASE_MODEL_FAMILIES), which family a being
+// is on (beingVesselFamily), which models belong to it (modelBelongsToFamily),
+// that family's default (defaultModelForFamily / FAMILY_DEFAULT_MODEL), and
+// how a folder's stored model is checked against a family before it is applied
+// (folderModelForFamily). They moved out of this component on 2026-11-08: the
+// select here and the derivation that replaced `settings.aiName` must agree on
+// all of it, and `modelBelongsToFamily` had spent three months here with no
+// test of its own.
 
 // ── Per-family model memory (conversation-scoped) ────────────────────────────
 // Switching Base Model Family used to drop straight to that family's factory
@@ -1601,7 +1536,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Fall back to the family default when the folder has a family but no saved
     // model — otherwise this sets the model to undefined and the chat can't run
     // until one is picked by hand.
-    setSpecificModel(defaultSpecificModel || defaultModelForFamily(localAiName || aiName));
+    setSpecificModel(folderModelForFamily(defaultSpecificModel, localAiName || aiName));
   }, [defaultSpecificModel]);
 
   // Load chat
@@ -1925,7 +1860,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         if (typeof folderSettings.watcherPrompt === 'string') setWatcherPrompt(folderSettings.watcherPrompt);
         setWatcherModel(pick('watcherModel', 'gemini-3.5-flash'));
         setModelParams(defaultModelParams || { temperature: 0.7, topP: 0.95, topK: 40, thinkingLevel: 'medium', enableWebSearch: false });
-        setSpecificModel(defaultSpecificModel || defaultModelForFamily(aiName));
+        setSpecificModel(folderModelForFamily(defaultSpecificModel, aiName));
         // Per-family memory is conversation-scoped: a brand new conversation
         // starts empty and fills in on the first switch away from a family.
         setFamilyModels({});

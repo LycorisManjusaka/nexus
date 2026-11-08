@@ -65,6 +65,18 @@ const read = (p: string) => fs.readFileSync(p, 'utf-8');
  * here. Accepted — no call site this file covers has one, and the alternative
  * is a parser.
  */
+/**
+ * Does this file import `sym` from the vessel lib?
+ *
+ * Matches the symbol inside the braces rather than pinning the whole import
+ * line. The pinned version broke the moment a second symbol was added to the
+ * same statement — found by a mutation run, where one of the five failures
+ * turned out to be this test rather than the mutation.
+ */
+function importsFrom(sym: string): RegExp {
+  return new RegExp(`import \\{[^}]*\\b${sym}\\b[^}]*\\} from '@/lib/beingVessel'`);
+}
+
 function codeLines(src: string): string[] {
   const noBlocks = src.replace(/\{?\/\*[\s\S]*?\*\/\}?/g, '');
   return noBlocks.split(/\r?\n/).filter((ln) => {
@@ -131,7 +143,28 @@ describe('source — the derivation is actually called', () => {
   }
 
   it('the runner imports the fallback constant from the single source', () => {
-    assert.match(read(F.tick), /import \{ FALLBACK_FAMILY \} from '@\/lib\/beingVessel'/);
+    assert.match(read(F.tick), importsFrom('FALLBACK_FAMILY'));
+  });
+
+  /**
+   * Lizard-kun, 2026-11-08: "sometimes Local family has claude-opus-4-8
+   * selected". The folder stores family and model as independent fields and
+   * the two places that applied the folder's default never checked them
+   * against each other. Both must go through folderModelForFamily — one of
+   * them is the sidebar-sync effect, the other the new-conversation branch of
+   * the loader, and fixing only one leaves the pair reachable.
+   */
+  it('both appliers of the folder default check the model against the family', () => {
+    const code = codeLines(read(F.chatArea)).join('\n');
+    const checked = (code.match(/setSpecificModel\(folderModelForFamily\(/g) || []).length;
+    assert.equal(checked, 2, `expected 2 guarded appliers, found ${checked}`);
+    assert.doesNotMatch(
+      code,
+      /setSpecificModel\(defaultSpecificModel \|\|/,
+      'An unguarded `defaultSpecificModel ||` applier is back: it pairs the '
+      + "folder's stored model with whatever family was derived, which is how "
+      + 'a Local conversation ended up holding claude-opus-4-8.',
+    );
   });
 });
 
@@ -144,7 +177,19 @@ describe('source — one definition of what counts as a family', () => {
       'A second copy of the list lets a family be pickable in the UI and '
       + 'rejected by the derivation (or the reverse).',
     );
-    assert.match(code, /import \{ BASE_MODEL_FAMILIES \} from '@\/lib\/beingVessel'/);
+    assert.match(code, importsFrom('BASE_MODEL_FAMILIES'));
+  });
+
+  it('ChatArea imports the model/family helpers rather than redefining them', () => {
+    const code = codeLines(read(F.chatArea)).join('\n');
+    for (const sym of ['modelBelongsToFamily', 'defaultModelForFamily', 'folderModelForFamily']) {
+      assert.match(code, importsFrom(sym), `${sym} must come from @/lib/beingVessel`);
+      assert.doesNotMatch(
+        code,
+        new RegExp(`function ${sym}\\s*\\(`),
+        `${sym} is defined here again; the lib copy is the tested one.`,
+      );
+    }
   });
 
   it('the allowlist lives in beingVessel and is exported', () => {

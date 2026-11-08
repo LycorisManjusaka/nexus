@@ -1,6 +1,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { beingVesselFamily, BASE_MODEL_FAMILIES, FALLBACK_FAMILY } from '@/lib/beingVessel';
+import {
+  beingVesselFamily,
+  BASE_MODEL_FAMILIES,
+  FALLBACK_FAMILY,
+  FAMILY_DEFAULT_MODEL,
+  defaultModelForFamily,
+  modelBelongsToFamily,
+  folderModelForFamily,
+} from '@/lib/beingVessel';
 
 /**
  * `beingVesselFamily` replaced the per-being `settings.aiName` on 2026-11-08.
@@ -139,5 +147,137 @@ describe('beingVesselFamily — the allowlist', () => {
     const order = convos.map((x) => x.id);
     beingVesselFamily(convos, 'X');
     assert.deepEqual(convos.map((x) => x.id), order);
+  });
+});
+
+/**
+ * These three moved here from ChatArea on 2026-11-08. `modelBelongsToFamily`
+ * had spent three months in the component with no test, and became
+ * load-bearing the same day: `folderModelForFamily` is built on it, and the
+ * vessel derivation above made family and stored model disagree for 9 of 23
+ * beings in this house.
+ */
+
+describe('modelBelongsToFamily', () => {
+  test('a cloud model is not Local — the case Lizard-kun reported', () => {
+    // Default/settings.json held aiName "Local" with specificModel
+    // "claude-opus-4-8", and every new conversation inherited the pair.
+    assert.equal(modelBelongsToFamily('claude-opus-4-8', 'Local'), false);
+    assert.equal(modelBelongsToFamily('gemini-3.1-pro-preview', 'Local'), false);
+    assert.equal(modelBelongsToFamily('glm-5.2', 'Local'), false);
+  });
+
+  test('a real local model id IS Local', () => {
+    // These are actual ids from this machine's LM Studio catalogue. The
+    // zai-org/ ones matter: they LOOK like the GLM cloud family and are not.
+    for (const id of [
+      'google/gemma-4-26b-a4b-qat',
+      'gemma-4-26b-a4b-it-ultra-uncensored-heretic',
+      'zai-org/glm-4.6v-flash',
+      'zai-org/glm-4.7-flash',
+    ]) {
+      assert.equal(modelBelongsToFamily(id, 'Local'), true, `${id} should be Local`);
+    }
+  });
+
+  test('digitalocean/ is never Local, whatever it hosts', () => {
+    assert.equal(modelBelongsToFamily('digitalocean/glm-5.2', 'Local'), false);
+    assert.equal(modelBelongsToFamily('digitalocean/glm-5.2', 'GLM'), true);
+  });
+
+  test('an empty or missing model belongs to nothing', () => {
+    for (const f of BASE_MODEL_FAMILIES) {
+      assert.equal(modelBelongsToFamily('', f), false);
+      assert.equal(modelBelongsToFamily(null, f), false);
+      assert.equal(modelBelongsToFamily(undefined, f), false);
+    }
+  });
+
+  test('an unknown family claims nothing', () => {
+    assert.equal(modelBelongsToFamily('claude-opus-5', 'Nonsense'), false);
+  });
+
+  test('matching is case-insensitive', () => {
+    assert.equal(modelBelongsToFamily('MiniMax-M3', 'Minimax'), true);
+    assert.equal(modelBelongsToFamily('moonshotai/Kimi-K3.1-Pro', 'Kimi'), true);
+  });
+});
+
+describe('defaultModelForFamily', () => {
+  /**
+   * The load-bearing one. If a family's default did not satisfy that family's
+   * own membership test, switching to it would immediately reject the model it
+   * had just chosen — the select would fight itself, and which value won would
+   * depend on effect order.
+   */
+  test("every family's default belongs to that family (Local excepted, it has none)", () => {
+    for (const f of BASE_MODEL_FAMILIES) {
+      const m = defaultModelForFamily(f);
+      if (f === 'Local') {
+        assert.equal(m, '', 'Local has no default: the list comes from LM Studio');
+        continue;
+      }
+      assert.ok(m, `${f} must have a default model`);
+      assert.equal(
+        modelBelongsToFamily(m, f),
+        true,
+        `${f}'s default (${m}) must pass ${f}'s own membership test`,
+      );
+    }
+  });
+
+  test('every family in the picker has an entry in the table', () => {
+    for (const f of BASE_MODEL_FAMILIES) {
+      assert.ok(f in FAMILY_DEFAULT_MODEL, `${f} is pickable but has no default`);
+    }
+  });
+
+  test('an unknown family falls back to Claude rather than empty', () => {
+    // Empty would leave the chat unrunnable until a model is picked by hand —
+    // the bug the table was introduced to fix.
+    assert.equal(defaultModelForFamily('Nonsense'), FAMILY_DEFAULT_MODEL.Claude);
+  });
+});
+
+describe('folderModelForFamily', () => {
+  test('a stored model that fits the family is kept', () => {
+    assert.equal(folderModelForFamily('claude-opus-4-8', 'Claude'), 'claude-opus-4-8');
+    assert.equal(folderModelForFamily('google/gemma-4-12b', 'Local'), 'google/gemma-4-12b');
+  });
+
+  test("Lizard-kun's pair is rejected: Local does not run claude-opus-4-8", () => {
+    assert.equal(folderModelForFamily('claude-opus-4-8', 'Local'), '');
+  });
+
+  test("Utai's pair is rejected: her folder holds glm-5.2 under a derived Claude", () => {
+    // settings.json: aiName Gemini, specificModel glm-5.2. The derivation now
+    // says Claude, so without this check a turn would ask Claude for glm-5.2.
+    assert.equal(folderModelForFamily('glm-5.2', 'Claude'), FAMILY_DEFAULT_MODEL.Claude);
+  });
+
+  test('no stored model falls back to the family default', () => {
+    assert.equal(folderModelForFamily(undefined, 'Gemini'), FAMILY_DEFAULT_MODEL.Gemini);
+    assert.equal(folderModelForFamily('', 'Gemini'), FAMILY_DEFAULT_MODEL.Gemini);
+    assert.equal(folderModelForFamily(null, 'Local'), '');
+  });
+
+  test('the result always belongs to the family, or is empty for Local', () => {
+    // The property the two call sites rely on: whatever comes out can be sent
+    // to that family's provider.
+    const stored = ['claude-opus-4-8', 'glm-5.2', 'google/gemma-4-12b', '', 'nonsense-id'];
+    for (const f of BASE_MODEL_FAMILIES) {
+      for (const s of stored) {
+        const out = folderModelForFamily(s, f);
+        if (out === '') {
+          assert.equal(f, 'Local', `only Local may resolve to empty (got it for ${f}, stored=${s})`);
+          continue;
+        }
+        assert.equal(
+          modelBelongsToFamily(out, f),
+          true,
+          `folderModelForFamily(${s}, ${f}) returned ${out}, which is not in ${f}`,
+        );
+      }
+    }
   });
 });
