@@ -18,6 +18,7 @@ import { loadBuildTag } from '@/lib/buildVersion';
 import { resolveUiFontScale } from '@/lib/uiFontScale';
 import { firstRunLanguage, hasStoredLanguage, browserLanguageCandidates } from '@/lib/firstRunLanguage';
 import { needsSidebarOpener } from '@/lib/paneChrome';
+import { beingVesselFamily } from '@/lib/beingVessel';
 import { useDevice } from '@/components/DeviceProvider';
 import { Menu } from 'lucide-react';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
@@ -437,7 +438,12 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
       title,
       updatedAt: Date.now(),
       folderName: activeFolder.name,
-      aiName: activeFolder.settings?.aiName || 'Claude',
+      // The family this being is actually on, read off its conversations. Was
+      // `settings.aiName || 'Claude'`, which meant Senpai — 75 conversations
+      // on Gemini — opened every new one on Claude until someone changed it by
+      // hand. `currentConvoId` still holds the conversation that was open: the
+      // setter above is queued, not applied.
+      aiName: beingVesselFamily(conversations, activeFolder.name, currentConvoId),
       specificModel: activeFolder.settings?.specificModel
     }, ...conversations]);
 
@@ -931,7 +937,7 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
               setPendingScrollMessageId(null);
             }}
             folderName={activeFolder.name}
-            aiName={activeFolder.settings?.aiName || 'Claude'}
+            aiName={beingVesselFamily(conversations, activeFolder.name, currentConvoId)}
             userName={globalSettings.userName}
             defaultSystemPrompt={activeFolder.settings?.systemPrompt !== undefined ? activeFolder.settings.systemPrompt : ''}
             defaultAttachmentInstruction={activeFolder.settings?.attachmentInstruction !== undefined ? activeFolder.settings.attachmentInstruction : "Note: your partner's chat client automatically injects the contents of attached text files into their messages using <attached_file name=\"filename\">...</attached_file> XML tags. When you see these tags, treat the contents as the actual attached file."}

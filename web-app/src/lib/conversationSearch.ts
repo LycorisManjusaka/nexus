@@ -134,7 +134,10 @@ async function loadValidNameKeys(): Promise<Set<string>> {
       try {
         const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
         add(parsed.name || d.name);
-        add(parsed?.settings?.aiName);
+        // `settings.aiName` was read here too. Removed 2026-11-08 with the
+        // field itself — and it had been contributing nothing before that:
+        // measured 2026-11-08, 0 of 23 beings had the key, so every call was
+        // `add(undefined)`.
         add(parsed?.settings?.customAiName);
       } catch {}
     }));

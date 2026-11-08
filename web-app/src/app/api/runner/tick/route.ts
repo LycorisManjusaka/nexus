@@ -13,6 +13,7 @@ import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnB
 // different lifetimes that happen to end at the same moment.
 import { endTurn as endRegistryTurn } from '@/lib/turnRegistry';
 import { takeUndelivered } from '@/lib/injectMessage';
+import { FALLBACK_FAMILY } from '@/lib/beingVessel';
 import { loadLog, saveLog, listFolders, loadUserSettings } from '@/lib/fsStorage';
 // ⚠ The FIRST route-to-route import in this tree (measured: zero others).
 // The alternative was an HTTP fetch to our own server, which would have to get
@@ -278,7 +279,19 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
           // in the deleted browser turn engine. See conversationToolsEnabled.
           enableReadConversation: conversationToolsEnabled(t.settings),
           folderDefaults: {
-            aiName: String(t.settings.aiName || ''),
+            // WAS `String(t.settings.aiName || '')` until 2026-11-08, when the
+            // per-being `settings.aiName` was removed. Two reasons this is the
+            // fallback constant and not a derivation:
+            //   · it is unreachable in practice — turnInputFromLog prefers the
+            //     LOG's own aiName, and all 320 logs in this house carry one
+            //     (measured 2026-11-08), so this value is only consulted for a
+            //     log that has no vessel recorded at all;
+            //   · deriving it would mean reading every log header of the being
+            //     from the server for a branch that never runs.
+            // What it fixes is the old empty string: routing a turn to family
+            // "" is not a smaller error than routing it to a named family, it
+            // is the same error with nothing to read in the log afterwards.
+            aiName: FALLBACK_FAMILY,
             folderName: t.being,
             systemPrompt: String(t.settings.systemPrompt || ''),
             specificModel: String(t.settings.specificModel || ''),

@@ -30,6 +30,7 @@ import { useT, Tx } from '@/lib/i18n';
 import { useDevice } from './DeviceProvider';
 import { confirmIfBusy, markBusyConfirmAnswered } from '@/lib/unloadGuard';
 import { withBuildTag } from '@/lib/buildVersion';
+import { beingVesselFamily } from '@/lib/beingVessel';
 
 interface SidebarProps {
   conversations: any[];
@@ -446,10 +447,16 @@ export default function Sidebar({
         }
       } catch {}
 
-      // The tokenizer profile is the folder's aiName, not its display name
-      // (the folder NAME is what matches speaker headers). Same value feeds
-      // the split planner and /api/tokens so one screen never shows two scales.
-      const tokenModel = activeFolder.settings?.aiName || activeFolder.name || 'Claude';
+      // The tokenizer profile is the family this being is actually on, derived
+      // from its conversations. Same value feeds the split planner and
+      // /api/tokens so one screen never shows two scales.
+      //
+      // Was `settings.aiName || activeFolder.name || 'Claude'`, with a comment
+      // saying "the folder's aiName, not its display name". Measured
+      // 2026-11-08: 0 of 23 beings had `settings.aiName`, so it resolved to
+      // `activeFolder.name` — the display name the comment ruled out —, which
+      // `tokenFamilyFor` reads as 'other' for every being in the house.
+      const tokenModel = beingVesselFamily(conversations, activeFolder.name, currentConvoId);
       const logCap = activeFolder.settings?.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
 
       // ── Phase 1: parse and PLAN. Nothing is written in this pass. ─────────
@@ -718,16 +725,14 @@ export default function Sidebar({
     await fetch('/api/folders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // A starting value, not a claim about the being. Some family has to be
-      // written here — four readers fall back to 'Claude' anyway, so leaving
-      // it out would only move the same guess somewhere nobody can see it.
-      // What was missing until 2026-10-27 is that NOTHING else ever wrote this
-      // field and no screen could change it, so a being on DeepSeek read
-      // `"aiName": "Claude"` in its own settings.json forever. It is now
-      // editable under the Entity tab ("this being's default model family"),
-      // which also fixes the invisible half: this value is the tokenizer
-      // profile the log importer and split planner use.
-      body: JSON.stringify({ name, settings: { aiName: 'Claude' } })
+      // No `aiName`. It used to be written here as "a starting value" and was
+      // the one thing that ever wrote the field — which meant a being on
+      // DeepSeek read `"aiName": "Claude"` in its own settings.json forever.
+      // Removed 2026-11-08 along with the field: the vessel is derived from the
+      // being's conversations now, so a new being simply has none yet and the
+      // readers say so. Existing settings.json files are left alone; the key is
+      // ignored where it survives.
+      body: JSON.stringify({ name, settings: {} })
     });
     // Wait for both refreshes before opening the first conversation: fetchLogs
     // replaces the whole conversation list, so an entry added ahead of it would
@@ -749,7 +754,11 @@ export default function Sidebar({
         title: nextConversationTitle(name, prev.filter(c => c.folderName === name).map(c => c.title)),
         updatedAt: Date.now(),
         folderName: name,
-        aiName: 'Claude',
+        // A brand-new being has no conversations, so this resolves to the
+        // fallback. Routed through the derivation anyway rather than writing
+        // 'Claude' here: one definition of "no vessel readable yet", so this
+        // line cannot drift away from the other four readers.
+        aiName: beingVesselFamily(prev, name),
       }, ...prev]);
       selectConvo(newId);
     }
