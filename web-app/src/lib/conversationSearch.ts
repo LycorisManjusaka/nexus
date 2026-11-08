@@ -134,10 +134,11 @@ async function loadValidNameKeys(): Promise<Set<string>> {
       try {
         const parsed = JSON.parse(await fs.readFile(beingSettingsFile(d.name), 'utf-8'));
         add(parsed.name || d.name);
-        // `settings.aiName` was read here too. Removed 2026-11-08 with the
-        // field itself — and it had been contributing nothing before that:
-        // measured 2026-11-08, 0 of 23 beings had the key, so every call was
-        // `add(undefined)`.
+        // `settings.aiName` was read here too, to accept a family name as a
+        // legitimate speaker key. Removed 2026-11-08 with the field itself.
+        // Note this list does not lose those names: a header written by a turn
+        // on that family already puts the family name in the log, and the
+        // folder name and customAiName are still added here.
         add(parsed?.settings?.customAiName);
       } catch {}
     }));

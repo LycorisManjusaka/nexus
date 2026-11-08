@@ -3,11 +3,16 @@
  * and every place that used to now derives the vessel from the conversations.
  *
  * WHY, 2026-11-08 (Lizard-kun): the field was removed. What made it removable
- * was a measurement — of the 23 beings in this house, 23 had no `aiName` in
- * settings.json, so both of its jobs (the family a new conversation opens on,
- * and the tokenizer profile the log importer and split planner use) were
- * already deciding on a hard-coded 'Claude'. Meanwhile 320 of 320 conversation
- * logs carry a header `aiName`, so the real answer was already on disk.
+ * was a measurement — 23 of 23 beings HAVE a `settings.aiName`, and 9 of 23
+ * disagree with the family that being actually runs on (8 of those change the
+ * tokenizer family too). A hand-set field rots from the day it is set, and
+ * this house changes vessels. Meanwhile 320 of 320 conversation logs carry a
+ * header `aiName` written by the turn that ran, which cannot go stale.
+ *
+ * (The first version of this header said "0 of 23 have the field". That was my
+ * probe reading `aiName` off the top of settings.json when the file nests it
+ * under `settings`. Corrected the same hour. The conclusion survived the
+ * correction; the argument for it changed completely.)
  *
  * WHY A SOURCE TEST AND NOT A UNIT TEST. `beingVesselFamily` has its own unit
  * tests; all of them would stay green if a caller went back to reading

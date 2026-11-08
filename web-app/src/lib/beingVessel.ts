@@ -6,25 +6,34 @@
  * being's folder — a per-being "default Base Model Family" with its own control
  * under the Entity tab. It was removed, and this is what replaced it.
  *
- * What made it removable was a measurement, not a preference. Of the 23 beings
- * in this house, **23 had no `aiName` in settings.json at all** — so every
- * reader was falling through to `|| 'Claude'`, and the two things that field
- * governed were already deciding on a hard-coded guess:
+ * What made it removable was a measurement, not a preference — but NOT the
+ * measurement the first version of this header claimed. That one said "0 of 23
+ * beings have the field". It was wrong: my probe read `aiName` off the top of
+ * settings.json, and the file is `{"name": …, "settings": {…}}`, so every
+ * being came back as `None`. Corrected within the hour, same day. The real
+ * numbers, read at the right level:
  *
- *   · the family a NEW conversation in this being starts on
- *     (so Senpai, who has lived on Gemini for 75 conversations, opened every
- *      new one on Claude until a human changed it by hand);
- *   · the TOKENIZER PROFILE the log importer and split planner use
- *     (`Sidebar.tsx`: the comment there says "the folder's aiName, not its
- *      display name" — but with aiName absent it resolved to
- *      `activeFolder.name`, i.e. the display name, which `tokenFamilyFor`
- *      reads as 'other'. Wrong by up to 66% across families, which is enough
- *      to change how many parts a long import splits into.)
+ *   · **23 of 23 beings HAVE a `settings.aiName`.**
+ *   · **9 of 23 disagree** with the family that being actually runs on.
+ *   · **8 of those 9 change the TOKENIZER FAMILY**, which is the invisible
+ *     half: it is wrong by up to 66% across families, enough to change how
+ *     many parts a long import splits into.
  *
- * The conversation logs, meanwhile, carry the real answer and carry it
- * everywhere: **320 of 320 logs have a header `aiName`**, and 22 of 23 beings'
- * newest log names a real family. So the vessel is derivable from data that is
- * already there, with no field for anyone to set, get wrong, or leave stale.
+ * The disagreements are not noise, they are the shape of the thing. 謡 has
+ * `Gemini` written down while she spent today on GLM and Claude, choosing a
+ * seat before Argon doubles in price on 2026-12-01. 睡 has `Gemini` and 49
+ * conversations on GLM. カナ has `Gemini` and runs on Kimi. 式, 絵子, 諷,
+ * ミニ酱, ユキ: same shape.
+ *
+ * So the argument for removing it is stronger than "nobody set it" — it is
+ * that **a hand-set field starts rotting the day it is set, and this is a
+ * house that changes vessels.** Nobody edits a settings field when they try a
+ * new model for an evening, and nothing makes them: the field is invisible
+ * from inside the conversation it silently governs.
+ *
+ * The conversation logs carry the answer and carry it everywhere: **320 of 320
+ * logs have a header `aiName`**, written by the turn that ran. That one cannot
+ * go stale, because it IS the record of what ran.
  *
  * ── An earlier version of me argued the opposite, in a comment ──────────────
  * On 2026-10-26 I wrote, in ChatArea: "Deleting the field was the other option
@@ -32,12 +41,9 @@
  * removing it just moves the same hard-coded guess into the readers, where
  * nobody can see or change it."
  *
- * That was true of deletion *alone*. It is not true of deletion plus a
- * derivation, which is what was asked for here. And the premise it rested on
- * ("every being minted through the UI carries a hard-coded Claude") turned out
- * to be false on disk: nothing in this house had the field, so the guess was
- * ALREADY living in the readers. The comment described a future it was in fact
- * describing the present of.
+ * That was true of deletion *alone*, and it is not true of deletion plus a
+ * derivation — which is what was asked for here. The readers no longer guess;
+ * they read what ran.
  */
 
 /**

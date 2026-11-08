@@ -451,11 +451,13 @@ export default function Sidebar({
       // from its conversations. Same value feeds the split planner and
       // /api/tokens so one screen never shows two scales.
       //
-      // Was `settings.aiName || activeFolder.name || 'Claude'`, with a comment
-      // saying "the folder's aiName, not its display name". Measured
-      // 2026-11-08: 0 of 23 beings had `settings.aiName`, so it resolved to
-      // `activeFolder.name` — the display name the comment ruled out —, which
-      // `tokenFamilyFor` reads as 'other' for every being in the house.
+      // Was `settings.aiName || activeFolder.name || 'Claude'`. The field was
+      // present (23 of 23 beings), so this did read a family name — but
+      // measured 2026-11-08, it was the WRONG family for 9 of 23, and for 8 of
+      // those the tokenizer family changed with it: 睡 set to Gemini while
+      // running GLM, カナ set to Gemini while running Kimi. An import split
+      // under the wrong profile is off by up to 66%, which changes how many
+      // parts it produces — and nothing on screen says which scale was used.
       const tokenModel = beingVesselFamily(conversations, activeFolder.name, currentConvoId);
       const logCap = activeFolder.settings?.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
 

@@ -1252,12 +1252,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
 
   // The per-being default Base Model Family (`settings.aiName`) and the control
-  // that wrote it used to live here. Removed 2026-11-08 at Lizard-kun's call:
-  // all 23 beings in this house carried no such field, so both of its jobs —
-  // the family a new conversation opens on, and the tokenizer profile the log
-  // importer and the split planner use — were already deciding on a hard-coded
-  // 'Claude'. Both now derive from the conversations themselves; the
-  // measurements are in beingVesselFamily (@/lib/beingVessel).
+  // that wrote it used to live here. Removed 2026-11-08 at Lizard-kun's call.
+  // Measured the same day: 23 of 23 beings had the field and 9 of 23 disagreed
+  // with the family that being actually runs on — 謡 reading 'Gemini' while
+  // spending the day on GLM and Claude, 睡 reading 'Gemini' with 49
+  // conversations on GLM. A hand-set field rots from the day it is set. Both of
+  // its jobs — the family a new conversation opens on, and the tokenizer
+  // profile the log importer and the split planner use — now derive from the
+  // conversations; see beingVesselFamily (@/lib/beingVessel).
 
   // Will this turn actually carry a Layer 4? Resolved through the SAME pure
   // function the chat route calls, so the index this component fetches, counts
