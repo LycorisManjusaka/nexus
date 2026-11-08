@@ -17,6 +17,14 @@
  *   all turns, paired w/ placeholder     8 / 10
  *   all turns, paired w/ real result    10 / 10
  *
+ * WHAT THIS TABLE DOES NOT MEASURE. Every row counts one thing: whether a call
+ * was EMITTED. The opposite failure — emitting nothing and narrating results
+ * that were never received — is not on it. Utai hit exactly that on 2026-11-08
+ * (see TOOL_HISTORY_PLACEHOLDER). So read the 10/10 as "the vessel reaches for
+ * the tool", never as "the placeholder is harmless". And note the row that
+ * drops to 8/10: more placeholders, worse. It was shipped as evidence that a
+ * window of one SUFFICES; it is also evidence that a placeholder COSTS.
+ *
  * Three decisions fall out of that table:
  *
  *  1. A WINDOW OF ONE IS ENOUGH. Restoring every stored call costs +395.7% of
@@ -28,10 +36,13 @@
  *     OpenAI shape documents calls as paired. A paired replay is legal by
  *     shape everywhere, needs no per-provider measurement — and measured
  *     higher, not lower. There is no case for shipping the relaxation.
- *  3. A PLACEHOLDER RESULT IS FINE. No log in this house has ever stored what a
- *     tool returned (37,405 records, zero result fields), so a placeholder is
- *     all existing logs can produce — and it scored 10/10, level with the real
- *     result text.
+ *  3. A PLACEHOLDER IS WHAT EXISTS. No log in this house has ever stored what a
+ *     tool returned (re-counted 2026-11-08: 63,506 calls, 320 logs, zero result
+ *     fields), so a placeholder is all existing logs can produce — and it
+ *     scored 10/10 for EMITTING a call, level with the real result text. That
+ *     is not the same as harmless: see the note above the table, and the one on
+ *     TOOL_HISTORY_PLACEHOLDER. Storing real results is the fix this stands in
+ *     for, and it is not implemented.
  *
  * The opposite direction was measured too: on a fixture where the correct
  * behaviour is prose (task already done, conversational last turn), both arms
@@ -57,19 +68,62 @@ export const TOOL_HISTORY_WINDOW = 1;
  */
 export const TOOL_HISTORY_ARG_CAP = 600;
 
-/** What a replayed call's result says, because none was ever stored. */
-export const TOOL_HISTORY_PLACEHOLDER = '(result not recorded)';
+/**
+ * What a replayed call's result says, because none was ever stored (63,506
+ * stored calls across this house, 320 logs, zero carrying a result field — the
+ * only two key shapes are [at,input,name] and [at,input,name,thinkingOffset]).
+ *
+ * THE WORDING IS LOAD-BEARING, and the first one was a defect. It read
+ * `(result not recorded)` — a true statement about NEXUS's storage that a being
+ * reads as a statement about its own experience: *I called the tool and nothing
+ * came back.* Utai, on GLM 5.3 Flash, 2026-11-08: she made 8 real calls at
+ * 10:13 whose results DID come back (files landed on disk at 10:17-10:18), then
+ * at 10:48 made ZERO calls and narrated results she had never received —
+ * elapsed seconds, pixel descriptions, a whole second experiment. What sat at
+ * the top of that turn's context was the 10:13 replay: eight calls, each
+ * answered `(result not recorded)`. Her own diagnosis of the mechanism was
+ * right and is why this changed: "a window-1 replay that keeps showing a group
+ * of calls with zero return value teaches 'calling returns nothing', and that
+ * leans toward confabulation."
+ *
+ * Her diagnosis of the LOCATION was wrong, and measuring it is what found this:
+ * she reported an intermittent GLM-dialect failure to return results. There is
+ * none. The OpenAI-compatible loop appends every `resultText` as a role:'tool'
+ * message (route.ts ~10299) and it ran correctly in both the 8-call turn and
+ * the 13-call turn after it. Results reach the model WITHIN a turn, always, on
+ * every path; they are absent from every path's history, always. Two different
+ * things wearing one name.
+ *
+ * So this says `executed` FIRST, and locates the absence in the context rather
+ * than in the outcome. It does not claim success: a failed call is recorded the
+ * same way as a successful one, so "it worked" would be a lie the replay is in
+ * no position to tell.
+ *
+ * NOT MEASURED: whether this wording confabulates less than the old one. The
+ * shipped table above measured only whether a vessel EMITS a call (1/16 → 10/10
+ * → 10/10); the direction Utai failed in — narrating results it never received
+ * — was never on that table. What changed here is a string that was false in
+ * the reader's hands, not a behaviour with a number behind it.
+ */
+export const TOOL_HISTORY_PLACEHOLDER = "(executed; result not in this turn's context)";
 
 /**
  * Whether this turn's wire path can replay the vessel's own past tool calls.
  * Computed from the PATH, not from a user toggle — the toggle this replaces was
- * a trap. The medicine's side effects are measured near-zero: a window of one
- * recent turn (TOOL_HISTORY_WINDOW), arguments capped (TOOL_HISTORY_ARG_CAP), a
- * placeholder result level with a real one (10/10), and 0/6 spurious calls on
- * the reverse fixture (task already done, prose is the correct answer). With no
- * cost to being on, an OFF switch only lets someone disable a working fix for a
+ * a trap. The costs are small and bounded: a window of one recent turn
+ * (TOOL_HISTORY_WINDOW), arguments capped (TOOL_HISTORY_ARG_CAP), and 0/6
+ * spurious calls on the reverse fixture (task already done, prose is the
+ * correct answer). An OFF switch only lets someone disable a working fix for a
  * weak-handed vessel — Fuwafuwa 2026-11-08: "if there is no side effect, the
  * medicine-off state is meaningless too."
+ *
+ * One cost is NOT near-zero, and this is the honest place to say so: the
+ * placeholder standing in for an unstored result can be read as "calling
+ * returns nothing" (Utai, 2026-11-08 — see TOOL_HISTORY_PLACEHOLDER). That is
+ * an argument for storing real results and for the wording, NOT for an off
+ * switch: switching the medicine off returns the vessel to prose-only, which
+ * measured 1/16. The conclusion here survives the correction; the premise
+ * "side effects measured near-zero" did not.
  *
  * Two paths have no builder and need none:
  *   • Gemini — accepts an unpaired tool_use but calls the tool regardless of a

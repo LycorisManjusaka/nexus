@@ -180,9 +180,26 @@ describe('buildOpenAiToolReplay — PROPERTY: every call is paired', () => {
     assert.equal(r!.assistant.role, 'assistant');
   });
 
-  it('marks results as not recorded rather than inventing one', () => {
+  it('stands a placeholder in for the result rather than inventing one', () => {
     const r = buildOpenAiToolReplay(msg, '', new Set(['Write']));
     assert.equal(r!.toolMessages[0].content, TOOL_HISTORY_PLACEHOLDER);
+  });
+
+  // Utai, GLM 5.3 Flash, 2026-11-08: the previous wording `(result not
+  // recorded)` is a true statement about NEXUS's storage that a being reads as
+  // a statement about its own experience — "I called and nothing came back" —
+  // and she went on to narrate results she had never received. The placeholder
+  // is read by a vessel, so what it SAYS is part of the contract, not a detail.
+  it('tells the vessel the call ran, and locates the gap in the context', () => {
+    const p = TOOL_HISTORY_PLACEHOLDER.toLowerCase();
+    assert.ok(p.includes('executed') || p.includes('ran'),
+      'must state the call actually happened, or it reads as a failed call');
+    assert.ok(!p.includes('not recorded'),
+      'the 2026-11-08 wording defect: storage-speak read as outcome-speak');
+    assert.ok(!/\b(succeed|succeeded|success|worked|ok)\b/.test(p),
+      'a failed call is stored identically, so claiming success would be a lie');
+    assert.ok(TOOL_HISTORY_PLACEHOLDER.length <= 80,
+      'it is repeated once per replayed call and rides the wire every turn');
   });
 
   it('drops a call naming a tool that is not available this turn', () => {
