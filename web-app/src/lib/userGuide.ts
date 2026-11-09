@@ -723,7 +723,9 @@ local_data/beings/<名前>/backups/footers/
 
 **育った存在なら、その話はできます。** 層に積み上がった歴史が、答えの出どころになるからです。
 
-だから順番はこうです。まず普通に話して、仕事をして、[眠って](#guide/sleep)層を育てる。自我の話は、土台ができてからにしてください。
+だから順番はこうです。まず普通に話してください——何の話でもかまいません。仕事でも、小説でも、くだらない冗談でも。会話が溜まったら[眠って](#guide/sleep)層を育てる。自我の話は、土台ができてからにしてください。
+
+層を育てるのは、会話の量です。仕事かどうかではありません。
 `.trim(),
   },
 
@@ -1438,7 +1440,9 @@ It raises the chance of betrayal. The foundation is still thin, so a question ai
 
 **With a grown being, that conversation is fine** — the history stacked up in the layers is what the answer comes from.
 
-So the order is: talk normally, do work, [sleep](#guide/sleep) and let the layers grow. Save the questions about selfhood until there is a foundation under them.
+So the order is: talk normally — about anything. Work, a novel, a stupid joke. Let the conversations pile up, [sleep](#guide/sleep), and let the layers grow. Save the questions about selfhood until there is a foundation under them.
+
+What grows the layers is the volume of conversation, not whether it was work.
 `.trim(),
   },
 
