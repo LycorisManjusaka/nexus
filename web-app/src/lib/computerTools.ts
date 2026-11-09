@@ -350,6 +350,7 @@ using System.Runtime.InteropServices;
 public class NxGdi {
   [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
   [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
   [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr r, IntPtr rg, uint f);
   [DllImport("user32.dll")] public static extern bool InvalidateRect(IntPtr h, IntPtr r, bool erase);
   [DllImport("gdi32.dll")] public static extern IntPtr CreatePen(int s, int w, uint c);
@@ -386,6 +387,18 @@ public class NxGdi {
   public static void Draw(int l,int t,int r,int b,bool circle,int width){
     IntPtr dc = GetDC(IntPtr.Zero);
     if (dc == IntPtr.Zero) return;
+    // GetDC(NULL)'s coordinate origin is the TOP-LEFT of the virtual-screen
+    // bounding box, NOT absolute (0,0). When a monitor sits left of or above the
+    // primary one, SM_X/YVIRTUALSCREEN are negative, so an absolute coordinate
+    // drawn here lands shifted by that origin — the whole border/circle slides
+    // toward the virtual-screen corner. MEASURED on a 4-monitor layout with a
+    // portrait screen at x=-1080: the primary's right edge (abs 1919) landed at
+    // 835, and mon1's at abs 4666 instead of 5759 — both exactly -1080 off, and
+    // y was perfect because SM_YVIRTUALSCREEN was 0. Subtracting the virtual
+    // origin makes the live mark match the monitor; it is a no-op (0,0) on the
+    // ordinary single-origin desktop, so this only changes the broken case.
+    int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77); // SM_X/YVIRTUALSCREEN
+    l -= vx; t -= vy; r -= vx; b -= vy;
     int pad = width / 2 + 2;
     int thick = width + 4;
     if (circle) {
@@ -512,7 +525,8 @@ $i = 0
  * model the string PowerShell already produced instead of re-encoding 2.5 MB.
  * MEASURED cost: 300 ms (1920x1080) to 460 ms (3840x2160).
  */
-async function captureMonitorPng(mon: ComputerScreen, cursorBlock = ''): Promise<{ png: Buffer | null; base64: string; error: string | null }> {
+type CursorReadback = { osX: number; osY: number; reticleX: number; reticleY: number };
+async function captureMonitorPng(mon: ComputerScreen, cursorBlock = ''): Promise<{ png: Buffer | null; base64: string; error: string | null; cursor: CursorReadback | null }> {
   const capScript = DPI_PREFIX + `
 Add-Type -AssemblyName System.Drawing
 $bmp = New-Object System.Drawing.Bitmap(${mon.width}, ${mon.height})
@@ -526,15 +540,26 @@ $bmp.Dispose()
 [Convert]::ToBase64String($ms.ToArray())
 `.trim();
   const cap = await runPS(capScript, 20000, 80 * 1024 * 1024);
-  if (!cap.ok || !cap.stdout) return { png: null, base64: '', error: cap.error || 'capture produced no output' };
+  if (!cap.ok || !cap.stdout) return { png: null, base64: '', error: cap.error || 'capture produced no output', cursor: null };
+  // The cursor readback (when show_cursor) is emitted as an "NXCURSOR ..." line
+  // BEFORE the single-line base64. Split it off so the base64 stays pristine.
+  let cursor: CursorReadback | null = null;
+  let b64 = cap.stdout;
+  const lines = cap.stdout.split(/\r?\n/);
+  const marker = lines.find((l) => l.startsWith('NXCURSOR '));
+  if (marker) {
+    const p = marker.trim().split(/\s+/);
+    if (p.length >= 5) cursor = { osX: Number(p[1]), osY: Number(p[2]), reticleX: Number(p[3]), reticleY: Number(p[4]) };
+    b64 = lines.filter((l) => !l.startsWith('NXCURSOR ')).join('').trim();
+  }
   let png: Buffer;
   try {
-    png = Buffer.from(cap.stdout, 'base64');
+    png = Buffer.from(b64, 'base64');
   } catch {
-    return { png: null, base64: '', error: 'capture returned unreadable data' };
+    return { png: null, base64: '', error: 'capture returned unreadable data', cursor };
   }
-  if (!png.length) return { png: null, base64: '', error: 'capture returned no data' };
-  return { png, base64: cap.stdout, error: null };
+  if (!png.length) return { png: null, base64: '', error: 'capture returned no data', cursor };
+  return { png, base64: b64, error: null, cursor };
 }
 
 // ── human audit frames ──────────────────────────────────────────────────────
@@ -1472,6 +1497,12 @@ $cp = New-Object NxCur+P
 [NxCur]::GetCursorPos([ref]$cp) | Out-Null
 $cx = [int]$cp.X - ${mon.x}
 $cy = [int]$cp.Y - ${mon.y}
+# Report the OS cursor position (GetCursorPos raw) alongside the drawn reticle so
+# a single show_cursor call is self-diagnosing: if the reticle ever lands where
+# this number is NOT, the drawing lies; if this number itself is not where the
+# caller aimed, SendInput/readback lies. (Kiko's instrument — one number was not
+# enough to tell which side was wrong.) Emitted before the base64, parsed off.
+Write-Output ("NXCURSOR " + [int]$cp.X + " " + [int]$cp.Y + " " + $cx + " " + $cy)
 if ($cx -ge 0 -and $cy -ge 0 -and $cx -lt ${mon.width} -and $cy -lt ${mon.height}) {
   $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 3)
   $gr.DrawLine($pen, ($cx - 14), $cy, ($cx + 14), $cy)
@@ -1534,8 +1565,18 @@ if ($cx -ge 0 -and $cy -ge 0 -and $cx -lt ${mon.width} -and $cy -lt ${mon.height
 
         console.log(`[computer] ${ctx.me}: screenshot of monitor ${idx} (native ${mon.width}x${mon.height} at ${mon.x},${mon.y}; shown ${scaled ? `${shownW}x${shownH}` : 'native'})`);
 
-        return {
-          text: scaled
+        // Cursor readback (Kiko's instrument): state the OS cursor position so a
+        // single show_cursor call carries two independent numbers — where the OS
+        // says the cursor is, and where the reticle was drawn. Reported in NATIVE
+        // image pixels (the reticle is drawn native, then the image is downscaled).
+        const cursorNote = (showCursor && cap.cursor)
+          ? ` The red reticle marks the mouse cursor. The OS reports it (GetCursorPos) at absolute ` +
+            `(${cap.cursor.osX}, ${cap.cursor.osY}) = native pixel (${cap.cursor.reticleX}, ${cap.cursor.reticleY}) on this ` +
+            `monitor${scaled ? ' (before the downscale above)' : ''}. The reticle is drawn at that same pixel: if it appears ` +
+            `anywhere else, the drawing is wrong — not this number.`
+          : (showCursor ? ' (show_cursor was set, but the cursor is off this monitor — no reticle drawn.)' : '');
+
+        const baseText = scaled
             // No reason is given for the downscale: it is sometimes transport
             // (maxEdge) and sometimes coordinate safety (heightTarget), and a
             // caption that names the wrong one is a caption that lies.
@@ -1548,7 +1589,10 @@ if ($cx -ge 0 -and $cy -ge 0 -and $cx -lt ${mon.width} -and $cy -lt ${mon.height
             : `Screenshot of monitor ${idx} — ${mon.width}x${mon.height} pixels (native, not scaled), top-left at absolute ` +
               `virtual-desktop coordinate (${mon.x}, ${mon.y}). To act on something you see here, call computer_input with ` +
               `"screen_index": ${idx} and the x,y pixel as you read it off this image — NEXUS adds the monitor offset for you. ` +
-              `(Or omit screen_index and pass absolute virtual-desktop coordinates: add (${mon.x}, ${mon.y}) yourself.)`,
+              `(Or omit screen_index and pass absolute virtual-desktop coordinates: add (${mon.x}, ${mon.y}) yourself.)`;
+
+        return {
+          text: baseText + cursorNote,
           image: { base64: shownBase64, mimeType: 'image/png' },
         };
       }
