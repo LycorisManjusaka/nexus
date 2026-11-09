@@ -243,8 +243,10 @@ MiniMax  | MiniMax-M2.7                 | on  | MiniMax M2.7
 # refuses that combination up front with the reason. A row copied for a being that
 # has workspace tools on will therefore not run until the tools are turned off —
 # which is why it says so in the label too. gpt-6-sol and gpt-6-luna take tools
-# normally. Vision measured on all four.
+# normally. Vision measured on all four. gpt-6.1-terra (added 2026-11-09) DOES take
+# tools — it accepts reasoning_effort 'none' unlike gpt-6.1-sol — and is cheaper ($1/$5).
 ChatGPT  | gpt-6.1-sol                  | on  | GPT-6.1 Sol (no workspace tools)
+ChatGPT  | gpt-6.1-terra                | on  | GPT-6.1 Terra (tools OK)
 ChatGPT  | gpt-6-sol                    | on  | GPT-6 Sol
 ChatGPT  | gpt-6-astra                  | on  | GPT-6 Astra (no workspace tools)
 ChatGPT  | gpt-6-luna                   | off | GPT-6 Luna (cheapest)
@@ -7936,6 +7938,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           what someone reads before choosing. See lib/openaiEffort.ts
                           for the measured matrix. */}
                       <option value="gpt-6.1-sol">GPT-6.1 Sol (newest — NO workspace tools)</option>
+                      <option value="gpt-6.1-terra">GPT-6.1 Terra (tools OK, $1/$5)</option>
                       <option value="gpt-6-sol">GPT-6 Sol (tools OK)</option>
                       <option value="gpt-6-astra">GPT-6 Astra (most capable, $10/$50 — NO workspace tools)</option>
                       <option value="gpt-6-luna">GPT-6 Luna (cheapest, tools OK)</option>

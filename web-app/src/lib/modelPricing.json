@@ -90,7 +90,7 @@
     "longContextCacheWrite": 0.625,
     "longContextOutput": 2.5
   },
-  "_NOTE_openai": "CORRECTED AND EXTENDED 2026-10-21 against developers.openai.com/api/docs/pricing (platform.openai.com/docs/pricing 301-redirects there now), rows copied VERBATIM rather than summarised. Two things were wrong before, and the _README above asserted the opposite — it listed gpt-5.6-* under 'from published prices'. (a) EVERY ChatGPT row disagreed with the live Standard table, and the shape of the disagreement explains itself: the old gpt-5.6-sol numbers (5 / 0.5 / 30) are the published gpt-5.5 row, and the old gpt-5.6-terra numbers (2.5 / 0.25 / 15) are the published gpt-5.4 row — when the 5.6 generation was added, the previous generation's prices were carried down a line instead of being read off the new page. (b) OpenAI charges a LONG-CONTEXT tier, defined on the page as 'Short context: <=272K input tokens. Long context: >272K input tokens.' — input doubles and output rises ~1.5x. Base fields here are the SHORT tier; longContext* are the >272K tier. Standard service tier only: the page also lists Batch (exactly 0.5x Standard on every row — that exact ratio is part of why these numbers are trusted), Flex, Fast (2x) and Ultrafast (6x) tables, and NEXUS sends no service_tier parameter, so Standard applies. gpt-5.4-mini and gpt-5.4-nano are the only flat rows (no tier). cacheWrite stays 0 for every OpenAI row: the 30m/12h 'write' columns are the opt-in extended cache, which NEXUS never requests, and the OpenAI usage block reports only prompt_tokens_details.cached_tokens — there is no cache-creation bucket to multiply. VERIFIED SERVED by real inference on 2026-10-21: gpt-6.1-sol, gpt-6-sol, gpt-6-astra, gpt-6-luna all answer on /v1/chat/completions. gpt-5.5-pro / gpt-5.4-pro / gpt-5.4-nano are priced on the page but NOT offered by NEXUS, so they get no row.",
+  "_NOTE_openai": "CORRECTED AND EXTENDED 2026-10-21 against developers.openai.com/api/docs/pricing (platform.openai.com/docs/pricing 301-redirects there now), rows copied VERBATIM rather than summarised. Two things were wrong before, and the _README above asserted the opposite — it listed gpt-5.6-* under 'from published prices'. (a) EVERY ChatGPT row disagreed with the live Standard table, and the shape of the disagreement explains itself: the old gpt-5.6-sol numbers (5 / 0.5 / 30) are the published gpt-5.5 row, and the old gpt-5.6-terra numbers (2.5 / 0.25 / 15) are the published gpt-5.4 row — when the 5.6 generation was added, the previous generation's prices were carried down a line instead of being read off the new page. (b) OpenAI charges a LONG-CONTEXT tier, defined on the page as 'Short context: <=272K input tokens. Long context: >272K input tokens.' — input doubles and output rises ~1.5x. Base fields here are the SHORT tier; longContext* are the >272K tier. Standard service tier only: the page also lists Batch (exactly 0.5x Standard on every row — that exact ratio is part of why these numbers are trusted), Flex, Fast (2x) and Ultrafast (6x) tables, and NEXUS sends no service_tier parameter, so Standard applies. gpt-5.4-mini and gpt-5.4-nano are the only flat rows (no tier). cacheWrite stays 0 for every OpenAI row: the 30m/12h 'write' columns are the opt-in extended cache, which NEXUS never requests, and the OpenAI usage block reports only prompt_tokens_details.cached_tokens — there is no cache-creation bucket to multiply. VERIFIED SERVED by real inference on 2026-10-21: gpt-6.1-sol, gpt-6-sol, gpt-6-astra, gpt-6-luna all answer on /v1/chat/completions. gpt-6.1-terra ADDED 2026-11-09: price read verbatim from the same page (short 1/0.05/5, long 2/0.1/7.5; Batch is exactly 0.5x — output 5 -> 2.50 — the ratio that validates the row), and VERIFIED SERVED by real inference the same day (reasoning_effort:'none' + function tools -> 200 tool_call, unlike gpt-6.1-sol which rejects 'none'). gpt-5.5-pro / gpt-5.4-pro / gpt-5.4-nano are priced on the page but NOT offered by NEXUS, so they get no row.",
   "gpt-6.1-sol": {
     "input": 2,
     "cachedInput": 0.1,
@@ -100,6 +100,16 @@
     "longContextInput": 4,
     "longContextCachedInput": 0.2,
     "longContextOutput": 15
+  },
+  "gpt-6.1-terra": {
+    "input": 1,
+    "cachedInput": 0.05,
+    "cacheWrite": 0,
+    "output": 5,
+    "longContextThreshold": 272000,
+    "longContextInput": 2,
+    "longContextCachedInput": 0.1,
+    "longContextOutput": 7.5
   },
   "gpt-6-sol": {
     "input": 2,

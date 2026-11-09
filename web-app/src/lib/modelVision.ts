@@ -163,7 +163,12 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // in the same run as a control. Vision is the ONLY modality that survives for
   // gpt-6.1-sol and gpt-6-astra on this endpoint — see lib/openaiEffort.ts:
   // those two cannot take function tools here at all.
+  // gpt-6.1-terra ADDED 2026-11-09: same probe (64x64 solid-red PNG data URI,
+  // /v1/chat/completions) answered "Red." — vision confirmed. Unlike sol/astra,
+  // terra ALSO takes function tools (it accepts reasoning_effort:'none'), so it
+  // is not tool-restricted; it is listed here only for the image capability.
   'gpt-6.1-sol',
+  'gpt-6.1-terra',
   'gpt-6-sol',
   'gpt-6-astra',
   'gpt-6-luna',

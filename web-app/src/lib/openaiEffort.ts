@@ -12,9 +12,13 @@
 //                       on an id that already ships — "broken" and "broken for
 //                       everyone including today" look identical without one.
 //   value 'none'     -> 200 on gpt-5.4, gpt-5.4-mini, gpt-5.5, all gpt-5.6-*,
-//                       gpt-6-sol, gpt-6-luna. REJECTED by gpt-6.1-sol and
-//                       gpt-6-astra, whose published vocabulary is exactly
-//                       low|medium|high|xhigh.
+//                       gpt-6-sol, gpt-6-luna, and gpt-6.1-terra (measured
+//                       2026-11-09). REJECTED by gpt-6.1-sol and gpt-6-astra,
+//                       whose published vocabulary is exactly low|medium|high|
+//                       xhigh. NOTE the 6.1 pair SPLITS: gpt-6.1-terra takes
+//                       'none' (so tools + 'none' -> 200, get_weather called),
+//                       gpt-6.1-sol does not. Same generation, different
+//                       vocabulary — do not infer one from the other.
 //   function tools   -> on this endpoint tools REQUIRE reasoning_effort 'none':
 //                       "Function tools with reasoning_effort are not supported
 //                        for <id> in /v1/chat/completions. To use function
