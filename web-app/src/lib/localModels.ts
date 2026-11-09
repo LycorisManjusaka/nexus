@@ -4,6 +4,7 @@ import { promisify } from 'util';
 import { loadKeys } from './fsStorage';
 import { killTree } from './shellTool';
 import { resolveLmsCommand } from './lmsPath';
+import { parseLmsEstimate, lmsEstimateArgs, type LmsEstimate } from './lmsEstimate';
 
 const execAsync = promisify(exec);
 
@@ -104,8 +105,18 @@ export async function execOrAbandon(
 const LOCAL_BASE = process.env.LOCAL_LLM_BASE || 'http://localhost:1234';
 
 export interface LocalModelMeta {
+  /** `modelKey` — the id every API and `lms load` wants, e.g.
+   *  "gemma-4-26b-a4b-it-qat-...". NOT the display name, and NOT the file
+   *  path (`indexedModelIdentifier`), which `lms load` rejects. */
   id: string;
+  /** LM Studio's own human label, e.g. "Gemma 4 26B A4B Instruct QAT ...".
+   *  Both this and `id` matter to a reader: the GUI shows one, the API and
+   *  logs show the other, and for community quants they diverge a lot. */
   displayName: string;
+  /** Who published the weights, e.g. "mradermacher", "google", "HauhauCS".
+   *  With a dozen Gemma 4 variants installed this is often the ONLY thing
+   *  that distinguishes two rows. Empty when the source didn't report it. */
+  publisher: string;
   sizeGB: string;
   params: string;
   arch: string;
@@ -214,6 +225,7 @@ export async function getLocalModelsMeta(): Promise<{ models: string[]; meta: Lo
       metaList.push({
         id,
         displayName: item.displayName || id,
+        publisher: item.publisher || '',
         sizeGB,
         params: item.paramsString || '',
         arch: item.architecture || '',
@@ -246,6 +258,11 @@ export async function getLocalModelsMeta(): Promise<{ models: string[]; meta: Lo
     const fallbackMeta: LocalModelMeta[] = ids.map((id: string) => ({
       id,
       displayName: id,
+      // `/v1/models` is the OpenAI-compatible shape and carries no publisher.
+      // (LM Studio's own `/api/v0/models` does, along with quant/arch/context —
+      // but this branch only runs when the lms CLI is missing, where every
+      // other field is empty too, so enriching it is a separate change.)
+      publisher: '',
       sizeGB: '',
       params: '',
       arch: '',
@@ -261,6 +278,41 @@ export async function getLocalModelsMeta(): Promise<{ models: string[]; meta: Lo
     return { models: ids, meta: fallbackMeta };
   } catch (e: any) {
     return { models: [], meta: [], error: e?.message || 'LM Studio server unreachable' };
+  }
+}
+
+/**
+ * Ask LM Studio what loading a model at a given context length would cost in
+ * memory — WITHOUT loading it.
+ *
+ * This is the number the GUI shows as "Estimated Memory Usage", and it is the
+ * one thing that decides whether a local model is usable at a context size:
+ * the same Gemma 4 12B is 13.57 GiB at 8K and 27.51 GiB at 100K on this
+ * machine. Measured 0.318s per call, so a UI can call it on every edit of the
+ * context field.
+ *
+ * `--estimate-only` genuinely does not load: VRAM stayed flat across runs.
+ * The parse (and the silent exit-0 failure mode) is documented in
+ * `lmsEstimate.ts`.
+ */
+export async function estimateLocalModel(
+  modelKey: string,
+  contextLength: number,
+): Promise<LmsEstimate> {
+  if (!modelKey) return { ok: false, raw: 'No model specified' };
+
+  const args = lmsEstimateArgs(modelKey, contextLength);
+  // Quote only the key — the rest are fixed flags and a sanitized integer.
+  const cmd = `${lms()} ${args[0]} "${modelKey.replace(/"/g, '')}" ${args.slice(2).join(' ')}`;
+
+  try {
+    const { stdout, stderr } = await execAsync(cmd, { timeout: 15000 });
+    // Both streams: lms prints "Model not found" and still exits 0, so a
+    // non-throwing run is not evidence that it worked.
+    return parseLmsEstimate(`${stdout || ''}\n${stderr || ''}`);
+  } catch (e: any) {
+    const combined = `${e?.stdout || ''}\n${e?.stderr || ''}`.trim();
+    return parseLmsEstimate(combined || e?.message || 'lms estimate failed');
   }
 }
 

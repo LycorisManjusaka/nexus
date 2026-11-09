@@ -5,6 +5,8 @@ import MessageBubble from './MessageBubble';
 import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
+import ModelPriceSelect from './ModelPriceSelect';
+import { tagPriceOptions, priceTiers, fmtPeakHours, fmtThreshold } from '@/lib/modelPriceLabel';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, Search, AudioLines, Link2, Check, Menu, MoreHorizontal } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
@@ -1346,6 +1348,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [localModels, setLocalModels] = useState<string[]>([]);
   const [localModelsMeta, setLocalModelsMeta] = useState<Record<string, any>>({});
   const [localModelsError, setLocalModelsError] = useState<string | null>(null);
+  // LM Studio's "Estimated Memory Usage" for the selected local model at the
+  // currently typed context length. This is the number that decides whether a
+  // local model is usable at a size — the same Gemma 4 12B measures 13.57 GiB
+  // at 8K and 27.51 GiB at 100K — and it was only visible in LM Studio's own
+  // GUI until now.
+  const [localEstimate, setLocalEstimate] = useState<any>(null);
+  const [localEstimating, setLocalEstimating] = useState(false);
   const refreshLocalModels = async () => {
     try {
       const r = await fetch('/api/local/models');
@@ -1364,6 +1373,32 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   useEffect(() => {
     if (localAiName === 'Local') refreshLocalModels();
   }, [localAiName]);
+  // Re-estimate whenever the model or the typed context length changes.
+  //
+  // Debounced because the context field is TYPED INTO: without it every
+  // keystroke in "100000" fires six CLI calls. 400ms is just "typing stopped";
+  // it is not a measured threshold and does not need to be, because being
+  // wrong about it costs one extra estimate — the call is read-only (it does
+  // NOT load the model) and takes 0.3s.
+  useEffect(() => {
+    if (localAiName !== 'Local' || !specificModel) { setLocalEstimate(null); return; }
+    const ctx = modelParams.localContextWindow ?? 80000;
+    if (!Number.isFinite(ctx) || ctx < 1) { setLocalEstimate(null); return; }
+    let cancelled = false;
+    setLocalEstimating(true);
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/local/estimate?model=${encodeURIComponent(specificModel)}&ctx=${ctx}`);
+        const d = await r.json();
+        if (!cancelled) setLocalEstimate(d);
+      } catch (e: any) {
+        if (!cancelled) setLocalEstimate({ ok: false, raw: e?.message || 'request failed' });
+      } finally {
+        if (!cancelled) setLocalEstimating(false);
+      }
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); setLocalEstimating(false); };
+  }, [localAiName, specificModel, modelParams.localContextWindow]);
   const isAudioPlaying = Object.values(audioPlayingStates).some(v => v);
   // Precise "audio is actually sounding RIGHT NOW" flag, for the camera only.
   // Distinct from isAudioPlaying above: that one is "any TTS state other than
@@ -7729,7 +7764,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <>
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7745,7 +7780,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (thinking)</option>
                       <option value="claude-haiku-5-5">Claude Haiku 5.5 (adaptive thinking, 1M ctx, cheapest)</option>
                       <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-                    </select>
+                    </ModelPriceSelect>
                   </div>
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.billing')}</label>
@@ -7776,7 +7811,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'Gemini' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.gemini.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7789,14 +7824,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
                       <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
                       <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
-                    </select>
+                    </ModelPriceSelect>
                   </div>
                 )}
 
                 {localAiName === 'Qwen' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.qwen.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7807,7 +7842,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="qwen3.6-plus">Qwen 3.6 Plus (text + vision)</option>
                       <option value="qwen3.5-omni-flash">Qwen 3.5 Omni Flash (text + vision + audio + video)</option>
                       <option value="qwen3.5-omni-plus">Qwen 3.5 Omni Plus (text + vision + audio + video — higher quality)</option>
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.qwen.help'))}
                     </div>
@@ -7817,7 +7852,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'DeepSeek' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.deepseek.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7831,7 +7866,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <optgroup label="Alibaba DashScope (Qwen billing)">
                         <option value="deepseek-v3.2">DeepSeek V3.2 (hybrid reasoning)</option>
                       </optgroup>
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.deepseek.help1'))}
                       <br />
@@ -7847,15 +7882,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'Minimax' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.minimax.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      <option value="MiniMax-M3.1-Flash">MiniMax M3.1 Flash (newest — multimodal, 1M context, 2× cheaper than M3)</option>
+                      <option value="MiniMax-M3.1-Flash">MiniMax M3.1 Flash (newest — multimodal, 1M context)</option>
                       <option value="MiniMax-M3">MiniMax M3 (flagship — multimodal, 1M context, agentic coding)</option>
                       <option value="MiniMax-M2.7">MiniMax M2.7 (coding + reasoning, 200K context)</option>
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.minimax.help'))}
                     </div>
@@ -7865,7 +7900,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'Cohere' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.cohere.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7873,7 +7908,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="command-a-plus-05-2026">Command A Plus (May 2026 — flagship)</option>
                       <option value="command-a-reasoning-08-2025">Command A Reasoning (Aug 2025)</option>
                       <option value="command-a-vision-07-2025">Command A Vision (Jul 2025 — multimodal)</option>
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.cohere.help'))}
                     </div>
@@ -7883,18 +7918,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'Kimi' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.kimi.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
                       <option value="moonshotai/Kimi-K3">Kimi K3 (1M context, always-on reasoning, native vision)</option>
-                      <option value="moonshotai/Kimi-K3.1-Pro">Kimi K3.1 Pro (post-trained K3 — 1M context, cheaper than K3, vision, tools)</option>
+                      <option value="moonshotai/Kimi-K3.1-Pro">Kimi K3.1 Pro (post-trained K3 — 1M context, vision, tools)</option>
                       <option value="moonshotai/Kimi-K3.1-Pro-Highspeed">Kimi K3.1 Pro Highspeed (same model, 2× price, 2–3× faster)</option>
                       <option value="moonshotai/Kimi-K2.7-Code">Kimi K2.7 Code (256K, coding line, thinking-only)</option>
                       <option value="moonshotai/Kimi-K2.7-Code-Highspeed">Kimi K2.7 Code Highspeed (same model, 2× price, faster)</option>
                       <option value="moonshotai/Kimi-K2.6">Kimi K2.6 (256K context, multimodal)</option>
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.kimi.help'))}
                     </div>
@@ -7904,7 +7939,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'Grok' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.grok.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7917,7 +7952,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="grok-4.20-0309-non-reasoning">Grok 4.20 — Non-reasoning (fast)</option>
                       <option value="grok-4-1-fast-non-reasoning">Grok 4.1 Fast (legacy)</option>
                       <option value="grok-code-fast-1">Grok Code Fast 1 (coding)</option>
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.grok.help'))}
                     </div>
@@ -7927,7 +7962,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'ChatGPT' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.chatgpt.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7937,17 +7972,17 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           /v1/responses instead, where tools work at any effort. See
                           lib/openaiResponses.ts and lib/openaiEffort.ts. */}
                       <option value="gpt-6.1-sol">GPT-6.1 Sol (newest, tools OK)</option>
-                      <option value="gpt-6.1-terra">GPT-6.1 Terra (tools OK, $1/$5)</option>
+                      <option value="gpt-6.1-terra">GPT-6.1 Terra (tools OK)</option>
                       <option value="gpt-6-sol">GPT-6 Sol (tools OK)</option>
-                      <option value="gpt-6-astra">GPT-6 Astra (most capable, $10/$50, tools OK)</option>
+                      <option value="gpt-6-astra">GPT-6 Astra (most capable, tools OK)</option>
                       <option value="gpt-6-luna">GPT-6 Luna (cheapest, tools OK)</option>
                       <option value="gpt-5.6-sol">GPT-5.6 Sol (flagship, deepest reasoning)</option>
-                      <option value="gpt-5.6-terra">GPT-5.6 Terra (balanced, ~2× cheaper)</option>
+                      <option value="gpt-5.6-terra">GPT-5.6 Terra (balanced)</option>
                       <option value="gpt-5.6-luna">GPT-5.6 Luna (fast, budget)</option>
                       <option value="gpt-5.5">GPT-5.5</option>
                       <option value="gpt-5.4">GPT-5.4</option>
-                      <option value="gpt-5.4-mini">GPT-5.4 Mini (fast, cheaper)</option>
-                    </select>
+                      <option value="gpt-5.4-mini">GPT-5.4 Mini (fast)</option>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.chatgpt.help'))}
                     </div>
@@ -7957,7 +7992,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'MiMo' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.mimo.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -7966,7 +8001,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="mimo-v2.6-flash">MiMo V2.6 Flash (fast + cheap — same modalities)</option>
                       <option value="mimo-v2.6-pro-ultraspeed">MiMo V2.6 Pro UltraSpeed (up to 20x faster, 10x the price)</option>
                       <RetiredOption value={specificModel} />
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.mimo.help'))}
                     </div>
@@ -7982,13 +8017,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       mono
                       placeholder={t('model.bytedance.ph')}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                      options={[
-                        { value: 'dola-seed-2-1-turbo-260628', label: 'Seed 2.1 Turbo (image + video, ½-price of Pro)' },
+                      options={tagPriceOptions([
+                        { value: 'dola-seed-2-1-turbo-260628', label: 'Seed 2.1 Turbo (image + video)' },
                         { value: 'seed-2-0-pro-260328', label: 'Seed 2.0 Pro (text + image)' },
                         { value: 'seed-2-0-lite-260428', label: 'Seed 2.0 Lite (omnimodal — image, audio, video)' },
                         { value: 'seed-2-0-mini-260428', label: 'Seed 2.0 Mini' },
                         { value: 'seed-2-0-code-preview-260328', label: 'Seed 2.0 Code (preview)' },
-                      ]}
+                      ])}
                     />
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.bytedance.help'))}
@@ -7999,7 +8034,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 {localAiName === 'Meta' && (
                   <div className="mb-4">
                     <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.meta.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={specificModel}
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -8012,9 +8047,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="muse-spark-1.3">Muse Spark 1.3 (vision, 1M context)</option>
                       <option value="muse-spark-1.2">Muse Spark 1.2 (vision, 1M context)</option>
                       <option value="muse-spark-1.1">Muse Spark 1.1 (vision, 1M context)</option>
-                      <option value="muse-spark-1.3-contributor">Muse Spark 1.3 — Contributor: 12.5x cheaper, Meta trains on your prompts AND replies</option>
-                      <option value="muse-spark-1.2-contributor">Muse Spark 1.2 — Contributor: 12.5x cheaper, Meta trains on your prompts AND replies</option>
-                    </select>
+                      <option value="muse-spark-1.3-contributor">Muse Spark 1.3 — Contributor: Meta trains on your prompts AND replies</option>
+                      <option value="muse-spark-1.2-contributor">Muse Spark 1.2 — Contributor: Meta trains on your prompts AND replies</option>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {renderRich(t('model.meta.help'))}
                     </div>
@@ -8037,7 +8072,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <option value="digitalocean">DigitalOcean Inference — inference.do-ai.run (US-hosted, ~half Z.ai price)</option>
                     </select>
                     <label className="text-xs font-medium text-muted-foreground block mb-1 mt-3">{t('model.glm.label')}</label>
-                    <select
+                    <ModelPriceSelect
                       value={(() => {
                         // Guard: a saved model that doesn't exist on the current
                         // provider (e.g. glm-4.7 after switching to DigitalOcean)
@@ -8056,9 +8091,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           {(!['digitalocean/glm-5.2','digitalocean/glm-5.1','digitalocean/glm-5'].includes(specificModel || '')) && (
                             <option value="" disabled>{t('model.glm.notOnDO').replace('{model}', specificModel || '')}</option>
                           )}
-                          <option value="digitalocean/glm-5.2">GLM-5.2 (262K context, $0.70/$2.20 per M)</option>
-                          <option value="digitalocean/glm-5.1">GLM-5.1 ($0.975/$4.30 per M)</option>
-                          <option value="digitalocean/glm-5">GLM-5 ($0.75/$2.40 per M)</option>
+                          <option value="digitalocean/glm-5.2">GLM-5.2 (262K context)</option>
+                          <option value="digitalocean/glm-5.1">GLM-5.1</option>
+                          <option value="digitalocean/glm-5">GLM-5</option>
                         </>
                       ) : (
                         <>
@@ -8079,7 +8114,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           <option value="glm-4.5-air">GLM-4.5 Air (cheap)</option>
                         </>
                       )}
-                    </select>
+                    </ModelPriceSelect>
                     <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                       {(specificModel || '').startsWith('digitalocean/')
                         ? renderRich(t('model.glm.helpDO'))
@@ -8095,7 +8130,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <label className="text-xs font-medium text-muted-foreground">{t('model.local.label')}</label>
                         <button onClick={refreshLocalModels} className="text-[10px] text-indigo-500 hover:underline" type="button">{t('model.local.refresh')}</button>
                       </div>
-                      <select
+                      <ModelPriceSelect
                         value={specificModel}
                         onChange={(e) => setSpecificModel(e.target.value)}
                         className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
@@ -8115,6 +8150,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             : '';
                           return (
                             <option key={m} value={m}>
+                              {meta?.publisher ? `${meta.publisher} · ` : ''}
                               {meta && meta.displayName ? meta.displayName : m}
                               {detail ? ` — ${detail}` : ''}
                               {flags ? ` ${flags}` : ''}
@@ -8122,7 +8158,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                             </option>
                           );
                         })}
-                      </select>
+                      </ModelPriceSelect>
                       {localModelsError && (
                         <div className="text-[10px] text-red-500 mt-1">{localModelsError}</div>
                       )}
@@ -8172,6 +8208,92 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     </div>
                   </>
                 )}
+
+                {/* Facts about the SELECTED model.
+                    Everything here is what a native <option> cannot hold: the
+                    OS draws that list, so it has no HTML, no wrapping, and no
+                    adjustable height. Rates for cloud families (read live from
+                    modelPricing.json, so they can't drift from billing), and
+                    for Local the internal id, publisher, and LM Studio's own
+                    memory estimate at the context length typed above. */}
+                {specificModel && (localAiName === 'Local' ? (() => {
+                  const meta = localModelsMeta[specificModel];
+                  return (
+                    <div className="mb-4 px-3 py-2 bg-muted/30 border border-border rounded-lg text-[11px] leading-relaxed space-y-0.5">
+                      {meta?.displayName && meta.displayName !== specificModel && (
+                        <div className="font-medium text-foreground">{meta.displayName}</div>
+                      )}
+                      <div className="text-muted-foreground">
+                        <span className="opacity-70">{t('model.local.internalId')}: </span>
+                        <span className="font-mono break-all">{specificModel}</span>
+                      </div>
+                      {meta?.publisher && (
+                        <div className="text-muted-foreground">
+                          <span className="opacity-70">{t('model.local.publisher')}: </span>
+                          {meta.publisher}
+                        </div>
+                      )}
+                      <div className="pt-1 mt-1 border-t border-border/50">
+                        <span className="opacity-70 text-muted-foreground">{t('model.local.estTitle')}: </span>
+                        {localEstimating ? (
+                          <span className="text-muted-foreground">{t('model.local.estimating')}</span>
+                        ) : localEstimate?.ok ? (
+                          <span className="text-foreground font-medium">
+                            {t('model.local.estGpu')} {localEstimate.gpuMemory}
+                            {localEstimate.totalMemory && localEstimate.totalMemory !== localEstimate.gpuMemory
+                              ? ` · ${t('model.local.estTotal')} ${localEstimate.totalMemory}`
+                              : ''}
+                          </span>
+                        ) : localEstimate ? (
+                          <span className="text-amber-600 dark:text-amber-500">
+                            {t('model.local.estFail')}{' '}
+                            <span className="font-mono">
+                              {String(localEstimate.raw || localEstimate.error || '').trim().split('\n')[0]}
+                            </span>
+                          </span>
+                        ) : null}
+                        {localEstimate?.ok && localEstimate.verdict && (
+                          <div className="text-muted-foreground opacity-70 mt-0.5">{localEstimate.verdict}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })() : (() => {
+                  const tiers = priceTiers(specificModel);
+                  if (!tiers) {
+                    return (
+                      <div className="mb-4 px-3 py-2 bg-muted/30 border border-border rounded-lg text-[11px] text-muted-foreground leading-relaxed">
+                        {t('model.price.none')}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="mb-4 px-3 py-2 bg-muted/30 border border-border rounded-lg text-[11px] leading-relaxed">
+                      <div className="opacity-70 text-muted-foreground mb-1">{t('model.price.title')}</div>
+                      {tiers.map((tier, i) => (
+                        <div key={tier.kind} className={i > 0 ? 'mt-1 pt-1 border-t border-border/50' : ''}>
+                          {(tier.kind !== 'base' || tiers.length > 1) && (
+                            <div className="opacity-70 text-muted-foreground">
+                              {tier.kind === 'base'
+                                ? t('model.price.base')
+                                : tier.kind === 'longContext'
+                                  ? t('model.price.longContext').replace('{n}', fmtThreshold(tier.threshold))
+                                  : t('model.price.peak').replace('{h}', fmtPeakHours(tier.peakHoursUtc))}
+                            </div>
+                          )}
+                          <div className="text-foreground flex flex-wrap gap-x-3 gap-y-0.5">
+                            <span>{t('model.price.input')} <span className="font-medium">{tier.input}</span></span>
+                            <span>{t('model.price.cached')} <span className="font-medium">{tier.cachedInput}</span></span>
+                            {tier.cacheWrite && (
+                              <span>{t('model.price.cacheWrite')} <span className="font-medium">{tier.cacheWrite}</span></span>
+                            )}
+                            <span>{t('model.price.output')} <span className="font-medium">{tier.output}</span></span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })())}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
