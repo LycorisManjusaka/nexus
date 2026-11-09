@@ -172,6 +172,13 @@ export function wireCarriesMedia(kind: MediaKind, ctx: DeliveryContext): boolean
     // in `streamViaAnthropicCompat`: if this said yes where the adapter says
     // no, the UI would promise delivery for bytes it then drops.
     if (kind === 'video' && family.includes('mimo')) return isVideoCapable(ctx.specificModel);
+    // Audio is the second Xiaomi extension, found the same way and gated the
+    // same way: `{ type:'audio', source:{...} }`, the image envelope with the
+    // type renamed (measured 2026-11-10 — see the audio block in route.ts).
+    // Claude and Kimi have no audio surface at all and keep the honest "won't
+    // arrive" label, which is why this is gated on the MODEL via
+    // isAudioCapable() and not on the family.
+    if (kind === 'audio' && family.includes('mimo')) return isAudioCapable(ctx.specificModel);
     return false;
   }
   if (family.includes('local')) return localWireCarries(kind);

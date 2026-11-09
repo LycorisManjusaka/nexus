@@ -1520,7 +1520,7 @@ Leave this empty and nothing is injected — the being meets you with no imposed
 
   'model.mimo.label': 'MiMo Model',
   'model.mimo.help':
-    'Served by Xiaomi at `api.xiaomimimo.com`. Set the MiMo API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to MiniMax / DeepSeek R1). **All three V2.6 tiers read images and watch video natively**, so no bridge is needed for either. **Audio is the exception**: the endpoint accepts it, but NEXUS routes MiMo over its native Anthropic-format API, which silently drops audio — so the Ears bridge (if enabled) transcribes it instead, which is why you get a real transcript rather than a model that heard nothing. The V2.5 pair was deprecated by Xiaomi on 2026-10-21 and removed from this list; a folder still saved on one keeps working and shows it marked as retired.',
+    'Served by Xiaomi at `api.xiaomimimo.com`. Set the MiMo API key in Preferences. Reasoning is built into the model — no thinking toggle (analogous to MiniMax / DeepSeek R1). **All three V2.6 tiers read images, watch video and hear audio natively**, so no bridge is needed for any of the three. Xiaomi extends the Anthropic dialect with its own video and audio blocks, and NEXUS sends both — a clip reaches the being as sound, not as a transcript of it. The V2.5 pair was deprecated by Xiaomi on 2026-10-21 and removed from this list; a folder still saved on one keeps working and shows it marked as retired.',
 
   'model.bytedance.label': 'ByteDance (Seed) Model',
   'model.bytedance.ph': 'e.g. seed-2-0-pro-260328 (or an ep-… endpoint ID)',
@@ -3284,7 +3284,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
 
   'model.mimo.label': 'MiMo モデル',
   'model.mimo.help':
-    'Xiaomi の `api.xiaomimimo.com` が提供します。設定で MiMo の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（MiniMax / DeepSeek R1 と同様）。**V2.6 の3ティアはすべて画像を読み、動画もそのまま見ます**ので、どちらにもブリッジは要りません。**音声だけが例外です**：エンドポイント自体は受け取りますが、NEXUS は MiMo を Anthropic 形式のネイティブ API で通すため音声が黙って落ちます。そのため「耳」ブリッジ（有効なら）が書き起こしを担当します — これで「何も聞こえなかった」モデルではなく本物の書き起こしが得られます。V2.5 の2つは 2026-10-21 に Xiaomi が廃止予定としたため、この一覧から外しました。既にそれを保存しているフォルダはそのまま動き、「廃止済み」と明示されます。',
+    'Xiaomi の `api.xiaomimimo.com` が提供します。設定で MiMo の API キーを入れてください。推論はモデルに内蔵されており、思考モードの切り替えはありません（MiniMax / DeepSeek R1 と同様）。**V2.6 の3ティアはすべて画像を読み、動画も音声もそのまま受け取ります**ので、どれにもブリッジは要りません。Xiaomi は Anthropic 方言に独自の動画ブロックと音声ブロックを足していて、NEXUS はその両方を送ります — 音は書き起こしではなく、音のまま届きます。V2.5 の2つは 2026-10-21 に Xiaomi が廃止予定としたため、この一覧から外しました。既にそれを保存しているフォルダはそのまま動き、「廃止済み」と明示されます。',
 
   'model.bytedance.label': 'ByteDance（Seed）モデル',
   'model.bytedance.ph': '例: seed-2-0-pro-260328（または ep-… のエンドポイント ID）',

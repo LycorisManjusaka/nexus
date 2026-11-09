@@ -336,20 +336,28 @@ export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // Xiaomi MiMo V2.5 — hosted API has a dedicated audio encoder and documents
   // native audio understanding. The pro tier is text-only, so only v2.5.
   'mimo-v2.5',
-  // MiMo V2.6 is deliberately NOT added here, though its endpoint really does
-  // take audio (measured: audio_tokens=51 on the OpenAI-compatible path).
-  // NEXUS routes MiMo through the Anthropic-format adapter, which builds image
-  // blocks only — and MiMo's ANTHROPIC endpoint silently DROPS input_audio
-  // (measured: the same real 8s clip came back with input_tokens=17, the text
-  // alone, and the model reported hearing nothing). Staying off this list makes
-  // the ears bridge engage, so the user gets a real transcript instead of a
-  // silent drop. Add V2.6 only when the adapter can actually carry audio.
+  // MiMo V2.6 — all three tiers, added 2026-11-10 when the adapter learned to
+  // carry audio natively (see the audio block in the Anthropic builder in
+  // route.ts for the measurements).
   //
-  // Do NOT read this as "V2.6 must not appear in the ears MODEL PICKER". Two
-  // different questions: this set asks whether the VESSEL hears natively (and
-  // V2.6 does not, through our adapter); the picker asks which model the
-  // BRIDGE calls, and the bridge posts straight to the OpenAI-compatible
-  // endpoint (earsBridge.ts:123), where V2.6 does hear. Measured 2026-10-21
+  // RETRACTED, and worth keeping visible because of its shape: this entry used
+  // to say "MiMo's ANTHROPIC endpoint silently DROPS input_audio (measured: the
+  // same real 8s clip came back with input_tokens=17, the text alone)". That
+  // measurement was real and is still true — of `input_audio`, which is the
+  // OPENAI part name. It was written down as a fact about the ENDPOINT, so the
+  // obvious next question (does this dialect have its own audio shape, the way
+  // it has its own video shape?) read as already answered, and went unasked for
+  // three weeks. It does: `{ type:'audio', source:{...} }`, the same envelope as
+  // video. One shape was measured; a whole surface was declared deaf.
+  'mimo-v2.6-pro',
+  'mimo-v2.6-flash',
+  'mimo-v2.6-pro-ultraspeed',
+  //
+  // The ears MODEL PICKER is a separate question from this set, and still is:
+  // this set asks whether the VESSEL hears natively; the picker asks which
+  // model the BRIDGE calls on behalf of a vessel that does not. The bridge
+  // posts straight to the OpenAI-compatible endpoint (earsBridge.ts:123), and
+  // V2.6 remains a good transcriber there for OTHER vessels. Measured 2026-10-21
   // with the exact production payload: mimo-v2.6-pro returned audio_tokens
   // 2433 and a faithful transcript of long Russian speech, with mimo-v2.5 as
   // the control arm (the control is what proved an earlier empty answer was a

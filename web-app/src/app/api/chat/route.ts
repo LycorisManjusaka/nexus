@@ -3476,6 +3476,47 @@ async function streamViaAnthropicCompat(args: {
         // passed through as-is rather than guessed at.
         if (media.name) contentArr.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
         contentArr.push({ type: 'video', source: { type: 'base64', media_type: media.mimeType, data: media.base64Data } });
+      } else if (
+        provider === 'mimo'
+        && media.mimeType?.startsWith('audio/')
+        && isAudioCapable(model)
+      ) {
+        // Audio is the same extension as video: the `image` envelope with the
+        // type renamed. Measured 2026-11-10 against all three V2.6 tiers.
+        //
+        // This block replaces a claim that was true about ONE SHAPE and got
+        // written down as a property of the ENDPOINT. The old note read "MiMo's
+        // Anthropic endpoint silently DROPS input_audio (input_tokens=17, the
+        // text alone)" — correct, and `input_audio` is the OPENAI part name, so
+        // of course this dialect ignores it. The `source` envelope was never
+        // tried. With it the bytes arrive:
+        //
+        //   text only 46 · 1 s 55 · 3 s 67 · 8 s 99 input_tokens  (~6.6 tok/s)
+        //
+        // A duration slope only proves the bytes were encoded, not heard — the
+        // Muse Spark trap, where a 200 + per-second billing sat on top of a
+        // model that answered "I cannot hear any attached audio" to both
+        // silence and a sine. So perception was checked separately, with three
+        // clips of IDENTICAL length (84 input_tokens each, so the token count
+        // cannot be the tell) and grossly different content:
+        //
+        //   flat 440 Hz          -> "a tone, the pitch stays the same"   3/3
+        //   440 Hz -> 1760 Hz    -> "a tone that jumps partway through"  3/3
+        //   white noise          -> "noise (hiss/static)"                2/3
+        //
+        // Telling flat from stepped is not guessable from "a clip is attached",
+        // which is the hole a presence/absence test leaves open. (pro called the
+        // noise a tone — weaker on timbre, right about pitch. Flash and
+        // UltraSpeed got all three.)
+        //
+        // Gated on isAudioCapable(model), in lockstep with wireCarriesMedia()
+        // in attachmentVisibility.ts and with AUDIO_CAPABLE_MODELS switching the
+        // ears bridge OFF: if those three disagree, the user is either promised
+        // delivery for dropped bytes, or transcribed over a vessel that can
+        // already hear. Only the three V2.6 tiers were measured; V2.5 keeps the
+        // bridge.
+        if (media.name) contentArr.push({ type: 'text', text: `<attached_file name="${media.name}" type="${media.mimeType}" />` });
+        contentArr.push({ type: 'audio', source: { type: 'base64', media_type: media.mimeType, data: media.base64Data } });
       }
     }
     if (m.content) contentArr.push({ type: 'text', text: m.content });
