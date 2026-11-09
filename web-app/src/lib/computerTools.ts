@@ -387,16 +387,37 @@ public class NxGdi {
   public static void Draw(int l,int t,int r,int b,bool circle,int width){
     IntPtr dc = GetDC(IntPtr.Zero);
     if (dc == IntPtr.Zero) return;
-    // GetDC(NULL)'s coordinate origin is the TOP-LEFT of the virtual-screen
-    // bounding box, NOT absolute (0,0). When a monitor sits left of or above the
-    // primary one, SM_X/YVIRTUALSCREEN are negative, so an absolute coordinate
-    // drawn here lands shifted by that origin — the whole border/circle slides
-    // toward the virtual-screen corner. MEASURED on a 4-monitor layout with a
-    // portrait screen at x=-1080: the primary's right edge (abs 1919) landed at
-    // 835, and mon1's at abs 4666 instead of 5759 — both exactly -1080 off, and
-    // y was perfect because SM_YVIRTUALSCREEN was 0. Subtracting the virtual
-    // origin makes the live mark match the monitor; it is a no-op (0,0) on the
-    // ordinary single-origin desktop, so this only changes the broken case.
+    // GetDC(NULL) draws in coordinates relative to the TOP-LEFT OF THE VIRTUAL
+    // SCREEN, not to the primary monitor's (0,0). With a monitor placed left of
+    // the primary, SM_XVIRTUALSCREEN is negative and every absolute coordinate
+    // handed to Rectangle() lands that much too far left.
+    //
+    // MEASURED 2026-11-10 on a 4-monitor desk (portrait at x=-1080, so
+    // SM_XVIRTUALSCREEN=-1080, SM_YVIRTUALSCREEN=0), by drawing rectangles that
+    // sit WELL INSIDE a monitor and capturing with the real screenshot tool:
+    //
+    //   drawn 2500..3499 on the 150% monitor -> right edge landed at abs 2419
+    //                                           (3499-1080, exact), y exact
+    //   drawn 300..1619 on the primary       -> right edge landed at abs ~540
+    //                                           (1619-1080), y exact
+    //   drawn -880..-201 inside the portrait -> landed off the desktop entirely
+    //                                           and nothing was visible at all
+    //
+    // DPI is NOT involved. The shift is the same -1080 on a 100% monitor and on
+    // a 150% one, and y never moves because SM_YVIRTUALSCREEN is 0 here.
+    //
+    // Why it was read for months as "the frame is the wrong SCALE": the shifted
+    // rectangle's LEFT edge falls off the monitor and is clipped away, so what
+    // survives looks like a smaller rectangle flush against the monitor's left
+    // border. The same constant shift then reads as a different "scale" per
+    // monitor — 1919-1080 is 44% of 1920, 5759-1080 is 72% of 3840 — which is
+    // exactly the pair of numbers measured earlier and misread as evidence of a
+    // per-monitor DPI factor. An inset rectangle, whose four edges cannot clip,
+    // is what separates a translation from a scale; a full-monitor rectangle
+    // cannot, and every earlier attempt used one.
+    //
+    // The subtraction is (0,0) on an ordinary single-origin desktop, so this
+    // changes only the layouts that were broken.
     int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77); // SM_X/YVIRTUALSCREEN
     l -= vx; t -= vy; r -= vx; b -= vy;
     int pad = width / 2 + 2;
