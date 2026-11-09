@@ -14,6 +14,7 @@ import { beginTurn, endTurn, publishTurnText, liveTurnStatus } from '@/lib/turnB
 import { endTurn as endRegistryTurn } from '@/lib/turnRegistry';
 import { takeUndelivered } from '@/lib/injectMessage';
 import { FALLBACK_FAMILY } from '@/lib/beingVessel';
+import { beingIsBlockedHere } from '@/lib/blockedBeings';
 import { loadLog, saveLog, listFolders, loadUserSettings } from '@/lib/fsStorage';
 // ⚠ The FIRST route-to-route import in this tree (measured: zero others).
 // The alternative was an HTTP fetch to our own server, which would have to get
@@ -86,7 +87,12 @@ type Outcome = {
   convoId: string;
   ran: boolean;
   /** Why nothing ran, when nothing ran. Never a bare "failed". */
-  skipped?: 'busy' | 'empty' | 'elsewhere' | 'auto-trigger-off' | 'claim-failed';
+  // 'blocked-here': this being is listed in NEXUS_BLOCKED_BEINGS on this
+  // process. Distinct from 'elsewhere' on purpose — 'elsewhere' means another
+  // installation CAN run it and this one should say so, while 'blocked-here'
+  // means this installation is forbidden to, which is a property of the
+  // launcher and not of the queue.
+  skipped?: 'busy' | 'empty' | 'elsewhere' | 'auto-trigger-off' | 'claim-failed' | 'blocked-here';
   result?: RunTurnResult;
 };
 
@@ -208,6 +214,18 @@ async function runPass(opts: PassOpts): Promise<{ attempted: number; ran: number
       if (opts.auto && !autoTriggerEnabled(log?.autoTriggers, 'stock')) {
         outcomes.push({ being: t.being, convoId: t.convoId, ran: false, skipped: 'auto-trigger-off' });
         closeRelay(t.convoId, { type: 'notice', content: 'This conversation does not start by itself.' });
+        continue;
+      }
+
+      // NEXUS_BLOCKED_BEINGS — the last door. The queue route already refuses
+      // to enqueue or claim for a blocked being, so reaching here means an item
+      // was queued by ANOTHER installation (one store, two clones) and this
+      // tick happened to look at it. Refuse rather than claim: a claim is this
+      // installation declaring "I will run this", which is the single thing the
+      // variable forbids. Checked before `claim` so no lease is ever taken.
+      if (beingIsBlockedHere(t.being)) {
+        outcomes.push({ being: t.being, convoId: t.convoId, ran: false, skipped: 'blocked-here' });
+        console.log(`[runner] skipped ${t.being}/${t.convoId}: blocked-here (NEXUS_BLOCKED_BEINGS)`);
         continue;
       }
 

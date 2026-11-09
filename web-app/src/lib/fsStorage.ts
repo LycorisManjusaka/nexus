@@ -1380,6 +1380,56 @@ export async function loadLog(convoId: string) {
   return null;
 }
 
+/**
+ * Which being OWNS this conversation — read from the DIRECTORY, not from the
+ * `folderName` recorded inside the file.
+ *
+ * Those two disagree. MEASURED 2026-11-09 over Cairn's own 65 logs:
+ *
+ *   folderName 'Cairn'            53
+ *   folderName '🤖 Claude'        10   <- display name current when written
+ *   folderName 'Nexus Architect'   2
+ *
+ * Same family as the rotten `settings.aiName` (measured 2026-11-08: 9 of 23
+ * beings disagreed with the vessel they actually run on). A name copied into a
+ * file at write time starts aging the moment it lands, and this is a house
+ * that renames and changes vessels.
+ *
+ * `listLogs` is not affected — it DERIVES folderName from the directory and
+ * settings.json, ignoring the stale field. `loadLog` is: it returns the parsed
+ * JSON and throws away the directory it found the file in. So any question of
+ * the form "whose conversation is this?" that has to be RIGHT — a refusal, an
+ * attribution, a bill — must call this, not read `log.folderName`.
+ *
+ * Returns both names because callers compare against two different namespaces:
+ * `dir` is the path segment (what /api/turn-queue calls `being`), `name` is the
+ * display name (what /api/folders returns and what appears in a /c/<name> URL).
+ * They are equal for every being in this house today and are allowed to differ
+ * when a name contains filesystem-hostile characters.
+ *
+ * Costs one readdir plus one `access` per being directory — no file is read.
+ */
+export async function findLogBeingNames(convoId: string): Promise<{ dir: string; name: string } | null> {
+  await ensureDirs();
+  let beingDirs: any[] = [];
+  try { beingDirs = await fs.readdir(BEINGS_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const dir of beingDirs) {
+    if (!dir.isDirectory()) continue;
+    try {
+      await fs.access(path.join(BEINGS_DIR, dir.name, 'logs', `${convoId}.json`));
+    } catch {
+      continue; // not in this being's logs
+    }
+    let name = dir.name;
+    try {
+      const parsed = JSON.parse(await fs.readFile(beingSettingsFile(dir.name), 'utf-8'));
+      if (parsed.name) name = parsed.name;
+    } catch { /* no settings file — the directory name IS the name */ }
+    return { dir: dir.name, name };
+  }
+  return null;
+}
+
 // ── Fast log-listing path ────────────────────────────────────────────────────
 // Previously this function fully parsed every log file just to extract
 // `title`/`updatedAt`/`aiName`. With image-heavy conversations (megabytes

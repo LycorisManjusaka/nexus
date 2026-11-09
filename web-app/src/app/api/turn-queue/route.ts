@@ -5,6 +5,7 @@ import {
 } from '@/lib/turnQueue';
 import { installationId, runnerHostStatus } from '@/lib/runnerHost';
 import { liveTurnStatus } from '@/lib/turnBus';
+import { beingIsBlockedHere, blockedResponseBody } from '@/lib/blockedBeings';
 
 // The stock a being's turns are fed from (phase 4a, 2026-10-27).
 //
@@ -135,6 +136,19 @@ export async function POST(req: Request) {
   const { being, convoId, ok } = keys(body);
   if (!ok) {
     return NextResponse.json({ error: 'being and convoId are required' }, { status: 400 });
+  }
+
+  // THE load-bearing refusal for NEXUS_BLOCKED_BEINGS. Every turn in this
+  // house goes through the queue (measured 2026-11-08: the only callers of
+  // buildSlimHistory / buildTurnRequestBody are the runner), so nothing can be
+  // enqueued and nothing can be claimed here means nothing can RUN here.
+  //
+  // Only those two actions. `release` / `abandon` / `break` stay open on
+  // purpose: if a lease is already held by this installation when the variable
+  // is added, refusing to release it would leave the queue wedged with no way
+  // out from the screen. A guard against a mistake must not create a worse one.
+  if ((action === 'enqueue' || action === 'claim') && beingIsBlockedHere(being)) {
+    return NextResponse.json(blockedResponseBody(being), { status: 403 });
   }
 
   try {

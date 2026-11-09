@@ -4,6 +4,7 @@ import pathModule from 'path';
 import { promises as fsp } from 'fs';
 import { loadKeys, readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, writeWorkspaceFile, ensureWorkspace, editWorkspaceFile, globWorkspaceFiles, grepWorkspaceFiles, deleteWorkspaceFile, readEntityFooter, getTrustedJunctionRoot, getSharedZoneRoot } from '@/lib/fsStorage';
 import { isVisionCapable, isAudioCapable, isVideoCapable, resolveGeminiMinThinkingLevel, reportsNormalizedCoords } from '@/lib/modelVision';
+import { beingIsBlockedHere, blockedResponseBody } from '@/lib/blockedBeings';
 import { type ThinkTagState, newThinkTagState, splitThinkTags, enterThinkFromPrefill } from '@/lib/thinkTagSplitter';
 import { resolveBridge, mediaKindOf, bridgedDescriptionText } from '@/lib/attachmentVisibility';
 import { describeImage } from '@/lib/eyesVision';
@@ -4497,6 +4498,24 @@ export async function POST(req: Request) {
       // heard of this setting must still be protected.
       betrayalDefense = true,
     } = await req.json();
+
+    // ── NEXUS_BLOCKED_BEINGS ────────────────────────────────────────────────
+    // The deepest door, and the only one that also catches a MODULE caller:
+    // runTurnForQueue reaches this handler by building a `new Request` and
+    // calling POST directly (no HTTP hop), so a guard placed only in the queue
+    // route would be bypassed by any future path that calls the runner some
+    // other way. Here it holds for every caller — browser fetch, runner, and
+    // the System Prompt Updater's agent runs (which pass this being's
+    // folderName with agentReadOnlyTools, i.e. a soul rewrite; that is a
+    // summons too, and arguably the one that matters most).
+    //
+    // Placed immediately after the body is parsed and before anything is
+    // spawned, charged, or written. tests/source/blockedBeingsWiring asserts
+    // that distance in lines, because the first version of that assertion
+    // looked for a side-effect NAME and matched the import on line 5.
+    if (beingIsBlockedHere(folderName)) {
+      return NextResponse.json(blockedResponseBody(String(folderName)), { status: 403 });
+    }
 
     // Human-facing notices only (billing after a stop, the LM Studio load
     // warning). Kept apart from `language` on purpose — see the destructured

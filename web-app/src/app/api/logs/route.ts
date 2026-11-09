@@ -1,13 +1,23 @@
 import { NextResponse } from 'next/server';
 import { listLogs, saveLog } from '@/lib/fsStorage';
 import { jsonMaybeGzip } from '@/lib/jsonGzip';
+import { blockedBeings, isBeingBlocked, blockedConversationOwner, blockedResponseBody } from '@/lib/blockedBeings';
 
 // `req` is taken only to read Accept-Encoding. Measured 2026-11-01: 305
 // conversations => 46,383 B, and this is on the critical path of every cold
 // start (the sidebar cannot render without it).
 export async function GET(req: Request) {
   const logs = await listLogs();
-  return jsonMaybeGzip(req, logs);
+  // A blocked being's conversations are dropped here as well as in
+  // /api/folders. Both are needed: the folder list drives the being picker,
+  // this one drives the conversation list AND the "latest conversation"
+  // ordering, so a conversation left in here would still surface a title, a
+  // timestamp, and a clickable link to something this process will not serve.
+  const blocked = blockedBeings();
+  const visible = blocked.length
+    ? logs.filter((l: any) => !isBeingBlocked(l?.folderName, blocked))
+    : logs;
+  return jsonMaybeGzip(req, visible);
 }
 
 export async function POST(req: Request) {
@@ -19,6 +29,18 @@ export async function POST(req: Request) {
   // handler as a bare 500 — a client-side mistake reported as a server fault.
   if (!logData || typeof logData !== 'object') {
     return NextResponse.json({ error: 'Missing or non-object logData' }, { status: 400 });
+  }
+  // Writes are refused too, not just reads. A stale tab that still has a
+  // blocked being's conversation in memory would otherwise keep saving over it
+  // from the wrong installation — which is the exact accident this guard
+  // exists for (an edit landing in the tree that is hosting someone's turn).
+  //
+  // Both the id (authoritative: the directory on disk) and the body's claimed
+  // folderName (the only signal a brand-new conversation has) — see
+  // blockedConversationOwner for why the field alone is not enough.
+  const blockedSave = await blockedConversationOwner(id, logData.folderName);
+  if (blockedSave) {
+    return NextResponse.json(blockedResponseBody(blockedSave), { status: 403 });
   }
 
   // ensure updatedAt is tracked
