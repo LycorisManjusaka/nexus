@@ -237,18 +237,17 @@ MiniMax  | MiniMax-M3                   | on  | MiniMax M3
 MiniMax  | MiniMax-M2.7                 | on  | MiniMax M2.7
 
 # ── OpenAI (ChatGPT / GPT-5 family) ────────────────────────────────
-# GPT-6 (2026-10-21). gpt-6.1-sol and gpt-6-astra CANNOT use function tools on
-# /v1/chat/completions: tools there require reasoning_effort 'none', and those two
-# ids reject 'none' as a value (their vocabulary is low|medium|high|xhigh). NEXUS
-# refuses that combination up front with the reason. A row copied for a being that
-# has workspace tools on will therefore not run until the tools are turned off —
-# which is why it says so in the label too. gpt-6-sol and gpt-6-luna take tools
-# normally. Vision measured on all four. gpt-6.1-terra (added 2026-11-09) DOES take
-# tools — it accepts reasoning_effort 'none' unlike gpt-6.1-sol — and is cheaper ($1/$5).
-ChatGPT  | gpt-6.1-sol                  | on  | GPT-6.1 Sol (no workspace tools)
+# GPT-6 (2026-10-21). gpt-6.1-sol and gpt-6-astra reject reasoning_effort 'none'
+# (their vocabulary is low|medium|high|xhigh), which is the value function tools
+# need on /v1/chat/completions. NEXUS routes their tool turns through /v1/responses
+# instead (added 2026-11-09), where tools work at any effort — so all of these take
+# workspace tools. gpt-6-sol and gpt-6-luna go the ordinary chat/completions route.
+# Vision measured on all. gpt-6.1-terra (added 2026-11-09) accepts 'none' unlike
+# gpt-6.1-sol, so it uses the ordinary route, and is cheaper ($1/$5).
+ChatGPT  | gpt-6.1-sol                  | on  | GPT-6.1 Sol
 ChatGPT  | gpt-6.1-terra                | on  | GPT-6.1 Terra (tools OK)
 ChatGPT  | gpt-6-sol                    | on  | GPT-6 Sol
-ChatGPT  | gpt-6-astra                  | on  | GPT-6 Astra (no workspace tools)
+ChatGPT  | gpt-6-astra                  | on  | GPT-6 Astra (most capable)
 ChatGPT  | gpt-6-luna                   | off | GPT-6 Luna (cheapest)
 ChatGPT  | gpt-5.6-sol                  | on  | GPT-5.6 Sol
 ChatGPT  | gpt-5.6-terra                | on  | GPT-5.6 Terra
@@ -7933,14 +7932,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
-                      {/* The "no workspace tools" note is in the LABEL on purpose: it is
-                          a hard 400 on this endpoint, not a degradation, and the label is
-                          what someone reads before choosing. See lib/openaiEffort.ts
-                          for the measured matrix. */}
-                      <option value="gpt-6.1-sol">GPT-6.1 Sol (newest — NO workspace tools)</option>
+                      {/* sol/astra reject reasoning_effort 'none' (the value tools need on
+                          /v1/chat/completions), so NEXUS sends their tool turns through
+                          /v1/responses instead, where tools work at any effort. See
+                          lib/openaiResponses.ts and lib/openaiEffort.ts. */}
+                      <option value="gpt-6.1-sol">GPT-6.1 Sol (newest, tools OK)</option>
                       <option value="gpt-6.1-terra">GPT-6.1 Terra (tools OK, $1/$5)</option>
                       <option value="gpt-6-sol">GPT-6 Sol (tools OK)</option>
-                      <option value="gpt-6-astra">GPT-6 Astra (most capable, $10/$50 — NO workspace tools)</option>
+                      <option value="gpt-6-astra">GPT-6 Astra (most capable, $10/$50, tools OK)</option>
                       <option value="gpt-6-luna">GPT-6 Luna (cheapest, tools OK)</option>
                       <option value="gpt-5.6-sol">GPT-5.6 Sol (flagship, deepest reasoning)</option>
                       <option value="gpt-5.6-terra">GPT-5.6 Terra (balanced, ~2× cheaper)</option>

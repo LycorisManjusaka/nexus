@@ -160,13 +160,13 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // The GPT-6 generation, all four measured 2026-10-21 with the same 64x64
   // solid-red PNG as an `image_url` data URI on /v1/chat/completions: sol, 6.1
   // sol, astra and luna each answered "Red", and gpt-5.6-terra answered "Red"
-  // in the same run as a control. Vision is the ONLY modality that survives for
-  // gpt-6.1-sol and gpt-6-astra on this endpoint — see lib/openaiEffort.ts:
-  // those two cannot take function tools here at all.
+  // in the same run as a control. gpt-6.1-sol and gpt-6-astra cannot take function
+  // tools on /v1/chat/completions (see lib/openaiEffort.ts), but their tool turns
+  // are routed through /v1/responses (lib/openaiResponses.ts), so that limit does
+  // not touch vision either way — images go on whichever endpoint runs.
   // gpt-6.1-terra ADDED 2026-11-09: same probe (64x64 solid-red PNG data URI,
   // /v1/chat/completions) answered "Red." — vision confirmed. Unlike sol/astra,
-  // terra ALSO takes function tools (it accepts reasoning_effort:'none'), so it
-  // is not tool-restricted; it is listed here only for the image capability.
+  // terra accepts reasoning_effort:'none', so it stays on the ordinary route.
   'gpt-6.1-sol',
   'gpt-6.1-terra',
   'gpt-6-sol',

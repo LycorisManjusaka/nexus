@@ -20,6 +20,7 @@ import { compileSafeRegex, grepLines } from '@/lib/safeRegex';
 import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { openAiCannotUseTools, openAiOffEffort, openAiToolsNeedNoneEffort } from '@/lib/openaiEffort';
+import { chatMessagesToResponsesInput, chatToolsToResponsesTools, RESPONSES_EVENT } from '@/lib/openaiResponses';
 import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFailureInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
@@ -8238,15 +8239,16 @@ export async function POST(req: Request) {
       // so true always means localTools is non-empty.
       // Same shape as the `.bat` launch refusal in ttsEngines: a combination
       // that cannot work is named up front instead of failing opaquely later.
-      if (isOpenAI && toolUseEnabled && openAiCannotUseTools(specificModel || '')) {
-        return NextResponse.json({
-          error: `${specificModel} cannot use workspace tools: OpenAI's /v1/chat/completions `
-            + `requires reasoning_effort 'none' for function tools, and this model's only `
-            + `accepted values are low/medium/high/xhigh (measured 2026-10-21). `
-            + `Either turn the workspace tools off for this being, or pick gpt-6-sol / `
-            + `gpt-6-luna / gpt-5.6-* — those take tools on this endpoint.`,
-        }, { status: 400 });
-      }
+      // gpt-6.1-sol / gpt-6-astra reject reasoning_effort 'none' — the one value
+      // function tools require on /v1/chat/completions — so they cannot use
+      // workspace tools on that endpoint. Rather than refuse the combination,
+      // route it to /v1/responses, which DOES take function tools at any effort
+      // (measured 2026-11-09: gpt-6.1-sol + tools -> 200 function_call, and a
+      // stateless second round with the tool result -> 200 final answer).
+      // runOpenAiResponsesOnce translates the chat-format message/tool loop to
+      // the responses `input`/`tools` shape at the boundary, so the outer tool
+      // loop and the tool executor are unchanged. See lib/openaiResponses.ts.
+      const useOpenAiResponses = isOpenAI && toolUseEnabled && openAiCannotUseTools(specificModel || '');
       if (isMimo && !keys.mimo) {
         return NextResponse.json({
           error: `MiMo (Xiaomi) requires the MiMo API key in Preferences.`,
@@ -9651,6 +9653,127 @@ export async function POST(req: Request) {
         return { visibleText, reasoningText, finishReason, toolCalls, usage, webSources: [...webSourceMap.values()] };
       };
 
+      // ── OpenAI /v1/responses variant of runLocalOnce ─────────────────────────
+      // Same signature and return shape as runLocalOnce, so the outer tool loop
+      // and the tool executor call it interchangeably (see `useOpenAiResponses`).
+      // It converts the chat-format `msgs` to the responses `input` array every
+      // call (stateless — no previous_response_id; measured safe 2026-11-09), maps
+      // the responses SSE events back to {visibleText, toolCalls, usage}, and maps
+      // the responses usage block (input_tokens / output_tokens) onto the chat
+      // usage field names the loop's accumulator already reads. No <think>
+      // splitter: the responses API streams reasoning on its own event, not as
+      // tag-wrapped prose, so `state` is unused here.
+      //
+      // Reasoning text is NOT shown for these models: a `summary` would have to be
+      // requested (reasoning:{summary:'auto'}), which some orgs are gated from, so
+      // the safe measured shape (no summary) is sent and the thought channel stays
+      // empty — the model still reasons (reasoning_tokens are billed), it just is
+      // not streamed. This matches the 2026-11-09 probes, which returned no
+      // reasoning output item at either effort.
+      const runOpenAiResponsesOnce = async (
+        msgs: any[],
+        controller: ReadableStreamDefaultController,
+        _state: ThinkTagState,
+        opts?: { noTools?: boolean }
+      ): Promise<{
+        visibleText: string;
+        reasoningText: string;
+        finishReason: string | null;
+        toolCalls: { id: string; name: string; arguments: string }[];
+        usage: any;
+        webSources: { url: string; title?: string }[];
+      }> => {
+        let visibleText = '';
+        let reasoningText = '';
+        let finishReason: string | null = null;
+        const toolCalls: { id: string; name: string; arguments: string }[] = [];
+        let usage: any = null;
+        const emitText = (t: string) => { if (!t) return; visibleText += t; betrayalSend(controller, { type: 'text', content: t }); };
+        const emitThought = (t: string) => { if (!t) return; reasoningText += t; betrayalSend(controller, { type: 'thought', content: t }); };
+
+        // on -> 'high'; off -> openAiOffEffort (='low' for sol/astra, which reject 'none').
+        const effort = modelParams.qwenEnableThinking !== false ? 'high' : openAiOffEffort(localModel);
+        const body: any = {
+          model: localModel,
+          input: chatMessagesToResponsesInput(msgs),
+          reasoning: { effort },
+          // A ceiling is also a stop — same number the Anthropic-compat and
+          // DeepSeek-direct paths settled on. Shared reasoning+answer budget.
+          max_output_tokens: 131072,
+          stream: true,
+        };
+        if (localTools.length && !opts?.noTools) {
+          body.tools = chatToolsToResponsesTools(localTools);
+          body.tool_choice = 'auto';
+        }
+
+        let res: Response;
+        try {
+          res = await fetch('https://api.openai.com/v1/responses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${keys.openai}` },
+            body: JSON.stringify(body),
+            signal: turnAbort.signal,
+          });
+        } catch (e: any) {
+          if (turnAbort.signal.aborted) return { visibleText, reasoningText, finishReason, toolCalls, usage, webSources: [] };
+          emitText(`[OpenAI responses could not connect: ${e?.message || 'network error'}]`);
+          return { visibleText, reasoningText, finishReason, toolCalls, usage, webSources: [] };
+        }
+        if (!res.ok || !res.body) {
+          const errText = await res.text().catch(() => '');
+          emitText(`[OpenAI responses error ${res.status}: ${errText.slice(0, 300)}]`);
+          return { visibleText, reasoningText, finishReason, toolCalls, usage, webSources: [] };
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          if (turnAbort.signal.aborted) { try { await reader.cancel(); } catch {} break; }
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const events = buf.split('\n\n');
+          buf = events.pop() || '';
+          for (const ev of events) {
+            // Each SSE block has an `event:` line and a `data:` line; the JSON
+            // payload carries its own `type`, so only the data line is read.
+            const dl = ev.split('\n').find(l => l.startsWith('data:'));
+            if (!dl) continue;
+            const ds = dl.slice(dl.indexOf(':') + 1).trim();
+            if (ds === '[DONE]') continue;
+            let payload: any;
+            try { payload = JSON.parse(ds); } catch { continue; }
+            const t = payload?.type;
+            if (t === RESPONSES_EVENT.textDelta) {
+              if (typeof payload.delta === 'string') emitText(payload.delta);
+            } else if (t === RESPONSES_EVENT.reasoningDelta) {
+              if (typeof payload.delta === 'string') emitThought(payload.delta);
+            } else if (t === RESPONSES_EVENT.itemDone) {
+              // The completed item carries the full function_call (call_id, name,
+              // arguments). call_id is the join key for function_call_output.
+              const item = payload.item;
+              if (item?.type === 'function_call') {
+                toolCalls.push({ id: item.call_id || '', name: item.name || '', arguments: item.arguments || '{}' });
+                finishReason = 'tool_calls';
+              }
+            } else if (t === RESPONSES_EVENT.completed) {
+              const u = payload.response?.usage;
+              if (u) {
+                usage = {
+                  prompt_tokens: Number(u.input_tokens || 0),
+                  completion_tokens: Number(u.output_tokens || 0),
+                  prompt_tokens_details: { cached_tokens: Number(u.input_tokens_details?.cached_tokens || 0) },
+                };
+              }
+              if (!finishReason) finishReason = 'stop';
+            }
+          }
+        }
+        return { visibleText, reasoningText, finishReason, toolCalls, usage, webSources: [] };
+      };
+
       // Computed once so the cache-debug log (inside the loop) and the final
       // cache_usage emission (after the loop) read from the same source of
       // truth without duplicated ternary chains.
@@ -9789,7 +9912,7 @@ export async function POST(req: Request) {
                     .slice(0, 16)
                 : '';
 
-              const { visibleText, reasoningText, finishReason, toolCalls, usage, webSources } = await runLocalOnce(msgs, controller, tagState);
+              const { visibleText, reasoningText, finishReason, toolCalls, usage, webSources } = await (useOpenAiResponses ? runOpenAiResponsesOnce : runLocalOnce)(msgs, controller, tagState);
               for (const s of webSources) {
                 if (!cumWebSourceMap.has(s.url)) cumWebSourceMap.set(s.url, s);
               }
@@ -9829,7 +9952,7 @@ export async function POST(req: Request) {
                 // from what it has already gathered, instead of dying with no output.
                 try {
                   enqueue({ type: 'tool_activity', tool: 'write the final answer' });
-                  const wrap = await runLocalOnce(
+                  const wrap = await (useOpenAiResponses ? runOpenAiResponsesOnce : runLocalOnce)(
                     [...msgs, { role: 'user', content: toolWrapUpInstruction(language) }],
                     controller,
                     tagState,

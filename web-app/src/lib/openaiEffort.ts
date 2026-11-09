@@ -29,11 +29,13 @@
 //                        leaves those three alone instead of "unifying" them
 //                        into something unmeasured.
 //
-// The two facts compose into a dead end: gpt-6.1-sol and gpt-6-astra cannot
-// take function tools here AT ALL — the only value that enables tools is the one
-// value they refuse. /v1/responses is the documented route and NEXUS does not
-// implement it for OpenAI. So the chat route refuses that combination UP FRONT
-// with this reason instead of letting every turn 400.
+// The two facts compose: on /v1/chat/completions, gpt-6.1-sol and gpt-6-astra
+// cannot take function tools AT ALL — the only value that enables tools is the one
+// value they refuse. /v1/responses is the documented route, and as of 2026-11-09
+// NEXUS implements it (lib/openaiResponses.ts + runOpenAiResponsesOnce): when
+// openAiCannotUseTools is true AND the being has tools on, the turn is routed to
+// /v1/responses, where tools work at any effort. `openAiCannotUseTools` therefore
+// now means "needs the responses path for tools", not "is refused".
 //
 // This lives in its own module so the matrix above is testable: route.ts cannot
 // be imported outside Next, and a hand-copied predicate in a probe would only
