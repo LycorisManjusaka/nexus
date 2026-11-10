@@ -13,6 +13,10 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // All current Claude models support vision.
   'claude-fable-5',
   'claude-fable-5-1',
+  // fable-5-2 added 2026-11-10: existence measured (count_tokens 200); vision
+  // covered by the family-level "all current Claude models" statement, same
+  // basis as fable-5/5.1 (not individually paid-probed — Fable is $10/$50).
+  'claude-fable-5-2',
   'claude-opus-5-5',
   'claude-opus-5',
   'claude-opus-4-8',

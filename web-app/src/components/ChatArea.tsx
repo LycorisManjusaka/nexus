@@ -130,11 +130,12 @@ const CLOUD_MODELS_FILL =
 # Format: family | specificModel | on|off | optional display label
 
 # ── Claude (Anthropic) ─────────────────────────────────────────────
-# fable-5 / fable-5-1 / opus-5-5 CANNOT disable thinking (Anthropic 400s on
+# fable-5 / fable-5-1 / fable-5-2 / opus-5-5 CANNOT disable thinking (Anthropic 400s on
 # thinking:{type:'disabled'} — measured 2026-10-01 for opus-5-5; sonnet-5-5
 # added 2026-10-02 by analogy, UNMEASURED), so the on/off column is advisory for
 # those rows: off sends adaptive at effort 'low'. Plain claude-opus-5 and
 # claude-sonnet-5 DO accept disabled — the ".5" ids differ from their base here.
+Claude   | claude-fable-5-2             | on  | Claude Fable 5.2 Thinking
 Claude   | claude-fable-5-1             | on  | Claude Fable 5.1 Thinking
 Claude   | claude-fable-5               | on  | Claude Fable 5 Thinking
 Claude   | claude-opus-5-5              | on  | Claude Opus 5.5 Thinking
@@ -7769,6 +7770,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       onChange={(e) => setSpecificModel(e.target.value)}
                       className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
                     >
+                      <option value="claude-fable-5-2">Claude Fable 5.2 (adaptive thinking, newest flagship)</option>
                       <option value="claude-fable-5-1">Claude Fable 5.1 (adaptive thinking, flagship)</option>
                       <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, legacy)</option>
                       <option value="claude-opus-5-5">Claude Opus 5.5 (adaptive thinking, newest)</option>

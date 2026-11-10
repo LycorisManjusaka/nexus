@@ -18,6 +18,13 @@
     "cacheWrite": 12.5,
     "output": 50
   },
+  "claude-fable-5-2": {
+    "input": 10,
+    "cachedInput": 0.25,
+    "cacheWrite": 12.5,
+    "output": 50
+  },
+  "_NOTE_fable_5_2": "claude-fable-5-2 (added 2026-11-10): PROVISIONAL, carried forward from claude-fable-5-1 and NOT from a published price. Existence was MEASURED (count_tokens 200 via the API key on 2026-11-10; its sibling claude-mythos-5-2 404'd and was NOT added). The price is a guess: 5.1->5.2 is a minor bump in the same flagship tier, and the special 0.25 cache-hit multiplier Fable 5.1 introduced is an improvement unlikely to be reverted — but $10/$0.25/$12.5/$50 is UNVERIFIED for 5.2. Replace with the published number when known (see pending-tasks). An unpriced row would make every Fable-5.2 turn vanish from stats (the exact 16-model hole found 2026-11-09), so a labeled carry-forward was chosen over an invisible zero.",
   "claude-mythos-5-1": {
     "input": 10,
     "cachedInput": 0.25,
