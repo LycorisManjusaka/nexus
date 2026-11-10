@@ -777,7 +777,177 @@ export async function breakLease(
  * Kept as a note and not as code because the code was reachable, tested and
  * wrong-shaped — the kind of thing someone restores from history by accident
  * if the only record is a deletion.
+ *
+ * ── 2026-11-10: a DIFFERENT hand, for a different hole (つよ) ───────────────
+ * `removePendingItem` / `editPendingItem` below are not that button coming
+ * back, and the difference is the whole reason they are allowed to exist.
+ *
+ *   discard   was for a FAILED turn's leftovers. That case is gone at the
+ *             source: a failed turn now commits and consumes its batch, so
+ *             nothing reaches the panel to be discarded.
+ *   these     are for a HEALTHY waiting item — typed, queued, not yet run.
+ *             Withdrawing discard took the only hand off those too, and
+ *             nothing replaced it: a message with a typo in it, or one queued
+ *             at a being who is asleep, has no exit from any screen at all.
+ *
+ * つよ, asking for them: 「まだ送ってないメッセージさぁ、確認する権利は管理者に
+ * あると思わない？そもそも壊れたらどうすんのよ？」— the second sentence is the
+ * load-bearing one. This machinery is three weeks old; the hand that fixes it
+ * when it goes wrong cannot be the machinery itself.
  */
+
+/**
+ * Locate one item that is WAITING — not claimed, not in flight.
+ *
+ * ONE guard for both remove and edit. Written once because the two would
+ * otherwise carry the same four-case judgement in two places, and the day they
+ * drift is the day one of them edits a batch a turn is already holding in
+ * memory (the answer arrives, the file is gone, and nothing says why).
+ *
+ * The four answers, each load-bearing:
+ *
+ *   not-found       — no such id here. Already consumed, or another screen
+ *                     removed it a moment ago. NOT an error to shout about:
+ *                     the end state is what the caller asked for.
+ *   claimed         — a runner took this id. Refused: the turn already read
+ *                     the payload into memory, so deleting the file now would
+ *                     produce an answer to a message that no longer exists,
+ *                     and editing it would answer the OLD text while the
+ *                     screen shows the new one. Stopping a running turn is a
+ *                     different control and already exists (break / stop).
+ *   claimed-unknown — a lease is held but does not say WHICH ids it took (a
+ *                     lease written before `claimedIds`, or whose id write
+ *                     failed). Refused on purpose: `splitByLease` reports this
+ *                     case rather than guessing, and a guess here is not a
+ *                     display error — it is a deleted message.
+ *   ok              — plus the FILE NAME, so the caller never recomputes it.
+ *
+ * The name comes from a readdir scan keyed on the id, exactly as `release` and
+ * `markReturned` do, rather than from `itemFileName(item.at, item.id)`.
+ * Rebuilding it would be a second derivation of the on-disk name, and this
+ * module has already paid once for a filename parsed at a fixed offset.
+ */
+async function findWaitingItem(
+  being: string,
+  convoId: string,
+  id: string,
+  opts?: Opts
+): Promise<
+  | { ok: true; name: string; item: QueueItem }
+  | { ok: false; reason: 'not-found' | 'claimed' | 'claimed-unknown' }
+> {
+  const dir = queueDir(being, convoId, opts);
+  // `beingsDir` is forwarded and `accept` is deliberately NOT: an item
+  // addressed to the other installation is exactly the one a person most needs
+  // to be able to delete — nothing here will ever run it (see QueueItem.host),
+  // and hiding it from this hand would reproduce the symptom addressing was
+  // invented to fix.
+  //
+  // Spelled as one explicit field rather than `{ ...opts, accept: undefined }`.
+  // MEASURED: the first version of this line passed NO opts at all, which drops
+  // `beingsDir` as well and silently reads the real BEINGS_DIR — invisible in
+  // production (where opts is undefined anyway) and caught only because a test
+  // pointed the store at a temp directory.
+  const scan = await pendingWithErrors(being, convoId, { beingsDir: opts?.beingsDir });
+  const item = scan.items.find((i) => i.id === id);
+  if (!item) return { ok: false, reason: 'not-found' };
+
+  const lease = await readLease(being, convoId, opts);
+  const split = splitByLease(scan.items, lease);
+  if (split.claimedUnknown) return { ok: false, reason: 'claimed-unknown' };
+  if (split.claimed.some((i) => i.id === id)) return { ok: false, reason: 'claimed' };
+
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return { ok: false, reason: 'not-found' };
+  }
+  const name = names
+    .filter(isItemFile)
+    .find((n) => n.slice(AT_PAD + 1, -'.json'.length) === id);
+  if (!name) return { ok: false, reason: 'not-found' };
+  return { ok: true, name, item };
+}
+
+export type PendingEditResult =
+  | { ok: true }
+  | { ok: false; reason: 'not-found' | 'claimed' | 'claimed-unknown' | 'empty' | 'unsupported-kind' };
+
+/**
+ * Delete ONE waiting item.
+ *
+ * No token. `release` needs one because it deletes the batch a turn is
+ * holding; this refuses claimed items outright, so there is no running turn
+ * whose work it could erase — the witness `release`'s token provides has
+ * nothing left to witness.
+ */
+export async function removePendingItem(
+  being: string,
+  convoId: string,
+  id: string,
+  opts?: Opts
+): Promise<PendingEditResult> {
+  const found = await findWaitingItem(being, convoId, id, opts);
+  if (!found.ok) return found;
+  try {
+    await fs.unlink(path.join(queueDir(being, convoId, opts), found.name));
+  } catch {
+    // Gone between the scan and here — another screen, or the runner finishing.
+    // The end state is what was asked for.
+  }
+  return { ok: true };
+}
+
+/**
+ * Rewrite the TEXT of one waiting `user_message`.
+ *
+ * ── The filename does not move ──────────────────────────────────────────────
+ * Written back under its own name, same as `markReturned`: the name carries
+ * `at`, and the whole FIFO order is that name. A corrected message has not
+ * lost its place in the line, and must not jump to the back of it.
+ *
+ * ── Only `user_message` ─────────────────────────────────────────────────────
+ * A command (`rerun`/`continue`) carries a POINTER, not a body — there is no
+ * text to fix, and letting this write `payload.text` onto one would produce an
+ * item that is neither a command nor a message. Refused by kind rather than by
+ * inspecting the payload, so the refusal states the rule instead of a symptom.
+ *
+ * ── Attachments are preserved, never touched ────────────────────────────────
+ * Read back and written out unchanged. Dropping them silently would make
+ * "fix a typo" delete an image, and this hand exists to prevent loss.
+ *
+ * ── The `[name]` label is NOT re-derived here ───────────────────────────────
+ * Whatever the person types is stored verbatim. `composeBatch` owns the label
+ * rule (it prefixes `[from]` only when the text does not already start with
+ * it), so deleting the label by hand gets it back at send time and keeping it
+ * does not double it. One owner, unchanged.
+ */
+export async function editPendingItem(
+  being: string,
+  convoId: string,
+  id: string,
+  text: string,
+  opts?: Opts
+): Promise<PendingEditResult> {
+  const found = await findWaitingItem(being, convoId, id, opts);
+  if (!found.ok) return found;
+  if (isCommandKind(found.item.kind)) return { ok: false, reason: 'unsupported-kind' };
+
+  const prev = (found.item.payload || {}) as UserMessagePayload;
+  const attachments = Array.isArray(prev.attachments) ? prev.attachments : [];
+  // The same rule the enqueue route and the runner both apply, from the same
+  // function: an edit that empties a message is an enqueue of nothing, and
+  // the two ends must not disagree about what "nothing" means.
+  if (isEmptyTurnText(text, attachments)) return { ok: false, reason: 'empty' };
+
+  const next: QueueItem = { ...found.item, payload: { ...prev, text, attachments } };
+  // Replace semantics are RIGHT here for the reason stated at the import: the
+  // file exists, and a half-written item would be read as corrupt by
+  // `pendingWithErrors`.
+  await atomicWriteFile(path.join(queueDir(being, convoId, opts), found.name), JSON.stringify(next));
+  return { ok: true };
+}
 
 /**
  * Every conversation of this being that has anything queued or a live lease.

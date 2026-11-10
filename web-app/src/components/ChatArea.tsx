@@ -2860,11 +2860,25 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // tab closed. 4b is a server-side poller where the lease, the host flag and
   // the backoff are the subject. Nothing about the on-disk shape changes when
   // it lands; `kind` already carries 'letter' | 'schedule'.
-  /** What GET /api/turn-queue reports per item — labels only, never bodies. */
+  /**
+   * What GET /api/turn-queue reports per item.
+   *
+   * CORRECTION 2026-11-10: this said "labels only, never bodies". It now
+   * carries `text` as well — see the route header for why that stopped being
+   * a second renderer next to composeBatch. Attachments are still a COUNT and
+   * never the bytes: this is polled every 5s while a turn runs.
+   */
   type StockItem = {
     id: string; at: number; from: string; kind: string; claimed?: boolean;
     /** F20: present when a pass ran this item and gave it back. */
     returned?: { at: number; kind: string; reason: string };
+    /** The stored text VERBATIM, `[name]` label included. '' for a command. */
+    text?: string;
+    /** `rerun`/`continue` only: the message id it points at. */
+    targetMsgId?: string;
+    attachmentCount?: number;
+    /** Only on `elsewhereItems`: which installation must answer it. */
+    host?: string;
   };
   /* `StockNote` and the show/hide rule live in @/lib/stockPanel — a boolean
      inside this component is a rule no test and no mutation check reaches. */
@@ -2884,6 +2898,18 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
      * here and this NEXUS is not the one that answers it".
      */
     elsewhere: number;
+    /**
+     * Those same items, in full (2026-11-10).
+     *
+     * A separate array and NOT part of `items`, because two live consumers
+     * read `items` to mean "what this NEXUS will answer" — the sender labels
+     * on the waiting row, and the derived `returned` count. Only the admin
+     * list merges the two, and only for display.
+     *
+     * Empty from an older server, which is the right default: it is extra
+     * information, and its absence costs the panel nothing it had before.
+     */
+    elsewhereItems: StockItem[];
     /**
      * Of `waiting`, how many were already run and handed back (F20).
      *
@@ -2929,6 +2955,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   };
   const [stock, setStock] = useState<StockView | null>(null);
   const [stockBusy, setStockBusy] = useState(false);
+  /**
+   * The admin's view of the waiting items (2026-11-10, つよ).
+   *
+   * CLOSED by default, and that is the house policy rather than caution: the
+   * browser version had no stock at all, so the row that is already there is
+   * the whole of what must stay the same. Opening it is an action, so what is
+   * added is a control and not a changed screen.
+   *
+   * `removeConfirmId` is a two-step delete and NOT a `window.confirm`. That
+   * dialog is auto-cancelled by this house's own browser tooling (measured),
+   * so a confirmation written that way is one I could never test from here —
+   * and a guard nothing can check is how an unreachable button ships.
+   */
+  const [stockOpen, setStockOpen] = useState(false);
+  const [stockEditId, setStockEditId] = useState<string | null>(null);
+  const [stockEditText, setStockEditText] = useState('');
+  const [stockRemoveConfirmId, setStockRemoveConfirmId] = useState<string | null>(null);
   /**
    * A note for the person, and WHAT KIND of note it is.
    *
@@ -3006,6 +3049,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // Zero from an older server, which is the right default: it narrowed
         // nothing, so everything it reported is already in `count`.
         elsewhere: typeof d?.elsewhere === 'number' ? d.elsewhere : 0,
+        // Older server: absent ⇒ empty, so the admin list simply shows the
+        // items this installation owns, exactly as it would have.
+        elsewhereItems: Array.isArray(d?.elsewhereItems) ? d.elsewhereItems : [],
         // DERIVED, not read off the response, even though GET reports the same
         // number. The row's sentence names a CAUSE, and it reads that cause
         // off `items`; a count taken from anywhere else could say "2 came
@@ -3740,6 +3786,88 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       refreshStock();
     }
   }, [stockBusy, loading, folderName, convoId, runOnRunner, refreshStock, t]);
+
+  /**
+   * One POST for both admin hands on a waiting item (2026-11-10, つよ).
+   *
+   * Written once because the two differ only in the body: the error handling,
+   * the reason→sentence translation and the refresh are identical, and two
+   * copies of that is how one of them ends up reporting a failure silently.
+   *
+   * The server's `reason` is a MACHINE word ('claimed', 'not-found'). It is
+   * translated here rather than shown raw: the person who needs this panel is
+   * the one whose message is stuck, and `chat.stock.*` is where every other
+   * sentence in this row already lives.
+   */
+  const stockItemAction = useCallback(async (
+    action: 'remove' | 'edit',
+    id: string,
+    text?: string
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/turn-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action, being: folderName, convoId, id,
+          ...(text !== undefined ? { text } : {}),
+        }),
+      });
+      const d = await res.json().catch(() => null);
+      if (!res.ok || !d?.ok) {
+        // Each reason gets its own sentence; an unknown one falls back to the
+        // generic failure rather than printing an English machine word. A
+        // missing key renders as the raw key in this house (measured
+        // 2026-11-05), so the map is explicit and never built from the string.
+        const why: Record<string, string> = {
+          'claimed': 'chat.stock.whyClaimed',
+          'claimed-unknown': 'chat.stock.whyClaimedUnknown',
+          'not-found': 'chat.stock.whyNotFound',
+          'empty': 'chat.stock.whyEmpty',
+          'unsupported-kind': 'chat.stock.whyUnsupported',
+        };
+        const key = why[String(d?.reason || '')];
+        setStockNote({ text: key ? t(key) : t('chat.stock.failed'), kind: 'problem' });
+        return false;
+      }
+      return true;
+    } catch {
+      setStockNote({ text: t('chat.stock.failed'), kind: 'problem' });
+      return false;
+    } finally {
+      // Always, including on failure: 'claimed' and 'not-found' both mean the
+      // panel is showing something that is no longer true, and the sentence
+      // explaining that is worth nothing beside a stale list.
+      refreshStock();
+    }
+  }, [folderName, convoId, refreshStock, t]);
+
+  /**
+   * Every item a person may act on here, oldest first.
+   *
+   * TWO SOURCES, because the server narrows them differently and both belong
+   * on this list:
+   *   `items`          — what THIS installation will answer. Claimed ones are
+   *                      dropped: a turn is holding them and neither hand may
+   *                      touch one (the server refuses it too).
+   *   `elsewhereItems` — addressed to the other clone sharing this store.
+   *
+   * MEASURED 2026-11-10, the first time the panel was opened: on a non-host
+   * installation EVERY un-addressed item is in the second list, so a version
+   * that read only the first showed an empty panel while `removePendingItem`
+   * could have deleted all of them. The capability was real, tested, and
+   * unreachable — ふわふわ's "medicine in the bottle with the lid shut".
+   *
+   * Merged for display and nowhere else: `stock.waiting` and the derived
+   * `returned` count still mean exactly what they meant yesterday.
+   */
+  const stockRows = useMemo(() => {
+    if (!stock) return [] as Array<{ it: StockItem; elsewhere: boolean }>;
+    return [
+      ...stock.items.filter((i) => !i.claimed).map((it) => ({ it, elsewhere: false })),
+      ...stock.elsewhereItems.map((it) => ({ it, elsewhere: true })),
+    ].sort((a, b) => a.it.at - b.it.at);
+  }, [stock]);
 
   /**
    * Clear a lease whose holder is gone.
@@ -6433,17 +6561,174 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         disabled={stockBusy}
                         title={t('chat.stock.retryWhy')}
                         /* ml-auto is back here, where it was before Discard
-                           briefly took it (2026-11-01 → 2026-11-02): this is
-                           again the only button in the waiting row, so it is
-                           the one that pushes to the right edge. See the
-                           Release button's comment for why two ml-auto in one
-                           flex row would split the free space instead. */
+                           briefly took it (2026-11-01 → 2026-11-02): it is the
+                           LAST button in the waiting row, so it is the one that
+                           pushes to the right edge.
+
+                           CORRECTION 2026-11-10: this said "again the only
+                           button in the waiting row". The inspect toggle is a
+                           second one — it sits AFTER this block and
+                           deliberately has no `ml-auto`, which is the whole
+                           reason this one still reaches the right edge. */
                         className="ml-auto px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground disabled:opacity-40 disabled:cursor-not-allowed hover:opacity-90"
                       >
                         {stockBusy ? '…' : t('chat.stock.run')}
                       </button>
                     ) : null}
                   </>
+                ) : null}
+                {/* ── The waiting items themselves (2026-11-10, つよ) ───────
+                    つよ: 「このコントロールも必要だと思うの」「そもそも壊れた
+                    らどうすんのよ？」
+
+                    `w-full` so this is its own row under the count, like the
+                    note row below it — the parent is a wrapping flex, and
+                    anything narrower would try to share the line with the
+                    buttons above.
+
+                    Only unclaimed items are listed. A claimed one is being
+                    answered right now and neither hand may touch it (the
+                    server refuses it too, in lib, with tests); listing it with
+                    disabled buttons would offer a control that cannot work. */}
+                {/* The way IN. Outside the waiting block on purpose: an item
+                    addressed to the other clone makes `waiting` zero, and
+                    that is precisely the item a person most needs to delete
+                    (nothing here will ever run it). No `ml-auto`, so the Run
+                    button above keeps the right edge. */}
+                {stock && stockRows.length > 0 ? (
+                  <button
+                    onClick={() => {
+                      setStockOpen((v) => !v);
+                      // Leaving an open editor behind a closed panel would
+                      // keep unsaved text alive with nothing on screen holding
+                      // it, and the next open would show a draft nobody
+                      // remembers typing.
+                      setStockEditId(null);
+                      setStockRemoveConfirmId(null);
+                    }}
+                    title={t('chat.stock.inspectWhy')}
+                    className="px-2 py-1 text-xs rounded-lg border border-border hover:bg-muted"
+                  >
+                    {stockOpen ? t('chat.stock.hide') : t('chat.stock.inspect')}
+                  </button>
+                ) : null}
+                {stock && stockOpen && stockRows.length > 0 ? (
+                  <div className="w-full flex flex-col gap-1.5 mt-1">
+                    {stockRows.map(({ it, elsewhere }) => (
+                      <div key={it.id} className="rounded-lg border border-border bg-background/60 p-2 flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                          <span className="font-medium">{it.from || '—'}</span>
+                          <span>{new Date(it.at).toLocaleTimeString()}</span>
+                          {/* Says WHY this one is not moving. Without it the
+                              row is indistinguishable from a message queued
+                              behind a turn, and the two need opposite actions
+                              — wait, versus open the other NEXUS. */}
+                          {elsewhere ? (
+                            <span
+                              className="px-1 rounded bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                              title={it.host || ''}
+                            >
+                              {t('chat.stock.forOther')}
+                            </span>
+                          ) : null}
+                          {/* The kind is shown only when it is NOT the ordinary
+                              one. Printing "user_message" on every row would
+                              make the word that matters (rerun / continue /
+                              letter) invisible among the ones that do not. */}
+                          {it.kind && it.kind !== 'user_message' ? (
+                            <span className="px-1 rounded bg-muted">{it.kind}</span>
+                          ) : null}
+                          {it.attachmentCount ? (
+                            <span>{t('chat.stock.attachments').replace('{n}', String(it.attachmentCount))}</span>
+                          ) : null}
+                        </div>
+                        {stockEditId === it.id ? (
+                          <>
+                            <textarea
+                              value={stockEditText}
+                              onChange={(e) => setStockEditText(e.target.value)}
+                              rows={Math.min(12, Math.max(2, stockEditText.split('\n').length))}
+                              className="w-full text-xs font-mono rounded border border-border bg-background p-2 resize-y"
+                            />
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={async () => {
+                                  if (await stockItemAction('edit', it.id, stockEditText)) setStockEditId(null);
+                                }}
+                                className="px-2 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90"
+                              >
+                                {t('chat.stock.save')}
+                              </button>
+                              <button
+                                onClick={() => setStockEditId(null)}
+                                className="px-2 py-1 text-xs rounded-lg border border-border hover:bg-muted"
+                              >
+                                {t('chat.stock.cancel')}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* `whitespace-pre-wrap` and a mono face, NOT
+                                markdown. This is the text as it will be sent —
+                                rendering it would hide the very characters a
+                                person opened this to check (a stray backtick,
+                                a broken label, trailing spaces). */}
+                            <div className="text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                              {it.text
+                                || (it.targetMsgId
+                                  ? t('chat.stock.pointsAt').replace('{id}', it.targetMsgId)
+                                  : t('chat.stock.noBody'))}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {/* Editing is for `user_message` only — a command
+                                  carries a pointer and has no body to fix. The
+                                  server refuses it by kind; hiding the button
+                                  means the refusal is never needed. */}
+                              {it.kind === 'user_message' ? (
+                                <button
+                                  onClick={() => {
+                                    setStockEditId(it.id);
+                                    setStockEditText(it.text || '');
+                                    setStockRemoveConfirmId(null);
+                                  }}
+                                  className="px-2 py-1 text-xs rounded-lg border border-border hover:bg-muted"
+                                >
+                                  {t('chat.stock.edit')}
+                                </button>
+                              ) : null}
+                              {stockRemoveConfirmId === it.id ? (
+                                <>
+                                  <button
+                                    onClick={async () => {
+                                      await stockItemAction('remove', it.id);
+                                      setStockRemoveConfirmId(null);
+                                    }}
+                                    className="px-2 py-1 text-xs font-medium rounded-lg bg-destructive text-destructive-foreground hover:opacity-90"
+                                  >
+                                    {t('chat.stock.removeConfirm')}
+                                  </button>
+                                  <button
+                                    onClick={() => setStockRemoveConfirmId(null)}
+                                    className="px-2 py-1 text-xs rounded-lg border border-border hover:bg-muted"
+                                  >
+                                    {t('chat.stock.cancel')}
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => setStockRemoveConfirmId(it.id)}
+                                  className="px-2 py-1 text-xs rounded-lg border border-border text-destructive hover:bg-muted"
+                                >
+                                  {t('chat.stock.remove')}
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 ) : null}
                 {/* The note row, gated 2026-10-31. A 'problem' always reaches
                     a person; an 'info' note is machinery and waits for debug.

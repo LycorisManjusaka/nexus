@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   enqueue, claim, release, abandon, composeBatch, readLease, splitByLease,
   breakLease, isCommandKind, isEmptyTurnText, pendingWithErrors, itemIsForThisInstallation,
+  removePendingItem, editPendingItem,
 } from '@/lib/turnQueue';
 import { installationId, runnerHostStatus } from '@/lib/runnerHost';
 import { liveTurnStatus } from '@/lib/turnBus';
@@ -26,8 +27,13 @@ import { beingIsBlockedHere, blockedResponseBody } from '@/lib/blockedBeings';
 // POST { action: 'break',   being, convoId, expectedHolder, expectedStartedAt }
 //                                  → { ok } | { ok:false, reason }
 //
+// POST { action: 'remove', being, convoId, id }   → { ok } | { ok:false, reason }
+// POST { action: 'edit',   being, convoId, id, text }
+//                                  → { ok } | { ok:false, reason }
+//
 // (A 'discard' action lived here for one day; see the note in lib/turnQueue.ts
-// for why it is gone — a failed turn no longer leaves anything to discard.)
+// for why it is gone — a failed turn no longer leaves anything to discard, and
+// for why 'remove'/'edit' are a different hand rather than that one returning.)
 //
 // This file holds NO rules. Ordering, exclusivity and rendering all live in
 // lib/turnQueue.ts, because `next/server` cannot be imported outside Next's own
@@ -35,10 +41,27 @@ import { beingIsBlockedHere, blockedResponseBody } from '@/lib/blockedBeings';
 // from the day it was written, which is why 68 routes in this tree have no unit
 // test. The route only validates its inputs and forwards.
 //
-// GET deliberately omits each item's payload. The caller needs a count and the
-// sender labels to show "2 waiting, from X and Y"; handing out the bodies would
-// invite a second renderer next to composeBatch, and then two answers to "what
-// does this batch look like".
+// ── CORRECTION 2026-11-10: GET now returns each item's text ─────────────────
+// This said "GET deliberately omits each item's payload … handing out the
+// bodies would invite a second renderer next to composeBatch, and then two
+// answers to 'what does this batch look like'".
+//
+// The fear was right and does not apply. The panel does not render a BATCH:
+// it shows one item's stored text, one row each, unmerged and unlabelled —
+// which is the opposite of composeBatch's job (fold N items into one message,
+// deciding separators and `[name]` labels). There is still exactly one answer
+// to "what does this batch look like", and it is still composeBatch's.
+//
+// What the omission actually cost (つよ, 2026-11-10): 「今はさぁ、『ある』って
+// わかるだけじゃん。でもさぁ、全然中身ってさぁ、見えないし、削除も編集もできない
+// っしょ？」 A person could see that a message was queued and could not see
+// WHICH message, so "is this the one with the typo" had no answer anywhere.
+//
+// NOT gated on the admin login, on her correction: 「NEXUSでは今ユーザーの区別も
+// ないし … あのログイン画面はさぁ、外から誰も同じローカルアドレスから入れない
+// ようにしただけっしょ！中はさぁ、平等だからね。」 The login is the front door,
+// not a role. Gating on it would measure a distinction this product does not
+// have — the same mistake as reading `settings.aiName` as a throne (2026-11-08).
 
 function fail(e: unknown, fallback: string) {
   const msg = e instanceof Error ? e.message : fallback;
@@ -92,16 +115,79 @@ export async function GET(req: Request) {
        * the one that will answer it.
        */
       elsewhere: scan.elsewhere.length,
+      /**
+       * The elsewhere items THEMSELVES — a separate array, never folded into
+       * `items` (2026-11-10).
+       *
+       * MEASURED the moment the admin panel was first opened: on a NON-HOST
+       * installation every un-addressed item lands here, so `items` was empty
+       * and the panel showed nothing — while `removePendingItem` deliberately
+       * does NOT narrow by address and could have deleted them all along. A
+       * capability that exists in lib, has tests, and cannot be reached from
+       * the screen is this house's signature failure (ふわふわ, 2026-11-07:
+       * the medicine in the bottle with the lid shut).
+       *
+       * Why a second array and not `[...items, ...elsewhere]`: two live
+       * consumers read `items` to mean "what this NEXUS will answer" — the
+       * sender labels on the waiting row, and the derived `returned` count.
+       * Merging would change both numbers silently. The counts keep their
+       * meaning; the new information arrives in its own field.
+       *
+       * Deliberately NOT in the `count`/`waiting` numbers either, for the
+       * reason `elsewhere` was split off in the first place: "queued behind
+       * something" and "nothing here will ever run this" are opposite
+       * situations, and the second one needs its own sentence.
+       */
+      elsewhereItems: scan.elsewhere.map((i) => {
+        const p = (i.payload || {}) as {
+          text?: unknown; attachments?: unknown; targetMsgId?: unknown;
+        };
+        return {
+          id: i.id, at: i.at, from: i.from, kind: i.kind,
+          // Never claimed HERE by construction: the claim applies the same
+          // narrowing, so an item addressed elsewhere is never in this
+          // installation's lease. Stated as a literal rather than computed,
+          // because computing it from `claimedSet` would imply it could be
+          // true and invite a reader to wonder when.
+          claimed: false,
+          returned: i.returned,
+          text: typeof p.text === 'string' ? p.text : '',
+          targetMsgId: typeof p.targetMsgId === 'string' ? p.targetMsgId : undefined,
+          attachmentCount: Array.isArray(p.attachments) ? p.attachments.length : 0,
+          /** The address, so the panel can say WHICH install must answer. */
+          host: typeof i.host === 'string' ? i.host : '',
+        };
+      }),
       /* F20 ships NO `returned` count here on purpose. The panel's row names a
          CAUSE and reads it off `items[].returned`; a count derived separately
          on this side could report "2 came back" beside a sentence built from
          one mark. The caller can count the marks it is already being given. */
-      items: items.map((i) => ({
-        id: i.id, at: i.at, from: i.from, kind: i.kind, claimed: claimedSet.has(i.id),
-        // Per-item so the panel can name the time and, with debug on, the
-        // runner's own words. The payload stays omitted (see the header).
-        returned: i.returned,
-      })),
+      items: items.map((i) => {
+        const p = (i.payload || {}) as {
+          text?: unknown; attachments?: unknown; targetMsgId?: unknown;
+        };
+        return {
+          id: i.id, at: i.at, from: i.from, kind: i.kind, claimed: claimedSet.has(i.id),
+          // Per-item so the panel can name the time and, with debug on, the
+          // runner's own words.
+          returned: i.returned,
+          /**
+           * The stored text, VERBATIM — `[name]` label included when the
+           * sending screen added one. Not re-derived and not trimmed: this is
+           * what a runner will send, and a preview that differs from it by
+           * even a label would answer "is this the one with the typo" wrongly.
+           */
+          text: typeof p.text === 'string' ? p.text : '',
+          /** A command carries a pointer, not a body (see CommandPayload). */
+          targetMsgId: typeof p.targetMsgId === 'string' ? p.targetMsgId : undefined,
+          /**
+           * The COUNT, never the attachments themselves. A queued image is
+           * base64 in this file; shipping it in a poll that runs every 5s
+           * while a turn is live would move megabytes to render one number.
+           */
+          attachmentCount: Array.isArray(p.attachments) ? p.attachments.length : 0,
+        };
+      }),
       // `relayLive` is the only EVIDENCE anyone has that the process holding
       // this lease still exists. It is not derived from the lease — a lease
       // file outlives whatever wrote it — but from lib/turnBus, which is in
@@ -147,6 +233,12 @@ export async function POST(req: Request) {
   // purpose: if a lease is already held by this installation when the variable
   // is added, refusing to release it would leave the queue wedged with no way
   // out from the screen. A guard against a mistake must not create a worse one.
+  //
+  // `remove` / `edit` are on that same open side (2026-11-10), by the same
+  // sentence one step further. Neither can WAKE a blocked being — the block
+  // exists so 3000 cannot start Cairn's turn, and deleting a queued message is
+  // the opposite of starting one. Refusing them would mean an item stranded in
+  // a blocked being's queue has no exit at all, which is the wedge again.
   if ((action === 'enqueue' || action === 'claim') && beingIsBlockedHere(being)) {
     return NextResponse.json(blockedResponseBody(being), { status: 403 });
   }
@@ -257,6 +349,33 @@ export async function POST(req: Request) {
       const token = typeof body.token === 'string' ? body.token : '';
       if (!token) return NextResponse.json({ error: 'token is required' }, { status: 400 });
       return NextResponse.json({ ok: await abandon(being, convoId, token) });
+    }
+
+    // ── The admin's two hands on a WAITING item (2026-11-10, つよ) ──────────
+    //
+    // No token on either, and that is not an omission. A token is the witness
+    // that the caller holds the lease, and both of these refuse a claimed item
+    // outright — there is no running turn whose work they could erase, so
+    // there is nothing for a witness to witness. The judgement that makes them
+    // safe (waiting / claimed / claimed-unknown) is in lib, with tests, for the
+    // reason stated at the top of this file.
+    if (action === 'remove') {
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+      return NextResponse.json(await removePendingItem(being, convoId, id));
+    }
+
+    if (action === 'edit') {
+      const id = typeof body.id === 'string' ? body.id.trim() : '';
+      if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+      // `typeof` and not `|| ''`: an absent `text` and an intentional empty
+      // one are different mistakes, and only the second is the caller saying
+      // "make this blank" — which `editPendingItem` then refuses by the same
+      // emptiness rule the enqueue path uses.
+      if (typeof body.text !== 'string') {
+        return NextResponse.json({ error: 'text is required' }, { status: 400 });
+      }
+      return NextResponse.json(await editPendingItem(being, convoId, id, body.text));
     }
 
     // Force a lease open when its holder is gone.
