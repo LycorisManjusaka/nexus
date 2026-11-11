@@ -160,6 +160,11 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
   const [canUpdate, setCanUpdate] = React.useState(false);
   const [updating, setUpdating] = React.useState(false);
   const [updateResult, setUpdateResult] = React.useState<any>(null);
+  // The .bat override for the refusal/overload fallback target. The browser
+  // cannot read process.env, so the field above (which edits the per-being
+  // settings value) cannot know it is being overridden by the launcher. Ask the
+  // server; undefined = no override, field behaves normally.
+  const [envFallbackModel, setEnvFallbackModel] = React.useState<string | undefined>(undefined);
   React.useEffect(() => {
     fetch('/api/update')
       .then(r => r.json())
@@ -351,6 +356,13 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
       setKeys(data);
       setLoading(false);
     });
+
+    // Process-level .bat override for the refusal fallback target. Kept separate
+    // from /api/keys on purpose: the keys object round-trips through POST on
+    // Save, so an env value folded into it would get persisted to keys.json.
+    fetch('/api/runtime-flags').then(r => r.json())
+      .then(d => setEnvFallbackModel(typeof d?.refusalFallbackModel === 'string' ? d.refusalFallbackModel : undefined))
+      .catch(() => {});
 
     const getDevices = async () => {
       // Audio devices are a SECURE-CONTEXT feature, and on a plain-HTTP LAN
@@ -822,9 +834,15 @@ export default function SettingsModal({ onClose, globalSettings, setGlobalSettin
                     type="text"
                     value={keys.claudeRefusalFallbackModel || ''}
                     onChange={e => setKeys({ ...keys, claudeRefusalFallbackModel: e.target.value })}
-                    placeholder={t('settings.claudeRefusalFallbackModel.placeholder')}
+                    placeholder={envFallbackModel || t('settings.claudeRefusalFallbackModel.placeholder')}
                     className="w-full px-3 py-2 bg-input border border-border rounded text-sm text-foreground focus:outline-none focus:border-indigo-500"
                   />
+                  {envFallbackModel && (
+                    <p className="text-[10px] text-amber-500 mt-1 leading-relaxed">
+                      {t('settings.claudeRefusalFallbackModel.envOverride')}{' '}
+                      <code className="px-1 py-0.5 rounded bg-input text-foreground">{envFallbackModel}</code>
+                    </p>
+                  )}
                   <p className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
                     <Tx k="settings.claudeRefusalFallbackModel.help" />
                   </p>

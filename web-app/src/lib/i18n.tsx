@@ -376,6 +376,8 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'settings.claudeRefusalFallbackModel.placeholder': 'claude-opus-4-8',
   'settings.claudeRefusalFallbackModel.help':
     "This retry is a permanent part of NEXUS — always on, no toggle. When Anthropic's safety classifier ends a turn with stop_reason \"refusal\", it is retried once on another model automatically. Leave blank for claude-opus-4-8 — the fallback target confirmed working on 2026-10-06 (an opus-5 turn that kept refusing the same context went through once it swapped to opus-4-8; the old sonnet-5 default is the same 5-generation and can refuse the same category, which makes the swap useless). Inside the same subscription, so billing does not move. A comma-separated list is tried in order. An installation can set this in its launcher .bat as CLAUDE_CODE_REFUSAL_FALLBACK_MODEL, which overrides this field. Setting this to the model already in use disables the retry (a model that just refused cannot help). A swap is never silent: a notice names the original model, the replacement, the category and the scope every time. Note this target doubles as the SDK's overload/unavailability fallback, so an opus-5 turn can also land on opus-4-8 during an Anthropic capacity event — the same 4.8↔5 degradation this house already tolerates.",
+  'settings.claudeRefusalFallbackModel.envOverride':
+    'Overridden by the launcher (.bat). The value in this field is ignored; the actual retry target is:',
   'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
   'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
   'settings.obsWebSocketUrl.help':
@@ -2247,6 +2249,8 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'settings.claudeRefusalFallbackModel.placeholder': 'claude-opus-4-8',
   'settings.claudeRefusalFallbackModel.help':
     'この再実行は NEXUS の一部として常時オンです（オン/オフの切り替えはありません）。Anthropicの安全分類器が stop_reason "refusal" でターンを終わらせたとき、別のモデルで一度だけ自動で再実行します。空欄なら claude-opus-4-8 を使います — 2026-10-06に実機で確認した、効くフォールバック先です（opus-5 が同じ文脈で何度も拒否したターンが、opus-4-8 への自動差し替えで通りました。旧既定の sonnet-5 は同じ5世代で、同じカテゴリを拒否しうるため差し替えても無駄になりがちでした）。同じサブスクリプション内なので課金先は動きません。カンマ区切りで複数指定すると順に試します。インストールのランチャー .bat で CLAUDE_CODE_REFUSAL_FALLBACK_MODEL として指定することもでき、その場合はこの欄より優先されます。現在使っているモデルと同じものを指定すると再実行は行いません（たった今拒否したモデルでは解決しないため）。差し替えは黙って起きず、元のモデル・差し替え先・分類名・適用範囲を明記した通知が毎回出ます。なお、この再実行先は過負荷・利用不能時のフォールバック先も兼ねるため、Anthropic側の容量不足でも opus-4-8 に着地することがあります（この家が元々許容している 4.8↔5 の縮退と同じ）。',
+  'settings.claudeRefusalFallbackModel.envOverride':
+    '起動設定（.bat）が優先中です。この欄の値は無視され、実際の再実行先はこちら:',
   'settings.obsWebSocketUrl.label': 'OBS WebSocket URL',
   'settings.obsWebSocketUrl.placeholder': 'ws://127.0.0.1:4455',
   'settings.obsWebSocketUrl.help':

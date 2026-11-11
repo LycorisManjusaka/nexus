@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   REFUSAL_FALLBACK_MODEL_ENV,
   refusalFallbackTarget,
+  refusalFallbackModelEnvValue,
   resolveRefusalFallback,
   DEFAULT_REFUSAL_FALLBACK_MODEL,
 } from '@/lib/agentEnv';
@@ -71,5 +72,41 @@ describe('refusalFallbackTarget → resolveRefusalFallback (end to end)', () => 
     const r = resolveRefusalFallback(target, 'claude-fable-5-2');
     assert.equal(r.catchAll, true);
     assert.equal(r.fallbackModel, 'claude-opus-4-8');
+  });
+});
+
+describe('refusalFallbackModelEnvValue — env-only, for the Settings UI', () => {
+  // /api/runtime-flags uses this to let the field show the real effective
+  // target instead of the stale "claude-opus-4-8" placeholder while the .bat
+  // wins. The field edits the per-being settings value and the browser cannot
+  // read process.env, so without this it has no way to know it is overridden.
+  const restore = (v: string | undefined) => {
+    if (v === undefined) delete process.env[REFUSAL_FALLBACK_MODEL_ENV];
+    else process.env[REFUSAL_FALLBACK_MODEL_ENV] = v;
+  };
+
+  test('unset env = undefined (so runtime-flags omits the key — the absence discipline)', () => {
+    // THE load-bearing case: an ordinary install sets nothing, this returns
+    // undefined, runtime-flags leaves the key out, the UI shows no override note
+    // and the placeholder stays the honest default. If this returned '' the
+    // route would still omit it (falsy), but undefined is the contract.
+    const prev = process.env[REFUSAL_FALLBACK_MODEL_ENV];
+    delete process.env[REFUSAL_FALLBACK_MODEL_ENV];
+    assert.equal(refusalFallbackModelEnvValue(), undefined);
+    restore(prev);
+  });
+
+  test('blank / whitespace env = undefined (not shown as an override)', () => {
+    const prev = process.env[REFUSAL_FALLBACK_MODEL_ENV];
+    process.env[REFUSAL_FALLBACK_MODEL_ENV] = '   ';
+    assert.equal(refusalFallbackModelEnvValue(), undefined);
+    restore(prev);
+  });
+
+  test('set env returns the trimmed value (what the UI surfaces)', () => {
+    const prev = process.env[REFUSAL_FALLBACK_MODEL_ENV];
+    process.env[REFUSAL_FALLBACK_MODEL_ENV] = '  claude-opus-5  ';
+    assert.equal(refusalFallbackModelEnvValue(), 'claude-opus-5');
+    restore(prev);
   });
 });

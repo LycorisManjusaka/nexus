@@ -235,3 +235,21 @@ export function refusalFallbackTargetFromEnv(
     : undefined);
   return refusalFallbackTarget(envRaw, keysValue);
 }
+
+/**
+ * The launcher (.bat) override value ALONE — trimmed, or undefined if unset.
+ * No settings merge: this answers only "is the .bat overriding, and with what".
+ *
+ * The browser cannot read process.env, so the Settings field cannot tell on its
+ * own that the per-being value it edits is being overridden by the installation
+ * .bat. /api/runtime-flags calls this so the UI can surface the real effective
+ * target instead of showing the stale "claude-opus-4-8" placeholder while the
+ * .bat quietly wins (the hole shipped 2026-11-09: env added, never surfaced).
+ */
+export function refusalFallbackModelEnvValue(): string | undefined {
+  const raw = (typeof process !== 'undefined' && process.env
+    ? process.env[REFUSAL_FALLBACK_MODEL_ENV]
+    : undefined);
+  const trimmed = (typeof raw === 'string' ? raw.trim() : '');
+  return trimmed || undefined;
+}
