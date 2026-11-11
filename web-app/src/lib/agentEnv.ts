@@ -183,3 +183,55 @@ export function resolveRefusalFallback(
 
   return { catchAll: true, fallbackModel: wanted };
 }
+
+/**
+ * Name of the installation-level override for the refusal/overload fallback
+ * TARGET. Set in the launcher .bat (run-cairn.bat / run-optional.bat), right
+ * next to CLAUDE_CODE_REFUSAL_FALLBACK_CATCH_ALL — the same family of lever,
+ * chosen per-installation above the git repo so a pull never touches it. Blank
+ * or unset is byte-for-byte the behaviour every installation had before this
+ * variable existed.
+ */
+export const REFUSAL_FALLBACK_MODEL_ENV = 'CLAUDE_CODE_REFUSAL_FALLBACK_MODEL';
+
+/**
+ * Resolve the fallback target from the two operator surfaces, in precedence
+ * order. PURE — both inputs are arguments so it is testable without touching the
+ * real environment (same discipline as parseBlockedBeings / firstRunLanguage).
+ *
+ *   1. env var (the .bat)                — installation-level, survives git pull
+ *   2. settings field (keys.claude...)   — per-being, in settings.json
+ *   3. (downstream) opus-4-8 default     — applied by resolveRefusalFallback
+ *
+ * Blank env AND blank settings returns undefined, which resolveRefusalFallback
+ * reads as "お任せ": it falls to DEFAULT_REFUSAL_FALLBACK_MODEL, the measured
+ * cross-generation target. So an operator who sets nothing gets exactly today's
+ * behaviour; one who writes a model id in the .bat overrides every being in that
+ * installation (deliberately — the .bat is the operator's surface, the settings
+ * field is the per-being one, and the stronger, repo-external knob wins).
+ */
+export function refusalFallbackTarget(
+  envRaw: string | undefined | null,
+  keysValue: string | undefined | null,
+): string | undefined {
+  const env = (typeof envRaw === 'string' ? envRaw.trim() : '');
+  if (env) return env;
+  const k = (typeof keysValue === 'string' ? keysValue.trim() : '');
+  return k || undefined;
+}
+
+/**
+ * The target for the process running this server — reads the real env var, then
+ * delegates to the pure resolver above. Server-side only: in a browser bundle
+ * process.env carries no non-NEXT_PUBLIC_ var, so this returns the settings
+ * value alone, which is harmless because the fallback decision is made in the
+ * route handler (the server), never the client.
+ */
+export function refusalFallbackTargetFromEnv(
+  keysValue: string | undefined | null,
+): string | undefined {
+  const envRaw = (typeof process !== 'undefined' && process.env
+    ? process.env[REFUSAL_FALLBACK_MODEL_ENV]
+    : undefined);
+  return refusalFallbackTarget(envRaw, keysValue);
+}

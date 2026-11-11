@@ -21,7 +21,7 @@ import { parseRetryDelayMs } from '@/lib/providerErrors';
 import { deepseekWireModel, DEEPSEEK_FLASH } from '@/lib/deepseekModels';
 import { openAiCannotUseTools, openAiOffEffort, openAiToolsNeedNoneEffort } from '@/lib/openaiEffort';
 import { chatMessagesToResponsesInput, chatToolsToResponsesTools, RESPONSES_EVENT } from '@/lib/openaiResponses';
-import { claudeAgentEnv, resolveRefusalFallback } from '@/lib/agentEnv';
+import { claudeAgentEnv, resolveRefusalFallback, refusalFallbackTargetFromEnv } from '@/lib/agentEnv';
 import { createBetrayalGuard, makeGuardedSender, buildEchoText, type GuardedSender } from '@/lib/betrayalGuard';
 import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFailureInjection, parseHandoffModels, type HandoffModel } from '@/lib/modelHandoff';
 import { unfinishedBillingFrames, unfinishedBillingLog } from '@/lib/unfinishedBilling';
@@ -1073,7 +1073,7 @@ async function streamClaudeViaAgentSDK(args: {
   // Two same-named things in one function is how a measurement starts
   // describing itself — this one is the request, that one is the event.
   const refusalRetry = resolveRefusalFallback(
-    keys?.claudeRefusalFallbackModel,
+    refusalFallbackTargetFromEnv(keys?.claudeRefusalFallbackModel),
     model,
   );
 
@@ -1750,7 +1750,7 @@ async function streamClaudeViaAgentSDK(args: {
                   // scope:'local' per the SDK: only this side-question's answer
                   // came from elsewhere, the session model is untouched.
                   const childRefusalRetry = resolveRefusalFallback(
-                    keys?.claudeRefusalFallbackModel,
+                    refusalFallbackTargetFromEnv(keys?.claudeRefusalFallbackModel),
                     childModel,
                   );
                   const childSystem =
