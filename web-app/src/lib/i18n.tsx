@@ -904,7 +904,7 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'folder.css.placeholder':
     "Define this being's theme by overriding the dark base, e.g.:\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nSaved to local_data/beings/<name>/theme.css. Empty = plain Dark.",
   'folder.css.help':
-    "This being's theme is its `local_data/beings/<name>/theme.css` file. No file = Dark.",
+    "This being's theme is its `local_data/beings/<name>/theme.css` file. No file = Dark. To restyle message or code colours, set the CSS variables (--muted, --border, ...) rather than an !important rule -- a theme's !important cannot override the built-in colours (an @layer rule wins).",
   'folder.voice.heading': 'TTS Voice',
   'folder.voice.pitch': 'Voice Pitch',
   'folder.voice.lower': 'Lower',
@@ -2740,7 +2740,7 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'folder.css.placeholder':
     'ダークを土台に上書きして、このフォルダのテーマを定義します。例：\n\n:root {\n  --background: #0b0f1a;\n  --foreground: #e6edf3;\n  --primary: #00e5ff;\n}\n\nlocal_data/beings/<フォルダ名>/theme.css に保存されます。空欄ならそのままダークです。',
   'folder.css.help':
-    'このフォルダのテーマは `local_data/beings/<フォルダ名>/theme.css` です。ファイルが無ければダークになります。',
+    'このフォルダのテーマは `local_data/beings/<フォルダ名>/theme.css` です。ファイルが無ければダークになります。メッセージやコードの色は CSS 変数（--muted、--border など）で変えてください。テーマ内の !important ルールは組み込みの配色を上書きできません（@layer の方が強いため）。',
   'folder.voice.heading': 'TTS音声',
   'folder.voice.pitch': '声の高さ',
   'folder.voice.lower': '低い',

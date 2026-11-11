@@ -270,6 +270,39 @@ html[data-shell="app"] body {
   }
 }
 
+/* User bubble: code backgrounds compute from the bubble colour, not the page
+   palette. In a theme where --primary is bright and --primary-foreground is
+   dark, the page --muted is also dark, so code renders dark-on-dark (the text
+   is forced to --primary-foreground by [&_*]:text-inherit and the `color:
+   inherit !important` rule in @layer base above). Overriding these variables
+   inside the bubble keeps the plate a faint veil of the bubble colour at any
+   theme.
+
+   UNLAYERED on purpose (same reason as the font-scale block below). These are
+   custom-property VALUES, i.e. normal declarations, and for normal declarations
+   an unlayered rule beats any @layer. Put inside @layer base, this override
+   LOSES to the theme's own `:root { --muted }` in the folder-custom-css <style>
+   (also unlayered, but lower specificity: 0,1,0 vs this rule's 0,2,0) -- the
+   layer comparison happens BEFORE specificity, so a layered rule never gets to
+   use its higher specificity against an unlayered one. Measured on screen
+   2026-11-11: inside @layer base the override was silently dropped and fenced
+   code in the user bubble stayed dark-on-dark. Reported by Navigator (Pilot
+   pasted a Word letter; its code plates were black-on-black in her bubble). */
+.bg-primary .prose {
+  --muted: rgba(0, 0, 0, 0.12);
+  --border: rgba(0, 0, 0, 0.22);
+}
+
+/* Human fenced code can be long; the bubble is overflow-hidden, so an unwrapped
+   <pre> has its tail clipped at the right edge (same report). Wrap it, scoped to
+   the user bubble so a being's code answers keep their horizontal scroll and
+   structure. Indented code is removed upstream for human messages
+   (remarkNoIndentedCode); this governs fenced blocks. Unlayered, as above. */
+.bg-primary .prose pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ── UI font scale ──────────────────────────────────────────────────────────
    `--ui-font-scale` (1 = the sizes NEXUS has always used) is set on <html> by
    NexusApp from globalSettings.uiFontScale -- see src/lib/uiFontScale.ts for

@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import { remarkNoIndentedCode } from '@/lib/remarkNoIndentedCode';
 import { stripLeadingTimestamps, stripAllTimestamps, isOnlyTimestamps } from '@/lib/timestampStrip';
 import { messageCost, resolvePrice } from '@/lib/modelPricing';
 import { applyOutputFilter } from '@/lib/outputFilter';
@@ -30,7 +31,11 @@ import { MOBILE_ACTION_ICON, MOBILE_ACTION_PAD } from '@/lib/bubbleActionBar';
 // Module-level so the reference is stable across renders for free (see the
 // memoisation note on mdComponents — react-markdown re-parses every tick).
 const MD_URL_TRANSFORM = makeMarkdownUrlTransform(defaultUrlTransform);
+
 const MD_PLUGINS = [remarkGfm, remarkBreaks];
+// Human messages drop indented code (see above); being replies keep it, since a
+// being deliberately indenting four spaces usually does mean a code block.
+const MD_PLUGINS_USER = [remarkGfm, remarkBreaks, remarkNoIndentedCode];
 
 // Audio/TTS runtime conditions go to console.WARN, deliberately, and every
 // such site in this file goes through here so the reason lives in one place.
@@ -156,7 +161,7 @@ const MarkdownBody = React.memo(function MarkdownBody(
       // plugin's hard-coded greys/whites.
       ? 'prose prose-sm max-w-none prose-invert [&_*]:text-inherit'
       : 'prose prose-sm max-w-none dark:prose-invert'}>
-      <ReactMarkdown remarkPlugins={MD_PLUGINS} components={components} urlTransform={MD_URL_TRANSFORM}>
+      <ReactMarkdown remarkPlugins={isUser ? MD_PLUGINS_USER : MD_PLUGINS} components={components} urlTransform={MD_URL_TRANSFORM}>
         {content}
       </ReactMarkdown>
     </div>
