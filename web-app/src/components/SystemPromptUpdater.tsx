@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
+import { inheritUnchangedLayers } from '@/lib/unchangedLayers';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt, END_SENTINEL } from '@/lib/spuScaffold';
 import { isCollectableHere, isCollectableBy, decideRunRecord, type SpuRunRecord } from '@/lib/spuRun';
 import { withIdleBound, decideAfterWatch, IDLE, RELAY_IDLE_TIMEOUT_MS } from '@/lib/relayWatch';
@@ -2095,7 +2096,17 @@ export default function SystemPromptUpdater({
       // changelog | Layers 1-3 | Layer 4 | trailing logs
       const { changelog, core } = splitOffChangelog(cleaned);
       const { before: layers123Raw, layer4, after: pastLayer4 } = splitOffLayer4(core);
-      const { layers: layers123 } = splitOffLogs(layers123Raw);
+      const { layers: layers123AsEmitted } = splitOffLogs(layers123Raw);
+      // A layer δ did not change comes back as `[[UNCHANGED]]` (or, from a
+      // model that ignored the contract, as a free-form note). Either way the
+      // original layer is carried over here — see unchangedLayers.ts. Without
+      // this, the marker itself would become that layer of the soul.
+      const { text: layers123, inherited: inheritedLayers } =
+        inheritUnchangedLayers(effectiveLeftText, layers123AsEmitted);
+      const inheritedNote = inheritedLayers.length
+        ? t('spu.st.redistInherited').replace('{list}', inheritedLayers
+            .map((x) => `Layer ${x.layer} (${t('spu.st.redistInherit.' + x.reason)})`).join(', '))
+        : '';
       const { layers: layer4Body, logs: layer4Logs } = splitOffLogs(layer4);
       // Anything past Layer 4 is a layer the agent was told not to write (Layer
       // 5 is the entity's own). It is kept only in the read-only logs pane so
@@ -2119,12 +2130,12 @@ export default function SystemPromptUpdater({
 
       if (!layer4) {
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
-        setStatusMessage(t('spu.st.redistNoLayer4'));
+        setStatusMessage(t('spu.st.redistNoLayer4') + inheritedNote);
         return false;
       }
       if (entries.length === 0) {
         setUpdateStatus({ state: 'done', thinkingChars, outputChars });
-        setStatusMessage(t('spu.st.redistNoEntries'));
+        setStatusMessage(t('spu.st.redistNoEntries') + inheritedNote);
         return false;
       }
 
@@ -2154,7 +2165,7 @@ export default function SystemPromptUpdater({
         (report.created.length ? t('spu.st.redistCreated').replace('{n}', String(report.created.length)) : '') +
         (report.skipped.length ? t('spu.st.redistSkipped').replace('{n}', String(report.skipped.length)) : '') +
         (report.backedUp ? t('spu.st.redistBackedUp').replace('{n}', String(report.backedUp)) : t('spu.st.redistNoBackup')) +
-        (changelog ? t('spu.st.changelogSavedShort') : '') + t('spu.st.period')
+        (changelog ? t('spu.st.changelogSavedShort') : '') + t('spu.st.period') + inheritedNote
       );
       // The reference index is now stale — refresh it from disk.
       try {
