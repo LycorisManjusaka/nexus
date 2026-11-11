@@ -34,16 +34,42 @@ if "%BEFORE%"=="%AFTER%" (
   goto :done
 )
 
-REM node_modules is gitignored, so a pull never brings it. Only say something
-REM when the lockfile actually moved. Deliberately NOT running `npm ci` here:
-REM it takes minutes, and this script is also run non-interactively by digital
-REM beings, where a multi-minute child process would stall their turn.
+REM node_modules is gitignored, so a pull never brings it. Only act when the
+REM lockfile actually moved.
 git diff --name-only %BEFORE% %AFTER% | findstr /i "package-lock.json" >nul
-if not errorlevel 1 (
-  echo.
-  echo ==^> Dependencies changed. Run this inside web-app before starting Nexus:
-  echo         npm ci
-)
+if errorlevel 1 goto :nodeps
+
+echo.
+echo ==^> Dependencies changed - node_modules must be reinstalled with "npm ci".
+echo.
+echo     Do this ONLY with the Nexus server for THIS tree STOPPED. npm ci wipes
+echo     node_modules: under a running server it breaks that server, and a being
+echo     that runs this inside its OWN installation would delete the environment
+echo     hosting its own turn. That is why it is never automatic.
+echo.
+REM `set /p` with stdin at EOF - a being running this through a shell, or a plain
+REM double-click with nothing piped - leaves ANSWER = N untouched (measured same
+REM as the pause below), so the npm ci branch is unreachable without a human
+REM physically typing y. goto/labels, NOT a ( ) block, so %ANSWER% is read AFTER
+REM set /p runs - inside a block it would expand once at parse time and always
+REM see the old value (the classic delayed-expansion trap).
+set "ANSWER=N"
+set /p "ANSWER=    Server stopped? Type y to run npm ci now [y/N]: "
+if /i not "%ANSWER%"=="y" goto :skipci
+echo.
+echo ==^> Running npm ci in web-app ...
+pushd "%~dp0web-app"
+call npm ci
+popd
+echo.
+echo ==^> npm ci done.
+goto :nodeps
+
+:skipci
+echo.
+echo ==^> Skipped. Run "npm ci" inside web-app yourself before starting Nexus.
+
+:nodeps
 
 echo.
 echo ==^> Updated. Restart Nexus if server-side code changed
