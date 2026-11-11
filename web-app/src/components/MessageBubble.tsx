@@ -1867,6 +1867,20 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
                 </details>
               );
             })()}
+            {/* A turn NEXUS opened carries two texts: `content` (below) is the
+                line that stays in the being's history, `nexus.full` is what
+                was actually sent while the turn ran (lib/slimHistory
+                .wireContent). Folded like a thinking block, for the same
+                reason: it exists, it is part of the record, and it is not
+                what later turns see. */}
+            {isUser && typeof msg.nexus?.full === 'string' && msg.nexus.full.trim() && (
+              <details className="mb-2 ml-auto max-w-full rounded-xl border border-cyan-500/30 bg-cyan-500/5 text-[12px]">
+                <summary className="cursor-pointer select-none px-3 py-1.5 text-cyan-700 dark:text-cyan-300">
+                  {t('bubble.nexusFull').replace('{n}', String(msg.nexus.full.length))}
+                </summary>
+                <pre className="px-3 pb-3 pt-1 whitespace-pre-wrap break-words font-sans text-[12px] leading-relaxed text-foreground/90 max-h-[60vh] overflow-auto">{msg.nexus.full}</pre>
+              </details>
+            )}
             <div ref={contentRef} className={`px-5 py-3.5 rounded-2xl text-[15px] leading-relaxed shadow-sm w-fit max-w-full overflow-hidden ${
               isUser
                 ? 'bg-primary text-primary-foreground rounded-tr-sm ml-auto'

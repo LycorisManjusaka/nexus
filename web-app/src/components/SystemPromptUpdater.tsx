@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput } from 'lucide-react';
+import { X, Layers, Loader2, Wand2, ArrowRight, ChevronsRight, Brain, PenLine, Check, AlertTriangle, Phone, Square, FileX, Shuffle, Clock, Hourglass, Info, Wrench, Scissors, Copy, FolderOutput, Save } from 'lucide-react';
+import { validateEditedSoul, surgeryBlocked, joinWithTail } from '@/lib/soulSurgery';
 import { inheritUnchangedLayers } from '@/lib/unchangedLayers';
 import { buildUpdateUserMsg, buildRedistributeUserMsg, buildGenesisUserMsg, buildIndexUserMsg, buildSummaryUserMsg, defaultSummaryAgentPrompt, END_SENTINEL } from '@/lib/spuScaffold';
 import { isCollectableHere, isCollectableBy, decideRunRecord, type SpuRunRecord } from '@/lib/spuRun';
@@ -411,6 +412,20 @@ interface Props {
    * it was "turned on" would describe a switch the product no longer has.
    */
   bindingOptional?: boolean;
+  /**
+   * Soul self-surgery (ζ) needs the being's own file tools: it edits a file
+   * on its desk. Off ⇒ the ζ button is not offered at all.
+   */
+  fileToolsEnabled?: boolean;
+  /** ζ was queued for this conversation — the owner kicks the runner. */
+  onSurgeryStarted?: (startedAt: number) => void;
+  /**
+   * A confirmed ζ result: replace the soul THIS conversation is running on,
+   * without cloning. Separate from onFinalize because the two differ in the
+   * one thing that matters — that one starts a new generation, this one does
+   * not.
+   */
+  onApplySoul?: (args: { newSystemPrompt: string }) => Promise<void>;
 }
 
 /**
@@ -461,6 +476,7 @@ export default function SystemPromptUpdater({
   open, onClose, folderName, convoId, title, originalMessages,
   aiName, specificModel, modelParams,
   folders, saveFolderSettings, onFinalize, bindingOptional, soulGeneration,
+  fileToolsEnabled, onSurgeryStarted, onApplySoul,
 }: Props) {
   const t = useT();
   const { isMobile } = useDevice();
@@ -601,6 +617,21 @@ export default function SystemPromptUpdater({
   }, [open]);
 
   const [updateStatus, setUpdateStatus] = useState<RunStatus>({ state: 'idle' });
+
+  // ── Soul self-surgery (ζ) ────────────────────────────────────────────────
+  // `surgery` is what the server says about a surgery for this being (null =
+  // none). `surgeryReview` is set while the PANES are showing its before/after
+  // instead of their usual contents — and while it is set, neither pane
+  // auto-saves: the left pane's file is the working copy and the right pane's
+  // is the next generation's draft, and a ζ result is neither of those.
+  const [surgery, setSurgery] = useState<null | {
+    state: 'elsewhere' | 'waiting' | 'running' | 'no-marker' | 'complete';
+    base: string; tail: string; edited: string; editedExists: boolean;
+  }>(null);
+  const [surgeryReview, setSurgeryReview] = useState<null | { base: string; tail: string }>(null);
+  const surgeryReviewRef = useRef(false);
+  const [surgeryAsk, setSurgeryAsk] = useState<null | 'start' | 'apply' | 'discard'>(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
   // The EXACT right-pane text a run left behind after ending WITHOUT the
   // completion sentinel. "Go to Next Conversation" compares the pane against
@@ -984,6 +1015,37 @@ export default function SystemPromptUpdater({
           forceMimoForSummary: hydratedForceMimo,
         });
         setStatusMessage(nextRaw ? t('spu.st.loadedDraft') : '');
+        // A ζ surgery for this being, if any. A COMPLETE one opens straight
+        // into review — the being declared it done, and the reason this panel
+        // was opened is to look at it. Anything else is only reported.
+        surgeryReviewRef.current = false;
+        setSurgeryReview(null);
+        setSurgeryAsk(null);
+        try {
+          const sr = await fetch(
+            `/api/soul-surgery?folder=${encodeURIComponent(folderName)}&convoId=${encodeURIComponent(convoId)}`
+          ).then((r) => r.json());
+          if (cancelled) return;
+          if (!sr || sr.error || sr.state === 'none' || !sr.state) {
+            setSurgery(null);
+          } else {
+            const info = {
+              state: sr.state,
+              base: typeof sr.base === 'string' ? sr.base : '',
+              tail: typeof sr.tail === 'string' ? sr.tail : '',
+              edited: typeof sr.edited === 'string' ? sr.edited : '',
+              editedExists: sr.editedExists === true,
+            };
+            setSurgery(info);
+            if (info.state === 'complete' && info.editedExists) {
+              surgeryReviewRef.current = true;
+              setSurgeryReview({ base: info.base, tail: info.tail });
+              setLeftText(info.base);
+              setRightText(info.edited);
+              setStatusMessage(t('spu.surgery.reviewing'));
+            }
+          }
+        } catch { setSurgery(null); }
       } catch (e: any) {
         setStatusMessage(t('spu.st.loadFailed').replace('{e}', e.message));
       } finally {
@@ -992,7 +1054,7 @@ export default function SystemPromptUpdater({
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, soulKey, currentLabel, nextLabel, agentFolder]);
+  }, [open, soulKey, currentLabel, nextLabel, agentFolder, reloadTick]);
 
   // ── Load agents + deletion patterns for the current language folder ──────
   useEffect(() => {
@@ -1293,6 +1355,7 @@ export default function SystemPromptUpdater({
   // be allowed to touch it.
   useEffect(() => {
     if (!open) return;
+    if (surgeryReviewRef.current) return;   // the pane is showing ζ's "before"
     if (lastSavedLeftRef.current === null) return;
     if (leftText === lastSavedLeftRef.current) return;
     const h = setTimeout(async () => {
@@ -1316,6 +1379,7 @@ export default function SystemPromptUpdater({
     // Suppress auto-save during live streaming (don't persist the raw partial
     // with the sentinel). When streaming ends this re-runs and saves the final.
     if (!open || streamingUpdate) return;
+    if (surgeryReviewRef.current) return;   // the pane is showing ζ's "after"
     if (lastSavedRightRef.current === null) return;
     if (rightText === lastSavedRightRef.current) return;
     const h = setTimeout(async () => {
@@ -2749,11 +2813,167 @@ export default function SystemPromptUpdater({
   // "Externalize & Index" — runs indexer.md (式神ζ). The agent sees Layers
   // 1-3 and no conversation log, with read-only access to this being's own
   // workspace, and moves trigger-conditioned detail out to desk files.
+  //
+  // ⚠ CHANGED 2026-11-11 (謡_14 v2.2). The ζ BUTTON no longer runs that agent.
+  // It opens a turn in the being's own conversation, in which the being edits
+  // a copy of its own Layers 1-3 with its own file tools; this panel then
+  // shows the before/after and the partner confirms. `runIndex` stays for one
+  // caller only — the recovery sweep, which may still hold an old 'index' run
+  // record nobody collected — and is no longer reachable from any button.
   const handleIndex = useCallback(async () => {
     if (running !== null) return;
     setRunning('index');
     try { await runIndex(); } finally { setRunning(null); }
   }, [running, runIndex]);
+
+  /** Leave review mode and put the panes back to what is on disk. */
+  const leaveSurgeryReview = useCallback(() => {
+    // Null BEFORE the flag drops: the auto-save effects treat null as "nothing
+    // loaded yet" and stay quiet until the reload below re-seeds both refs.
+    // Without this the 800ms timers would write ζ's texts into the working
+    // copy and the next generation's draft in the gap.
+    lastSavedLeftRef.current = null;
+    lastSavedRightRef.current = null;
+    surgeryReviewRef.current = false;
+    setSurgeryReview(null);
+    setSurgeryAsk(null);
+    setReloadTick((n) => n + 1);
+  }, []);
+
+  const startSurgery = useCallback(async () => {
+    setSurgeryAsk(null);
+    try {
+      const r = await fetch('/api/soul-surgery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'start', folder: folderName, convoId, label: currentLabel,
+          lang: agentFolder, uiLang: agentFolder,
+        }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d?.ok) {
+        const code = String(d?.error || `HTTP ${r.status}`);
+        const known: Record<string, string> = {
+          'surgery-in-progress': t('spu.surgery.err.inProgress'),
+          'no-soul-file': t('spu.surgery.err.noSoul').split('{file}').join(`${soulKey}_${currentLabel}.md`),
+          'covenant-has-no-slot': t('spu.surgery.err.noSlot').split('{file}').join(AGENT_FILE_INDEX),
+        };
+        setStatusMessage(known[code] || t('spu.surgery.err.start').replace('{e}', code));
+        if (code === 'surgery-in-progress') setReloadTick((n) => n + 1);
+        return;
+      }
+      // The turn belongs to the conversation now. Close, and let the owner of
+      // the conversation kick the runner exactly as it does for a send.
+      onClose();
+      onSurgeryStarted?.(Number(d.startedAt) || Date.now());
+    } catch (e: any) {
+      setStatusMessage(t('spu.surgery.err.start').replace('{e}', e?.message || String(e)));
+    }
+  }, [folderName, convoId, currentLabel, agentFolder, soulKey, onClose, onSurgeryStarted, t]);
+
+  /** Show a surgery that ended WITHOUT the marker — the partner's own call. */
+  const reviewSurgeryAnyway = useCallback(() => {
+    if (!surgery || !surgery.editedExists) return;
+    surgeryReviewRef.current = true;
+    setSurgeryReview({ base: surgery.base, tail: surgery.tail });
+    setLeftText(surgery.base);
+    setRightText(surgery.edited);
+    setStatusMessage(t('spu.surgery.reviewing'));
+  }, [surgery, t]);
+
+  const discardSurgery = useCallback(async () => {
+    setSurgeryAsk(null);
+    try {
+      const r = await fetch('/api/soul-surgery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear', folder: folderName }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setSurgery(null);
+      leaveSurgeryReview();
+      setStatusMessage(t('spu.surgery.discarded'));
+    } catch (e: any) {
+      setStatusMessage(t('spu.surgery.err.clear').replace('{e}', e?.message || String(e)));
+    }
+  }, [folderName, leaveSurgeryReview, t]);
+
+  // What NEXUS itself can check about the text in the right pane — recomputed
+  // from the PANE, not taken from the server's reading of the file, because
+  // the partner may have repaired the text by hand before confirming.
+  const surgeryProblems = useMemo(
+    () => (surgeryReview ? validateEditedSoul(surgeryReview.base, rightText) : []),
+    [surgeryReview, rightText],
+  );
+
+  /**
+   * The partner's confirmation: write ζ's result as THIS generation's soul and
+   * keep the conversation going on it. No new generation, no clone.
+   *
+   * Four writes, in the order that fails safest: the snapshot of the file
+   * about to be replaced, the soul file, the left pane's working copy (so the
+   * next β is fed the slimmed soul and not the one from before the surgery),
+   * and last the conversation's live prompt.
+   */
+  const applySurgeryResult = useCallback(async () => {
+    if (!surgeryReview) return;
+    setSurgeryAsk(null);
+    if (surgeryBlocked(surgeryProblems)) {
+      setStatusMessage(t('spu.surgery.blocked'));
+      return;
+    }
+    const fileName = `${soulKey}_${currentLabel}.md`;
+    const newSoul = joinWithTail(rightText.replace(/\s+$/, ''), surgeryReview.tail);
+    setLoading(true);
+    try {
+      if (realSoulText.trim()) await writeSoulBackup('BEFORE', currentLabel, currentLabel, realSoulText);
+      await writeSoulBackup('AFTER', currentLabel, currentLabel, newSoul);
+      const post = async (url: string) => {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: soulKey, label: currentLabel, contents: newSoul }),
+        });
+        if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+      };
+      await post('/api/system-prompts');
+      await post('/api/system-prompts/work');
+
+      let processed = newSoul;
+      for (const raw of deletionPatterns) {
+        const m = raw.match(/^\/(.+)\/([a-z]*)$/);
+        if (m) {
+          try { processed = processed.replace(new RegExp(m[1], m[2]), ''); }
+          catch { processed = processed.split(raw).join(''); }
+        } else {
+          processed = processed.split(raw).join('');
+        }
+      }
+      processed = processed.replace(/\n{3,}/g, '\n\n');
+      const fullPrompt = [header, processed].filter((x) => x && x.trim()).join('\n\n');
+      if (onApplySoul) await onApplySoul({ newSystemPrompt: fullPrompt });
+
+      await fetch('/api/soul-surgery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear', folder: folderName }),
+      }).catch(() => {});
+      setSurgery(null);
+      leaveSurgeryReview();
+      setStatusMessage(
+        t('spu.surgery.applied')
+          .split('{file}').join(fileName)
+          .replace('{before}', String(surgeryReview.base.length))
+          .replace('{after}', String(rightText.trim().length))
+      );
+    } catch (e: any) {
+      setStatusMessage(t('spu.surgery.err.apply').replace('{e}', e?.message || String(e)));
+    } finally {
+      setLoading(false);
+    }
+  }, [surgeryReview, surgeryProblems, soulKey, currentLabel, rightText, realSoulText, writeSoulBackup,
+      deletionPatterns, header, onApplySoul, folderName, leaveSurgeryReview, t]);
 
   // "Genesis (Build From Scratch)" — runs genesis_extractor.md. Assumes no
   // prior Layers 1-3 exist; builds them from the conversation log (and left
@@ -3171,9 +3391,29 @@ export default function SystemPromptUpdater({
                 <Square size={14} /> {t('spu.stop')}
               </button>
             )}
+            {surgeryReview && (
+              surgeryAsk === 'apply' ? (
+                <button
+                  onClick={applySurgeryResult}
+                  disabled={busy}
+                  className="px-3 py-1.5 bg-cyan-600 text-white hover:bg-cyan-700 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40"
+                >
+                  <Save size={14} /> {t('spu.surgery.writeReally')}
+                </button>
+              ) : (
+                <button
+                  onClick={() => setSurgeryAsk('apply')}
+                  disabled={busy || surgeryBlocked(surgeryProblems)}
+                  className="px-3 py-1.5 bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-500/25 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={t('spu.surgery.writeTitle').split('{file}').join(`${soulKey}_${currentLabel}.md`)}
+                >
+                  <Save size={14} /> {t('spu.surgery.write')}
+                </button>
+              )
+            )}
             <button
               onClick={handleAuto}
-              disabled={busy || !updateAgent}
+              disabled={busy || !updateAgent || !!surgeryReview}
               className="px-3 py-1.5 bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/25 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
               title={t('spu.autoTitle')}
             >
@@ -3182,7 +3422,10 @@ export default function SystemPromptUpdater({
             </button>
             <button
               onClick={goToNextConversation}
-              disabled={busy}
+              // Not while a ζ result is in the panes: this button writes the
+              // RIGHT pane as the NEXT generation, and that text is an edit of
+              // THIS one.
+              disabled={busy || !!surgeryReview}
               className="px-3 py-1.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 rounded-md text-sm font-medium flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
               title={t('spu.nextTitle')}
             >
@@ -3210,6 +3453,55 @@ export default function SystemPromptUpdater({
               >
                 {t('spu.btn.discardRun')}
               </button>
+            )}
+          </div>
+        )}
+
+        {/* Soul self-surgery (ζ): what is going on, and the hands on it. */}
+        {(surgery || surgeryAsk === 'start') && !loading && (
+          <div className="px-6 py-2 text-[12px] bg-cyan-500/10 border-b border-cyan-500/30 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Sigil letter={SIGIL.index} tone="text-cyan-700 dark:text-cyan-200" />
+            {surgeryAsk === 'start' ? (
+              <>
+                <span className="text-foreground">
+                  {t('spu.surgery.startAsk').split('{file}').join(`${soulKey}_${currentLabel}.md`)}
+                </span>
+                <button onClick={startSurgery} className="px-2 py-0.5 rounded bg-cyan-600 text-white hover:bg-cyan-700">
+                  {t('spu.surgery.startYes')}
+                </button>
+                <button onClick={() => setSurgeryAsk(null)} className="px-2 py-0.5 rounded border border-border hover:bg-muted">
+                  {t('spu.surgery.cancel')}
+                </button>
+              </>
+            ) : surgery && (
+              <>
+                <span className="font-medium text-cyan-700 dark:text-cyan-300">
+                  {surgeryReview ? t('spu.surgery.banner.review') : t(`spu.surgery.banner.${surgery.state}`)}
+                </span>
+                {surgeryReview && surgeryProblems.map((p, i) => (
+                  <span key={i} className={p.kind === 'unchanged' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-400'}>
+                    {p.kind === 'empty' ? t('spu.surgery.problem.empty')
+                      : p.kind === 'unchanged' ? t('spu.surgery.problem.unchanged')
+                      : t('spu.surgery.problem.heading').replace('{h}', p.heading)}
+                  </span>
+                ))}
+                <span className="ml-auto flex items-center gap-2">
+                  {!surgeryReview && surgery.state === 'no-marker' && surgery.editedExists && (
+                    <button onClick={reviewSurgeryAnyway} className="px-2 py-0.5 rounded border border-cyan-500/40 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-500/10">
+                      {t('spu.surgery.reviewAnyway')}
+                    </button>
+                  )}
+                  {surgeryAsk === 'discard' ? (
+                    <button onClick={discardSurgery} className="px-2 py-0.5 rounded bg-red-600 text-white hover:bg-red-700">
+                      {t('spu.surgery.discardReally')}
+                    </button>
+                  ) : (
+                    <button onClick={() => setSurgeryAsk('discard')} className="px-2 py-0.5 rounded border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10">
+                      {t('spu.surgery.discard')}
+                    </button>
+                  )}
+                </span>
+              </>
             )}
           </div>
         )}
@@ -3444,9 +3736,12 @@ export default function SystemPromptUpdater({
                   <Sigil letter={SIGIL.redistribute} tone="text-purple-700 dark:text-purple-200" />
                   {t('spu.redistributeBtn')}
                 </button>
+                {/* ζ — offered only when the being has file tools: the whole
+                    surgery is the being editing a file on its own desk. */}
+                {fileToolsEnabled && (
                 <button
-                  onClick={handleIndex}
-                  disabled={busy || !indexAgent}
+                  onClick={() => setSurgeryAsk('start')}
+                  disabled={busy || !indexAgent || !realSoulExists || !!surgery}
                   className="px-2.5 py-1 text-xs font-medium bg-cyan-500/15 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-500/25 rounded flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
                   title={t('spu.indexTitle').replace('{file}', AGENT_FILE_INDEX)}
                 >
@@ -3454,6 +3749,7 @@ export default function SystemPromptUpdater({
                   <Sigil letter={SIGIL.index} tone="text-cyan-700 dark:text-cyan-200" />
                   {t('spu.indexBtn')}
                 </button>
+                )}
                 <button
                   onClick={handleUpdateNoConvo}
                   disabled={busy || !reorganizeAgent}

@@ -23,6 +23,7 @@ import {
 import { useDevice } from './DeviceProvider';
 import ClickTip from './ClickTip';
 import SystemPromptUpdater from './SystemPromptUpdater';
+import { findSurgeryOutcome } from '@/lib/soulSurgery';
 import SearchModal from './SearchModal';
 import TtsStatusBar, { createTtsStatusStore } from './TtsStatusBar';
 import AudioSessionModal from './AudioSessionModal';
@@ -5266,6 +5267,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [isConvertingPngs, setIsConvertingPngs] = useState(false);
   const [sysPromptUpdaterOpen, setSysPromptUpdaterOpen] = useState(false);
+  // ── Soul self-surgery (ζ): open the SPU when the being declares it done ──
+  // Holds the server's `startedAt` for a surgery THIS tab started, 0 otherwise.
+  // Only a tab that started one auto-opens the panel; any other tab (or a
+  // later visit) finds the result waiting when the SPU is opened by hand —
+  // a panel that pops open on a conversation someone merely looked at would
+  // be answering a question nobody asked.
+  const surgeryWatchRef = useRef(0);
+  useEffect(() => {
+    const startedAt = surgeryWatchRef.current;
+    if (!startedAt || loading) return;
+    const outcome = findSurgeryOutcome(messages, startedAt);
+    if (outcome === 'complete') {
+      surgeryWatchRef.current = 0;
+      setSysPromptUpdaterOpen(true);
+    } else if (outcome === 'no-marker') {
+      // The being stopped without the marker (a question, or "not today").
+      // The conversation simply continues; nothing opens.
+      surgeryWatchRef.current = 0;
+    }
+  }, [loading, messages]);
   const [searchOpen, setSearchOpen] = useState(false);
   // Mail and Statistics moved to the Sidebar (NexusApp owns their state and
   // modals now) — they are house-wide, not per-conversation, and belong where
@@ -8965,6 +8986,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // Only so the status line after a first summary says what actually
         // changed: burned in, the summaries key moves nothing.
         bindingOptional={bindingOptional}
+        // ζ is the being editing a file on its own desk, so it is offered
+        // only when the being has its file tools.
+        fileToolsEnabled={toolUseEnabled}
+        onSurgeryStarted={(startedAt: number) => {
+          surgeryWatchRef.current = startedAt;
+          // The item is in the queue; run it the way "run now" does.
+          void runOnRunner().finally(() => refreshStock());
+        }}
+        onApplySoul={async ({ newSystemPrompt }) => {
+          // The soul THIS conversation runs on. The ordinary save effect
+          // persists it with the rest of the log — no clone, no new
+          // generation.
+          setSystemPrompt(newSystemPrompt);
+        }}
         saveFolderSettings={async (fName: string, patch: any) => {
           const target = folders?.find((f: any) => f.name === fName);
           if (!target) return;

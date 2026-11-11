@@ -282,6 +282,22 @@ function runnerEventDeps(deps: RunTurnDeps): TurnEventDeps {
   };
 }
 
+/**
+ * The `nexus` field for the user message a 'system' item becomes, or null.
+ *
+ * Exported for the test: "the full text reaches the log" is the half of this
+ * feature nothing downstream can check — a turn that lost it still runs, on
+ * the one-line summary, and answers a covenant it never saw.
+ */
+export function nexusFieldFromItem(item: QueueItem | undefined): { full?: string; purpose?: string } | null {
+  if (!item || item.kind !== 'system') return null;
+  const p = (item.payload ?? {}) as { fullText?: unknown; purpose?: unknown };
+  const out: { full?: string; purpose?: string } = {};
+  if (typeof p.fullText === 'string' && p.fullText.trim()) out.full = p.fullText;
+  if (typeof p.purpose === 'string' && p.purpose) out.purpose = p.purpose;
+  return out.full || out.purpose ? out : null;
+}
+
 export async function runTurnForQueue(
   being: string,
   convoId: string,
@@ -481,12 +497,18 @@ export async function runTurnForQueue(
         reason: `nothing to send: ${take.length} queued item(s) [${kinds}] carried no text and no attachments`,
       };
     }
+    // A NEXUS-opened turn: `content` is the line that stays in the history,
+    // `nexus.full` is what is sent while this is the newest user turn
+    // (lib/slimHistory.wireContent). splitLeadingTurn guarantees a 'system'
+    // item is alone in `take`, so there is exactly one payload to read.
+    const nexusField = nexusFieldFromItem(take[0]);
     const userMessage = {
       id: deps.newId(),
       role: 'user',
       content: batch.text,
       attachments: batch.attachments,
       timestamp: nowStart,
+      ...(nexusField ? { nexus: nexusField } : {}),
     };
     history = [...stored, userMessage as SlimHistoryMessage];
     keep = history;

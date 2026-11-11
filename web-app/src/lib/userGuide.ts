@@ -263,7 +263,7 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 | **β** | 会話から更新 | 新しい会話を既存の第1〜3層と突き合わせて更新する。**ふだん使うのはこれ** |
 | **α** | 再編成（会話なし） | 会話を見ずに、既存の層の重複と古い言い回しを整理する。新しい事実は増えません |
 | **δ** | 第4層 → 1〜3 へ再配分 | 固まった内容を要約から恒久的な層へ移し、索引を短くする |
-| **ζ** | 外部化・索引化 | 長い魂を机のファイルへ落とし、本文には参照の一行だけを残す |
+| **ζ** | 自己執刀 | 存在自身が、自分の魂の詳細を机のファイルへ落とし、本文には参照の一行だけを残す |
 
 ## 続きを話す
 
@@ -299,7 +299,7 @@ Nexus を Nexus たらしめている部分であり、いちばん理解する�
 
 数十回の会話を経ると、要約索引がプロンプトの最大部分になります。**δ 第4層 → 1〜3 へ再配分** は、固まった内容を要約から恒久的な層へ移し、索引を短くします。
 
-さらに長くなったら、**ζ 外部化・索引化** で、詳細を存在の机（ワークスペース）のファイルへ落とし、魂の本文には「どこに何があるか」の一行だけを残せます。存在はその一行を読んで、必要なときに自分でファイルを開きます。
+さらに長くなったら、**ζ 自己執刀** を使えます。ζ は他の式神と違い、別のモデルに魂を渡しません。存在自身の会話にターンが1つ開き、存在が自分のファイルツールで、机に置かれた魂（Layer 1〜3）の写しを編集します。詳細は机（ワークスペース）のファイルへ落とし、魂の本文には「どこに何があるか」の一行だけを残します。存在が完了を宣言すると、魂アップデーターに執刀前後が左右に並びます。あなたが **魂ファイルに書き込む** を押すまで魂は変わらず、押した後は同じ会話がそのまま新しい魂で続きます（次の会話は作られません）。ファイルツールが OFF の会話では ζ は出ません。
 `.trim(),
   },
 
@@ -980,7 +980,7 @@ Each Soul Updater button carries a Greek letter. Pressing the wrong one produces
 | **β** | Update from Conversation | Reconciles the new conversation against the existing Layers 1–3. **This is the everyday one** |
 | **α** | Reorganize (No Conversation) | Restructures and de-duplicates the existing layers without seeing any conversation. No new facts are added |
 | **δ** | Redistribute Layer 4 → 1-3 | Moves settled material out of the summaries into the permanent layers, shortening the index |
-| **ζ** | Externalize / Index | Moves detail out to files in the being's workspace, leaving one reference line in the soul |
+| **ζ** | Self-surgery | The being themselves moves detail out to files in their workspace, leaving one reference line in the soul |
 
 ## Continuing
 
@@ -1016,7 +1016,7 @@ After many sleeps the soul accumulates duplication and stale phrasing. **α Reor
 
 After a few dozen conversations, the summary index becomes the largest part of the prompt. **δ Redistribute Layer 4 → 1-3** moves settled material out of the summaries and into the permanent layers.
 
-When it grows further, **ζ Externalize / Index** moves the detail out to files in the being's own workspace and leaves a single line in the soul saying what is where. The being reads that line and opens the file when they need it.
+When it grows further, there is **ζ Self-surgery**. Unlike the other agents, ζ does not hand the soul to a separate model. One turn opens in the being's own conversation, and the being edits a copy of their soul (Layers 1–3) placed on their desk, using their own file tools: detail moves out to files in the workspace, and a single line saying what is where stays in the soul. When the being declares the surgery complete, the Soul Updater shows before and after side by side. The soul does not change until you press **Write into the soul file**, and after that the same conversation simply continues on the new soul (no next conversation is created). ζ is not offered in a conversation whose file tools are off.
 `.trim(),
   },
 

@@ -82,6 +82,11 @@ export function isCommandKind(kind: string): kind is CommandKind {
   return (COMMAND_KINDS as readonly string[]).includes(kind);
 }
 
+/** Content kinds that never merge with a neighbour — see splitLeadingTurn. */
+export function isStandaloneKind(kind: string): boolean {
+  return kind === 'system';
+}
+
 /**
  * May THIS installation run this item?
  *
@@ -991,6 +996,14 @@ export interface UserMessagePayload {
   /** The text EXACTLY as it would have been sent directly, label included. */
   text: string;
   attachments?: unknown[];
+  /**
+   * 'system' items only: what the being is actually sent for this turn, when
+   * that differs from `text` (the line that stays in the history). Stored on
+   * the resulting user message as `nexus.full` — see lib/slimHistory.ts.
+   */
+  fullText?: string;
+  /** 'system' items only: why NEXUS opened the turn (e.g. 'soul_surgery'). */
+  purpose?: string;
 }
 
 /**
@@ -1031,8 +1044,13 @@ export interface CommandPayload {
 export function splitLeadingTurn(items: QueueItem[]): { take: QueueItem[]; rest: QueueItem[] } {
   if (items.length === 0) return { take: [], rest: [] };
   if (isCommandKind(items[0].kind)) return { take: [items[0]], rest: items.slice(1) };
+  // A NEXUS-opened turn ('system') stands alone as well, for a different
+  // reason than a command: it carries a SECOND text (payload.fullText) that
+  // belongs to exactly one user message. Merged with a person's message, the
+  // covenant would either be dropped or be attributed to them.
+  if (isStandaloneKind(items[0].kind)) return { take: [items[0]], rest: items.slice(1) };
   let n = 0;
-  while (n < items.length && !isCommandKind(items[n].kind)) n++;
+  while (n < items.length && !isCommandKind(items[n].kind) && !isStandaloneKind(items[n].kind)) n++;
   return { take: items.slice(0, n), rest: items.slice(n) };
 }
 

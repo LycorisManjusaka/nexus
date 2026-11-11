@@ -61,6 +61,33 @@ export interface SlimHistoryMessage {
   modelFamily?: string;
   claudeThinkingBlocks?: { thinking: string; signature: string }[];
   thoughtProcess?: string;
+  /**
+   * Set on a user turn that NEXUS opened (soul self-surgery, later the 24/7
+   * wake-ups). `content` is the one-line fact that stays in the history;
+   * `full` is what was actually sent — see `wireContent` below.
+   */
+  nexus?: { full?: string; purpose?: string } | null;
+}
+
+/**
+ * What a message's body is ON THE WIRE.
+ *
+ * A NEXUS-opened turn carries two texts (トカゲくん, 2026-11-11: "the same
+ * mechanism as a thinking block, on a USER turn — it exists, but the being
+ * does not see it; except that while the turn RUNS, the real one is seen").
+ * The rule that implements that sentence: the full text travels only while
+ * its message is the NEWEST user turn in the history being sent. That is true
+ * for the turn itself, for a rerun of its answer and for a continue of it —
+ * and false from the next user turn on, when the one-line `content` takes
+ * its place with no deletion step to forget.
+ *
+ * The full text is STORED, not re-derived from the covenant file: that file
+ * is rewritten over time, and a log has to say what was really sent.
+ */
+export function wireContent(m: SlimHistoryMessage, isNewestUserTurn: boolean): string {
+  const full = m.nexus?.full;
+  if (isNewestUserTurn && m.role === 'user' && typeof full === 'string' && full.trim()) return full;
+  return m.content || '';
 }
 
 /** Everything outside the message list that changes what travels. */
@@ -102,7 +129,11 @@ export function buildSlimHistory(
   // server receives exactly what it is allowed to replay. When the toggle is
   // off this is empty and the body is byte-for-byte the old one.
   const toolHistoryIds = opts.toolHistoryEnabled ? selectToolHistoryIds(history) : new Set<string>();
-  return history.map((m) => {
+  let newestUserIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]?.role === 'user') { newestUserIdx = i; break; }
+  }
+  return history.map((m, idx) => {
     const slim: Record<string, unknown> = {
       // id forwarded so the backend can match `attachment_described` SSE
       // events back to the originating message. Frontend updates the
@@ -115,7 +146,7 @@ export function buildSlimHistory(
       // way out so those old turns stop replaying a failure explanation to
       // the model every single turn. Non-destructive: only this outgoing
       // copy is cleaned, the stored log is untouched.
-      content: stripTurnNotices(m.content || ''),
+      content: stripTurnNotices(wireContent(m, idx === newestUserIdx)),
       role: m.role,
       timestamp: m.timestamp,
     };
