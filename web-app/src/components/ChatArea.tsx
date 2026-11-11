@@ -42,6 +42,7 @@ import { messageAnchorId, absoluteDeepLink } from '@/lib/deepLink';
 import { copyText } from '@/lib/clipboard';
 import { dedupeMessageIds } from '@/lib/messageIds';
 import { applyTurnSaved, type TurnSavedEvent } from '@/lib/turnSaved';
+import { placeAnnouncedUser } from '@/lib/announcedUser';
 import { retiredModelLabel } from '@/lib/retiredModels';
 import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
@@ -3554,8 +3555,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         attachmentDescribed: () => {},
         // ── WHERE to paint, for a tab that did not start this turn ──────────
         turnPlan: (plan) => {
-          // The kicking tab decided all of this before the stream opened.
-          if (!attach) return;
+          // The kicking tab decided all of this before the stream opened —
+          // except the user message of a turn it did not type (a stocked
+          // message, a NEXUS-opened turn): see lib/announcedUser.ts.
+          if (!attach) {
+            const hasOptimistic = optimisticIdsRef.current.length > 0;
+            setMessages(prev => placeAnnouncedUser(prev, plan.user, watchId, hasOptimistic));
+            return;
+          }
           // FIRST plan only. A handoff opens a second pass under a new id; a
           // watcher appends it to the first vessel's bubble, which is exactly
           // what the KICKING tab does today, and the reload at the end splits
