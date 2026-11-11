@@ -363,6 +363,8 @@ public class NxGdi {
   [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleBitmap(IntPtr dc,int w,int h);
   [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr d,int dx,int dy,int w,int h,IntPtr s,int sx,int sy,uint rop);
   [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr dc);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int l, t, r, b; }
+  [DllImport("gdi32.dll")] public static extern int GetClipBox(IntPtr dc, out RECT r);
 
   class Saved { public IntPtr dc; public IntPtr bmp; public IntPtr old; public int x,y,w,h; }
   static System.Collections.Generic.List<Saved> saved = new System.Collections.Generic.List<Saved>();
@@ -387,39 +389,36 @@ public class NxGdi {
   public static void Draw(int l,int t,int r,int b,bool circle,int width){
     IntPtr dc = GetDC(IntPtr.Zero);
     if (dc == IntPtr.Zero) return;
-    // GetDC(NULL) draws in coordinates relative to the TOP-LEFT OF THE VIRTUAL
-    // SCREEN, not to the primary monitor's (0,0). With a monitor placed left of
-    // the primary, SM_XVIRTUALSCREEN is negative and every absolute coordinate
-    // handed to Rectangle() lands that much too far left.
+    // WHERE IS THIS DC'S (0,0)? Ask the DC; do not assume.
     //
-    // MEASURED 2026-11-10 on a 4-monitor desk (portrait at x=-1080, so
-    // SM_XVIRTUALSCREEN=-1080, SM_YVIRTUALSCREEN=0), by drawing rectangles that
-    // sit WELL INSIDE a monitor and capturing with the real screenshot tool:
+    // RETRACTED 2026-11-11. From 11-10 to 11-11 this function subtracted
+    // SM_X/YVIRTUALSCREEN, on a comment that said "MEASURED: GetDC(NULL) is
+    // relative to the top-left of the virtual screen, so everything lands
+    // 1080 px too far left". That claim is FALSE on the machine it was written
+    // on. A frame-by-frame recording of the whole desktop (two independent
+    // grabbers: GDI for the full virtual screen, Desktop Duplication per
+    // monitor; they agree) showed, on the 4-monitor desk with a portrait
+    // monitor at x=-1080:
     //
-    //   drawn 2500..3499 on the 150% monitor -> right edge landed at abs 2419
-    //                                           (3499-1080, exact), y exact
-    //   drawn 300..1619 on the primary       -> right edge landed at abs ~540
-    //                                           (1619-1080), y exact
-    //   drawn -880..-201 inside the portrait -> landed off the desktop entirely
-    //                                           and nothing was visible at all
+    //   with the subtraction    -> every monitor's frame landed exactly 1080 px
+    //                              too far RIGHT (the "fix" was the bug)
+    //   without the subtraction -> all four frames sit on their monitor's edges
     //
-    // DPI is NOT involved. The shift is the same -1080 on a 100% monitor and on
-    // a 150% one, and y never moves because SM_YVIRTUALSCREEN is 0 here.
+    // and the DC says so itself: GetClipBox(GetDC(NULL)) returns
+    // (-1080,0,9600,2160), i.e. its coordinates ARE absolute virtual-desktop
+    // coordinates and negative x is simply valid. Why the 11-10 probes read the
+    // opposite sign is not known; they were single still captures, not a
+    // recording.
     //
-    // Why it was read for months as "the frame is the wrong SCALE": the shifted
-    // rectangle's LEFT edge falls off the monitor and is clipped away, so what
-    // survives looks like a smaller rectangle flush against the monitor's left
-    // border. The same constant shift then reads as a different "scale" per
-    // monitor — 1919-1080 is 44% of 1920, 5759-1080 is 72% of 3840 — which is
-    // exactly the pair of numbers measured earlier and misread as evidence of a
-    // per-monitor DPI factor. An inset rectangle, whose four edges cannot clip,
-    // is what separates a translation from a scale; a full-monitor rectangle
-    // cannot, and every earlier attempt used one.
-    //
-    // The subtraction is (0,0) on an ordinary single-origin desktop, so this
-    // changes only the layouts that were broken.
-    int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77); // SM_X/YVIRTUALSCREEN
-    l -= vx; t -= vy; r -= vx; b -= vy;
+    // So no constant is assumed here. The DC's own clip box is compared with the
+    // virtual-screen origin: when they match (the measured case) the offset is
+    // 0; if some configuration ever hands out a DC whose (0,0) is the virtual
+    // top-left, the same line produces the shift that case needs.
+    RECT cb;
+    if (GetClipBox(dc, out cb) != 0) {
+      int ox = cb.l - GetSystemMetrics(76), oy = cb.t - GetSystemMetrics(77); // SM_X/YVIRTUALSCREEN
+      l += ox; t += oy; r += ox; b += oy;
+    }
     int pad = width / 2 + 2;
     int thick = width + 4;
     if (circle) {
@@ -464,6 +463,96 @@ public class NxGdi {
 Add-Type -TypeDefinition $gdiSig -ErrorAction SilentlyContinue
 `;
 
+// ── the monitor frame: real windows, not paint on the screen DC ─────────────
+//
+// The screenshot frame used to go through NxGdi.Draw (paint on GetDC(NULL)).
+// A frame-by-frame recording of all four monitors (2026-11-11) showed why it
+// never looked right even once its position was: paint on the screen DC is
+// only visible over surfaces that are themselves GDI-drawn. Over a browser,
+// or over Paint's ribbon and title bar, it simply is not there — the right
+// edge of a monitor showing a browser existed only across the taskbar's 55 px,
+// and the left edge of a monitor showing Paint began below the ribbon. What
+// reached the eye was "a few red pieces in odd places", which reads as "wrong
+// position and wrong scale".
+//
+// So the frame is four thin top-most windows, one per edge. They are layered
+// (content pushed once with UpdateLayeredWindow, so no window procedure and no
+// message pump are needed for the 650 ms they live), click-through
+// (WS_EX_TRANSPARENT) and never activated (WS_EX_NOACTIVATE + SW_SHOWNOACTIVATE),
+// so they cannot take focus or swallow a click. Each strip lies wholly inside
+// its monitor: nothing spills onto the neighbour. Coordinates are absolute
+// virtual-desktop pixels; the process is per-monitor DPI aware (DPI_PREFIX).
+//
+// The click marker still uses NxGdi.Draw: it must appear between mouse_down
+// and mouse_up, and it has the same blind spot over GPU-composited surfaces.
+const FRAME_HELPER = `
+$frameSig = @'
+using System;
+using System.Runtime.InteropServices;
+public class NxFrame {
+  [StructLayout(LayoutKind.Sequential)] struct PT { public int x, y; }
+  [StructLayout(LayoutKind.Sequential)] struct SZ { public int w, h; }
+  [StructLayout(LayoutKind.Sequential)] struct BF { public byte op, flags, alpha, fmt; }
+  [StructLayout(LayoutKind.Sequential)] struct BIH {
+    public int size, width, height; public short planes, bits;
+    public int comp, sizeImage, xppm, yppm, used, important;
+  }
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr CreateWindowExW(int ex, string cls, string name, int style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+  [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] static extern bool UpdateLayeredWindow(IntPtr h, IntPtr dst, ref PT pdst, ref SZ size, IntPtr src, ref PT psrc, int key, ref BF bf, int flags);
+  [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+  [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr dc, ref BIH bi, int usage, out IntPtr bits, IntPtr sec, int off);
+  [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+  [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+  [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+
+  static System.Collections.Generic.List<IntPtr> wins = new System.Collections.Generic.List<IntPtr>();
+
+  static void Strip(int x, int y, int w, int h){
+    if (w <= 0 || h <= 0) return;
+    // WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+    int ex = 0x00080000 | 0x00000020 | 0x00000008 | 0x00000080 | 0x08000000;
+    IntPtr hwnd = CreateWindowExW(ex, "Static", "", unchecked((int)0x80000000), x, y, w, h, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+    if (hwnd == IntPtr.Zero) return;
+    IntPtr screen = GetDC(IntPtr.Zero);
+    IntPtr mem = CreateCompatibleDC(screen);
+    BIH bi = new BIH(); bi.size = 40; bi.width = w; bi.height = -h; bi.planes = 1; bi.bits = 32;
+    IntPtr bits; IntPtr bmp = CreateDIBSection(mem, ref bi, 0, out bits, IntPtr.Zero, 0);
+    if (bmp != IntPtr.Zero && bits != IntPtr.Zero) {
+      int n = w * h; int red = unchecked((int)0xFFFF0000); // opaque red, premultiplied BGRA
+      for (int i = 0; i < n; i++) Marshal.WriteInt32(bits, i * 4, red);
+      IntPtr old = SelectObject(mem, bmp);
+      PT dst = new PT(); dst.x = x; dst.y = y; PT src = new PT(); SZ sz = new SZ(); sz.w = w; sz.h = h;
+      BF bf = new BF(); bf.op = 0; bf.flags = 0; bf.alpha = 255; bf.fmt = 1; // AC_SRC_OVER, AC_SRC_ALPHA
+      UpdateLayeredWindow(hwnd, screen, ref dst, ref sz, mem, ref src, 0, ref bf, 2); // ULW_ALPHA
+      ShowWindow(hwnd, 4); // SW_SHOWNOACTIVATE
+      SelectObject(mem, old); DeleteObject(bmp);
+    }
+    DeleteDC(mem); ReleaseDC(IntPtr.Zero, screen);
+    wins.Add(hwnd);
+  }
+
+  // l,t,r,b: the monitor's outer bounds, inclusive, absolute virtual-desktop px.
+  public static void Show(int l, int t, int r, int b, int pen){
+    int w = r - l + 1, h = b - t + 1;
+    Strip(l, t, w, pen);
+    Strip(l, b - pen + 1, w, pen);
+    Strip(l, t, pen, h);
+    Strip(r - pen + 1, t, pen, h);
+  }
+
+  public static void Hide(){
+    foreach (IntPtr w in wins) DestroyWindow(w);
+    wins.Clear();
+  }
+}
+'@
+Add-Type -TypeDefinition $frameSig -ErrorAction SilentlyContinue
+`;
+
 /**
  * Fire-and-forget monitor border, drawn out-of-process so it adds no latency to
  * the being's own call.
@@ -479,10 +568,10 @@ export function fireFlash(x: number, y: number, w: number, h: number, ms: number
   try {
     const l = Math.trunc(x), t = Math.trunc(y);
     const r = Math.trunc(x + w) - 1, b = Math.trunc(y + h) - 1;
-    const script = DPI_PREFIX + GDI_HELPER +
-      `[NxGdi]::Draw(${l}, ${t}, ${r}, ${b}, $false, 8)\n` +
+    const script = DPI_PREFIX + FRAME_HELPER +
+      `[NxFrame]::Show(${l}, ${t}, ${r}, ${b}, 8)\n` +
       `Start-Sleep -Milliseconds ${Math.trunc(ms)}\n` +
-      `[NxGdi]::Clear()\n`;
+      `[NxFrame]::Hide()\n`;
     const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
       stdio: 'ignore', windowsHide: true,
     });
