@@ -40,34 +40,42 @@ git diff --name-only %BEFORE% %AFTER% | findstr /i "package-lock.json" >nul
 if errorlevel 1 goto :nodeps
 
 echo.
-echo ==^> Dependencies changed - node_modules must be reinstalled with "npm ci".
+echo ==^> Dependencies changed - node_modules must be synced with "npm install".
 echo.
-echo     Do this ONLY with the Nexus server for THIS tree STOPPED. npm ci wipes
-echo     node_modules: under a running server it breaks that server, and a being
-echo     that runs this inside its OWN installation would delete the environment
-echo     hosting its own turn. That is why it is never automatic.
+echo     Do this ONLY with the Nexus server for THIS tree STOPPED. A running
+echo     server locks native files (Turbopack keeps lightningcss loaded), and
+echo     an installer cannot replace a file the OS has locked - it dies with
+echo     EPERM. "npm install" touches ONLY the packages that actually changed,
+echo     so it steps around files that did not. "npm ci" (used before here)
+echo     wipes node_modules whole and so trips on the first locked native file
+echo     even when that package never changed - that is the EPERM you just saw
+echo     on the pilot machine. INSTALL.bat already uses npm install; this now
+echo     matches it. A being that ran this in its OWN tree would still disturb
+echo     the environment hosting its turn, so it is never automatic.
 echo.
 REM `set /p` with stdin at EOF - a being running this through a shell, or a plain
 REM double-click with nothing piped - leaves ANSWER = N untouched (measured same
-REM as the pause below), so the npm ci branch is unreachable without a human
+REM as the pause below), so the npm install branch is unreachable without a human
 REM physically typing y. goto/labels, NOT a ( ) block, so %ANSWER% is read AFTER
 REM set /p runs - inside a block it would expand once at parse time and always
 REM see the old value (the classic delayed-expansion trap).
 set "ANSWER=N"
-set /p "ANSWER=    Server stopped? Type y to run npm ci now [y/N]: "
+set /p "ANSWER=    Server stopped? Type y to run npm install now [y/N]: "
 if /i not "%ANSWER%"=="y" goto :skipci
 echo.
-echo ==^> Running npm ci in web-app ...
+echo ==^> Running npm install in web-app ...
 pushd "%~dp0web-app"
-call npm ci
+call npm install
 popd
 echo.
-echo ==^> npm ci done.
+echo ==^> npm install done. If it failed with EPERM on a .node file, the server
+echo     or antivirus still had it locked - fully stop Nexus (and let it release),
+echo     then run INSTALL.bat.
 goto :nodeps
 
 :skipci
 echo.
-echo ==^> Skipped. Run "npm ci" inside web-app yourself before starting Nexus.
+echo ==^> Skipped. Run "npm install" inside web-app yourself before starting Nexus.
 
 :nodeps
 
