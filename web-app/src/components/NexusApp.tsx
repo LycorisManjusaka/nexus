@@ -19,6 +19,8 @@ import { resolveUiFontScale } from '@/lib/uiFontScale';
 import { firstRunLanguage, hasStoredLanguage, browserLanguageCandidates } from '@/lib/firstRunLanguage';
 import { needsSidebarOpener } from '@/lib/paneChrome';
 import { beingVesselFamily } from '@/lib/beingVessel';
+import { pickMirroredGlobalSettings, mirrorChanged } from '@/lib/serverGlobalSettings';
+import type { MirroredGlobalSettings } from '@/lib/serverGlobalSettings';
 import { useDevice } from '@/components/DeviceProvider';
 import { Menu } from 'lucide-react';
 // NexusApp itself renders the provider, so it sits ABOVE the context and must
@@ -232,6 +234,37 @@ export default function NexusApp({ deepLink = null }: { deepLink?: DeepLink | nu
   useEffect(() => {
     if (!settingsLoadedRef.current) return;
     localStorage.setItem('nexus_globalSettings', JSON.stringify(globalSettings));
+  }, [globalSettings]);
+
+  // ── Mirror the two server-read keys into user_settings.json ───────────────
+  // localStorage is invisible to a server-side turn, and since the runner
+  // migration EVERY turn is built outside the browser. `betrayalDefense` and
+  // `maxToolIterations` were read off a file nobody wrote, so the defence was
+  // on no matter what the box said. See lib/serverGlobalSettings.ts for the
+  // measurement and for why `language` is deliberately NOT mirrored.
+  //
+  // Fires once after load (the ref starts null), which heals an install where
+  // the box was already unticked long ago, and then only when the mirrored
+  // subset actually changes — Preferences state moves on every keystroke in
+  // the text fields, and none of those belong on disk.
+  const mirrorRef = useRef<MirroredGlobalSettings | null>(null);
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    const next = pickMirroredGlobalSettings(globalSettings);
+    if (mirrorRef.current && !mirrorChanged(mirrorRef.current, next)) return;
+    mirrorRef.current = next;
+    // No opinion to send: an install that never opened Preferences must not
+    // overwrite a choice another device made.
+    if (Object.keys(next).length === 0) return;
+    fetch('/api/user', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch((e) => {
+      // Loud, because the consequence is silent: the screen would keep showing
+      // a choice the next turn does not honour.
+      console.warn('[settings] could not mirror Preferences to the server', e);
+    });
   }, [globalSettings]);
 
   const fetchFolders = async () => {
