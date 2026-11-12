@@ -1255,6 +1255,10 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'anchor.report.thought': 'What the anchor thought ({n} characters)',
   'anchor.report.error': 'The call failed:',
   'anchor.report.empty': 'The anchor produced no output.',
+  'anchor.save.button': 'Save to bench',
+  'anchor.save.saving': 'Saving…',
+  'anchor.save.saved': '✓ Saved:',
+  'anchor.save.error': 'Save failed:',
   'sysmodal.tab.model': 'Model',
   // This field holds Layers 1-3 only. Layer 4 (summaries index) and Layer 5
   // (the being's own FOOTER.md) are appended at send time and are never stored
@@ -3099,6 +3103,10 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'anchor.report.thought': '錨が考えたこと（{n} 文字）',
   'anchor.report.error': '呼び出しに失敗しました:',
   'anchor.report.empty': '錨は何も出力しませんでした。',
+  'anchor.save.button': '土台に保存',
+  'anchor.save.saving': '保存中…',
+  'anchor.save.saved': '✓ 保存しました:',
+  'anchor.save.error': '保存に失敗:',
   'sysmodal.tab.model': 'モデル',
   // 「第N層」表記。同じ画面の隣のラベルが「第1〜5層」「第4層」なので、
   // 説明文で多数派の「Layer 1〜3」を使うと1画面に2系統を並べることになる。

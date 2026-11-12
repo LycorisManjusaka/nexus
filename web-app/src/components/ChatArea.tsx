@@ -530,6 +530,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Which reply the anchor is reading right now ('' = none). One at a time:
   // the report lands on a message, and two in flight could land out of order.
   const [anchorBusyId, setAnchorBusyId] = useState<string>('');
+  // Per-message feedback for "save this run as a test-bench fixture" (謡's toy):
+  // '' | 'saving' | 'saved:<relative path>' | 'error:<message>'.
+  const [anchorSaveState, setAnchorSaveState] = useState<Record<string, string>>({});
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -5183,6 +5186,30 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Stable identity for the memo'd bubble; the id comes back as an argument.
   const onAnchorStable = React.useCallback((id: string) => liveHandlersRef.current.handleAnchor(id), []);
 
+  // Save one anchor run as a fixture for 謡's offline test bench. The context
+  // the anchor saw is rebuilt server-side from the log (not trusted from here);
+  // we send the stored report so no second model call is made.
+  const handleSaveAnchorFixture = async (msgId: string, report: AnchorReport) => {
+    setAnchorSaveState(prev => ({ ...prev, [msgId]: 'saving' }));
+    try {
+      const res = await fetch('/api/anchor/save-fixture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder: folderName, convoId, messageId: msgId,
+          lang: uiLanguage === 'ja' ? 'ja' : 'en', report,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setAnchorSaveState(prev => ({
+        ...prev,
+        [msgId]: data && data.saved ? `saved:${data.file}` : `error:${String(data?.error || `HTTP ${res.status}`)}`,
+      }));
+    } catch (e: any) {
+      setAnchorSaveState(prev => ({ ...prev, [msgId]: `error:${e?.message || String(e)}` }));
+    }
+  };
+
   const handleCopyLink = (id: string) => {
     const url = absoluteDeepLink(folderName, convoId, id);
     copyText(url).then((ok) => {
@@ -6337,6 +6364,27 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       {!msg.anchorReport.output && !msg.anchorReport.error ? (
                         <div className="mt-1 text-xs text-muted-foreground">{t('anchor.report.empty')}</div>
                       ) : null}
+                      {/* Save this run as a fixture for 謡's offline test bench. */}
+                      <div className="mt-2 flex items-center gap-2 border-t border-sky-500/20 pt-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAnchorFixture(msg.id, msg.anchorReport)}
+                          disabled={anchorSaveState[msg.id] === 'saving'}
+                          className="text-[11px] px-2 py-0.5 rounded border border-sky-500/40 text-sky-700 dark:text-sky-300 hover:bg-sky-500/10 disabled:opacity-50"
+                        >
+                          {anchorSaveState[msg.id] === 'saving' ? t('anchor.save.saving') : t('anchor.save.button')}
+                        </button>
+                        {(() => {
+                          const st = anchorSaveState[msg.id] || '';
+                          if (st.startsWith('saved:')) {
+                            return <span className="text-[11px] text-emerald-600 dark:text-emerald-400 truncate">{t('anchor.save.saved')} {st.slice(6)}</span>;
+                          }
+                          if (st.startsWith('error:')) {
+                            return <span className="text-[11px] text-red-500 truncate">{t('anchor.save.error')} {st.slice(6)}</span>;
+                          }
+                          return null;
+                        })()}
+                      </div>
                     </>
                   )}
                 </div>
