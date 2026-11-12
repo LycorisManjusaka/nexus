@@ -3999,10 +3999,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     void drainStock();
   }, [stockSig, loading, stockBusy, injectTurnId, drainStock, autoRunStock]);
 
+  const emptyLogWrittenRef = useRef<string | null>(null);
   const handleSend = async (
     text: string,
     attachments: any[],
-    opts?: { mode?: 'interject' | 'send'; from?: string }
+    opts?: { mode?: 'interject' | 'send' | 'stock'; from?: string }
   ) => {
     if (!text.trim() && attachments.length === 0) return;
 
@@ -4031,15 +4032,46 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // and never appended to the conversation log. (The old dedicated interject
     // input box is gone — sending normally while they work IS the interjection.)
     //
-    // Unless the sender explicitly picked 'send' in the mode menu, in which
+    // Unless the sender explicitly picked 'stock' in the mode menu, in which
     // case it goes to the stock to be run as the NEXT turn. The default stays
     // the interjection: it is the emergency brake (see InputArea).
     if (injectTurnId) {
-      if (opts?.mode === 'send') {
+      if (opts?.mode === 'stock') {
         await enqueueToStock(text, attachments, opts.from || '');
         return;
       }
       await sendInterjection(text, attachments);
+      return;
+    }
+
+    // ── Idle, and the sender picked the stock (つよ 2026-11-12) ─────────────
+    // The message is queued and NOTHING is started here: no runner kick, no
+    // optimistic bubble, no loading. It waits with whatever else is in the
+    // stock, and the next thing that starts a turn — the "run now" button
+    // today, a timer later — delivers the whole batch as one message
+    // (composeBatch, the same merge a normal send already gets).
+    //
+    // "Nothing is started HERE" is the exact claim. If this conversation has
+    // the stock auto-trigger switched on, that effect will see the new item
+    // and drain it, which is what the person who switched it on asked for.
+    //
+    // It sits above the cross-tab probe and the size pre-flight on purpose:
+    // both guard a turn that is about to run, and this path runs none. The
+    // queue is safe to add to while another tab works.
+    if (opts?.mode === 'stock') {
+      // The runner loads the conversation from disk ('no-log' otherwise), so a
+      // never-saved conversation gets its empty log written first — the same
+      // write the first normal send does below. Once only: a second unguarded
+      // write would bump the version under this tab for no reason.
+      if (messages.length === 0 && emptyLogWrittenRef.current !== convoId) {
+        emptyLogWrittenRef.current = convoId;
+        await fetch('/api/logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: convoId, clientId: TAB_CLIENT_ID, logData: buildLogData([]) }),
+        });
+      }
+      await enqueueToStock(text, attachments, opts.from || '');
       return;
     }
 

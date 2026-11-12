@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square, MessageSquare, ChevronDown } from 'lucide-react';
+import { Send, Paperclip, X, FileText, Image as ImageIcon, Music, Video, File, Square, MessageSquare, ChevronDown, ListPlus } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import { uploadAttachment, dataUrlToBlob } from '@/lib/attachmentUrl';
 import { SNIFF_BYTES, TEXT_MAX_BYTES, MEDIA_EXT, looksLikeText } from '@/lib/textSniff';
@@ -701,13 +701,36 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
    * direction out of the *next* turn, which is where a forgotten mode would
    * actually surprise someone.
    */
-  const [sendMode, setSendMode] = useState<'interject' | 'send'>('interject');
+  /*
+   * REWORKED 2026-11-12 (つよ): the paper plane now means ONE thing — "this
+   * message starts a turn now" — and putting a message in the stock got its
+   * own mark (ListPlus) and is offered in BOTH states:
+   *     idle     : plane = send now (default)     | ListPlus = stock
+   *     thinking : bubble = interject (default)   | ListPlus = stock
+   * Before this, the plane meant "send now" idle and "stock" mid-turn, and
+   * idle had no way to add to the stock at all. Her reason for the idle
+   * option: people can leave messages a few at a time without waking the
+   * being, and whatever starts the next turn (the "run now" button today, a
+   * timer later) delivers them together as one batch.
+   *
+   * So the state is no longer a mode but one bit: did the sender pick the
+   * stock. The default is derived from isGenerating and is never stored.
+   * Scope is unchanged: it resets whenever the generating state flips.
+   */
+  const [stockPicked, setStockPicked] = useState(false);
   const [modeMenuAt, setModeMenuAt] = useState<{ left: number; bottom: number } | null>(null);
   useEffect(() => {
-    setSendMode('interject');
+    setStockPicked(false);
     setModeMenuAt(null);
   }, [isGenerating]);
-  const effectiveMode: 'interject' | 'send' = isGenerating ? sendMode : 'send';
+  type SendMode = 'interject' | 'send' | 'stock';
+  const defaultMode: SendMode = isGenerating ? 'interject' : 'send';
+  const effectiveMode: SendMode = stockPicked ? 'stock' : defaultMode;
+  const modeLabelKey = (m: SendMode) => `input.mode.${m}`;
+  const modeIcon = (m: SendMode, size: number, tinted: boolean) =>
+    m === 'interject' ? <MessageSquare size={size} className={tinted ? 'text-amber-500' : undefined} />
+    : m === 'stock' ? <ListPlus size={size} className={tinted ? 'text-sky-500' : undefined} />
+    : <Send size={size} className={tinted ? 'text-indigo-500' : undefined} />;
 
   const handleSend = () => {
     if (!text.trim() && attachments.length === 0) return;
@@ -921,9 +944,9 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
           </button>
         )}
         <div className="flex flex-col items-center gap-1">
-          {/* The mode picker exists only while a turn runs — idle, the stock and
-              a direct send are the same thing and there is nothing to choose. */}
-          {isGenerating && (
+          {/* The picker is offered in both states since 2026-11-12: idle it
+              chooses between starting a turn and only stocking the message. */}
+          {!disabled && (
             <button
               onClick={(e) => {
                 if (modeMenuAt) { setModeMenuAt(null); return; }
@@ -947,19 +970,19 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             // title saying "send as a message" would imply there is one. (This
             // button had no title at all before 2026-10-27; the mode label got
             // applied to both states by the same edit that added it.)
-            title={isGenerating
-              ? (effectiveMode === 'interject' ? t('input.mode.interject') : t('input.mode.send'))
-              : t('input.send')}
+            title={t(modeLabelKey(effectiveMode))}
             className={`p-3 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 transition-opacity shadow-sm ${
               effectiveMode === 'interject'
                 ? 'bg-amber-500 text-white'
-                : 'bg-primary text-primary-foreground'
+                : effectiveMode === 'stock'
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-primary text-primary-foreground'
             }`}
           >
             {/* MessageSquare is already this house's mark for an interjection
                 (MessageBubble renders the mid-turn event with it, in amber), so
                 the button and the log entry it produces look like each other. */}
-            {effectiveMode === 'interject' ? <MessageSquare size={18} /> : <Send size={18} />}
+            {modeIcon(effectiveMode, 18, false)}
           </button>
         </div>
       </div>
@@ -974,25 +997,23 @@ const InputArea = React.forwardRef(function InputArea({ onSend, onStop, isGenera
             className="fixed z-[91] -translate-x-1/2 bg-card border border-border rounded-xl shadow-xl overflow-hidden text-sm"
             style={{ left: modeMenuAt.left, bottom: modeMenuAt.bottom }}
           >
-            {(['interject', 'send'] as const).map((m) => (
+            {([defaultMode, 'stock'] as SendMode[]).map((m) => (
               <button
                 key={m}
-                onClick={() => { setSendMode(m); setModeMenuAt(null); textareaRef.current?.focus(); }}
+                onClick={() => { setStockPicked(m === 'stock'); setModeMenuAt(null); textareaRef.current?.focus(); }}
                 className={`w-full text-left px-3 py-2 flex items-start gap-2 hover:bg-muted transition-colors ${
-                  sendMode === m ? 'bg-muted/60' : ''
+                  effectiveMode === m ? 'bg-muted/60' : ''
                 }`}
               >
                 <span className="mt-0.5 shrink-0">
-                  {m === 'interject'
-                    ? <MessageSquare size={14} className="text-amber-500" />
-                    : <Send size={14} className="text-indigo-500" />}
+                  {modeIcon(m, 14, true)}
                 </span>
                 <span className="flex flex-col">
                   <span className="font-medium whitespace-nowrap">
-                    {t(m === 'interject' ? 'input.mode.interject' : 'input.mode.send')}
+                    {t(modeLabelKey(m))}
                   </span>
                   <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                    {t(m === 'interject' ? 'input.mode.interjectHint' : 'input.mode.sendHint')}
+                    {t(m === 'stock' ? (isGenerating ? 'input.mode.stockHintBusy' : 'input.mode.stockHintIdle') : `input.mode.${m}Hint`)}
                   </span>
                 </span>
               </button>
