@@ -108,7 +108,12 @@ test('frames: the emitted usage record is the same object the success path sends
 // ── unfinishedBillingLog ────────────────────────────────────────────────────
 
 test('log: names the provider and distinguishes billed from free', () => {
-  assert.match(unfinishedBillingLog('[gemini]', frame()), /\[gemini\].*NOT billed/);
+  // 2026-11-12: the zero case no longer claims "NOT billed". A betrayal abort
+  // reaches the catch with an empty usage accumulator over a turn that really
+  // did bill, so the terminal may not assert free either (see the lib header).
+  const zero = unfinishedBillingLog('[gemini]', frame());
+  assert.match(zero, /\[gemini\].*no usage frame arrived/);
+  assert.doesNotMatch(zero, /NOT billed/);
   assert.match(
     unfinishedBillingLog('[claude-oauth]', frame({ totalInputTokens: 300, outputTokens: 7 })),
     /\[claude-oauth\].*billed 307 tokens/,

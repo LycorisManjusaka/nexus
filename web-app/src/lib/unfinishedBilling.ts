@@ -58,20 +58,44 @@ export function billedTokens(frame: NormalizedUsageFrame | null | undefined): nu
 export function unfinishedBillingFrames(
   frame: NormalizedUsageFrame | null | undefined,
   ja: boolean,
+  /**
+   * Did the model demonstrably emit thought/text this turn?
+   * (`betrayalSend.sawOutput()` — see lib/betrayalGuard.ts.)
+   *
+   * MEASURED 2026-11-12 (つよ, 先輩/Gemini, betrayal defence ON): the guard
+   * aborts the turn the moment it blanks it, and Gemini carries usage on its
+   * FINAL chunk only — so the abort lands in the catch with an empty usage
+   * accumulator and this reported "課金なし: モデルは一度も呼ばれていません"
+   * over a turn that had just produced a full betrayal reply. A lie, and
+   * exactly the failure this module's header forbids: absence of a token row
+   * read as proof of free.
+   *
+   * The real count is NOT recoverable here (the provider never sent it), so
+   * the third state says the amount is unknown rather than inventing one.
+   * Omitted/false keeps the old two-state wording, which the user guide
+   * documents for a Stop pressed before the request goes out.
+   */
+  modelProducedOutput?: boolean,
 ): Array<Record<string, unknown>> {
   const billed = billedTokens(frame);
   const out: Array<Record<string, unknown>> = [];
   if (billed > 0 && frame) out.push(frame as unknown as Record<string, unknown>);
-  out.push({
-    type: 'notice',
-    content: billed > 0
-      ? (ja
-          ? `課金あり: このターンで ${billed.toLocaleString()} トークン（モデルは走りました）`
-          : `Billed: ${billed.toLocaleString()} tokens this turn (the model did run)`)
-      : (ja
-          ? '課金なし: モデルは一度も呼ばれていません'
-          : 'Not billed: no model call was reached'),
-  });
+  let content: string;
+  if (billed > 0) {
+    content = ja
+      ? `課金あり: このターンで ${billed.toLocaleString()} トークン（モデルは走りました）`
+      : `Billed: ${billed.toLocaleString()} tokens this turn (the model did run)`;
+  } else if (modelProducedOutput) {
+    content = ja
+      ? '課金額は不明: モデルは走って出力しましたが、使用量が届く前にターンが中断されました（課金はゼロではありません）'
+      : 'Amount unknown: the model ran and produced output, but the turn was cut off'
+        + ' before its usage arrived (this was NOT free)';
+  } else {
+    content = ja
+      ? '課金なし: モデルは一度も呼ばれていません'
+      : 'Not billed: no model call was reached';
+  }
+  out.push({ type: 'notice', content });
   return out;
 }
 
@@ -81,8 +105,10 @@ export function unfinishedBillingLog(
   frame: NormalizedUsageFrame | null | undefined,
 ): string {
   const billed = billedTokens(frame);
+  // "no usage frame arrived", not "no model call reached": the terminal must
+  // not make the claim the screen notice was corrected for (see above).
   return billed === 0
-    ? `${tag} unfinished turn: NOT billed (no model call reached)`
+    ? `${tag} unfinished turn: no usage frame arrived (cost unknown, not necessarily zero)`
     : `${tag} unfinished turn: billed ${billed} tokens`
       + ` (in=${frame?.totalInputTokens ?? 0} out=${frame?.outputTokens ?? 0}`
       + ` cacheRead=${frame?.cachedInputTokens ?? 0})`;

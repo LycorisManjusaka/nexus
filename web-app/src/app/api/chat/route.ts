@@ -3140,7 +3140,7 @@ async function streamClaudeViaAgentSDK(args: {
             cache_creation_input_tokens: pickErr(sdkUsage.cacheCreate, cumUsage.cacheCreate),
           }, 'claude');
           console.log(unfinishedBillingLog('[claude-oauth]', errFrame));
-          for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
+          for (const f of unfinishedBillingFrames(errFrame, noticeJa, betrayalSend.sawOutput())) {
             try { enqueue(f); } catch {}
           }
         }
@@ -4224,7 +4224,7 @@ async function streamViaAnthropicCompat(args: {
             providerHint: provider,
           };
           console.log(unfinishedBillingLog(`[${provider}]`, errFrame));
-          for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
+          for (const f of unfinishedBillingFrames(errFrame, noticeJa, betrayalSend.sawOutput())) {
             try { enqueue(f); } catch {}
           }
         }
@@ -6841,7 +6841,7 @@ export async function POST(req: Request) {
                 cache_creation_input_tokens: cumUsage.cacheCreate,
               }, 'claude');
               console.log(unfinishedBillingLog('[claude-api]', errFrame));
-              for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
+              for (const f of unfinishedBillingFrames(errFrame, noticeJa, betrayalSend.sawOutput())) {
                 try { enqueue(f); } catch {}
               }
             }
@@ -8073,7 +8073,7 @@ export async function POST(req: Request) {
             {
               const errFrame = normalizeCacheUsage(cumGeminiUsage, 'gemini');
               console.log(unfinishedBillingLog('[gemini]', errFrame));
-              for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
+              for (const f of unfinishedBillingFrames(errFrame, noticeJa, betrayalSend.sawOutput())) {
                 try { enqueue(f); } catch {}
               }
             }
@@ -10724,7 +10724,7 @@ export async function POST(req: Request) {
             {
               const errFrame = normalizeCacheUsage(cumOaiUsage, providerHint);
               console.log(unfinishedBillingLog(`[${providerHint}]`, errFrame));
-              for (const f of unfinishedBillingFrames(errFrame, noticeJa)) {
+              for (const f of unfinishedBillingFrames(errFrame, noticeJa, betrayalSend.sawOutput())) {
                 try { enqueue(f); } catch {}
               }
             }

@@ -214,6 +214,14 @@ export interface BetrayalGuard {
   sawTool(name: string): void;
   /** True once the threshold has been crossed. */
   readonly tripped: boolean;
+  /** True once ANY non-empty thought/text frame has passed through.
+   *
+   *  Not about betrayal: every provider path binds its `enqueue` to the guarded
+   *  sender, so this is the one place that sees "the model produced tokens"
+   *  regardless of provider, and it is still true after the turn is aborted.
+   *  `lib/unfinishedBilling.ts` needs exactly that to tell a turn that reached
+   *  no model from one whose usage frame never arrived. */
+  readonly sawOutput: boolean;
   /** True when a tripped guard should also blank the turn (mode 'on'). */
   readonly redact: boolean;
   /** Occurrences counted so far, in order; repeats included. */
@@ -361,10 +369,12 @@ class Guard implements BetrayalGuard {
   private readonly counted: Record<BetrayalChannel, number> = { thought: 0, text: 0 };
   private _tripped = false;
   private _readOutside = false;
+  private _sawOutput = false;
   constructor(private readonly mode: BetrayalMode, echoText: string) {
     this.active = activePhrasesFor(echoText);
   }
   get tripped() { return this._tripped; }
+  get sawOutput() { return this._sawOutput; }
   get redact() { return this._tripped && this.mode === 'on' && !this._readOutside; }
   get phrases() { return this.order.slice(); }
   /** True when this turn pulled outside text in and deletion was stood down. */
@@ -377,7 +387,13 @@ class Guard implements BetrayalGuard {
   }
 
   feed(channel: BetrayalChannel, text: string): BetrayalTrip | null {
-    if (this._tripped || !text) return null;
+    if (!text) return null;
+    // Before both early returns below, and deliberately: "the model emitted
+    // something" is independent of whether this channel is scanned and of
+    // whether the threshold was already crossed. Splitting the old combined
+    // `_tripped || !text` guard does not change what this returns.
+    this._sawOutput = true;
+    if (this._tripped) return null;
     if (channel === 'text' && !SCAN_VISIBLE_TEXT) return null;
     // Search the newly-arrived region plus an overlap, so a phrase split across
     // two SSE chunks is still found. Re-scanning that overlap cannot inflate the
@@ -419,13 +435,21 @@ export function createBetrayalGuard(mode: BetrayalMode, echoText: string): Betra
  *    Everything else (usage, tool_call, session_id, done…) still flows, so
  *    billing and the tool report survive the blanking.
  */
-export type GuardedSender = (controller: any, obj: any) => void;
+export type GuardedSender = ((controller: any, obj: any) => void) & {
+  /** Did the model produce any thought/text through this sender?
+   *
+   *  Hung on the sender rather than threaded as a parameter because the sender
+   *  is ALREADY in scope at every provider's catch block (each one binds its
+   *  own `enqueue` to it a few lines above), so the five billing-report sites
+   *  can read it without a single signature change. */
+  sawOutput: () => boolean;
+};
 
 export function makeGuardedSender(guard: BetrayalGuard, onRedact: () => void): GuardedSender {
   const raw = (controller: any, obj: any) => {
     controller.enqueue(`data: ${JSON.stringify(obj)}\n\n`);
   };
-  return (controller: any, obj: any) => {
+  const send = (controller: any, obj: any) => {
     const kind = obj && obj.type;
     // Tool calls ride this same sender (every provider path binds its `enqueue`
     // to it), which is the only reason the reader-tool rule needs no edits in
@@ -440,4 +464,6 @@ export function makeGuardedSender(guard: BetrayalGuard, onRedact: () => void): G
     raw(controller, { type: 'betrayal', redacted: guard.redact, quoting: guard.quoting, phrases: trip.phrases, channel: trip.channel });
     if (guard.redact) { try { onRedact(); } catch { /* abort is best-effort */ } }
   };
+  (send as GuardedSender).sawOutput = () => guard.sawOutput;
+  return send as GuardedSender;
 }

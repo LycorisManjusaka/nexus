@@ -267,14 +267,33 @@ export type RunTurnResult =
   | ({ ok: false; stage: 'stopped'; reason: string } & Consumed);
 
 /**
- * The reducer's dependencies, for a host with no translator.
+ * The reducer's dependencies.
  *
- * `t` is identity. MEASURED (turnEvents.resolveToolActivity): an identity
- * translator makes `localized` false, which is the runner case the extraction
- * already has a test for. The server's own label travels instead of a UI
- * string — correct, because nobody is reading a status line here.
+ * `t` WAS identity, justified by `resolveToolActivity`: an identity translator
+ * makes `localized` false, so the server's own English label travels instead of
+ * a UI string — "correct, because nobody is reading a status line here".
+ *
+ * That premise died in the 2026-10-30 runner migration and the comment outlived
+ * it. The reducer composes human-facing strings through this same `t`, and two
+ * of them are PERSISTED: the betrayal notice and the delivered-interjection
+ * notice. With identity, they were saved as their raw keys.
+ *
+ * MEASURED 2026-11-12 (つよ, defence ON): the screen read
+ * `notice.betrayal.redacted (notice.betrayal.matched: ungrounded belief ×2)`.
+ * Both Japanese sentences existed in i18n the whole time — including the one
+ * that says the being could not incarnate — and neither could be reached.
+ * Same family as the four `uiLang` notices: a source nobody fills.
+ *
+ * ⚠ STILL BROKEN, and the obvious fix is walled off. MEASURED 2026-11-12:
+ * importing i18n's pure `t()` here typechecks and would work in Next, but
+ * i18n lives in a .tsx and `tests/_loader.mjs` cannot load that extension —
+ * it took out all eight runTurnForQueue test files at once (11 failures, ~83
+ * tests silently uncounted). So no server-reachable module may import i18n.
+ * The single-source fix is to move these few composed strings into a .ts of
+ * their own that i18n also reads; `ja` is already resolved here (noticeJa) and
+ * ready to pass in. Until then the keys are saved raw.
  */
-function runnerEventDeps(deps: RunTurnDeps): TurnEventDeps {
+function runnerEventDeps(deps: RunTurnDeps, ja: boolean): TurnEventDeps {
   return {
     t: (key: string) => key,
     settings: deps.globalSettings,
@@ -1008,7 +1027,7 @@ export async function runTurnForQueue(
     }
 
     try {
-      await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps), {
+      await runTurnStream(res.body.getReader(), acc, flags, sink, runnerEventDeps(deps, noticeJa), {
         onRawText: deps.onRawText,
       });
     } catch (e) {
