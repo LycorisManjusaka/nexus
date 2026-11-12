@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import fs from 'fs/promises';
 import path from 'path';
 import { resolvePrice, messageCost, effectivePrice } from '@/lib/modelPricing';
-import { BEINGS_DIR, beingLogsDir, beingSettingsFile, beingBillingDir } from '@/lib/beingPaths';
+import { BEINGS_DIR, beingLogsDir, beingSettingsFile, beingBillingDir, beingAuxBillingDir } from '@/lib/beingPaths';
 import { makeIsOriginalIndex } from '@/lib/firstOriginal';
 import {
   canonFamily, familyFromModelId, splitClaudeByAuth, type StatRecord,
 } from '@/lib/modelFamily';
 import { billingToStatRecord, type SpuBillingEntry } from '@/lib/spuBilling';
+import { auxBillingToStatRecord, type AuxBillingEntry } from '@/lib/auxBilling';
 
 // Full-scan billing statistics. Unlike the header-only listLogs() path, this
 // reads every active conversation in full, walks its messages in order, and
@@ -98,6 +99,7 @@ export async function GET() {
     // empty or missing logs folder, and gating it on logs would drop that spend.
     const files: { entity: string; full: string }[] = [];
     const billingDirs: { entity: string; dir: string }[] = [];
+    const auxBillingDirs: { entity: string; dir: string }[] = [];
     for (const d of dirs) {
       if (!d.isDirectory()) continue;
       let entity = d.name;
@@ -106,6 +108,7 @@ export async function GET() {
         if (parsed.name) entity = parsed.name;
       } catch {}
       billingDirs.push({ entity, dir: beingBillingDir(d.name) });
+      auxBillingDirs.push({ entity, dir: beingAuxBillingDir(d.name) });
       let fnames: string[] = [];
       try { fnames = await fs.readdir(beingLogsDir(d.name)); } catch { continue; }
       for (const fn of fnames) {
@@ -220,6 +223,25 @@ export async function GET() {
           entry = JSON.parse(raw);
         } catch { return; }
         const rec = billingToStatRecord(entry, entity);
+        if (rec) records.push(rec);
+      }));
+    }));
+
+    // ── Auxiliary-call ledger (eyes / ears / video watcher / subagent / anchor) ─
+    // beings/<name>/billing/. Same contract as the SPU ledger above: raw usage,
+    // priced here through messageCost, Local dropped. See lib/auxBilling.ts.
+    await Promise.all(auxBillingDirs.map(async ({ entity, dir }) => {
+      let fnames: string[] = [];
+      try { fnames = await fs.readdir(dir); } catch { return; }
+      await Promise.all(fnames.map(async (fn) => {
+        if (fn.startsWith('.') || !fn.endsWith('.json')) return;
+        let entry: AuxBillingEntry;
+        try {
+          let raw = await fs.readFile(path.join(dir, fn), 'utf-8');
+          if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+          entry = JSON.parse(raw);
+        } catch { return; }
+        const rec = auxBillingToStatRecord(entry, entity);
         if (rec) records.push(rec);
       }));
     }));

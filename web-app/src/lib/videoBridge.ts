@@ -2,6 +2,9 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
+import { usageFromOpenAi, usageFromGemini } from './auxBilling';
+import { recordAuxBilling, type AuxBillTarget } from './auxBillingStore';
+import type { TurnCacheUsage } from './turnEvents';
 import { resolveGeminiMinThinkingLevel } from './modelVision';
 
 // Disk cache for video descriptions. One file per (video bytes ‖ prompt ‖ model)
@@ -28,6 +31,9 @@ export interface BridgeResult {
   description: string;
   fromCache: boolean;
   error?: string;
+  /** Provider-reported usage of the call that produced this (absent on a
+   *  cache hit or a failed call). Billed by describe*() — see auxBilling.ts. */
+  usage?: TurnCacheUsage | null;
 }
 
 async function callQwenOmniVideo(params: {
@@ -85,13 +91,14 @@ async function callQwenOmniVideo(params: {
   }
 
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
     console.error(`${tag} HTTP 200 but empty content. Raw body: ${JSON.stringify(data).slice(0, 500)}`);
-    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty', usage };
   }
   console.log(`${tag} OK in ${elapsedMs} ms · ${description.length} chars described`);
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 async function callMimoVideo(params: {
@@ -146,13 +153,14 @@ async function callMimoVideo(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
     console.error(`${tag} HTTP 200 but empty content. Raw body: ${JSON.stringify(data).slice(0, 500)}`);
-    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty', usage };
   }
   console.log(`${tag} OK in ${elapsedMs} ms · ${description.length} chars described`);
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 async function callGeminiVideo(params: {
@@ -210,16 +218,17 @@ async function callGeminiVideo(params: {
   }
 
   const data = await res.json();
+  const usage = usageFromGemini(data?.usageMetadata);
   const description = (data?.candidates?.[0]?.content?.parts || [])
     .map((p: any) => p?.text || '')
     .join('')
     .trim();
   if (!description) {
     console.error(`${tag} HTTP 200 but empty content. Raw body: ${JSON.stringify(data).slice(0, 500)}`);
-    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty', usage };
   }
   console.log(`${tag} OK · ${description.length} chars described`);
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 /**
@@ -288,13 +297,14 @@ async function callSeedVideo(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
     console.error(`${tag} HTTP 200 but empty content. Raw body: ${JSON.stringify(data).slice(0, 500)}`);
-    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[video — watcher returned an empty description]', fromCache: false, error: 'empty', usage };
   }
   console.log(`${tag} OK in ${elapsedMs} ms · ${description.length} chars described`);
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 export async function describeVideo(params: {
@@ -307,6 +317,9 @@ export async function describeVideo(params: {
   mimoKey?: string;
   bytedanceKey?: string;
   attachmentName?: string;
+  /** Who this call is for. When given, the call is written to that
+   *  being's auxiliary billing ledger. */
+  bill?: AuxBillTarget;
 }): Promise<BridgeResult> {
   const { videoBase64, videoMimeType, watcherPrompt, watcherModel, qwenKey, geminiKey, mimoKey, bytedanceKey, attachmentName } = params;
   const logName = attachmentName || '(unnamed)';
@@ -359,6 +372,10 @@ export async function describeVideo(params: {
       fromCache: false, error: 'exception',
     };
   }
+
+  // Billed whether or not the description was usable: the provider call
+  // happened. A cache hit returned above and never reaches here.
+  await recordAuxBilling(params.bill, { kind: 'watcher', model: watcherModel, authMode: 'api-key', usage: result.usage });
 
   if (!result.error) {
     try { await fs.writeFile(cachePath, result.description, 'utf8'); } catch {}

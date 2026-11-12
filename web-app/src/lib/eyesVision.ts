@@ -2,6 +2,9 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
+import { usageFromOpenAi, usageFromGemini, usageFromAnthropic } from './auxBilling';
+import { recordAuxBilling, type AuxBillTarget } from './auxBillingStore';
+import type { TurnCacheUsage } from './turnEvents';
 import { resolveGeminiMinThinkingLevel } from './modelVision';
 import { claudeAgentEnv } from './agentEnv';
 
@@ -33,6 +36,9 @@ export interface EyesResult {
   description: string;
   fromCache: boolean;
   error?: string;
+  /** Provider-reported usage of the call that produced this (absent on a
+   *  cache hit or a failed call). Billed by describe*() — see auxBilling.ts. */
+  usage?: TurnCacheUsage | null;
 }
 
 // ── Provider implementations ───────────────────────────────────────────────
@@ -81,11 +87,12 @@ async function callZaiVision(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
-    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 async function callMimoVision(params: {
@@ -137,11 +144,12 @@ async function callMimoVision(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
-    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 async function callGeminiVision(params: {
@@ -189,14 +197,15 @@ async function callGeminiVision(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromGemini(data?.usageMetadata);
   const description = (data?.candidates?.[0]?.content?.parts || [])
     .map((p: any) => p?.text || '')
     .join('')
     .trim();
   if (!description) {
-    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 // Local (LM Studio / llama.cpp) vision. OpenAI-compatible, NO API key — the
@@ -246,11 +255,12 @@ async function callLocalVision(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
-    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 // OAuth Claude vision. Describes the image using the Pro/Max SUBSCRIPTION token
@@ -287,6 +297,10 @@ async function callOAuthClaudeVision(params: {
       };
     }
     let text = '';
+    // The SDK's result message carries the subscription call's usage. Recorded
+    // with authMode 'oauth', so stats files it under Claude (OAuth) — real
+    // tokens, no per-token charge.
+    let usage: TurnCacheUsage | null = null;
     for await (const m of query({
       prompt: prompt(),
       options: {
@@ -316,14 +330,15 @@ async function callOAuthClaudeVision(params: {
       } else if ((m as any).type === 'result') {
         const r: any = m;
         if (!text && typeof r.result === 'string') text = r.result;
+        usage = usageFromAnthropic(r.usage);
         break;
       }
     }
     text = text.trim();
     if (!text) {
-      return { description: '[image — OAuth Claude returned an empty description]', fromCache: false, error: 'empty' };
+      return { description: '[image — OAuth Claude returned an empty description]', fromCache: false, error: 'empty', usage };
     }
-    return { description: text, fromCache: false };
+    return { description: text, fromCache: false, usage };
   } catch (e: any) {
     const cleanMsg = e?.message || 'unknown error';
     console.error(`[eyes/oauth-claude] ${cleanMsg}`);
@@ -363,6 +378,9 @@ export async function describeImage(params: {
   mimoKey?: string;
   oauthToken?: string;
   allowHostAnthropicEnv?: boolean;
+  /** Who this call is for. When given, the call is written to that
+   *  being's auxiliary billing ledger. */
+  bill?: AuxBillTarget;
 }): Promise<EyesResult> {
   const { imageBase64, imageMimeType, eyesPrompt, eyesModel, zaiKey, geminiKey, mimoKey, oauthToken, allowHostAnthropicEnv } = params;
 
@@ -444,6 +462,10 @@ export async function describeImage(params: {
       error: 'exception',
     };
   }
+
+  // Billed whether or not the description was usable: the provider call
+  // happened. A cache hit returned above and never reaches here.
+  await recordAuxBilling(params.bill, { kind: 'eyes', model: eyesModel, authMode: lower.startsWith('claude') ? 'oauth' : 'api-key', usage: result.usage });
 
   // Best-effort cache write — only successful descriptions, never error placeholders.
   if (!result.error) {

@@ -76,6 +76,15 @@ export function beingBillingEntryFile(name: string, runId: string): string {
   return path.join(beingBillingDir(name), `${sanitizeBeingName(runId)}.json`);
 }
 
+/**
+ * The auxiliary-call billing ledger: beings/<name>/billing/<id>.json — eyes,
+ * ears, video watcher, subagent, anchor. Separate from soul/billing because
+ * these are not soul runs; same one-file-per-entry shape. See lib/auxBilling.ts.
+ */
+export function beingAuxBillingDir(name: string): string {
+  return path.join(beingDir(name), 'billing');
+}
+
 export function beingBackupsDir(name: string): string {
   return path.join(beingDir(name), 'backups');
 }

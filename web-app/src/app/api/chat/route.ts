@@ -1717,7 +1717,7 @@ async function streamClaudeViaAgentSDK(args: {
                     pausedForRendezvous++;
                     let sub: Awaited<ReturnType<typeof runSubagent>>;
                     try {
-                      sub = await runSubagent({
+                      sub = await runSubagent({ convoId,
                         family: childFamily, model: subagentModel, keys, task: a.task,
                         returnContract: a.return_contract, folderName, fullAccess: agentFullSystemAccess,
                         webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
@@ -1726,14 +1726,10 @@ async function streamClaudeViaAgentSDK(args: {
                       pausedForRendezvous--;
                       touchSdkActivity();
                     }
-                    // Into BOTH accumulators: only one of them is used at the
-                    // end, and a subagent's bill must survive either choice.
-                    for (const acc of [cumUsage, sdkUsage]) {
-                      acc.input += sub.usage.input;
-                      acc.output += sub.usage.output;
-                      acc.cacheRead += sub.usage.cacheRead;
-                      acc.cacheCreate += sub.usage.cacheCreate;
-                    }
+                    // NOT added to cumUsage/sdkUsage: a paid non-Claude child
+                    // inside the OAuth accumulators was priced as subscription
+                    // Claude. It is billed by runSubagent at its own rate
+                    // (lib/auxBilling.ts).
                     enqueue({ type: 'subagent_done', task: a.task, result: sub.text, via: sub.via });
                     return { content: [{ type: 'text' as const, text: sub.text || '(subagent returned nothing)' }] };
                   }
@@ -4138,16 +4134,14 @@ async function streamViaAnthropicCompat(args: {
                     ? subagentFamily.trim()
                     : (provider === 'kimi' ? 'Kimi' : 'MiMo');
                   const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : model;
-                  const sub = await runSubagent({
+                  const sub = await runSubagent({ convoId,
                     family: childFamily, model: childModel, keys, task,
                     returnContract: (tu.input as any)?.return_contract ? String((tu.input as any).return_contract) : undefined,
                     folderName, fullAccess: agentFullSystemAccess,
                     webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                   });
-                  cumUsage.input += sub.usage.input;
-                  cumUsage.output += sub.usage.output;
-                  cumUsage.cacheRead += sub.usage.cacheRead;
-                  cumUsage.cacheCreate += sub.usage.cacheCreate;
+                  // Not added to this turn's usage: the child is billed by
+                  // runSubagent at its OWN model's rate (lib/auxBilling.ts).
                   enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                   resultContent = sub.text || '(subagent returned nothing)';
                 }
@@ -5186,6 +5180,7 @@ export async function POST(req: Request) {
                 contentStr += bridgedDescriptionText(att, wantBridge);
               } else if (wantBridge === 'eyes') {
                 const result = await describeImage({
+                  bill: { being: folderName, convoId },
                   imageBase64: base64Data,
                   imageMimeType: mimeType,
                   eyesPrompt,
@@ -5214,6 +5209,7 @@ export async function POST(req: Request) {
                 });
               } else if (wantBridge === 'ears') {
                 const result = await describeAudio({
+                  bill: { being: folderName, convoId },
                   audioBase64: base64Data,
                   audioMimeType: mimeType,
                   earsPrompt,
@@ -5241,6 +5237,7 @@ export async function POST(req: Request) {
                 });
               } else if (wantBridge === 'watcher') {
                 const result = await describeVideo({
+                  bill: { being: folderName, convoId },
                   videoBase64: base64Data,
                   videoMimeType: mimeType,
                   watcherPrompt,
@@ -6745,16 +6742,14 @@ export async function POST(req: Request) {
                       // Claude child on the same Anthropic key.
                       const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : 'Claude';
                       const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : 'claude-haiku-4-5';
-                      const sub = await runSubagent({
+                      const sub = await runSubagent({ convoId,
                         family: childFamily, model: childModel, keys, task,
                         returnContract: (tu.input as any)?.return_contract ? String((tu.input as any).return_contract) : undefined,
                         folderName, fullAccess: agentFullSystemAccess,
                         webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                       });
-                      cumUsage.input += sub.usage.input;
-                      cumUsage.output += sub.usage.output;
-                      cumUsage.cacheRead += sub.usage.cacheRead;
-                      cumUsage.cacheCreate += sub.usage.cacheCreate;
+                      // Not added to this turn's usage: the child is billed by
+                      // runSubagent at its OWN model's rate (lib/auxBilling.ts).
                       enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                       resultContent = sub.text || '(subagent returned nothing)';
                     }
@@ -7870,14 +7865,14 @@ export async function POST(req: Request) {
                         // Gemini child on the same Google key.
                         const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : 'Gemini';
                         const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : 'gemini-3.1-flash-lite';
-                        const sub = await runSubagent({
+                        const sub = await runSubagent({ convoId,
                           family: childFamily, model: childModel, keys, task,
                           returnContract: fc.args?.return_contract ? String(fc.args.return_contract) : undefined,
                           folderName, fullAccess: agentFullSystemAccess,
                           webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                         });
-                        cumGeminiUsage.promptTokenCount += sub.usage.input;
-                        cumGeminiUsage.candidatesTokenCount += sub.usage.output;
+                        // Not added to this turn's usage: the child is billed by
+                        // runSubagent at its OWN model's rate (lib/auxBilling.ts).
                         enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                         result = { result: sub.text || '(subagent returned nothing)' };
                       }
@@ -10110,6 +10105,7 @@ export async function POST(req: Request) {
                           // user-message injection (the model can't see).
                           const base64 = bin.data.toString('base64');
                           const eyesResult = await describeImage({
+                            bill: { being: folderName, convoId },
                             imageBase64: base64,
                             imageMimeType: bin.mimeType,
                             eyesPrompt,
@@ -10340,6 +10336,7 @@ export async function POST(req: Request) {
                       if (cr.image) {
                         if (useEyesHere) {
                           const eyesResult = await describeImage({
+                            bill: { being: folderName, convoId },
                             imageBase64: cr.image.base64,
                             imageMimeType: cr.image.mimeType,
                             eyesPrompt,
@@ -10381,6 +10378,7 @@ export async function POST(req: Request) {
                       if (ar.image) {
                         if (useEyesHere) {
                           const eyesResult = await describeImage({
+                            bill: { being: folderName, convoId },
                             imageBase64: ar.image.base64,
                             imageMimeType: ar.image.mimeType,
                             eyesPrompt,
@@ -10462,14 +10460,14 @@ export async function POST(req: Request) {
                         // endpoint. Empty → inherit the parent's family+model.
                         const childFamily = subagentFamily && subagentFamily.trim() ? subagentFamily.trim() : aiName;
                         const childModel = subagentModel && subagentModel.trim() ? subagentModel.trim() : localModel;
-                        const sub = await runSubagent({
+                        const sub = await runSubagent({ convoId,
                           family: childFamily, model: childModel, keys,
                           task, returnContract: parsed?.return_contract ? String(parsed.return_contract) : undefined,
                           folderName, fullAccess: agentFullSystemAccess,
                           webSearch: !!(modelParams?.enableWebSearch || modelParams?.enableClaudeWebSearch),
                         });
-                        cumOaiUsage.prompt_tokens += sub.usage.input;
-                        cumOaiUsage.completion_tokens += sub.usage.output;
+                        // Not added to this turn's usage: the child is billed by
+                        // runSubagent at its OWN model's rate (lib/auxBilling.ts).
                         enqueue({ type: 'subagent_done', task, result: sub.text, via: sub.via });
                         resultText = sub.text || '(subagent returned nothing)';
                       }

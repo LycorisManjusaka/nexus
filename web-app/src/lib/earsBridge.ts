@@ -2,6 +2,9 @@ import fs from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
+import { usageFromOpenAi, usageFromGemini } from './auxBilling';
+import { recordAuxBilling, type AuxBillTarget } from './auxBillingStore';
+import type { TurnCacheUsage } from './turnEvents';
 import { resolveGeminiMinThinkingLevel } from './modelVision';
 
 // Disk cache for audio descriptions, keyed by SHA-256 of
@@ -26,6 +29,9 @@ export interface BridgeResult {
   description: string;
   fromCache: boolean;
   error?: string;
+  /** Provider-reported usage of the call that produced this (absent on a
+   *  cache hit or a failed call). Billed by describe*() — see auxBilling.ts. */
+  usage?: TurnCacheUsage | null;
 }
 
 // Map common audio mime subtypes to the short format string DashScope/Qwen-Omni
@@ -87,11 +93,12 @@ async function callQwenOmni(params: {
   }
 
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
-    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 async function callMimoAudio(params: {
@@ -139,11 +146,12 @@ async function callMimoAudio(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
-    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 async function callGeminiAudio(params: {
@@ -198,14 +206,15 @@ async function callGeminiAudio(params: {
   }
 
   const data = await res.json();
+  const usage = usageFromGemini(data?.usageMetadata);
   const description = (data?.candidates?.[0]?.content?.parts || [])
     .map((p: any) => p?.text || '')
     .join('')
     .trim();
   if (!description) {
-    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 /**
@@ -271,11 +280,12 @@ async function callSeedAudio(params: {
     };
   }
   const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
   const description = (data?.choices?.[0]?.message?.content || '').trim();
   if (!description) {
-    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty' };
+    return { description: '[audio — ears returned an empty description]', fromCache: false, error: 'empty', usage };
   }
-  return { description, fromCache: false };
+  return { description, fromCache: false, usage };
 }
 
 export async function describeAudio(params: {
@@ -287,6 +297,9 @@ export async function describeAudio(params: {
   geminiKey: string;
   mimoKey?: string;
   bytedanceKey?: string;
+  /** Who this call is for. When given, the call is written to that
+   *  being's auxiliary billing ledger. */
+  bill?: AuxBillTarget;
 }): Promise<BridgeResult> {
   const { audioBase64, audioMimeType, earsPrompt, earsModel, qwenKey, geminiKey, mimoKey, bytedanceKey } = params;
 
@@ -335,6 +348,10 @@ export async function describeAudio(params: {
       fromCache: false, error: 'exception',
     };
   }
+
+  // Billed whether or not the description was usable: the provider call
+  // happened. A cache hit returned above and never reaches here.
+  await recordAuxBilling(params.bill, { kind: 'ears', model: earsModel, authMode: 'api-key', usage: result.usage });
 
   // Cache successful descriptions only (don't cache error placeholders).
   if (!result.error) {

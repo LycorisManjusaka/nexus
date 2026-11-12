@@ -21,6 +21,8 @@ import { GoogleGenAI } from '@google/genai';
 import { readWorkspaceFile, readWorkspaceFileBinary, isImageFilename, globWorkspaceFiles, grepWorkspaceFiles } from './fsStorage';
 import { webSearch as runWebSearch, webFetch as runWebFetch } from './webTools';
 import { deepseekWireModel } from './deepseekModels';
+import { usageFromSubagent } from './auxBilling';
+import { recordAuxBilling } from './auxBillingStore';
 
 export interface SubagentUsage { input: number; output: number; cacheRead: number; cacheCreate: number }
 // `via` records WHERE the request actually went: the provider label, the exact
@@ -358,7 +360,41 @@ function resolveOpenAIRoute(family: string, model: string, keys: any): { url: st
   return null;
 }
 
+/**
+ * Run a subagent AND bill it (2026-11-12).
+ *
+ * Until now every caller added the child's tokens into the PARENT's usage
+ * accumulators, which priced them at the parent's rate — and on the OAuth path
+ * hid a paid child inside the subscription bucket. The child is now billed
+ * here, once, at its own model's rate, into the being's auxiliary ledger
+ * (lib/auxBilling.ts); callers no longer touch their accumulators.
+ *
+ * `folderName` is the being; `convoId` is optional context for the ledger.
+ */
 export async function runSubagent(opts: {
+  family: string; model: string; keys: any;
+  task: string; returnContract?: string; folderName: string; fullAccess: boolean; webSearch?: boolean;
+  convoId?: string;
+}): Promise<SubagentResult> {
+  const r = await runSubagentUnbilled(opts);
+  const fam = (opts.family || '').toLowerCase();
+  // Only the Anthropic runner stores input_tokens with the cache buckets
+  // separate; the other two store the whole prompt.
+  const anthropicRunner = fam.includes('claude') || fam.includes('fable') || fam.includes('mythos');
+  await recordAuxBilling(
+    { being: opts.folderName, convoId: opts.convoId },
+    {
+      kind: 'subagent',
+      model: opts.model,
+      family: anthropicRunner ? 'Claude' : opts.family,
+      authMode: 'api-key',
+      usage: usageFromSubagent(r.usage, !anthropicRunner),
+    },
+  );
+  return r;
+}
+
+async function runSubagentUnbilled(opts: {
   family: string; model: string; keys: any;
   task: string; returnContract?: string; folderName: string; fullAccess: boolean; webSearch?: boolean;
 }): Promise<SubagentResult> {
