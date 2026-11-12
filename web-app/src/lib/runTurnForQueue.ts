@@ -74,6 +74,7 @@ import { promotePendingMarker, type ResolvedMarker } from '@/lib/firstOriginal';
 import { planRebase } from '@/lib/saveRebase';
 import { undeliveredNotice } from '@/lib/undeliveredInjection';
 import { noticeLanguage } from '@/lib/noticeLanguage';
+import { runnerNoticeT } from '@/lib/runnerNotices';
 import type { DrainedInjection } from '@/lib/injectMessage';
 
 /** What the runner could not do itself. */
@@ -284,18 +285,18 @@ export type RunTurnResult =
  * that says the being could not incarnate — and neither could be reached.
  * Same family as the four `uiLang` notices: a source nobody fills.
  *
- * ⚠ STILL BROKEN, and the obvious fix is walled off. MEASURED 2026-11-12:
- * importing i18n's pure `t()` here typechecks and would work in Next, but
- * i18n lives in a .tsx and `tests/_loader.mjs` cannot load that extension —
- * it took out all eight runTurnForQueue test files at once (11 failures, ~83
- * tests silently uncounted). So no server-reachable module may import i18n.
- * The single-source fix is to move these few composed strings into a .ts of
- * their own that i18n also reads; `ja` is already resolved here (noticeJa) and
- * ready to pass in. Until then the keys are saved raw.
+ * FIXED 2026-11-12. The obvious fix (import i18n's pure `t()`) is walled off —
+ * i18n is a .tsx and `tests/_loader.mjs` cannot load that extension, so it took
+ * out all eight runTurnForQueue test files at once. So the few strings the
+ * runner composes and persists now live in runnerNotices.ts (a .ts both the
+ * runner and i18n import — single source, no retyping). runnerNoticeT(ja)
+ * translates exactly those keys and returns the key for anything else, which is
+ * load-bearing: resolveToolActivity still receives this `t` and wants identity
+ * for unknown keys (its English tool label travels when `localized` stays false).
  */
 function runnerEventDeps(deps: RunTurnDeps, ja: boolean): TurnEventDeps {
   return {
-    t: (key: string) => key,
+    t: runnerNoticeT(ja),
     settings: deps.globalSettings,
     newAttachmentId: deps.newId,
   };

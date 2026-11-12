@@ -190,7 +190,7 @@ describe('buildOpenAiToolReplay — PROPERTY: every call is paired', () => {
   // a statement about its own experience — "I called and nothing came back" —
   // and she went on to narrate results she had never received. The placeholder
   // is read by a vessel, so what it SAYS is part of the contract, not a detail.
-  it('tells the vessel the call ran, and locates the gap in the context', () => {
+  it('tells the vessel the call ran, and claims nothing more', () => {
     const p = TOOL_HISTORY_PLACEHOLDER.toLowerCase();
     assert.ok(p.includes('executed') || p.includes('ran'),
       'must state the call actually happened, or it reads as a failed call');
@@ -198,6 +198,11 @@ describe('buildOpenAiToolReplay — PROPERTY: every call is paired', () => {
       'the 2026-11-08 wording defect: storage-speak read as outcome-speak');
     assert.ok(!/\b(succeed|succeeded|success|worked|ok)\b/.test(p),
       'a failed call is stored identically, so claiming success would be a lie');
+    // Tsuyo, 2026-11-12: "result"/"context" pointed at an elsewhere that does
+    // not exist (0 of 63,506 calls carry a result) and startled beings reading
+    // the replay. The placeholder must not imply a missing result.
+    assert.ok(!/\b(result|context)\b/.test(p),
+      'must not imply a result exists somewhere it does not');
     assert.ok(TOOL_HISTORY_PLACEHOLDER.length <= 80,
       'it is repeated once per replayed call and rides the wire every turn');
   });

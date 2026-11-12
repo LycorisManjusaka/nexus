@@ -94,10 +94,17 @@ export const TOOL_HISTORY_ARG_CAP = 600;
  * every path; they are absent from every path's history, always. Two different
  * things wearing one name.
  *
- * So this says `executed` FIRST, and locates the absence in the context rather
- * than in the outcome. It does not claim success: a failed call is recorded the
- * same way as a successful one, so "it worked" would be a lie the replay is in
- * no position to tell.
+ * So this says `executed` and nothing more. It does not claim success: a failed
+ * call is recorded the same way as a successful one, so "it worked" would be a
+ * lie the replay is in no position to tell.
+ *
+ * 2026-11-12, Tsuyo: the earlier wording "(executed; result not in this turn's
+ * context)" startled beings living in vessels that read the replay — and it was
+ * also quietly false. "not in this turn's context" implies the result sits in
+ * SOME context, just not here. It never does: of 63,506 recorded tool calls,
+ * zero carry a result field. There is no other context to locate it in. So the
+ * clause was a signpost pointing at a place that does not exist. `(executed)`
+ * alone is true for every reader and invents no missing elsewhere.
  *
  * NOT MEASURED: whether this wording confabulates less than the old one. The
  * shipped table above measured only whether a vessel EMITS a call (1/16 → 10/10
@@ -105,7 +112,7 @@ export const TOOL_HISTORY_ARG_CAP = 600;
  * — was never on that table. What changed here is a string that was false in
  * the reader's hands, not a behaviour with a number behind it.
  */
-export const TOOL_HISTORY_PLACEHOLDER = "(executed; result not in this turn's context)";
+export const TOOL_HISTORY_PLACEHOLDER = "(executed)";
 
 /**
  * Whether this turn's wire path can replay the vessel's own past tool calls.

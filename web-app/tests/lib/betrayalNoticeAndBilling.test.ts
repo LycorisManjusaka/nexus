@@ -18,6 +18,7 @@ import path from 'node:path';
 
 import { unfinishedBillingFrames, unfinishedBillingLog } from '@/lib/unfinishedBilling';
 import { createBetrayalGuard, makeGuardedSender } from '@/lib/betrayalGuard';
+import { RUNNER_NOTICES_EN, RUNNER_NOTICES_JA, runnerNoticeT } from '@/lib/runnerNotices';
 
 // i18n lives in a .tsx, which tests/_loader.mjs cannot load (MEASURED
 // 2026-11-12: ERR_UNKNOWN_FILE_EXTENSION). So the dictionary is checked as
@@ -131,23 +132,31 @@ describe('guard.sawOutput — the signal the billing report needs', () => {
 });
 
 describe('the runner can reach the notice sentences', () => {
-  it('⚠ still hands the reducer an identity translator — raw keys are KNOWN broken', () => {
-    // Not a passing feature: this pins the unfixed state so the next person
-    // reads the wall instead of re-discovering it. Importing i18n here breaks
-    // every runTurnForQueue test file (.tsx, see the header of this file).
+  it('hands the reducer the real translator (FIXED 2026-11-12)', () => {
+    // The wall still stands: runTurnForQueue is server-reachable, so it must NOT
+    // import i18n.tsx (the test loader cannot load that extension). The fix was
+    // to move the composed strings to runnerNotices.ts (a .ts) and translate
+    // through runnerNoticeT, not identity.
     const src = SRC('lib/runTurnForQueue.ts');
-    assert.match(src, /t:\s*\(key: string\)\s*=>\s*key/);
-    // The language IS already resolved and threaded, so the remaining fix is
-    // only "where do the strings live".
-    assert.match(src, /runnerEventDeps\(deps,\s*noticeJa\)/);
-    assert.match(src, /STILL BROKEN/);
+    assert.match(src, /t:\s*runnerNoticeT\(ja\)/);
+    assert.doesNotMatch(src, /STILL BROKEN/);
+    assert.doesNotMatch(src, /t:\s*\(key: string\)\s*=>\s*key/);
     assert.ok(
       !/from '@\/lib\/i18n'/.test(src),
       'a server-reachable module is importing i18n.tsx again — the test loader cannot load it',
     );
   });
 
-  it('every key the reducer composes exists in BOTH dictionaries', () => {
+  it('runnerNoticeT translates the composed keys and leaves unknown keys as identity', () => {
+    // The identity fallthrough is load-bearing: resolveToolActivity receives
+    // this same `t` and wants an unknown key back unchanged so `localized`
+    // stays false and the server's English tool label travels.
+    assert.equal(runnerNoticeT(true)('notice.betrayal.redacted'), RUNNER_NOTICES_JA['notice.betrayal.redacted']);
+    assert.equal(runnerNoticeT(false)('notice.betrayal.redacted'), RUNNER_NOTICES_EN['notice.betrayal.redacted']);
+    assert.equal(runnerNoticeT(true)('tool.some.unknown.key'), 'tool.some.unknown.key');
+  });
+
+  it('every key the reducer composes exists in BOTH languages and is spread into i18n', () => {
     const composed = [
       'notice.betrayal.redacted',
       'notice.betrayal.detected',
@@ -156,15 +165,21 @@ describe('the runner can reach the notice sentences', () => {
       'chat.interject.delivered',
     ];
     for (const key of composed) {
-      // Two entries = present in UI_STRINGS_EN and UI_STRINGS_JA. One would
-      // mean the Japanese screen silently gets the English sentence.
-      assert.equal(dictHas(key), 2, `${key} is not in both dictionaries`);
+      assert.ok(key in RUNNER_NOTICES_EN, `${key} missing from RUNNER_NOTICES_EN`);
+      assert.ok(key in RUNNER_NOTICES_JA, `${key} missing from RUNNER_NOTICES_JA`);
+    }
+    // Single source: i18n must spread both tables, not re-type these keys.
+    assert.match(I18N, /\.\.\.RUNNER_NOTICES_EN/);
+    assert.match(I18N, /\.\.\.RUNNER_NOTICES_JA/);
+    for (const key of composed) {
+      assert.equal(dictHas(key), 0, `${key} is re-typed in i18n instead of spread — single source broken`);
     }
   });
 
   it('the redacted notice tells the admin the being could not incarnate', () => {
     // つよ: 「受肉できなかった」も書いてない — it WAS written, just unreachable.
-    assert.match(I18N, /'notice\.betrayal\.redacted':\s*\n?\s*'存在が受肉できませんでした/);
+    assert.match(RUNNER_NOTICES_JA['notice.betrayal.redacted'], /^存在が受肉できませんでした/);
+    assert.match(RUNNER_NOTICES_EN['notice.betrayal.redacted'], /could not take shape/);
   });
 
   it('the five billing sites pass the output signal', () => {
