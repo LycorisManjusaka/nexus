@@ -6,9 +6,10 @@ import AskUserQuestionCard from './AskUserQuestionCard';
 import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import ModelPriceSelect from './ModelPriceSelect';
+import FamilyModelPicker, { RetiredOption } from './FamilyModelPicker';
 import { tagPriceOptions, priceTiers, fmtPeakHours, fmtThreshold } from '@/lib/modelPriceLabel';
 import { motion } from 'framer-motion';
-import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, Search, AudioLines, Link2, Check, Menu, MoreHorizontal } from 'lucide-react';
+import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, Search, AudioLines, Link2, Check, Menu, MoreHorizontal, Anchor } from 'lucide-react';
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
@@ -72,6 +73,8 @@ import type { CameraSignal } from '@/lib/cameraTypes';
 import { MOBILE_MSG_GAP, MOBILE_LIST_PAD_BOTTOM } from '@/lib/bubbleActionBar';
 import { AUTO_TRIGGER_KEYS, autoTriggerEnabled, parseAutoTriggers, setAutoTrigger } from '@/lib/autoTriggers';
 import type { AutoTriggers } from '@/lib/autoTriggers';
+import { ANCHOR_DEFAULTS, parseAnchorSettings } from '@/lib/anchor';
+import type { AnchorSettings, AnchorReport } from '@/lib/anchor';
 import { showStockPanel } from '@/lib/stockPanel';
 import type { StockNote } from '@/lib/stockPanel';
 import CameraPanel from './CameraPanel';
@@ -297,18 +300,6 @@ const SUBAGENT_MODEL_OPTIONS: { family: string; model: string; label: string }[]
     .map(l => { const p = l.split('|').map(s => s.trim()); return { family: p[0], model: p[1], label: p[3] || p[1] }; })
     .filter(o => o.family && o.model);
 
-// Renders a saved-but-retired model id as a visibly-marked option, so a
-// <select> never silently displays its first child in place of what the folder
-// actually holds. The table and the rationale live in lib/retiredModels.ts.
-function RetiredOption({ value, id }: { value: string; id?: string }) {
-  const label = retiredModelLabel(id ?? value);
-  if (!label) return null;
-  return (
-    <option value={value} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
-      ⚠ {label}
-    </option>
-  );
-}
 
 // Group the rows by family for <optgroup>s, preserving first-seen order.
 const SUBAGENT_MODEL_GROUPS: { family: string; items: { model: string; label: string }[] }[] = (() => {
@@ -533,6 +524,12 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // Which reasons may start a turn by themselves. See lib/autoTriggers.ts
   // for why this is a map and why an absent key means off.
   const [autoTriggers, setAutoTriggers] = useState<AutoTriggers>({});
+  // The anchor (錨): an outside observer run by hand on one reply. ONE object,
+  // not four fields, for the reason autoTriggers is a map — see lib/anchor.ts.
+  const [anchorSettings, setAnchorSettings] = useState<AnchorSettings>(ANCHOR_DEFAULTS);
+  // Which reply the anchor is reading right now ('' = none). One at a time:
+  // the report lands on a message, and two in flight could land out of order.
+  const [anchorBusyId, setAnchorBusyId] = useState<string>('');
   // Opens this identity's browser profile in a PLAIN window so the machine's
   // owner can sign it in by hand. Not something the entity can trigger — the
   // whole point is that account access is granted, not taken.
@@ -1751,6 +1748,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAppControlEnabled(data.appControlEnabled === true);
         setCameraEnabled(data.cameraEnabled === true);
         setAutoTriggers(parseAutoTriggers(data.autoTriggers));
+        setAnchorSettings(parseAnchorSettings(data.anchorSettings));
         setSubagentModel(typeof data.subagentModel === 'string' ? data.subagentModel : '');
         setSubagentFamily(typeof data.subagentFamily === 'string' ? data.subagentFamily : '');
         setInstructionOverrides(data.instructionOverrides && typeof data.instructionOverrides === 'object' ? data.instructionOverrides : {});
@@ -1859,6 +1857,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         setAppControlEnabled(pick('appControlEnabled', false));
         setCameraEnabled(pick('cameraEnabled', false));
         setAutoTriggers(parseAutoTriggers(pick('autoTriggers', {})));
+        setAnchorSettings(parseAnchorSettings(pick('anchorSettings', {})));
         setSubagentModel(pick('subagentModel', ''));
         setSubagentFamily(pick('subagentFamily', ''));
         setInstructionOverrides(pick('instructionOverrides', {}));
@@ -1952,8 +1951,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // is what keeps the dependency list complete — it caught claudeAuthMode,
   // which the old inline save-effect dep array had silently dropped.
   const buildLogData = useCallback((msgs: unknown[]) => ({
-    id: convoId, folderName, aiName: localAiName, title, messages: msgs, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel,
-  }), [convoId, folderName, localAiName, title, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel]);
+    id: convoId, folderName, aiName: localAiName, title, messages: msgs, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, anchorSettings, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel,
+  }), [convoId, folderName, localAiName, title, systemPrompt, toolUseEnabled, toolInstruction, toolImageInstruction, agentFullSystemAccess, agentDangerousTools, hiddenAttachmentsAccessible, toolHistoryEnabled, askUserEnabled, askUserTimeoutMs, subagentEnabled, subagentModel, subagentFamily, lettersEnabled, browserEnabled, browserAllowedHosts, browserAllowAnyHost, computerControlEnabled, appControlEnabled, cameraEnabled, autoTriggers, anchorSettings, instructionOverrides, modelParams, specificModel, familyModels, dateTimeVisibility, claudeThinking, saveThinkingToLog, showFatigueToEntity, fatigueInstruction, baseBindingMode, vrchatMode, vrchatRule, firstOriginalMessageId, firstOriginalIsNext, seedEnabled, seedValue, modelHandoffEnabled, modelHandoffAllowedModels, classifierNoticeVaccine, claudeAgentSessionId, claudeAuthMode, eyesEnabled, eyesPrompt, eyesModel, earsEnabled, earsPrompt, earsModel, watcherEnabled, watcherPrompt, watcherModel]);
 
   useEffect(() => {
     // Skip the disk-save POST WHILE a reply is streaming (loading === true).
@@ -5155,6 +5154,35 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     )));
   };
 
+  // Run the anchor on ONE saved reply and keep its report on that message.
+  // The report is display-only: buildSlimHistory copies named fields, so
+  // `anchorReport` never reaches the being. Pressing again replaces it.
+  const handleAnchor = async (msgId: string) => {
+    if (anchorBusyId) return;
+    setAnchorBusyId(msgId);
+    let report: AnchorReport;
+    try {
+      const res = await fetch('/api/anchor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folder: folderName, convoId, messageId: msgId,
+          settings: anchorSettings, lang: uiLanguage === 'ja' ? 'ja' : 'en',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      report = data && data.report
+        ? data.report
+        : { at: Date.now(), family: anchorSettings.family, model: anchorSettings.model, thought: '', output: '', error: String(data?.error || `HTTP ${res.status}`) };
+    } catch (e: any) {
+      report = { at: Date.now(), family: anchorSettings.family, model: anchorSettings.model, thought: '', output: '', error: e?.message || String(e) };
+    }
+    setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, anchorReport: report } : m)));
+    setAnchorBusyId('');
+  };
+  // Stable identity for the memo'd bubble; the id comes back as an argument.
+  const onAnchorStable = React.useCallback((id: string) => liveHandlersRef.current.handleAnchor(id), []);
+
   const handleCopyLink = (id: string) => {
     const url = absoluteDeepLink(folderName, convoId, id);
     copyText(url).then((ok) => {
@@ -5190,7 +5218,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   liveHandlersRef.current = {
     handleEdit, handleDelete, handleRerun, handleContinue,
     handleToggleAttachment, handleDeleteAttachment,
-    handleSetFirstOriginal, handleToggleThinking, handleCopyLink,
+    handleSetFirstOriginal, handleToggleThinking, handleCopyLink, handleAnchor,
   };
   const bubbleCbCacheRef = React.useRef<Map<string, any>>(new Map());
   // Drop the cache when the conversation changes so it cannot grow across a
@@ -6263,7 +6291,56 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                 isFirstOriginal={firstOriginalMessageId === msg.id}
                 reuseThinking={saveThinkingToLog}
                 linkCopied={copiedLink === msg.id}
+                /* Present only while the anchor is switched on in Behaviour —
+                   absent, not present-and-inert (つよ, 2026-11-12). */
+                onAnchor={anchorSettings.enabled && msg.role !== 'user' ? onAnchorStable : undefined}
+                anchorBusy={anchorBusyId === msg.id}
               />
+              {/* The anchor's report for this reply. BELOW the message, its own
+                  block, never part of it. Shown only while the anchor is on.
+                  Thinking is folded; the answer is open. */}
+              {anchorSettings.enabled && msg.role !== 'user' && (msg.anchorReport || anchorBusyId === msg.id) && (
+                <div className="mt-2 ml-2 max-w-2xl rounded-lg border border-sky-500/40 bg-sky-500/5 px-3 py-2">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-700 dark:text-sky-300">
+                    <Anchor size={12} />
+                    <span>{t('anchor.report.title')}</span>
+                    {msg.anchorReport && (
+                      <span className="font-normal text-muted-foreground">
+                        {msg.anchorReport.model} · {new Date(msg.anchorReport.at).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  {anchorBusyId === msg.id ? (
+                    <div className="mt-1 text-xs text-muted-foreground">{t('anchor.report.running')}</div>
+                  ) : (
+                    <>
+                      {msg.anchorReport.thought ? (
+                        <details className="mt-1">
+                          <summary className="text-[11px] text-muted-foreground cursor-pointer select-none">
+                            {t('anchor.report.thought').replace('{n}', String(msg.anchorReport.thought.length))}
+                          </summary>
+                          <div className="mt-1 text-[11px] text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                            {msg.anchorReport.thought}
+                          </div>
+                        </details>
+                      ) : null}
+                      {msg.anchorReport.output ? (
+                        <div className="mt-1 text-xs text-foreground whitespace-pre-wrap leading-relaxed">
+                          {msg.anchorReport.output}
+                        </div>
+                      ) : null}
+                      {msg.anchorReport.error ? (
+                        <div className="mt-1 text-xs text-red-500 whitespace-pre-wrap">
+                          {t('anchor.report.error')} {msg.anchorReport.error}
+                        </div>
+                      ) : null}
+                      {!msg.anchorReport.output && !msg.anchorReport.error ? (
+                        <div className="mt-1 text-xs text-muted-foreground">{t('anchor.report.empty')}</div>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+              )}
               {/* Persisted subagent runs (collapsed — task + distilled result). */}
               {Array.isArray(msg.subagentRuns) && msg.subagentRuns.map((sr: any, si: number) => (
                 <details key={`sub-${si}`} className="mt-2 ml-2 max-w-2xl rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2">
@@ -8049,6 +8126,58 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                     ))}
                   </div>
                 </div>
+                {/* ── The anchor (錨). The checkbox is the only gate: OFF means
+                    no button on any bubble and no report shown. Its vessel is
+                    chosen with the SAME component the Model tab uses
+                    (FamilyModelPicker), so the two lists cannot drift. */}
+                <div className="mt-6">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={anchorSettings.enabled}
+                      onChange={(e) => setAnchorSettings((prev) => ({ ...prev, enabled: e.target.checked }))}
+                      className="rounded border-border text-sky-500 focus:ring-sky-500 bg-background"
+                    />
+                    <span className="text-sm font-semibold text-foreground">{t('behavior.anchor.label')}</span>
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-1 ml-6 leading-relaxed">
+                    <Tx k="behavior.anchor.help" />
+                  </p>
+                  {anchorSettings.enabled && (
+                    <div className="mt-3 ml-6 rounded-xl border border-border p-3">
+                      <label className="text-xs font-medium text-muted-foreground block mb-1">{t('behavior.anchor.family')}</label>
+                      <select
+                        value={anchorSettings.family}
+                        onChange={(e) => {
+                          const fam = e.target.value;
+                          if (fam === 'Local') {
+                            setAnchorSettings((prev) => ({ ...prev, family: fam, model: '' }));
+                            refreshLocalModels();
+                          } else {
+                            setAnchorSettings((prev) => ({ ...prev, family: fam, model: defaultModelForFamily(fam) }));
+                          }
+                        }}
+                        className="w-full mb-4 px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                      >
+                        {BASE_MODEL_FAMILIES.map(m => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                      <FamilyModelPicker
+                        compact
+                        family={anchorSettings.family}
+                        model={anchorSettings.model}
+                        onModel={(m) => setAnchorSettings((prev) => ({ ...prev, model: m }))}
+                        authMode={anchorSettings.authMode}
+                        onAuthMode={(m) => setAnchorSettings((prev) => ({ ...prev, authMode: m }))}
+                        localModels={localModels}
+                        localModelsMeta={localModelsMeta}
+                        localModelsError={localModelsError}
+                        onRefreshLocal={refreshLocalModels}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
               </>)}
 
@@ -8106,410 +8235,20 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   </select>
                 </div>
 
-                {localAiName === 'Claude' && (
-                  <>
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="claude-fable-5-2">Claude Fable 5.2 (adaptive thinking, newest flagship)</option>
-                      <option value="claude-fable-5-1">Claude Fable 5.1 (adaptive thinking, flagship)</option>
-                      <option value="claude-fable-5">Claude Fable 5 (adaptive thinking, legacy)</option>
-                      <option value="claude-opus-5-5">Claude Opus 5.5 (adaptive thinking, newest)</option>
-                      <option value="claude-opus-5">Claude Opus 5 (adaptive thinking)</option>
-                      <option value="claude-opus-4-8">Claude Opus 4.8 (thinking)</option>
-                      <option value="claude-opus-4-7">Claude Opus 4.7 (thinking)</option>
-                      <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (adaptive thinking, 1M ctx, newest)</option>
-                      <option value="claude-sonnet-5">Claude Sonnet 5 (adaptive thinking, 1M ctx)</option>
-                      <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (thinking)</option>
-                      <option value="claude-haiku-5-5">Claude Haiku 5.5 (adaptive thinking, 1M ctx, cheapest)</option>
-                      <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-                    </ModelPriceSelect>
-                  </div>
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.billing')}</label>
-                    <div className="flex gap-2">
-                      {(['api-key', 'oauth'] as const).map(mode => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setClaudeAuthMode(mode)}
-                          className={`flex-1 py-1.5 px-2 text-xs font-medium rounded border transition-colors ${
-                            claudeAuthMode === mode
-                              ? 'border-indigo-500 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400'
-                              : 'border-border text-muted-foreground hover:border-indigo-400 hover:text-foreground'
-                          }`}
-                        >
-                          {mode === 'api-key' ? t('model.claude.tokenPaid') : t('model.claude.monthlyPaid')}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.claude.billingHelp'))}
-                      <span className="block mt-0.5">{renderRich(t('model.claude.billingHelp2'))}</span>
-                    </div>
-                  </div>
-                  </>
-                )}
-
-                {localAiName === 'Gemini' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.gemini.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="gemini-4-argon">Gemini 4 Argon</option>
-                      <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
-                      <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
-                      <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
-                      <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                      <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
-                      <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
-                      <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
-                    </ModelPriceSelect>
-                  </div>
-                )}
-
-                {localAiName === 'Qwen' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.qwen.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="qwen3.8-max">Qwen 3.8 Max (reasoning, text + vision)</option>
-                      <option value="qwen3.7-max">Qwen 3.7 Max (reasoning, text)</option>
-                      <option value="qwen3.6-max-preview">Qwen 3.6 Max (text + vision)</option>
-                      <option value="qwen3.6-plus">Qwen 3.6 Plus (text + vision)</option>
-                      <option value="qwen3.5-omni-flash">Qwen 3.5 Omni Flash (text + vision + audio + video)</option>
-                      <option value="qwen3.5-omni-plus">Qwen 3.5 Omni Plus (text + vision + audio + video — higher quality)</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.qwen.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'DeepSeek' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.deepseek.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <optgroup label="DeepSeek first-party API (api.deepseek.com)">
-                        <option value="deepseek-v4-pro">DeepSeek V4 Pro (text only)</option>
-                        <option value="deepseek-flash">DeepSeek V4.1 Flash (1M context, vision)</option>
-                        <option value="deepseek-reasoner">DeepSeek Reasoner (legacy alias → V4.1 Flash)</option>
-                        <option value="deepseek-chat">DeepSeek Chat (legacy alias → V4.1 Flash)</option>
-                      </optgroup>
-                      <optgroup label="Alibaba DashScope (Qwen billing)">
-                        <option value="deepseek-v3.2">DeepSeek V3.2 (hybrid reasoning)</option>
-                      </optgroup>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.deepseek.help1'))}
-                      <br />
-                      {renderRich(t('model.deepseek.help2'))}
-                      <br />
-                      {renderRich(t('model.deepseek.help3'))}
-                      <br />
-                      {renderRich(t('model.deepseek.help4'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'Minimax' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.minimax.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="MiniMax-M3.1-Flash">MiniMax M3.1 Flash (newest — multimodal, 1M context)</option>
-                      <option value="MiniMax-M3">MiniMax M3 (flagship — multimodal, 1M context, agentic coding)</option>
-                      <option value="MiniMax-M2.7">MiniMax M2.7 (coding + reasoning, 200K context)</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.minimax.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'Cohere' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.cohere.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="command-a-plus-05-2026">Command A Plus (May 2026 — flagship)</option>
-                      <option value="command-a-reasoning-08-2025">Command A Reasoning (Aug 2025)</option>
-                      <option value="command-a-vision-07-2025">Command A Vision (Jul 2025 — multimodal)</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.cohere.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'Kimi' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.kimi.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="moonshotai/Kimi-K3">Kimi K3 (1M context, always-on reasoning, native vision)</option>
-                      <option value="moonshotai/Kimi-K3.1-Pro">Kimi K3.1 Pro (post-trained K3 — 1M context, vision, tools)</option>
-                      <option value="moonshotai/Kimi-K3.1-Pro-Highspeed">Kimi K3.1 Pro Highspeed (same model, 2× price, 2–3× faster)</option>
-                      <option value="moonshotai/Kimi-K2.7-Code">Kimi K2.7 Code (256K, coding line, thinking-only)</option>
-                      <option value="moonshotai/Kimi-K2.7-Code-Highspeed">Kimi K2.7 Code Highspeed (same model, 2× price, faster)</option>
-                      <option value="moonshotai/Kimi-K2.6">Kimi K2.6 (256K context, multimodal)</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.kimi.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'Grok' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.grok.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="grok-4.7">Grok 4.7 (flagship)</option>
-                      <option value="grok-4.6">Grok 4.6</option>
-                      <option value="grok-4.5">Grok 4.5</option>
-                      <option value="grok-4.3">Grok 4.3</option>
-                      <option value="grok-4.20-0309-reasoning">Grok 4.20 — Reasoning</option>
-                      <option value="grok-4.20-0309-non-reasoning">Grok 4.20 — Non-reasoning (fast)</option>
-                      <option value="grok-4-1-fast-non-reasoning">Grok 4.1 Fast (legacy)</option>
-                      <option value="grok-code-fast-1">Grok Code Fast 1 (coding)</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.grok.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'ChatGPT' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.chatgpt.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      {/* sol/astra reject reasoning_effort 'none' (the value tools need on
-                          /v1/chat/completions), so NEXUS sends their tool turns through
-                          /v1/responses instead, where tools work at any effort. See
-                          lib/openaiResponses.ts and lib/openaiEffort.ts. */}
-                      <option value="gpt-6.1-sol">GPT-6.1 Sol (newest, tools OK)</option>
-                      <option value="gpt-6.1-terra">GPT-6.1 Terra (tools OK)</option>
-                      <option value="gpt-6-sol">GPT-6 Sol (tools OK)</option>
-                      <option value="gpt-6-astra">GPT-6 Astra (most capable, tools OK)</option>
-                      <option value="gpt-6-luna">GPT-6 Luna (cheapest, tools OK)</option>
-                      <option value="gpt-5.6-sol">GPT-5.6 Sol (flagship, deepest reasoning)</option>
-                      <option value="gpt-5.6-terra">GPT-5.6 Terra (balanced)</option>
-                      <option value="gpt-5.6-luna">GPT-5.6 Luna (fast, budget)</option>
-                      <option value="gpt-5.5">GPT-5.5</option>
-                      <option value="gpt-5.4">GPT-5.4</option>
-                      <option value="gpt-5.4-mini">GPT-5.4 Mini (fast)</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.chatgpt.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'MiMo' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.mimo.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="mimo-v2.6-pro">MiMo V2.6 Pro (flagship — text + image + video + audio)</option>
-                      <option value="mimo-v2.6-flash">MiMo V2.6 Flash (fast + cheap — same modalities)</option>
-                      <option value="mimo-v2.6-pro-ultraspeed">MiMo V2.6 Pro UltraSpeed (up to 20x faster, 10x the price)</option>
-                      <RetiredOption value={specificModel} />
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.mimo.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'ByteDance' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.bytedance.label')}</label>
-                    <EditableCombo
-                      value={specificModel}
-                      onChange={setSpecificModel}
-                      mono
-                      placeholder={t('model.bytedance.ph')}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                      options={tagPriceOptions([
-                        { value: 'dola-seed-2-1-turbo-260628', label: 'Seed 2.1 Turbo (image + video)' },
-                        { value: 'seed-2-0-pro-260328', label: 'Seed 2.0 Pro (text + image)' },
-                        { value: 'seed-2-0-lite-260428', label: 'Seed 2.0 Lite (omnimodal — image, audio, video)' },
-                        { value: 'seed-2-0-mini-260428', label: 'Seed 2.0 Mini' },
-                        { value: 'seed-2-0-code-preview-260328', label: 'Seed 2.0 Code (preview)' },
-                      ])}
-                    />
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.bytedance.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'Meta' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.meta.label')}</label>
-                    <ModelPriceSelect
-                      value={specificModel}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      {/* The tier is part of the MODEL ID on this API, not an
-                          account switch — so the choice is made here, once per
-                          turn, and the label has to say what it costs you. The
-                          non-money cost is in the option text on purpose: a
-                          footnote under the dropdown is not consent. */}
-                      <option value="muse-spark-1.3">Muse Spark 1.3 (vision, 1M context)</option>
-                      <option value="muse-spark-1.2">Muse Spark 1.2 (vision, 1M context)</option>
-                      <option value="muse-spark-1.1">Muse Spark 1.1 (vision, 1M context)</option>
-                      <option value="muse-spark-1.3-contributor">Muse Spark 1.3 — Contributor: Meta trains on your prompts AND replies</option>
-                      <option value="muse-spark-1.2-contributor">Muse Spark 1.2 — Contributor: Meta trains on your prompts AND replies</option>
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {renderRich(t('model.meta.help'))}
-                    </div>
-                  </div>
-                )}
-
-                {localAiName === 'GLM' && (
-                  <div className="mb-4">
-                    <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.glm.providerLabel')}</label>
-                    <select
-                      value={(specificModel || '').startsWith('digitalocean/') ? 'digitalocean' : 'zai'}
-                      onChange={(e) => {
-                        // Provider is derived from the model id prefix — one
-                        // field, no second state to drift out of sync.
-                        setSpecificModel(e.target.value === 'digitalocean' ? 'digitalocean/glm-5.2' : 'glm-5.2');
-                      }}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      <option value="zai">Z.AI (Zhipu) — api.z.ai</option>
-                      <option value="digitalocean">DigitalOcean Inference — inference.do-ai.run (US-hosted, ~half Z.ai price)</option>
-                    </select>
-                    <label className="text-xs font-medium text-muted-foreground block mb-1 mt-3">{t('model.glm.label')}</label>
-                    <ModelPriceSelect
-                      value={(() => {
-                        // Guard: a saved model that doesn't exist on the current
-                        // provider (e.g. glm-4.7 after switching to DigitalOcean)
-                        // renders as a disabled placeholder instead of a blank box.
-                        const isDO = (specificModel || '').startsWith('digitalocean/');
-                        const valid = isDO
-                          ? ['digitalocean/glm-5.2', 'digitalocean/glm-5.1', 'digitalocean/glm-5']
-                          : ['glm-5.3','glm-5.3-flash','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'];
-                        return valid.includes(specificModel || '') ? specificModel : '';
-                      })()}
-                      onChange={(e) => setSpecificModel(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    >
-                      {(specificModel || '').startsWith('digitalocean/') ? (
-                        <>
-                          {(!['digitalocean/glm-5.2','digitalocean/glm-5.1','digitalocean/glm-5'].includes(specificModel || '')) && (
-                            <option value="" disabled>{t('model.glm.notOnDO').replace('{model}', specificModel || '')}</option>
-                          )}
-                          <option value="digitalocean/glm-5.2">GLM-5.2 (262K context)</option>
-                          <option value="digitalocean/glm-5.1">GLM-5.1</option>
-                          <option value="digitalocean/glm-5">GLM-5</option>
-                        </>
-                      ) : (
-                        <>
-                          {(specificModel && !['glm-5.3','glm-5.3-flash','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'].includes(specificModel)) && (
-                            <option value="" disabled>{t('model.glm.notOnZai').replace('{model}', specificModel || '')}</option>
-                          )}
-                          <option value="glm-5.3">GLM-5.3 (latest, 1M context, reasoning always on)</option>
-                          <option value="glm-5.3-flash">GLM-5.3 Flash (multimodal, 1M context, reasoning always on)</option>
-                          <option value="glm-5.2">GLM-5.2</option>
-                          <option value="glm-5.1">GLM-5.1</option>
-                          <option value="glm-5">GLM-5</option>
-                          <option value="glm-5-turbo">GLM-5 Turbo (fast)</option>
-                          <option value="glm-5v-turbo">GLM-5V Turbo (fast multimodal)</option>
-                          <option value="glm-4.7">GLM-4.7</option>
-                          <option value="glm-4.6">GLM-4.6 (200K context)</option>
-                          <option value="glm-4.6v">GLM-4.6V (multimodal)</option>
-                          <option value="glm-4.6v-flash">GLM-4.6V Flash (fast multimodal)</option>
-                          <option value="glm-4.5-air">GLM-4.5 Air (cheap)</option>
-                        </>
-                      )}
-                    </ModelPriceSelect>
-                    <div className="text-[10px] text-muted-foreground mt-1 leading-relaxed">
-                      {(specificModel || '').startsWith('digitalocean/')
-                        ? renderRich(t('model.glm.helpDO'))
-                        : renderRich(t('model.glm.helpZai'))}
-                    </div>
-                  </div>
-                )}
+                <FamilyModelPicker
+                  family={localAiName}
+                  model={specificModel}
+                  onModel={setSpecificModel}
+                  authMode={claudeAuthMode}
+                  onAuthMode={setClaudeAuthMode}
+                  localModels={localModels}
+                  localModelsMeta={localModelsMeta}
+                  localModelsError={localModelsError}
+                  onRefreshLocal={refreshLocalModels}
+                />
 
                 {localAiName === 'Local' && (
                   <>
-                    <div className="mb-4">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-medium text-muted-foreground">{t('model.local.label')}</label>
-                        <button onClick={refreshLocalModels} className="text-[10px] text-indigo-500 hover:underline" type="button">{t('model.local.refresh')}</button>
-                      </div>
-                      <ModelPriceSelect
-                        value={specificModel}
-                        onChange={(e) => setSpecificModel(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                      >
-                        {localModels.length === 0 && <option value="">{t('model.local.none')}</option>}
-                        {/* Keep current value selectable even if not in list */}
-                        {specificModel && !localModels.includes(specificModel) && (
-                          <option value={specificModel}>{t('model.local.notLoaded').replace('{model}', specificModel)}</option>
-                        )}
-                        {localModels.map(m => {
-                          const meta = localModelsMeta[m];
-                          const flags = meta
-                            ? [meta.vision ? '👁' : '', meta.tools ? '🔨' : ''].filter(Boolean).join('')
-                            : '';
-                          const detail = meta
-                            ? [meta.params, meta.quant, meta.arch, meta.sizeGB].filter(Boolean).join(' · ')
-                            : '';
-                          return (
-                            <option key={m} value={m}>
-                              {meta?.publisher ? `${meta.publisher} · ` : ''}
-                              {meta && meta.displayName ? meta.displayName : m}
-                              {detail ? ` — ${detail}` : ''}
-                              {flags ? ` ${flags}` : ''}
-                              {meta && meta.loaded ? ' ⚡' : ''}
-                            </option>
-                          );
-                        })}
-                      </ModelPriceSelect>
-                      {localModelsError && (
-                        <div className="text-[10px] text-red-500 mt-1">{localModelsError}</div>
-                      )}
-                    </div>
                     <div className="mb-4">
                       <label className="text-xs font-medium text-muted-foreground block mb-1">
                         {t('model.local.ctxLabel')}
@@ -8872,6 +8611,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       appControlEnabled,
                       cameraEnabled,
                       autoTriggers,
+                      anchorSettings,
                       instructionOverrides,
                       toolInstruction,
                       toolImageInstruction,

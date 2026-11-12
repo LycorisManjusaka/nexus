@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from 'react';
-import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal, Download, ImageOff } from 'lucide-react';
+import { Pencil, Trash2, Check, X, FileText, Image as ImageIcon, Music, Video, File, EyeOff, Eye, RefreshCw, Brain, Volume2, Loader2, Copy, Square, Pause, Play, Bookmark, Globe, Link2, CornerDownRight, Wrench, Scissors, MessageSquare, MoreHorizontal, Download, ImageOff, Anchor } from 'lucide-react';
 import { format } from 'date-fns';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -168,7 +168,7 @@ const MarkdownBody = React.memo(function MarkdownBody(
   );
 });
 
-function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false }: any) {
+function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAttachment, onToggleThinking, reuseThinking = false, onRerun, onContinue, onAudioStateChange, onSpeakingChange, onTtsStatus, globalSettings, folders, folderName, isVRChatMode, deliveryCtx, isPastMessage = false, isOriginal = true, isFirstOriginal = false, onSetFirstOriginal, onCopyLink, linkCopied = false, onAnchor, anchorBusy = false }: any) {
   const t = useT();
   const { isMobile } = useDevice();
   const isUser = msg.role === 'user';
@@ -1958,9 +1958,24 @@ function MessageBubble({ msg, onEdit, onDelete, onToggleAttachment, onDeleteAtta
           if (!isUser && onRerun) tail.push({ key: 'rerun', run: onRerun, label: t('bubble.rerun'), icon: <RefreshCw size={14} />, tone: 'text-muted-foreground hover:text-indigo-500' });
           if (!isUser && onContinue) tail.push({ key: 'continue', run: onContinue, label: t('bubble.continue'), icon: <CornerDownRight size={14} />, tone: 'text-muted-foreground hover:text-amber-500' });
           if (onSetFirstOriginal) tail.push({ key: 'first', run: onSetFirstOriginal, label: isFirstOriginal ? t('bubble.firstOriginal.clear') : t('bubble.firstOriginal.set'), icon: <Bookmark size={14} fill={isFirstOriginal ? 'currentColor' : 'none'} />, tone: isFirstOriginal ? 'text-indigo-500 hover:text-muted-foreground' : 'text-muted-foreground hover:text-indigo-500' });
+          // The anchor: present only when ChatArea passes it (Behaviour → anchor
+          // ON, assistant replies only). Inert while a run for THIS reply is in
+          // flight — the report lands on the message, so a second press mid-run
+          // would only queue a duplicate.
+          if (!isUser && onAnchor) tail.push({ key: 'anchor', run: () => { if (!anchorBusy) onAnchor(msg.id); }, label: anchorBusy ? t('bubble.anchor.running') : t('bubble.anchor'), icon: anchorBusy ? <Loader2 size={14} className="animate-spin" /> : <Anchor size={14} />, tone: 'text-muted-foreground hover:text-sky-500' });
           tail.push({ key: 'delete', run: onDelete, label: isOriginal ? t('bubble.delete.original') : t('bubble.delete.cloned'), icon: <Trash2 size={14} />, tone: 'text-red-400 hover:text-red-500' });
           return (
           <div className={`absolute transition-opacity flex gap-1 ${
+            // DESKTOP WRAPS (つよ, 2026-11-12): the row had grown to eight or
+            // nine buttons and ran under the camera panel. `w-max` + a max
+            // width is what makes wrapping possible at all here: the bar is
+            // absolutely positioned at `left-full`, where the available width
+            // is zero, so a bare `flex-wrap` would shrink it to ONE button per
+            // row. 156px = five 28px buttons + four 4px gaps. The user side
+            // packs toward its bubble (`justify-end`). Mobile is untouched —
+            // it already folds the tail behind "…".
+            isMobile ? '' : `flex-wrap w-max max-w-[156px] ${isUser ? 'justify-end' : ''}`
+          } ${
             globalSettings?.alwaysShowHoverControls === true
               ? 'opacity-100'
               : 'opacity-0 group-hover/bubble:opacity-100 no-hover:opacity-100'

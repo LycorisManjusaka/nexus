@@ -1248,6 +1248,16 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'behavior.triggers.help': 'Normally a turn starts because a person pressed send. Tick a reason here to let it start without that. **Nothing is ticked by default**, and a conversation saved before this existed never asked for it, so it stays manual. Today an **open tab** is what notices and starts the turn; when nothing is ticked, the stock panel shows a button instead. (A server-side runner that works with every tab closed is phase 4b and is not built yet.)',
   'behavior.trigger.stock': 'Stocked messages',
   'behavior.trigger.stock.help': 'When messages are waiting in the stock and nothing is running, start a turn with them. Each distinct stock state is attempted once, so a failure leaves the messages waiting with a reason rather than retrying in a loop. OFF: they wait for the button.',
+  'behavior.anchor.label': 'Anchor',
+  'behavior.anchor.help': 'When ON, an anchor button appears on the being’s replies. Pressing it has a separate model read that reply and the turns just before it, and report what it sees. The report is shown under the reply and is never sent to the being. Pressing again replaces it. What the anchor checks for is written in <code>system_prompt_agents/en/anchor.md</code>, re-read on every run. The anchor is not given the being’s soul or its thinking. The cost of each call appears in Statistics on the "Anchor" row.',
+  'behavior.anchor.family': 'Model that acts as the anchor',
+  'bubble.anchor': 'Ask the anchor',
+  'bubble.anchor.running': 'The anchor is reading…',
+  'anchor.report.title': 'Anchor report',
+  'anchor.report.running': 'The anchor is reading…',
+  'anchor.report.thought': 'What the anchor thought ({n} characters)',
+  'anchor.report.error': 'The call failed:',
+  'anchor.report.empty': 'The anchor produced no output.',
   'sysmodal.tab.model': 'Model',
   // This field holds Layers 1-3 only. Layer 4 (summaries index) and Layer 5
   // (the being's own FOOTER.md) are appended at send time and are never stored
@@ -3088,6 +3098,16 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'behavior.triggers.help': '普通、ターンが始まるのは人が送信を押したからです。ここで理由にチェックを入れると、それ無しでも始まります。**既定では何も入っていません**。この項目が無かった時代に保存された会話は一度もそれを求めていないので、手動のままです。今これに気づいてターンを始めるのは**開いているタブ**です。チェックが無いときは、代わりにストックのパネルにボタンが出ます。（タブを全部閉じても動くサーバー側のランナーはフェーズ4bで、まだ作っていません。）',
   'behavior.trigger.stock': 'ストックされたメッセージ',
   'behavior.trigger.stock.help': 'ストックにメッセージが待っていて、何も走っていないとき、それらでターンを始めます。同じストックの状態につき試すのは1回だけなので、失敗したときはループせず、理由を添えて待ったままになります。OFF のときはボタンを待ちます。',
+  'behavior.anchor.label': '錨',
+  'behavior.anchor.help': 'ONにすると、存在の返答のボタンに錨が増えます。押すと、別のモデルがその返答と直前の流れを読んで、見えたことを報告します。報告は返答の下に出るだけで、存在には送られません。もう一度押すと新しい報告に置き換わります。錨が何を検査するかは <code>system_prompt_agents/ja/anchor.md</code> に書いてあり、毎回読み直されます。錨には存在の魂と思考は渡されません。呼び出しの料金は統計の「Anchor」の行に出ます。',
+  'behavior.anchor.family': '錨として動くモデル',
+  'bubble.anchor': '錨に見てもらう',
+  'bubble.anchor.running': '錨が読んでいます…',
+  'anchor.report.title': '錨の報告',
+  'anchor.report.running': '錨が読んでいます…',
+  'anchor.report.thought': '錨が考えたこと（{n} 文字）',
+  'anchor.report.error': '呼び出しに失敗しました:',
+  'anchor.report.empty': '錨は何も出力しませんでした。',
   'sysmodal.tab.model': 'モデル',
   // 「第N層」表記。同じ画面の隣のラベルが「第1〜5層」「第4層」なので、
   // 説明文で多数派の「Layer 1〜3」を使うと1画面に2系統を並べることになる。

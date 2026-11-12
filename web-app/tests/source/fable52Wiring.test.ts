@@ -32,7 +32,11 @@ import { VISION_CAPABLE_MODELS } from '@/lib/modelVision';
 import { familyFromModelId } from '@/lib/modelFamily';
 
 const CHATAREA = path.join(process.cwd(), 'src', 'components', 'ChatArea.tsx');
-const chatArea = fs.readFileSync(CHATAREA, 'utf-8');
+// 2026-11-12: the model lists moved out of ChatArea into FamilyModelPicker (one
+// component, used by the Model tab and by the anchor's picker). Both files are
+// read so gate 5 still covers every place a model id could be offered.
+const PICKER = path.join(process.cwd(), 'src', 'components', 'FamilyModelPicker.tsx');
+const chatArea = [fs.readFileSync(CHATAREA, 'utf-8'), fs.readFileSync(PICKER, 'utf-8')].join(String.fromCharCode(10));
 
 describe('Fable 5.2 wiring', () => {
   it('1. is priced — a row exists so its turns do not vanish from stats', () => {
