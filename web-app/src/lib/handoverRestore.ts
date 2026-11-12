@@ -58,9 +58,14 @@ import { estimateTokensForModel } from './tokenEstimate';
 /** Cap, in log text tokens, for a being whose folder has no explicit setting. */
 export const DEFAULT_MAX_CONVERSATION_LOG = 80000;
 
-/** The log cap is edited in units of 10k tokens: 1 → 10k, 100 → 1M. */
+/** The log cap is edited in units of 10k tokens: 0 → no past log, 1 → 10k,
+ *  100 → 1M. The minimum is 0 (not 1): a cap of 0 keeps NO carried-over
+ *  history — auto-trim removes all of it and restore puts none back — so a
+ *  being can be run on fresh-each-generation sessions. Readers of the cap must
+ *  use `?? DEFAULT`, never `|| DEFAULT`, or a deliberate 0 falls back to the
+ *  default. */
 export const LOG_CAP_UNIT = 10000;
-export const LOG_CAP_MIN_UNITS = 1;
+export const LOG_CAP_MIN_UNITS = 0;
 export const LOG_CAP_MAX_UNITS = 100;
 
 /** Hard stop on how many older generations one restore call will read. Far above
@@ -241,8 +246,19 @@ export interface RestorePlanReply {
    *                    generation 1, or the bottom row of its folder
    *   'not-head'     — something NEWER sits above this conversation, so what is
    *                    on screen is history (the same condition the past-log
-   *                    band warns about). Restoring into it would grow a log
-   *                    nobody is going to speak in, on open.
+   *                    band warns about). Restoring into it on OPEN would grow a
+   *                    log nobody is going to speak in. Emitted only when the
+   *                    caller did NOT pass `includePast`: a user who explicitly
+   *                    raises the cap on a past generation (to collect a
+   *                    complete transcript for statistics) opts into the restore,
+   *                    so that path passes `includePast` and this reason is not
+   *                    returned. Opening alone never sets it.
+   *   'inactive'     — the conversation is marked inactive ("…" → Mark inactive,
+   *                    dimmed in the sidebar). Its history is NOT put back,
+   *                    whether it is a head or a past generation and whether or
+   *                    not `includePast` was passed: an inactive conversation is
+   *                    one the user has set aside. Checked FIRST, before the
+   *                    chain, so a set-aside log never grows.
    *   'not-in-chain' — the conversation is not in its own folder's list at all
    *                    (marked corrupted, or a folderName that no longer
    *                    matches). Not the same as "nothing older".
@@ -263,5 +279,33 @@ export interface RestorePlanReply {
    * from the outside, and the one person who hit it spent half an hour unable
    * to tell "nothing to restore" from "refused to restore".
    */
-  reason?: 'not-numbered' | 'no-older' | 'not-head' | 'not-in-chain' | 'not-found';
+  reason?: 'not-numbered' | 'no-older' | 'not-head' | 'not-in-chain' | 'not-found' | 'inactive';
+}
+
+/**
+ * The restore gate: given what the server already knows about a conversation,
+ * which reason (if any) blocks putting its history back. `null` means restore
+ * proceeds. Pure so the route's branch order is testable without disk — the
+ * route reads `self`/`chain` and hands the facts here.
+ *
+ * Order matters and is fixed:
+ *   1. `inactive` FIRST — a set-aside conversation never grows, head or past,
+ *      with or without `includePast`. It short-circuits before the chain so a
+ *      dimmed log is answered the same way wherever it sits.
+ *   2. `not-in-chain` / `no-older` — structural "nothing to put back".
+ *   3. `not-head` LAST, and only when `includePast` is false — opening a past
+ *      generation must not grow it, but an explicit cap raise opts in.
+ */
+export function restoreGateReason(f: {
+  active: boolean;
+  orphan: boolean;
+  olderCount: number;
+  isHead: boolean;
+  includePast: boolean;
+}): RestorePlanReply['reason'] | null {
+  if (f.active === false) return 'inactive';
+  if (f.orphan) return 'not-in-chain';
+  if (f.olderCount === 0) return 'no-older';
+  if (!f.isHead && !f.includePast) return 'not-head';
+  return null;
 }

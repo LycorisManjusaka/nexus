@@ -444,6 +444,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // render for the rest of the conversation's life.
   const restoreFloorRef = useRef<{ convoId: string | null; floor: number | null }>({ convoId: null, floor: null });
   const restoreBusyRef = useRef(false);
+  // Last conversation-log cap observed by the restore effect, per conversation.
+  // A cap that is strictly larger than this on the SAME convoId is an explicit
+  // raise, which is the only thing that restores a past generation. A convoId
+  // mismatch (mount or switch) is never a raise. See the restore effect.
+  const prevCapRef = useRef<{ convoId: string | null; cap: number }>({ convoId: null, cap: 0 });
   // Byte length of the most recent serialized conversation. Fed by the save
   // effect (which stringifies anyway, so this is free) and read by handleSend
   // to warn BEFORE a large attachment makes the conversation unsavable.
@@ -2422,7 +2427,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // numbers on the same screen, and then the display is the thing that lies.
   const conversationLogCap =
     folders?.find((f: any) => f.name === folderName)?.settings?.maxConversationLog
-    || DEFAULT_MAX_CONVERSATION_LOG;
+    ?? DEFAULT_MAX_CONVERSATION_LOG;
   const contextElapsed = contextElapsedPercent(tokenBreakdown, conversationLogCap);
   // Past 100% the oldest exchanges start leaving the verbatim transcript. Both
   // the 💤 cue and the Soul Updater button key off this single boolean so they
@@ -2448,7 +2453,9 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (activeFolderSettings.autoTrimCopiedMessages === false) return;
     if (!firstOriginalMessageId) return;
     if (loading) return; // never trim mid-stream
-    const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+    // `??` not `||`: a deliberate cap of 0 ("no past log") must not fall back to
+    // the default. 0 means auto-trim removes all carried-over history.
+    const cap = activeFolderSettings.maxConversationLog ?? DEFAULT_MAX_CONVERSATION_LOG;
     // Log-only total: copied + original. System prompt and attachments excluded.
     const logTotal = logCapUsage(tokenBreakdown);
     if (logTotal <= cap) return;
@@ -2512,12 +2519,26 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (!firstOriginalMessageId && !firstOriginalIsNext) return;
     if (restoreBusyRef.current) return;
     const settings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-    const cap = settings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+    // `??` not `||`: a deliberate cap of 0 ("no past log") must not read as the
+    // default.
+    const cap = settings.maxConversationLog ?? DEFAULT_MAX_CONVERSATION_LOG;
+    // Did the user just RAISE the cap on THIS conversation? Only then does a past
+    // generation (not the chain head) restore — opening one must never silently
+    // grow it. `prevCapRef` holds the last cap seen per conversation; a mount or
+    // a conversation switch (convoId mismatch) is not a raise, so opening alone
+    // leaves `includePast` false. Recorded before the budget gate so a no-room
+    // pass still marks the cap as observed.
+    const prevCap = prevCapRef.current;
+    const capRaised = prevCap.convoId === convoId && cap > prevCap.cap;
+    prevCapRef.current = { convoId, cap };
     // The trimmer's measure, exactly: carried-over + new message text.
     const budget = cap - logCapUsage(tokenBreakdown);
     if (budget <= 0) return;
     const memo = restoreFloorRef.current;
-    if (memo.convoId === convoId) {
+    // A cap raise resets the floor memo: a past generation that answered
+    // 'not-head' (floor null) before now opts in via `includePast`, so the memo
+    // must not keep us from asking again.
+    if (memo.convoId === convoId && !capRaised) {
       if (memo.floor === null) return;   // nothing left at any budget
       if (budget < memo.floor) return;   // too small for the next message back
     }
@@ -2532,7 +2553,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
           // messages on the SAME scale the client just used to compute `budget`.
           // Without it the two sides size the same messages differently and the
           // restorer either overshoots the cap or stops short of it.
-          body: JSON.stringify({ convoId, budgetTokens: budget, excludeKeys, model: localAiName }),
+          // `includePast` is true only on an explicit cap raise (see capRaised
+          // above): the server restores a past generation only when the user
+          // opted in, never just from opening it.
+          body: JSON.stringify({ convoId, budgetTokens: budget, excludeKeys, model: localAiName, includePast: capRaised }),
         });
         if (!res.ok) {
           // Stop asking for this conversation, but say so — a restore that
@@ -5670,7 +5694,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             // Per-folder conversation-log cap (was global, moved into Folder
             // Settings; retired `maxRecommendedContext` 2026-10-03).
             const activeFolderSettings = folders?.find((f: any) => f.name === folderName)?.settings || {};
-            const cap = activeFolderSettings.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+            const cap = activeFolderSettings.maxConversationLog ?? DEFAULT_MAX_CONVERSATION_LOG;
             const { sys, copied, original, attach, detail, total } = tokenBreakdown;
             const logTotal = logCapUsage(tokenBreakdown);
             // Why the Att number is what it is: its composition, the path that

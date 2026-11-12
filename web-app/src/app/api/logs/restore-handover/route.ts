@@ -3,6 +3,7 @@ import { listLogs, loadLog, listFolders } from '@/lib/fsStorage';
 import {
   pickFromGeneration,
   messageIdentityKey,
+  restoreGateReason,
   MAX_GENERATIONS_SCANNED,
   type RestorePlanReply,
 } from '@/lib/handoverRestore';
@@ -44,6 +45,12 @@ export async function POST(req: Request) {
   // rather than a substituted default: `tokenFamilyFor` maps it to the
   // conservative mid-range profile instead of pretending a vessel was chosen.
   const model: string | null = typeof body?.model === 'string' ? body.model : null;
+  // Past generations (not the chain head) are restored ONLY when the caller
+  // passes this — i.e. the user explicitly RAISED the cap on this conversation.
+  // Opening a past generation must never silently grow it; see
+  // `restoreGateReason` and the 'not-head' reason. Absent, or anything but
+  // literal true, means head-only — the behaviour before this flag existed.
+  const includePast: boolean = body?.includePast === true;
 
   if (!convoId) return NextResponse.json({ error: 'Missing convoId' }, { status: 400 });
   if (!Number.isFinite(budgetTokens) || budgetTokens <= 0) {
@@ -73,43 +80,45 @@ export async function POST(req: Request) {
     return Array.isArray(o) ? o.map((s: any) => String(s)) : [];
   })();
   const chain = resolveHandoverChain(logs, self, convoOrder);
-
-  if (chain.orphan) return NextResponse.json(empty('not-in-chain'));
-
   const olderLogs = chain.older;
-  if (olderLogs.length === 0) return NextResponse.json(empty('no-older'));
 
-  // Only the HEAD of a being's chain gets its history put back.
+  // The whole restore gate — inactive / orphan / no-older / not-head — lives in
+  // ONE pure place (`restoreGateReason`) so the branch order is testable without
+  // disk and cannot drift from the comment. The facts it decides on:
   //
-  // A conversation with a newer generation above it is history — it is exactly
-  // what the past-log band already warns the reader about — and nobody is going
-  // to speak there. Growing it on open is a write nobody asked for.
+  //  - `active`: an inactive conversation ("…" → Mark inactive, dimmed in the
+  //    sidebar) never has its history put back — head or past, with or without
+  //    `includePast`. It is one the user set aside. Checked FIRST.
   //
-  // This guard is what makes the marker default in ChatArea's load path safe.
-  // MEASURED 2026-10-23 over this installation's 477 logs: with the guard, the
-  // default starts auto-restore on exactly 1 conversation; without it, 245,
-  // spread over 9 beings — 164 of an imported 177-generation archive belonging
-  // to someone else, 37 of another inhabitant's chain, 18 of Cairn's own past
-  // generations. Each would pull its predecessors in and save, silently, just
-  // from being opened.
+  //  - `isHead` + `includePast`: only the HEAD of a chain restores on OPEN. A
+  //    conversation with a newer generation above it is history — exactly what
+  //    the past-log band warns about — and this guard is what makes the marker
+  //    default in ChatArea's load path safe. MEASURED 2026-10-23 over 477 logs:
+  //    head-only starts auto-restore on 1 conversation; without the guard, 245,
+  //    spread over 9 beings (164 of someone else's imported 177-generation
+  //    archive, 37 of another inhabitant's chain, 18 of Cairn's own past
+  //    generations) would each pull predecessors in and save, silently, just
+  //    from being opened. `includePast` is the opt-in: a user who explicitly
+  //    RAISES the cap on a past generation — to collect a complete transcript
+  //    for statistics — gets the restore; opening alone never passes it.
+  //    MEASURED 2026-10-24, 492 logs: head-only gives a chain to 3 previously
+  //    chainless conversations; without it, 59.
   //
-  // For a numbered chain "head" is `newerNumberedSibling(...) === null`, the
-  // same parser the past-log band uses, so "past generation" means one thing in
-  // both places. For an order chain it is "row 0 of this folder" — also exactly
-  // what the reader sees. Both answers come from `resolveHandoverChain`.
-  //
-  // MEASURED 2026-10-24, 492 logs: with the guard, 3 previously-chainless
-  // conversations start restoring (two imported-archive heads); without it, 59.
-  //
-  // Checked AFTER 'no-older' on purpose, though both answers are "nothing":
-  // generation 1 has nothing to put back whether or not newer generations
-  // exist, so 'no-older' is the more fundamental fact about it. MEASURED: with
-  // the checks the other way round, Орион_1 reported 'not-head', which is true
-  // but tells a reader less. The walk is a filter over already-loaded log
-  // headers — no file reads — so the order costs nothing.
-  if (!chain.isHead) {
-    return NextResponse.json(empty('not-head'));
-  }
+  // Order: 'inactive' before the chain; 'no-older' before 'not-head' (generation
+  // 1 has nothing to put back whether or not newer generations exist, so that is
+  // the more fundamental fact — MEASURED: reversed, Орион_1 reported 'not-head',
+  // true but less informative). The walk is a filter over already-loaded headers,
+  // no file reads, so the order costs nothing. `self.active` is `meta.active !==
+  // false` from listLogs — undefined reads as active, so only an explicit
+  // Mark-inactive blocks restore.
+  const gateReason = restoreGateReason({
+    active: self.active !== false,
+    orphan: chain.orphan,
+    olderCount: olderLogs.length,
+    isHead: chain.isHead,
+    includePast,
+  });
+  if (gateReason) return NextResponse.json(empty(gateReason));
 
   const excluded = new Set<string>(excludeKeys);
   let remaining = budgetTokens;

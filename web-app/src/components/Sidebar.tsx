@@ -459,7 +459,7 @@ export default function Sidebar({
       // under the wrong profile is off by up to 66%, which changes how many
       // parts it produces — and nothing on screen says which scale was used.
       const tokenModel = beingVesselFamily(conversations, activeFolder.name, currentConvoId);
-      const logCap = activeFolder.settings?.maxConversationLog || DEFAULT_MAX_CONVERSATION_LOG;
+      const logCap = activeFolder.settings?.maxConversationLog ?? DEFAULT_MAX_CONVERSATION_LOG;
 
       // ── Phase 1: parse and PLAN. Nothing is written in this pass. ─────────
       // Splitting and dialect detection both change what the import produces,
@@ -1450,7 +1450,7 @@ export default function Sidebar({
                         min={LOG_CAP_MIN_UNITS}
                         max={LOG_CAP_MAX_UNITS}
                         step={1}
-                        value={Math.round((folderMaxConversationLog || DEFAULT_MAX_CONVERSATION_LOG) / LOG_CAP_UNIT)}
+                        value={Math.round((folderMaxConversationLog ?? DEFAULT_MAX_CONVERSATION_LOG) / LOG_CAP_UNIT)}
                         onChange={(e) => setFolderMaxConversationLog(clampLogCapUnits(parseInt(e.target.value, 10)) * LOG_CAP_UNIT)}
                         className="w-24 p-2 bg-background border border-border rounded-lg text-sm font-mono"
                       />
