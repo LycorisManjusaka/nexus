@@ -113,6 +113,7 @@ export default function FamilyModelPicker({
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="gemini-4-argon">Gemini 4 Argon</option>
+          <option value="gemini-4-hydrogen">Gemini 4 Hydrogen</option>
           <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
           <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
           <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>

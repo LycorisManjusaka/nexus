@@ -34,6 +34,10 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // argon measured 2026-10-14: synthetic 320x200 PNG reading "K7Q" -> answered
   // "K7Q" through generateContentStream (the production SDK path).
   'gemini-4-argon',
+  // hydrogen measured 2026-11-13 (REST generateContent): 320x200 PNG, one half
+  // green and one half red, asked which side is green. Both mirror images
+  // answered correctly (LEFT / RIGHT), so the answer was read, not guessed.
+  'gemini-4-hydrogen',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
@@ -326,6 +330,10 @@ export const AUDIO_CAPABLE_MODELS = new Set<string>([
   // gemini-3.8-flash, already in this set, answered DOWN 2/2. So argon is not
   // merely accepted here, it outperforms a member that already ships.
   'gemini-4-argon',
+  // hydrogen measured 2026-11-13: the same two-tone clip in both orders
+  // (220->1760 Hz and 1760->220 Hz, equal length). Answered UP and DOWN
+  // respectively, 2/2 correct.
+  'gemini-4-hydrogen',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
@@ -393,6 +401,9 @@ export const VIDEO_CAPABLE_MODELS = new Set<string>([
   // argon measured 2026-10-14: 2s mp4, 1s solid blue then 1s solid red ->
   // "Blue, red" (correct order).
   'gemini-4-argon',
+  // hydrogen measured 2026-11-13: 2s mp4 in both orders (blue->red, red->blue),
+  // answered "Blue, Red" and "Red, Blue".
+  'gemini-4-hydrogen',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
@@ -470,8 +481,11 @@ export function isVideoCapable(specificModel: string | undefined | null): boolea
 // while 'low' / 'medium' / 'high' all return 200. Without this entry the UI's
 // default path (minimal) 400s on every single turn, because the `pro` substring
 // rule in resolveGeminiMinThinkingLevel does not match the id "gemini-4-argon".
+// Gemini 4 Hydrogen: same 400 on 'minimal', measured 2026-11-13; low / medium /
+// high return 200.
 const GEMINI_NO_MINIMAL_THINKING = new Set<string>([
   'gemini-4-argon',
+  'gemini-4-hydrogen',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
 ]);
