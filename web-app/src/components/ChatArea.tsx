@@ -166,8 +166,11 @@ Claude   | claude-haiku-4-5-20251001    | off | Claude Haiku 4.5
 # Argon's catalogue output ceiling is 32768, half of every 3.x sibling's 65536.
 # gemini-4-hydrogen (measured 2026-11-13): also rejects 'minimal' with the same
 # 400; low/medium/high return 200. Catalogue: in=1048576, out=65536.
+# gemini-4-carbon (measured 2026-11-13): same 400 on 'minimal'; low/medium/high
+# return 200. Catalogue: in=1048576, out=32768 (Argon's ceiling, not Hydrogen's).
 Gemini   | gemini-4-argon               | on  | Gemini 4 Argon
 Gemini   | gemini-4-hydrogen            | on  | Gemini 4 Hydrogen
+Gemini   | gemini-4-carbon              | on  | Gemini 4 Carbon
 Gemini   | gemini-3.8-flash             | on  | Gemini 3.8 Flash
 Gemini   | gemini-3.7-flash             | on  | Gemini 3.7 Flash
 Gemini   | gemini-3.6-flash             | on  | Gemini 3.6 Flash
@@ -7983,6 +7986,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                           { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
                           { value: 'gemini-4-argon', label: 'gemini-4-argon (Google key)' },
                           { value: 'gemini-4-hydrogen', label: 'gemini-4-hydrogen (Google key)' },
+                          { value: 'gemini-4-carbon', label: 'gemini-4-carbon (Google key)' },
                           { value: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Google key)' },
                           { value: 'gemini-3.7-flash', label: 'gemini-3.7-flash (Google key)' },
                           { value: 'gemini-3.6-flash', label: 'gemini-3.6-flash (Google key)' },
@@ -8040,6 +8044,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <option value="qwen3.5-omni-plus">qwen3.5-omni-plus</option>
                         <option value="gemini-4-argon">gemini-4-argon</option>
                         <option value="gemini-4-hydrogen">gemini-4-hydrogen</option>
+                        <option value="gemini-4-carbon">gemini-4-carbon</option>
                         <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                         <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>
@@ -8095,6 +8100,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       >
                         <option value="gemini-4-argon">gemini-4-argon</option>
                         <option value="gemini-4-hydrogen">gemini-4-hydrogen</option>
+                        <option value="gemini-4-carbon">gemini-4-carbon</option>
                         <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                         <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                         <option value="gemini-3.6-flash">gemini-3.6-flash</option>

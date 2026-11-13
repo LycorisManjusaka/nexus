@@ -254,6 +254,13 @@
     "cacheWrite": 0,
     "output": 10
   },
+  "_NOTE_gemini-4-carbon": "In the live catalogue on 2026-11-13 (ListModels: in=1048576, out=32768, generateContent/countTokens/batchGenerateContent, no createCachedContent). Reachable with this house's ordinary paid key (generateContent 200, not gated). Prices read off aistudio.google.com/docs/pricing on 2026-11-13 through a page summariser, Gemini 4 Carbon Standard paid tier, cells quoted as returned: input '$2.00 through November 30, 2026.' / '$4.00 starting December 1, 2026.', output (incl. thinking) '$10.00 through November 30, 2026.' / '$20.00 starting December 1, 2026.', context caching '$0.10 through November 30, 2026.' / '$0.20 starting December 1, 2026.', 'Implicit caching only (explicit caching is not supported).'. Free tier: 'Not available'. Identical to Argon's row. Numbers below are the CURRENT introductory rate — REVISIT ON 2026-12-01, when all three double (same date as Argon). The page carries no eligibility / government-only wording for Carbon; usage terms were not read.",
+  "gemini-4-carbon": {
+    "input": 2.0,
+    "cachedInput": 0.1,
+    "cacheWrite": 0,
+    "output": 10
+  },
   "_NOTE_gemini-4-hydrogen": "In the live catalogue on 2026-11-13 (ListModels: in=1048576, out=65536, generateContent/countTokens/batchGenerateContent, no createCachedContent). Prices read off aistudio.google.com/docs/pricing on 2026-11-13 through a page summariser, Gemini 4 Hydrogen Standard paid tier, cells quoted as returned: input '$1.50', output (incl. thinking) '$7.50', context caching '$0.075' with the note 'Implicit caching only (explicit caching is not supported).'. UNLIKE Argon / Carbon / 3.8 Flash on the same page, the Hydrogen cells carry NO 'through ... starting ...' wording — no scheduled increase was published on that date. That is an observation of the page on one day, not a promise; re-read the row if Google announces a change. No prompt-length tier listed. Free tier exists. cachedInput is the published $0.075 (5% of input).",
   "gemini-4-hydrogen": {
     "input": 1.5,

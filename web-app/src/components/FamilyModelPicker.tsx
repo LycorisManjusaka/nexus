@@ -114,6 +114,7 @@ export default function FamilyModelPicker({
         >
           <option value="gemini-4-argon">Gemini 4 Argon</option>
           <option value="gemini-4-hydrogen">Gemini 4 Hydrogen</option>
+          <option value="gemini-4-carbon">Gemini 4 Carbon</option>
           <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
           <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
           <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
