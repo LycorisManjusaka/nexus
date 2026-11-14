@@ -1,4 +1,6 @@
 import fs from 'fs/promises';
+import { resolveOpenAIRoute, type OpenAIRoute } from './openAiRoutes';
+import { familyFromModelId } from './modelFamily';
 import path from 'path';
 import crypto from 'crypto';
 import { parseUpstreamError } from './bridgeErrorParse';
@@ -263,6 +265,67 @@ async function callLocalVision(params: {
   return { description, fromCache: false, usage };
 }
 
+// Every other family (2026-11-14, つよ: the eyes seat must offer every family
+// that can see). The endpoint, key and wire model come from resolveOpenAIRoute
+// — the SAME table the subagent uses — so a new family is wired once.
+// No temperature / top_p / max_tokens on purpose: several of these vessels
+// reject non-default sampling (reasoning GPTs, Kimi K3), and a capped call on
+// Meta spends the whole budget thinking and returns null (see openAiRoutes.ts).
+async function callOpenAiCompatVision(params: {
+  imageBase64: string;
+  imageMimeType: string;
+  eyesPrompt: string;
+  route: OpenAIRoute;
+}): Promise<EyesResult> {
+  const { imageBase64, imageMimeType, eyesPrompt, route } = params;
+  const dataUrl = `data:${imageMimeType};base64,${imageBase64}`;
+  const body = {
+    model: route.model,
+    messages: [
+      { role: 'user', content: [
+        { type: 'text', text: eyesPrompt },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ] },
+    ],
+    stream: false,
+  };
+  const res = await fetch(route.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...route.headers },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error(`[eyes/${route.label}] HTTP ${res.status} · FULL BODY:\n${errText}`);
+    const cleanMsg = parseUpstreamError(errText, res.status);
+    return { description: `[image — ${route.label} ${route.model} could not describe it: ${cleanMsg}]`, fromCache: false, error: cleanMsg };
+  }
+  const data = await res.json();
+  const usage = usageFromOpenAi(data?.usage);
+  const content = data?.choices?.[0]?.message?.content;
+  const description = (Array.isArray(content)
+    ? content.map((p: any) => (typeof p === 'string' ? p : p?.text || '')).join('')
+    : (content || '')).trim();
+  if (!description) {
+    return { description: '[image — eyes returned an empty description]', fromCache: false, error: 'empty', usage };
+  }
+  return { description, fromCache: false, usage };
+}
+
+/**
+ * Which family the eyes bridge sends a non-native id to, or null when one of
+ * the native branches (local / claude / gemini / mimo / Z.AI GLM) owns it.
+ * `digitalocean/glm-…` is GLM on DigitalOcean; familyFromModelId would call it
+ * Local because of the slash.
+ */
+export function eyesCompatFamily(eyesModel: string): string | null {
+  const lower = (eyesModel || '').toLowerCase();
+  if (lower.startsWith('digitalocean/')) return 'GLM';
+  const fam = familyFromModelId(lower);
+  return EYES_COMPAT_FAMILIES.has(fam) ? fam : null;
+}
+const EYES_COMPAT_FAMILIES = new Set(['ChatGPT', 'Grok', 'Qwen', 'DeepSeek', 'Kimi', 'MiniMax', 'Cohere', 'ByteDance', 'Meta']);
+
 // OAuth Claude vision. Describes the image using the Pro/Max SUBSCRIPTION token
 // via the Agent SDK (same sanctioned Claude Code client the main OAuth chat
 // path uses — NOT the raw Messages API), so it needs NO API key. This is the
@@ -362,6 +425,9 @@ async function callOAuthClaudeVision(params: {
  *                            needs oauthToken)
  *   • starts with "gemini" → Google Generative Language API (uses geminiKey)
  *   • starts with "mimo"   → Xiaomi MiMo hosted API (uses mimoKey)
+ *   • ChatGPT / Grok / Qwen / DeepSeek / Kimi / MiniMax / Cohere /
+ *     ByteDance / Meta / digitalocean/ GLM → that family's OpenAI-compatible
+ *     endpoint via resolveOpenAIRoute (uses `keys`)
  *   • anything else        → defaults to Z.AI GLM (uses zaiKey)
  *
  * Results are cached on disk by (imageBytes, eyesPrompt, eyesModel) so the
@@ -378,6 +444,8 @@ export async function describeImage(params: {
   mimoKey?: string;
   oauthToken?: string;
   allowHostAnthropicEnv?: boolean;
+  /** The whole key file, for families reached through resolveOpenAIRoute. */
+  keys?: any;
   /** Who this call is for. When given, the call is written to that
    *  being's auxiliary billing ledger. */
   bill?: AuxBillTarget;
@@ -411,6 +479,7 @@ export async function describeImage(params: {
 
   // Route by model prefix.
   const lower = eyesModel.toLowerCase();
+  const compatFamily = eyesCompatFamily(eyesModel);
   let result: EyesResult;
   try {
     if (lower.startsWith('local:')) {
@@ -444,6 +513,16 @@ export async function describeImage(params: {
         };
       }
       result = await callMimoVision({ imageBase64, imageMimeType, eyesPrompt, eyesModel, mimoKey });
+    } else if (compatFamily) {
+      const route = resolveOpenAIRoute(compatFamily, eyesModel, params.keys || {});
+      if (!route || !route.headers.Authorization) {
+        return {
+          description: `[image — eyes via ${route?.label || compatFamily} needs its API key in Settings]`,
+          fromCache: false,
+          error: 'no_key',
+        };
+      }
+      result = await callOpenAiCompatVision({ imageBase64, imageMimeType, eyesPrompt, route });
     } else {
       // GLM family (or unrecognized — assume GLM for backward compat).
       if (!zaiKey) {

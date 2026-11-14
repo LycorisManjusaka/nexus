@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { senseAccepts, senseFamilyOf, senseStoredValue, sensePickerId, senseFamilies, senseSeatDefault } from '@/lib/sensorModels';
+import { eyesCompatFamily } from '@/lib/eyesVision';
 
 test('every family-switch default can actually sit in its seat', () => {
   const bad: string[] = [];
@@ -49,13 +50,42 @@ test('every model the old watcher list offered survives the filter', () => {
 test('a text-only model is not offered as eyes, even on a routable family', () => {
   assert.equal(senseAccepts('eyes', 'GLM', 'glm-5.2'), false);
 });
-test('a model the bridge cannot route to is not offered, even if it perceives', () => {
-  // Kimi sees, but the eyes bridge has no Kimi route.
-  assert.equal(senseAccepts('eyes', 'Kimi', 'moonshotai/Kimi-K3'), false);
-  // DigitalOcean GLM would be sent to Z.AI by the eyes bridge's else-branch.
-  assert.equal(senseAccepts('eyes', 'GLM', 'digitalocean/glm-5.2'), false);
+test('the eyes seat offers every family of the Model tab (つよ, 2026-11-14)', () => {
+  for (const f of ['Gemini', 'Claude', 'ChatGPT', 'Grok', 'Qwen', 'DeepSeek', 'GLM', 'Kimi', 'Minimax', 'Cohere', 'MiMo', 'ByteDance', 'Meta', 'Local']) {
+    assert.ok(senseFamilies('eyes').includes(f), f);
+  }
+  assert.equal(senseAccepts('eyes', 'Kimi', 'moonshotai/Kimi-K3'), true);
+  assert.equal(senseAccepts('eyes', 'Cohere', 'command-a-vision-07-2025'), true);
+  assert.equal(senseAccepts('eyes', 'Grok', 'grok-4.7'), true);
+  assert.equal(senseAccepts('eyes', 'Minimax', 'MiniMax-M3'), true);
+  // Still blind ones stay out, whatever the family.
+  assert.equal(senseAccepts('eyes', 'DeepSeek', 'deepseek-v4-pro'), false);
+  assert.equal(senseAccepts('eyes', 'Cohere', 'command-a-reasoning'), false);
+});
+test('an id is only offered under its own family (never sent to another provider)', () => {
+  assert.equal(senseAccepts('eyes', 'Grok', 'gpt-5.4-mini'), false);
+  assert.equal(senseAccepts('eyes', 'ChatGPT', 'gpt-5.4-mini'), true);
   // The ears/video bridges test `seed`, so the `dola-` snapshot is unreachable.
   assert.equal(senseAccepts('ears', 'ByteDance', 'dola-seed-2-1-turbo-260628'), false);
+});
+test('the watcher needs video AND sound (つよ\'s decision)', () => {
+  // Sees video, cannot hear -> not offered. The id is reachable (`seed…`), so
+  // only the sound rule can turn it away (the dola- form is already unroutable
+  // and would pass this test for the wrong reason — it did, once).
+  assert.equal(senseAccepts('watcher', 'ByteDance', 'seed-2-1-pro-260628'), false);
+  assert.equal(senseAccepts('watcher', 'Gemini', 'gemini-4-hydrogen'), true);
+  assert.equal(senseAccepts('watcher', 'Qwen', 'qwen3.5-omni-flash'), true);
+  assert.equal(senseAccepts('watcher', 'ByteDance', 'seed-2-0-lite-260428'), true);
+});
+test('eyes routes a non-native family through the shared table', () => {
+  assert.equal(eyesCompatFamily('moonshotai/Kimi-K3'), 'Kimi');
+  assert.equal(eyesCompatFamily('muse-spark-1.3'), 'Meta');
+  assert.equal(eyesCompatFamily('digitalocean/glm-5.2'), 'GLM');
+  // Native branches keep their own callers.
+  assert.equal(eyesCompatFamily('gemini-4-hydrogen'), null);
+  assert.equal(eyesCompatFamily('glm-5v-turbo'), null);
+  assert.equal(eyesCompatFamily('mimo-v2.6-flash'), null);
+  assert.equal(eyesCompatFamily('claude-haiku-5-5'), null);
 });
 test('the eyes bridge is the only one with a Local and Claude seat', () => {
   assert.ok(senseFamilies('eyes').includes('Local'));
