@@ -14,6 +14,7 @@ import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, 
 import { createPortal, flushSync } from 'react-dom';
 import { makeIsOriginalId, makeIsOriginalIndex, optimisticMarkerIndex, adoptResolvedMarker, type FirstOriginalMarker } from '@/lib/firstOriginal';
 import { shouldReloadFromDisk, classifyLogLoad } from '@/lib/diskVersion';
+import { settingsSignature, shouldSkipAutoSave } from '@/lib/autoSaveSkip';
 import { planStopPress, planTurnNamed } from '@/lib/pendingStop';
 import { resolveAudioSessionRule } from '@/lib/audioSessionRule';
 import { mintTurnId } from '@/lib/turnName';
@@ -904,6 +905,8 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // needlessly churns bytes that rclone/Mercurial then have to re-sync. With
   // this flag, updatedAt only advances when the user actually changes something.
   const skipNextAutoSaveRef = useRef(false);
+  // The settings signature this tab last saw on disk — see lib/autoSaveSkip.
+  const diskSettingsSigRef = useRef<string | null>(null);
   // Set when a load could not READ the file (an unreadable status, a network
   // error, a body that did not parse) — as opposed to a 404, which is a real
   // answer. While it is true the auto-save is held off entirely, because the
@@ -1709,6 +1712,10 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
         // state below re-fires the auto-save effect; this flag makes that one
         // run skip its POST so the file's mtime/contents stay untouched.
         skipNextAutoSaveRef.current = true;
+        // A different conversation's settings are not "what this tab last saw
+        // on disk" for this one. Null = the one-shot skip applies unchanged
+        // (lib/autoSaveSkip).
+        diskSettingsSigRef.current = null;
         // Record the version this tab is now working from. Every save below
         // carries it, so a save built on a snapshot another tab has already
         // superseded is refused instead of silently overwriting.
@@ -1975,9 +1982,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // longer reaches this effect (it lives in the token-totals effect below), so
     // consuming the flag on this one fire is sufficient — genuine later edits
     // find the flag already cleared and save normally.
-    const skipSave = skipNextAutoSaveRef.current;
+    // ⚠ Not a bare one-shot any more (2026-11-14, Навигатор / 津代 item 3): a
+    // vessel changed DURING a turn reaches this fire with the flag set by the
+    // turn's patch, and a bare skip threw the change away — the screen said
+    // Sonnet, disk (and therefore the runner) said Fable. Skip only when the
+    // settings on screen are still the ones this tab last saw on disk.
+    const settingsSig = settingsSignature(buildLogData([]) as Record<string, unknown>);
+    const skipSave = shouldSkipAutoSave(skipNextAutoSaveRef.current, settingsSig, diskSettingsSigRef.current);
     skipNextAutoSaveRef.current = false;
-    if (skipSave) return;
+    if (skipSave) {
+      diskSettingsSigRef.current = settingsSig;
+      return;
+    }
+    diskSettingsSigRef.current = settingsSig;
 
     if (messages.length > 0) {
       const cleanMessages = messages.map(m => {
