@@ -1118,7 +1118,6 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // away from a viewport that never moved"; see scrollMagnet.ts for the
   // measurement that made the difference load-bearing.
   const lastScrollTopRef = useRef(0);
-  const initialMount = useRef(true);
   const prevMessagesLengthRef = useRef(0);
   const handleSendRef = useRef<any>(null);
   // Imperative handle to the input box (set/get its text) + the last VRChat
@@ -1569,17 +1568,28 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     return () => { cancelled = true; };
   }, [toolUseEnabled, toolInstruction, localAiName]);
 
-  // Sync specific model when changed from the sidebar
-  useEffect(() => {
-    if (initialMount.current) {
-      initialMount.current = false;
-      return;
-    }
-    // Fall back to the family default when the folder has a family but no saved
-    // model — otherwise this sets the model to undefined and the chat can't run
-    // until one is picked by hand.
-    setSpecificModel(folderModelForFamily(defaultSpecificModel, localAiName || aiName));
-  }, [defaultSpecificModel]);
+  // ── NO "sync the vessel from the being's default" effect here ─────────────
+  //
+  // There used to be one: whenever `defaultSpecificModel` (the being-level
+  // default, as THIS tab last fetched it) changed, the open conversation's
+  // vessel was overwritten with it, and the ordinary save wrote that to disk.
+  // It dates from when the sidebar had a model control. It has none now; the
+  // only writer of the being default is "Save as Folder Defaults", which
+  // writes this conversation's OWN vessel — for the tab that pressed it the
+  // effect was a no-op.
+  //
+  // MEASURED 2026-11-14 (Навигатор / Пилот: Sonnet 5 chosen, Fable 5.2
+  // answering later, from a phone, with an idle second tab at home): so the
+  // only time it could act was when the default changed from SOMEWHERE ELSE —
+  // another tab's "save as defaults", or another tab re-posting its stale
+  // whole copy of the being settings (every folder write sends
+  // `{...this tab's copy, oneKey}`). Then the next folder refresh in this tab
+  // silently swapped the vessel of a conversation nobody had touched.
+  //
+  // A conversation's vessel changes when someone changes it in THIS
+  // conversation, or the being calls change_model. A brand-new conversation
+  // still takes the being default once, in the load effect below.
+  // Pinned by tests/vesselNotSyncedFromDefault.test.ts.
 
   // Load chat
   useEffect(() => {

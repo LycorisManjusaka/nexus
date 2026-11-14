@@ -153,11 +153,16 @@ describe('source — the derivation is actually called', () => {
    * against each other. Both must go through folderModelForFamily — one of
    * them is the sidebar-sync effect, the other the new-conversation branch of
    * the loader, and fixing only one leaves the pair reachable.
+   *
+   * 2026-11-14: the sidebar-sync effect is GONE (it overwrote an open
+   * conversation's vessel whenever another tab changed the being default —
+   * tests/vesselNotSyncedFromDefault.test.ts). One applier is left, and it
+   * must still be the guarded one.
    */
-  it('both appliers of the folder default check the model against the family', () => {
+  it('the applier of the folder default checks the model against the family', () => {
     const code = codeLines(read(F.chatArea)).join('\n');
     const checked = (code.match(/setSpecificModel\(folderModelForFamily\(/g) || []).length;
-    assert.equal(checked, 2, `expected 2 guarded appliers, found ${checked}`);
+    assert.equal(checked, 1, `expected 1 guarded applier, found ${checked}`);
     assert.doesNotMatch(
       code,
       /setSpecificModel\(defaultSpecificModel \|\|/,
