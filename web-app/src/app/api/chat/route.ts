@@ -1451,7 +1451,7 @@ async function streamClaudeViaAgentSDK(args: {
             // never a tool argument — so an entity cannot sign mail as someone
             // else. Tool names as seen by the model: `mcp__nexus__write_letter`,
             // `mcp__nexus__list_letters`, etc.
-            const letterCtx = { me: folderName, convoId, instructions: I };
+            const letterCtx = { me: folderName, convoId, instructions: I, fullAccess: agentFullSystemAccess };
             nexusTools.push(
               sdk.tool(
                 'write_letter',
@@ -1460,8 +1460,9 @@ async function streamClaudeViaAgentSDK(args: {
                   to: z.union([z.string(), z.array(z.string())]).describe(I.writeLetterToParam),
                   title: z.string().describe(I.writeLetterTitleParam),
                   text: z.string().describe(I.writeLetterTextParam),
+                  attachments: z.array(z.string()).optional().describe(I.writeLetterAttachmentsParam),
                 },
-                async (a: { to: string | string[]; title: string; text: string }) => ({
+                async (a: { to: string | string[]; title: string; text: string; attachments?: string[] }) => ({
                   content: [{ type: 'text' as const, text: await runLetterTool('write_letter', a, letterCtx) }],
                 }),
               ),
@@ -3571,7 +3572,7 @@ async function streamViaAnthropicCompat(args: {
   }
   if (lettersEnabled) {
     tools.push(
-      { name: 'write_letter', description: I.toolWriteLetterDesc, input_schema: { type: 'object', properties: { to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam }, title: { type: 'string', description: I.writeLetterTitleParam }, text: { type: 'string', description: I.writeLetterTextParam } }, required: ['to', 'title', 'text'] } },
+      { name: 'write_letter', description: I.toolWriteLetterDesc, input_schema: { type: 'object', properties: { to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam }, title: { type: 'string', description: I.writeLetterTitleParam }, text: { type: 'string', description: I.writeLetterTextParam }, attachments: { type: 'array', items: { type: 'string' }, description: I.writeLetterAttachmentsParam } }, required: ['to', 'title', 'text'] } },
       { name: 'list_letters', description: I.toolListLettersDesc, input_schema: { type: 'object', properties: {}, required: [] } },
       { name: 'list_recipients', description: I.toolListRecipientsDesc, input_schema: { type: 'object', properties: {}, required: [] } },
       { name: 'read_letter', description: I.toolReadLetterDesc, input_schema: { type: 'object', properties: { id: { type: 'string', description: I.readLetterIdParam } }, required: ['id'] } },
@@ -4063,7 +4064,7 @@ async function streamViaAnthropicCompat(args: {
               } else if (tu.name === 'search_attachments') {
                 resultContent = await runSearchAttachments(folderName, String(tu.input?.query || '').trim(), !!tu.input?.regex, agentFullSystemAccess);
               } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
-                resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
+                resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I, fullAccess: agentFullSystemAccess });
               } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                 resultContent = await runBrowserTool(tu.name, tu.input || {}, {
                   me: folderName, allowedHosts: browserAllowedHosts,
@@ -5828,6 +5829,7 @@ export async function POST(req: Request) {
               to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam },
               title: { type: 'string', description: I.writeLetterTitleParam },
               text: { type: 'string', description: I.writeLetterTextParam },
+              attachments: { type: 'array', items: { type: 'string' }, description: I.writeLetterAttachmentsParam },
             },
             required: ['to', 'title', 'text'],
           },
@@ -6642,7 +6644,7 @@ export async function POST(req: Request) {
                   } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                     // Mail between identities. `me` is folderName — the sender is
                     // never taken from the model's arguments.
-                    resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I });
+                    resultContent = await runLetterTool(tu.name, tu.input || {}, { me: folderName, convoId, instructions: I, fullAccess: agentFullSystemAccess });
                   } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tu.name)) {
                     // Browser control. The host allowlist is enforced inside the
                     // executor, on the requested URL, on redirects, and as a
@@ -7088,6 +7090,7 @@ export async function POST(req: Request) {
                   to: { type: 'ARRAY', items: { type: 'STRING' }, description: I.writeLetterToParam },
                   title: { type: 'STRING', description: I.writeLetterTitleParam },
                   text: { type: 'STRING', description: I.writeLetterTextParam },
+                  attachments: { type: 'ARRAY', items: { type: 'STRING' }, description: I.writeLetterAttachmentsParam },
                 },
                 required: ['to', 'title', 'text'],
               },
@@ -7770,7 +7773,7 @@ export async function POST(req: Request) {
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
-                      result = { report: await runLetterTool(fc.name, fc.args || {}, { me: folderName, convoId, instructions: I }) };
+                      result = { report: await runLetterTool(fc.name, fc.args || {}, { me: folderName, convoId, instructions: I, fullAccess: agentFullSystemAccess }) };
                     } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(fc.name)) {
                       // Browser control. Allowlist enforcement lives in the
                       // executor, not here — see the Claude API site.
@@ -8877,6 +8880,7 @@ export async function POST(req: Request) {
                 to: { type: 'array', items: { type: 'string' }, description: I.writeLetterToParam },
                 title: { type: 'string', description: I.writeLetterTitleParam },
                 text: { type: 'string', description: I.writeLetterTextParam },
+                attachments: { type: 'array', items: { type: 'string' }, description: I.writeLetterAttachmentsParam },
               },
               required: ['to', 'title', 'text'],
             },
@@ -10322,7 +10326,7 @@ export async function POST(req: Request) {
                     } else if ((LETTER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
                       // Mail between identities. `me` is folderName — the sender
                       // is never taken from the model's arguments.
-                      resultText = await runLetterTool(tc.name, parsed || {}, { me: folderName, convoId, instructions: I });
+                      resultText = await runLetterTool(tc.name, parsed || {}, { me: folderName, convoId, instructions: I, fullAccess: agentFullSystemAccess });
                     } else if ((BROWSER_TOOL_NAMES as readonly string[]).includes(tc.name)) {
                       // Browser control. Allowlist enforcement lives in the
                       // executor, not here — see the Claude API site.

@@ -70,7 +70,7 @@ import fs from 'fs/promises';
 import type { Dirent } from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
-import { listFolders } from './fsStorage';
+import { listFolders, resolveBeingToolPath, ensureWorkspace } from './fsStorage';
 import {
   BEINGS_DIR,
   beingLettersInboxDir,
@@ -100,6 +100,125 @@ export interface LetterMeta {
   alsoTo: string[];    // co-recipients of the same letter (empty for a normal one)
   readAt?: string;     // best-effort, from sidecar contents when parseable
   archivedAt?: string;
+  /** Names of the files attached to this letter (see ATTACHMENTS below). */
+  attachments: string[];
+}
+
+// ── attachments ──────────────────────────────────────────────────────────────
+//
+// WHERE THEY LIVE (added 2026-11-14)
+//   beings/<to>/letters/from/<from>/<letter>.md.files/<name>
+//
+//   Next to the letter, in the same sender directory, and nowhere else. That
+//   one choice is what makes the 3003 bridge free: the bridge is a junction
+//   on exactly this sender directory (see ONE SENDER DIRECTORY MAY BE A
+//   JUNCTION above), so a file put here is already on the other side. Storing
+//   attachments in the house's content-addressed attachment store would have
+//   meant a second, per-house copy step for every bridged letter.
+//
+//   The directory is the truth, as with sidecars: what is in it is attached.
+//   readMailbox() only picks up names ending in ".md", so ".md.files" is never
+//   mistaken for a letter.
+//
+// WHY THE FILES ARE COPIED IN, NOT REFERENCED
+//   The sender may delete or edit the desk file the moment the letter is sent.
+//   A letter is meant to last, so it carries its own bytes.
+//
+// HOW THE READER GETS THEM
+//   read_letter copies them into the READER's desk (letter_attachments/<id>/).
+//   That is what lets the reader both open them with Read and show them to the
+//   person in front of them with an ordinary `![](...)` — the HTTP file route
+//   serves workspace paths only and deliberately ignores Full PC access (see
+//   resolveWorkspacePathSafe), so a path outside the desk could never be shown.
+
+export const MAX_LETTER_ATTACHMENTS = 20;
+export const MAX_LETTER_ATTACHMENT_BYTES = 200 * 1024 * 1024;
+const FILES_SUFFIX = '.files';
+/** Desk folder read_letter copies attachments into. */
+export const LETTER_ATTACHMENTS_DESK_DIR = 'letter_attachments';
+
+export function letterFilesDir(letterFile: string): string {
+  return letterFile + FILES_SUFFIX;
+}
+
+/**
+ * A filename safe on every machine this house syncs to: the last path segment
+ * only, no Windows-reserved characters or device names, no trailing dot/space.
+ * Non-ASCII is KEPT — unlike letter filenames, an attachment's name is what the
+ * reader sees, and "蟹.jpg" turned into "_.jpg" would lose the only label it has.
+ */
+export function safeAttachmentName(raw: string): string {
+  const last = String(raw || '').split(/[\\/]/).pop() || '';
+  let s = last.replace(/[\x00-\x1f<>:"|?*]/g, '_').replace(/[. ]+$/, '').trim();
+  if (!s || s === '.' || s === '..') s = 'file';
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(s)) s = '_' + s;
+  if (s.length > 120) {
+    const ext = path.extname(s).slice(0, 16);
+    s = s.slice(0, 120 - ext.length) + ext;
+  }
+  return s;
+}
+
+/** Make names unique within one letter: "a.png", "a (2).png", … */
+export function uniqueAttachmentNames(names: string[]): string[] {
+  const used = new Set<string>();
+  return names.map((n) => {
+    let cand = n;
+    const ext = path.extname(n);
+    const stem = ext ? n.slice(0, -ext.length) : n;
+    for (let i = 2; used.has(cand.toLowerCase()); i++) cand = `${stem} (${i})${ext}`;
+    used.add(cand.toLowerCase());
+    return cand;
+  });
+}
+
+export interface LetterFile { name: string; data: Buffer }
+
+async function listAttachmentNames(letterFile: string): Promise<string[]> {
+  try {
+    const ents = await fs.readdir(letterFilesDir(letterFile), { withFileTypes: true });
+    return ents.filter((e) => e.isFile()).map((e) => e.name).sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+/** Absolute path of one attachment, or null if `name` is not one of them. */
+export async function letterAttachmentPath(meta: LetterMeta, name: string): Promise<string | null> {
+  const names = await listAttachmentNames(meta.file);
+  return names.includes(name) ? path.join(letterFilesDir(meta.file), name) : null;
+}
+
+/**
+ * Copy a letter's attachments into `deskRoot/letter_attachments/<id>/`.
+ * Returns desk-relative paths (forward slashes, as written in markdown). An
+ * existing copy of the same size is left alone, so re-reading costs nothing.
+ */
+export async function copyAttachmentsToDesk(
+  meta: LetterMeta,
+  deskRoot: string,
+): Promise<{ rel: string; bytes: number }[]> {
+  const out: { rel: string; bytes: number }[] = [];
+  const names = await listAttachmentNames(meta.file);
+  if (!names.length) return out;
+  const destDir = path.join(deskRoot, LETTER_ATTACHMENTS_DESK_DIR, meta.id);
+  await fs.mkdir(destDir, { recursive: true });
+  for (const name of names) {
+    const src = path.join(letterFilesDir(meta.file), name);
+    const dest = path.join(destDir, name);
+    const st = await fs.stat(src);
+    let same = false;
+    try { same = (await fs.stat(dest)).size === st.size; } catch { /* not copied yet */ }
+    if (!same) await fs.copyFile(src, dest);
+    out.push({ rel: `${LETTER_ATTACHMENTS_DESK_DIR}/${meta.id}/${name}`, bytes: st.size });
+  }
+  return out;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export type LetterDirection = 'in' | 'out';
@@ -329,6 +448,7 @@ async function readMailbox(to: string, from: string): Promise<LetterMeta[]> {
       archived: archSc.present,
       readAt: readSc.at,
       archivedAt: archSc.at,
+      attachments: await listAttachmentNames(file),
     });
   }
   out.sort(byNewest);
@@ -483,6 +603,8 @@ export async function writeLetter(
    * told a letter was opened, never that it was set aside.
    */
   alsoTo: string[] = [],
+  /** Files to attach, already read by the caller (names already unique). */
+  files: LetterFile[] = [],
 ): Promise<WriteLetterResult> {
   const cleanTo = (to || '').trim();
   const cleanTitle = (title || '').trim();
@@ -556,6 +678,21 @@ export async function writeLetter(
       }
       if (++tries > 50) return { ok: false, error: 'Could not find a free filename for this letter.' };
       filename = `${stamp}_${randomSuffix()}.md`;
+    }
+  }
+
+  if (files.length) {
+    // A letter that says it carries a picture and arrives without it misleads
+    // the reader, so a failed attachment takes the letter back with it.
+    const letterPath = path.join(dir, filename);
+    const filesDir = letterFilesDir(letterPath);
+    try {
+      await fs.mkdir(filesDir, { recursive: true });
+      for (const f of files) await fs.writeFile(path.join(filesDir, f.name), f.data, { flag: 'wx' });
+    } catch (e: any) {
+      try { await fs.rm(filesDir, { recursive: true, force: true }); } catch { /* best effort */ }
+      try { await fs.unlink(letterPath); } catch { /* best effort */ }
+      return { ok: false, error: `Could not attach the files: ${e?.message || 'unknown error'}` };
     }
   }
 
@@ -700,7 +837,12 @@ export async function updateLetter(
     if (!title) return { ok: false, error: 'A title is required.' };
     await fs.writeFile(
       meta.file,
-      buildLetterFile(current.from || meta.from, current.to || meta.to, title, current.sent || meta.sent, body),
+      // `also` is carried through: rebuilding without it silently turned a
+      // letter sent to several people into one that reads as personal.
+      buildLetterFile(
+        current.from || meta.from, current.to || meta.to, title, current.sent || meta.sent, body,
+        (current.also || '').split(',').map((x) => x.trim()).filter(Boolean),
+      ),
     );
     regenerateStatus().catch(() => {});
     return { ok: true };
@@ -716,6 +858,7 @@ export async function deleteLetter(meta: LetterMeta): Promise<{ ok: boolean; err
       try { await fs.unlink(meta.file + suffix); } catch { /* may not exist */ }
     }
     await fs.unlink(meta.file);
+    try { await fs.rm(letterFilesDir(meta.file), { recursive: true, force: true }); } catch { /* none */ }
     // Leave the (now possibly empty) mailbox directory: recreating it costs
     // nothing and removing it races with a delivery in flight.
     regenerateStatus().catch(() => {});
@@ -807,6 +950,52 @@ export interface LetterToolCtx {
   convoId?: string;
   /** Resolved (per-Entity overridable) instruction strings. */
   instructions?: Record<string, string>;
+  /** The being's Full PC access toggle — decides which paths it may attach. */
+  fullAccess?: boolean;
+}
+
+/** Attachment paths in whatever shape the model emitted (same tolerance as recipients). */
+export function normalizeAttachmentPaths(raw: any): string[] {
+  const out: string[] = [];
+  const push = (v: any) => {
+    const s = String(v ?? '').trim();
+    if (!s) return;
+    if (/^\[[\s\S]*\]$/.test(s)) {
+      try { const p = JSON.parse(s); if (Array.isArray(p)) { p.forEach(push); return; } } catch { /* a path */ }
+    }
+    if (!out.includes(s)) out.push(s);
+  };
+  if (Array.isArray(raw)) raw.forEach(push); else if (raw != null) push(raw);
+  return out;
+}
+
+/**
+ * Read the files a being asked to attach. Any problem fails the WHOLE letter
+ * before anything is delivered: a letter that went out without the picture it
+ * talks about is worse than one the sender is asked to fix.
+ */
+async function loadAttachments(me: string, paths: string[], fullAccess: boolean): Promise<{ files: LetterFile[] } | { error: string }> {
+  if (paths.length > MAX_LETTER_ATTACHMENTS) {
+    return { error: `too many attachments (${paths.length}). One letter may carry at most ${MAX_LETTER_ATTACHMENTS} files.` };
+  }
+  const loaded: { name: string; data: Buffer }[] = [];
+  for (const p of paths) {
+    const abs = await resolveBeingToolPath(me, p, { fullAccess });
+    if (!abs) {
+      return { error: fullAccess
+        ? `cannot attach "${p}": that path could not be resolved.`
+        : `cannot attach "${p}": only files inside your desk can be attached (the same files your file tools can open).` };
+    }
+    let st;
+    try { st = await fs.stat(abs); } catch { return { error: `cannot attach "${p}": no such file.` }; }
+    if (!st.isFile()) return { error: `cannot attach "${p}": it is a folder, not a file. Attach the files inside it one by one.` };
+    if (st.size > MAX_LETTER_ATTACHMENT_BYTES) {
+      return { error: `cannot attach "${p}": it is ${fmtBytes(st.size)}, over the ${fmtBytes(MAX_LETTER_ATTACHMENT_BYTES)} limit per file.` };
+    }
+    loaded.push({ name: safeAttachmentName(abs), data: await fs.readFile(abs) });
+  }
+  const names = uniqueAttachmentNames(loaded.map((f) => f.name));
+  return { files: loaded.map((f, i) => ({ name: names[i], data: f.data })) };
 }
 
 // Newest-first listings are capped so a long correspondence can't quietly eat
@@ -878,7 +1067,7 @@ function fillTokens(template: string, vars: Record<string, string>): string {
 function describeInbound(l: LetterMeta): string {
   const state = l.read ? (l.archived ? 'read, archived' : 'read') : (l.archived ? 'archived unread' : 'UNREAD');
   const also = l.alsoTo?.length ? ` · also to ${l.alsoTo.join(', ')}` : '';
-  return `- ${l.id} · from ${l.from} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}${also}`;
+  return `- ${l.id} · from ${l.from} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}${also}${l.attachments?.length ? ` · ${l.attachments.length} attachment${l.attachments.length === 1 ? '' : 's'}` : ''}`;
 }
 
 function describeOutbound(l: LetterMeta): string {
@@ -891,7 +1080,34 @@ function describeOutbound(l: LetterMeta): string {
   // each row makes it obvious they are the same letter rather than several
   // near-identical ones the sender might think it needs to write again.
   const also = l.alsoTo?.length ? ` · also to ${l.alsoTo.join(', ')}` : '';
-  return `- ${l.id} · to ${l.to} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}${also}`;
+  return `- ${l.id} · to ${l.to} · "${l.title}" · ${fmtWhen(l.sent)} · ${state}${also}${l.attachments?.length ? ` · ${l.attachments.length} attachment${l.attachments.length === 1 ? '' : 's'}` : ''}`;
+}
+
+/**
+ * The attachment section of read_letter's result. The files are copied into
+ * the reader's desk first, so every path named here is one the reader can
+ * really Read and really show — stating a path that cannot be opened would be
+ * the very failure this was built to end (a desk path from the sender's side
+ * arrived as a dead string).
+ */
+async function describeAttachmentsForReader(meta: LetterMeta, me: string): Promise<string[]> {
+  if (!meta.attachments?.length) return [];
+  try {
+    const copied = await copyAttachmentsToDesk(meta, await ensureWorkspace(me));
+    return [
+      '',
+      `--- Attachments (${copied.length}) — copied into your desk ---`,
+      ...copied.map((c) => `- ${c.rel} (${fmtBytes(c.bytes)})`),
+      'Open one with your Read tool to see it (an image is shown to you as an image). To show it to the person ' +
+      `you are talking with, write it in your reply as markdown, e.g. ![](${copied[0].rel}).`,
+    ];
+  } catch (e: any) {
+    return [
+      '',
+      `--- Attachments (${meta.attachments.length}): ${meta.attachments.join(', ')} ---`,
+      `They could not be copied into your desk (${e?.message || 'unknown error'}), so they cannot be opened this time.`,
+    ];
+  }
 }
 
 /**
@@ -928,12 +1144,20 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
         // `from` is ctx.me, resolved server-side from the conversation's folder.
         // It is deliberately NOT read from args: otherwise any entity could sign
         // mail as any other.
+        const attachPaths = normalizeAttachmentPaths(args?.attachments ?? args?.files ?? args?.attachment);
+        let files: LetterFile[] = [];
+        if (attachPaths.length) {
+          const loaded = await loadAttachments(me, attachPaths, !!ctx.fullAccess);
+          if ('error' in loaded) return `Error: ${loaded.error} Nothing was sent.`;
+          files = loaded.files;
+        }
+
         const delivered: string[] = [];
         const failed: string[] = [];
         let firstId = '';
         for (const target of targets) {
           const others = targets.filter((t) => t !== target);
-          const r = await writeLetter(me, target, title, text, others);
+          const r = await writeLetter(me, target, title, text, others, files);
           if (r.ok) { delivered.push(r.to || target); if (!firstId) firstId = r.id || ''; }
           else failed.push(`${target} (${r.error})`);
         }
@@ -961,6 +1185,10 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
           (n) => !roster.some((r) => r === n || r.toLowerCase() === n.toLowerCase()),
         );
         const notes: string[] = [];
+        if (files.length) {
+          notes.push(`Attached (${files.length}): ${files.map((f) => `${f.name} (${fmtBytes(f.data.length)})`).join(', ')}. ` +
+            'They travel with the letter — deleting or changing your copies now does not affect it.');
+        }
         // Partial success is reported, never swallowed: the entity must know
         // which copies did not go out so it can decide whether to retry.
         if (failed.length) notes.push(`Not delivered: ${failed.join('; ')}`);
@@ -1034,6 +1262,7 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
         if (!hit) return 'Error: no letter with that id. Call list_letters to see the ids you can open.';
         const { meta, direction } = hit;
         const body = await readLetterBody(meta);
+        const attachBlock = await describeAttachmentsForReader(meta, me);
 
         if (direction === 'out') {
           // Re-reading your OWN letter must not write the .read sidecar — that
@@ -1050,6 +1279,7 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
             `Status: ${status}`,
             '',
             body || '(empty)',
+            ...attachBlock,
           ].join('\n');
         }
 
@@ -1064,6 +1294,7 @@ export async function runLetterTool(name: string, args: any, ctx: LetterToolCtx)
           ...(meta.alsoTo?.length ? [`Also sent to: ${meta.alsoTo.join(', ')}`] : []),
           '',
           body || '(empty)',
+          ...attachBlock,
         ].join('\n');
       }
 

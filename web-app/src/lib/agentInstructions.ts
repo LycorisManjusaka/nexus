@@ -315,6 +315,12 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
     'A short subject line. It is what they see before deciding whether to open the letter, so make it say something.',
   writeLetterTextParam:
     'The letter itself. Write it in full — they cannot ask you a follow-up question, and you will not be there when they read it.',
+  writeLetterAttachmentsParam:
+    'Optional. Paths of files to send with the letter — images, audio, video, documents, anything — given the ' +
+    'same way your file tools take paths. The files are copied into the letter, so it keeps them even if you ' +
+    'delete yours later. The reader receives them in their own desk, can open them, and can show them to the ' +
+    'person they are talking with. Writing ![](path) in the letter text does NOT send a file: the reader ' +
+    'cannot reach your desk, so it arrives as a dead string. List the file here instead.',
 
   toolListLettersDesc:
     'List your letters: the ones written TO you (with whether you have read or archived each) and the ones ' +
@@ -872,6 +878,7 @@ export const AGENT_INSTRUCTION_LABELS: { key: string; label: string }[] = [
   { key: 'writeLetterToParam', label: 'Tool: write_letter — "to" parameter' },
   { key: 'writeLetterTitleParam', label: 'Tool: write_letter — "title" parameter' },
   { key: 'writeLetterTextParam', label: 'Tool: write_letter — "text" parameter' },
+  { key: 'writeLetterAttachmentsParam', label: 'Tool: write_letter — "attachments" parameter' },
   { key: 'toolListLettersDesc', label: 'Tool: list_letters — description' },
   { key: 'toolListRecipientsDesc', label: 'Tool: list_recipients — description' },
   { key: 'toolReadLetterDesc', label: 'Tool: read_letter — description' },
@@ -973,6 +980,7 @@ export const AGENT_INSTRUCTION_LABELS_JA: Record<string, string> = {
   writeLetterToParam: 'ツール write_letter —「to」引数',
   writeLetterTitleParam: 'ツール write_letter —「title」引数',
   writeLetterTextParam: 'ツール write_letter —「text」引数',
+  writeLetterAttachmentsParam: 'ツール write_letter —「attachments」引数',
   toolListLettersDesc: 'ツール list_letters — 説明',
   toolListRecipientsDesc: 'ツール list_recipients — 説明',
   toolReadLetterDesc: 'ツール read_letter — 説明',

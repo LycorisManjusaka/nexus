@@ -391,6 +391,16 @@ async function resolvePathForAccess(folderName: string, relPath: string, opts?: 
   return resolveWorkspacePathSafe(folderName, relPath);
 }
 
+/**
+ * The same resolution a being's own file tools get (sandboxed unless
+ * fullAccess). Exported for write_letter's attachments, so a being can attach
+ * exactly the files it could already Read — no more, no less. NOT for HTTP
+ * routes: see resolveWorkspacePathSafe.
+ */
+export async function resolveBeingToolPath(folderName: string, relPath: string, opts?: WsOpts): Promise<string | null> {
+  return resolvePathForAccess(folderName, relPath, opts);
+}
+
 export async function listWorkspaceFiles(folderName: string): Promise<string[]> {
   const root = await ensureWorkspace(folderName);
   const trustedRoot = await getTrustedJunctionRoot();

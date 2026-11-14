@@ -30,7 +30,10 @@ interface Letter {
   readAt?: string;
   archivedAt?: string;
   body?: string;
+  attachments?: string[];
 }
+
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
 type StateFilter = 'all' | 'unread' | 'read' | 'archived';
 
@@ -486,6 +489,27 @@ export default function MailModal({
                     )}
                   </div>
                 </div>
+
+                {!!detail.attachments?.length && (
+                  <div className="flex flex-wrap items-start gap-2 border-b border-border px-4 py-2">
+                    <span className="text-[11px] text-muted-foreground">
+                      {t('mail.attachments').replace('{n}', String(detail.attachments.length))}
+                    </span>
+                    {detail.attachments.map((name) => {
+                      const src = `/api/letters?id=${encodeURIComponent(detail.id)}&file=${encodeURIComponent(name)}`;
+                      return IMAGE_EXT.test(name) ? (
+                        <a key={name} href={src} target="_blank" rel="noreferrer" title={name}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={src} alt={name} className="h-16 max-w-[8rem] rounded border border-border object-cover" />
+                        </a>
+                      ) : (
+                        <a key={name} href={`${src}&download=1`} className="rounded bg-muted px-2 py-1 font-mono text-[11px] hover:underline">
+                          {name}
+                        </a>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <textarea
                   value={draftText}

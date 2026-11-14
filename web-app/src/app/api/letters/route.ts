@@ -13,7 +13,9 @@ import {
   correspondentNames,
   knownIdentities,
   regenerateStatus,
+  letterAttachmentPath,
 } from '@/lib/letters';
+import { mimeForRef } from '@/lib/attachmentStore';
 
 // Human-facing Mail Manager API. Entities never touch this route — they reach
 // letters only through their four tools, which are scoped to their own two
@@ -36,6 +38,24 @@ export async function GET(req: Request) {
     if (id) {
       const meta = await resolveAnyLetter(id);
       if (!meta) return NextResponse.json({ error: 'No letter with that id.' }, { status: 404 });
+      // `?id=&file=<name>` → that attachment's bytes. The name must be one the
+      // letter actually carries (letterAttachmentPath checks), so this cannot
+      // be steered at any other file.
+      const fileName = url.searchParams.get('file');
+      if (fileName) {
+        const abs = await letterAttachmentPath(meta, fileName);
+        if (!abs) return NextResponse.json({ error: 'No such attachment.' }, { status: 404 });
+        const data = await fs.readFile(abs);
+        const ascii = fileName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+        const disp = url.searchParams.get('download') ? 'attachment' : 'inline';
+        return new Response(new Uint8Array(data), {
+          headers: {
+            'Content-Type': mimeForRef(fileName),
+            'Content-Length': String(data.length),
+            'Content-Disposition': `${disp}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+          },
+        });
+      }
       const { file, ...safe } = meta; // absolute paths stay server-side
       return NextResponse.json({ letter: { ...safe, body: await readLetterBody(meta) } });
     }
