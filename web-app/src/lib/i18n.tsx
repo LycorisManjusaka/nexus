@@ -976,6 +976,15 @@ export const UI_STRINGS_EN: Record<string, string> = {
   'chat.elapsed.tip':
     'Context elapsed: {pct}% — original (non-copied) messages {original} ÷ the conversation log cap {cap} tokens. Copied messages, attachments and the system prompt are not counted: the system prompt sits outside the cap, so a longer soul no longer makes this number climb.\n\nHow much of this session’s room has been used since the last consolidation ("sleep"). It is NOT a condition: the being is exactly as capable and has exactly the same tool access at 95% as at 5%. Past 100%, the oldest exchanges begin to consolidate — they leave the verbatim transcript and remain as summary in the layers. A high number is a cue to record anything that must survive word-for-word, not a reason to expect worse output.',
   'chat.sleep.badge': '💤 sleep',
+  'chat.usage.title': 'Claude subscription usage (the same numbers as the Claude.ai usage page)',
+  'chat.usage.five': '5h',
+  'chat.usage.week': 'wk',
+  'chat.usage.resets': 'resets {time}',
+  'chat.usage.wasReset': 'reset at {time} (the new value arrives with the next OAuth turn)',
+  'chat.usage.unknown': 'not received yet',
+  'chat.usage.asOf': 'Last received: {time}',
+  'chat.usage.none': 'Nothing received yet. Run one OAuth turn and it appears.',
+  'chat.usage.note': 'Anthropic reports these numbers while an OAuth turn is running; they do not update between turns. Per-model buckets (such as Fable) are not reported, so they are not shown.',
   'chat.sleep.tip':
     'Context elapsed has passed 100%. The oldest exchanges are now being consolidated — they leave the verbatim transcript and remain as summary in the layers.\n\nStarting a fresh conversation ("sleep") makes everything from that point verbatim again. Record anything that must survive word-for-word before you do.\n\nThis is a cue only — nothing happens automatically, and the being is exactly as capable and has exactly the same tool access as at 5%.',
   'chat.cost.tip': 'Estimated cost of this conversation’s new (non-copied) replies: {total}',
@@ -2857,6 +2866,15 @@ export const UI_STRINGS_JA: Record<string, string> = {
   'chat.elapsed.tip':
     'コンテキスト経過：{pct}% — 新規（引き継ぎでない）メッセージ {original} ÷ 会話ログの上限 {cap} トークン。引き継ぎメッセージ・添付・システムプロンプトは数えません：システムプロンプトは上限の外にあるので、魂が長くなってもこの数値は上がりません。\n\n前回の統合（「睡眠」）以降、このセッションの領域をどれだけ使ったかを示します。これは状態ではありません：95% でも 5% でも、存在の能力もツールへのアクセスもまったく同じです。100% を超えると古いやり取りから順に統合され、逐語の記録から離れて各層に要約として残ります。数値が高いことは、逐語で残すべきものを書き留める合図であって、出力が悪くなる予兆ではありません。',
   'chat.sleep.badge': '💤 睡眠',
+  'chat.usage.title': 'Claude サブスクの使用量（Claude.ai の「ご利用状況」と同じ値）',
+  'chat.usage.five': '5時間',
+  'chat.usage.week': '週',
+  'chat.usage.resets': '{time} にリセット',
+  'chat.usage.wasReset': '{time} にリセット済み（新しい値は次の OAuth ターンで届きます）',
+  'chat.usage.unknown': 'まだ届いていません',
+  'chat.usage.asOf': '最後に届いた時刻: {time}',
+  'chat.usage.none': 'まだ一度も届いていません。OAuth のターンを1回走らせると出ます。',
+  'chat.usage.note': '値は OAuth のターンが走っている間に Anthropic から届きます。ターンの合間には更新されません。モデル別の枠（Fable など）は届かないので出していません。',
   'chat.sleep.tip':
     'コンテキスト経過が 100% を超えました。古いやり取りから順に統合されています — 逐語の記録から離れ、各層に要約として残ります。\n\n新しい会話を始める（「睡眠」）と、そこから先は再びすべてが逐語になります。逐語で残す必要があるものは、その前に記録してください。\n\nこれは合図にすぎません — 自動では何も起こらず、存在の能力もツールへのアクセスも 5% のときとまったく同じです。',
   'chat.cost.tip': 'この会話の新規（引き継ぎでない）応答の推定費用：{total}',

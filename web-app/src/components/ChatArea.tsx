@@ -45,6 +45,7 @@ import { dedupeMessageIds } from '@/lib/messageIds';
 import { applyTurnSaved, type TurnSavedEvent } from '@/lib/turnSaved';
 import { placeAnnouncedUser } from '@/lib/announcedUser';
 import { retiredModelLabel } from '@/lib/retiredModels';
+import { parseSnapshot, viewWindow, type ClaudeUsageSnapshot, type WindowView } from '@/lib/claudeUsage';
 import { buildSoulExport, soulExportFilename } from '@/lib/soulExport';
 import { defaultSummaryHintForLang } from '@/lib/summaryHint';
 import { useT, useLanguage, Tx, renderRich } from '@/lib/i18n';
@@ -2208,6 +2209,63 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     earsEnabled,
     watcherEnabled,
   }), [effSpecificModel, effAiName, claudeAuthMode, eyesEnabled, earsEnabled, watcherEnabled]);
+
+  // Claude subscription usage meter (5-hour / weekly windows). Shown only while
+  // the effective vessel is OAuth Claude — the same flag the context gauge's
+  // tip uses, so flipping the auth mode in settings shows/hides it at once.
+  // The numbers only exist when an OAuth turn has reported them
+  // (lib/claudeUsage.ts), so: read on show, poll while a turn runs, read once
+  // more when it ends, and tick each minute so a passed reset time stops
+  // displaying the old percentage.
+  const [claudeUsage, setClaudeUsage] = useState<ClaudeUsageSnapshot | null>(null);
+  const [usageNow, setUsageNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deliveryCtx.isOAuthClaude) return;
+    let alive = true;
+    const pull = () => {
+      fetch('/api/claude-usage', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (alive) { setClaudeUsage(parseSnapshot(d)); setUsageNow(Date.now()); } })
+        .catch(() => {});
+    };
+    pull();
+    const id = setInterval(pull, loading ? 5000 : 60000);
+    return () => { alive = false; clearInterval(id); };
+  }, [deliveryCtx.isOAuthClaude, loading]);
+  const renderUsageGauge = (mobile: boolean) => {
+    if (!deliveryCtx.isOAuthClaude) return null;
+    const five = viewWindow(claudeUsage?.fiveHour, usageNow);
+    const week = viewWindow(claudeUsage?.sevenDay, usageNow);
+    const hm = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dt = (ms: number) => new Date(ms).toLocaleString([], { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    const short = (v: WindowView) => (v.state === 'live' ? `${v.pct}%` : '—');
+    const line = (label: string, v: WindowView, fmt: (ms: number) => string) =>
+      v.state === 'live'
+        ? `${label}: ${v.pct}%` + (v.resetsAt ? ` (${t('chat.usage.resets').replace('{time}', fmt(v.resetsAt))})` : '')
+        : v.state === 'reset'
+          ? `${label}: ${t('chat.usage.wasReset').replace('{time}', fmt(v.resetsAt))}`
+          : `${label}: ${t('chat.usage.unknown')}`;
+    const tip = [
+      t('chat.usage.title'),
+      line(t('chat.usage.five'), five, hm),
+      line(t('chat.usage.week'), week, dt),
+      claudeUsage ? t('chat.usage.asOf').replace('{time}', dt(claudeUsage.capturedAt)) : t('chat.usage.none'),
+      t('chat.usage.note'),
+    ].join('\n');
+    const pct = five.state === 'live' ? five.pct : 0;
+    const barColor = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-400' : 'bg-violet-500';
+    return (
+      <div className={`flex flex-col items-end gap-1 cursor-default ${mobile ? 'w-full pb-1' : 'min-w-[120px]'}`} title={tip}>
+        <div className="flex h-2 w-full rounded-full overflow-hidden bg-muted/60 border border-border/50">
+          <div className={barColor} style={{ width: `${pct}%` }} />
+        </div>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-2 font-semibold whitespace-nowrap">
+          <span>{t('chat.usage.five')} {short(five)}{five.state === 'live' && five.resetsAt ? ` · ${hm(five.resetsAt)}` : ''}</span>
+          <span>{t('chat.usage.week')} {short(week)}</span>
+        </div>
+      </div>
+    );
+  };
 
   // Index of the last USER message. On the OAuth path only this message's
   // images become native image blocks; every earlier image is dropped, because
@@ -5696,6 +5754,11 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
               level with the token numbers — instead of being centred against a
               two-line block and claiming a row of its own. */}
           <div className={isMobile ? (mobileToolbarOpen ? `w-full flex flex-nowrap items-end justify-end gap-2 pb-1` : `hidden`) : `contents`}>
+          {/* Claude plan usage — desktop: a sibling gauge LEFT of the context
+              gauge, so the elapsed % that follows the context gauge is not read
+              as belonging to it (つよ, 2026-11-14). On a phone it gets its own
+              row below the status bar (rendered after this wrapper closes). */}
+          {!isMobile && renderUsageGauge(false)}
           {(() => {
             // Per-folder conversation-log cap (was global, moved into Folder
             // Settings; retired `maxRecommendedContext` 2026-10-03).
@@ -5869,6 +5932,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
             );
           })()}
           </div>
+          {isMobile && mobileToolbarOpen && renderUsageGauge(true)}
           {/* The icon row. On mobile it becomes its own full-width header row,
               collapsed by default — it cannot fit beside the status bar on a
               phone. On desktop the wrapper is `display:contents`, so it is

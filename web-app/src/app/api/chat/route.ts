@@ -27,6 +27,7 @@ import { resolveHandoff, describeAllowed, buildHandoffInjection, buildHandoffFai
 import { unfinishedBillingFrames, unfinishedBillingLog } from '@/lib/unfinishedBilling';
 import { renderTranscriptHistory } from '@/lib/transcriptRender';
 import { shouldNoteRateLimit, rateLimitNoteText } from '@/lib/rateLimitNote';
+import { recordRateLimitInfo } from '@/lib/claudeUsageStore';
 
 // Payload field for an attachment the AI produced by reading an image from the
 // workspace. These are persisted into the conversation like any other
@@ -2622,6 +2623,9 @@ async function streamClaudeViaAgentSDK(args: {
             if ((msg as any).type === 'rate_limit_event') {
               const ri: any = (msg as any).rate_limit_info || {};
               console.log(`${oauthTag} rate_limit ${ri.status} type=${ri.rateLimitType} util=${ri.utilization} resetsAt=${ri.resetsAt} overage=${ri.isUsingOverage} @ t+${((Date.now() - turnT0) / 1000).toFixed(1)}s`);
+              // Feed the usage meter beside the context gauge (fire-and-forget,
+              // never throws). lib/claudeUsage.ts has the measurement notes.
+              void recordRateLimitInfo(ri);
               if (ri.status === 'rejected' || ri.surpassedThreshold) {
                 const pct = typeof ri.utilization === 'number' ? ` (${Math.round(ri.utilization * 100)}% used)` : '';
                 // Overwrites, does not append — see `rateLimitScreenNote`.
