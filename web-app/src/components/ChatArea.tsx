@@ -2716,7 +2716,19 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // stops the chase. Held in a ref because `handleSend` needs to stop it and is
   // defined far from the effect that owns it.
   const releaseDeepLinkRef = useRef<(() => void) | null>(null);
-  const deepLinkScrollPending = !!scrollToMessageId && scrolledToRef.current !== scrollToMessageId;
+  // The parent clears `scrollToMessageId` the instant we report back, which
+  // used to tear down the chase effect on the very next render — so the 6s
+  // layout chase never actually ran, and the bottom magnet (still attached)
+  // pulled the view down as images laid out. Latch the target locally so the
+  // chase outlives the parent's clear. 2026-11-14, Tsuyo's ② report.
+  const [linkTarget, setLinkTarget] = useState<string | null>(null);
+  useEffect(() => {
+    if (scrollToMessageId) setLinkTarget(scrollToMessageId);
+  }, [scrollToMessageId]);
+  const activeLinkTarget: string | null = scrollToMessageId || linkTarget;
+  const onScrolledRef = useRef(onScrolledToMessage);
+  onScrolledRef.current = onScrolledToMessage;
+  const deepLinkScrollPending = !!activeLinkTarget && scrolledToRef.current !== activeLinkTarget;
   // Transient "copied ✓" feedback for the link buttons ('convo' | message id).
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
@@ -2787,7 +2799,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     if (!el || !content || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       if (!stickToBottomRef.current) return;
-      if (scrollToMessageId && scrolledToRef.current !== scrollToMessageId) return;
+      if (activeLinkTarget && scrolledToRef.current !== activeLinkTarget) return;
       if (distanceFromBottom(el) === 0) return;
       jumpToBottom(el);
       // Record our own landing, or the scroll event it provokes would look
@@ -2797,7 +2809,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     });
     ro.observe(content);
     return () => ro.disconnect();
-  }, [scrollToMessageId]);
+  }, [activeLinkTarget]);
 
   const handleListScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -2863,18 +2875,23 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // when the id is genuinely absent, say so instead of leaving the user at the
   // bottom of the wrong place wondering.
   useEffect(() => {
-    if (!scrollToMessageId) return;
-    if (scrolledToRef.current === scrollToMessageId) return;
+    const target = activeLinkTarget;
+    if (!target) return;
+    if (scrolledToRef.current === target) return;
     if (messages.length === 0) return;            // not loaded yet — wait for the next run
 
-    const el = document.getElementById(messageAnchorId(scrollToMessageId));
+    const el = document.getElementById(messageAnchorId(target));
     if (!el) {
       // Messages are present but this id isn't among them: deleted or wrong link.
-      scrolledToRef.current = scrollToMessageId;
-      onScrolledToMessage?.(false);
+      scrolledToRef.current = target;
+      onScrolledRef.current?.(false);
       return;
     }
-    scrolledToRef.current = scrollToMessageId;
+    scrolledToRef.current = target;
+    // The reader is now looking at an EARLIER message, not the end: detach the
+    // bottom magnet. Left attached, the content ResizeObserver above yanked the
+    // view to the bottom as soon as images below the target decoded.
+    stickToBottomRef.current = false;
 
     // Brief highlight so the eye lands on the right message in a long thread.
     el.classList.add('ring-2', 'ring-indigo-500/70', 'rounded-xl');
@@ -2896,7 +2913,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
 
     const recentre = () => {
       if (cancelled) return;
-      const node = document.getElementById(messageAnchorId(scrollToMessageId));
+      const node = document.getElementById(messageAnchorId(target));
       if (!node) return;
       const r = node.getBoundingClientRect();
       // A message taller than the viewport can never be perfectly centred, so
@@ -2931,7 +2948,7 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
     // Hard stop: stop chasing the layout after a few seconds either way.
     const end = setTimeout(() => { cancelled = true; ro.disconnect(); }, 6000);
 
-    onScrolledToMessage?.(true);
+    onScrolledRef.current?.(true);
     return () => {
       cancelled = true;
       ro.disconnect();
@@ -2941,7 +2958,13 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
       container?.removeEventListener('touchstart', release);
       if (releaseDeepLinkRef.current === release) releaseDeepLinkRef.current = null;
     };
-  }, [scrollToMessageId, messages.length, onScrolledToMessage]);
+    // Deps are deliberately NOT `messages.length` / the parent's callback: any
+    // change in either ran this effect's cleanup and killed the chase mid-way
+    // (the handover restore prepends messages right after open; the parent's
+    // callback is a fresh arrow every render). `messagesReady` still gives the
+    // cold-load rerun once the list arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeLinkTarget, messages.length > 0]);
 
   // ── The stock (phase 4a-2, 2026-10-27) ───────────────────────────────────
   // A durable, server-side queue of things that should cause a turn. Today the
