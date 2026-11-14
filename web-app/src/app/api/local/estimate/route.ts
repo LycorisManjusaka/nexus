@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { estimateLocalModel } from '@/lib/localModels';
+import { isMockModelId } from '@/lib/mockModel';
 
 /**
  * What would this local model cost in memory at this context length?
@@ -32,6 +33,9 @@ export async function GET(req: Request) {
     if (!Number.isFinite(ctx) || ctx < 1) {
       return NextResponse.json({ ok: false, error: 'Context length required.' }, { status: 400 });
     }
+
+    // The soulless machine uses no memory worth estimating (lib/mockModel.ts).
+    if (isMockModelId(model)) return NextResponse.json({ ok: false, error: 'mock model: no memory estimate', raw: '' });
 
     const est = await estimateLocalModel(model, ctx);
     // 200 even when ok:false — the request was served; the ESTIMATE failed.

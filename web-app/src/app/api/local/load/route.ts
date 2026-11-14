@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { loadLocalModel, ensureLmStudioLaunched } from '@/lib/localModels';
+import { isMockModelId } from '@/lib/mockModel';
 
 export async function POST(req: Request) {
   try {
@@ -7,6 +8,9 @@ export async function POST(req: Request) {
     if (!model) {
       return NextResponse.json({ error: 'Model identifier required.' }, { status: 400 });
     }
+
+    // The soulless machine has nothing to load (lib/mockModel.ts).
+    if (isMockModelId(model)) return NextResponse.json({ ok: true, message: 'mock model: nothing to load' });
 
     await ensureLmStudioLaunched();
     const res = await loadLocalModel(model, Number(contextLength) || 80000);

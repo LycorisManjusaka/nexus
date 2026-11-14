@@ -327,6 +327,8 @@ import { buildOpenAiToolReplay, buildAnthropicToolReplay } from '@/lib/toolHisto
 import { runSubagent } from '@/lib/subagent';
 import { runLetterTool, LETTER_TOOL_NAMES, announceLetters } from '@/lib/letters';
 import { ensureLmStudioLaunched, getLocalModelsMeta, loadLocalModel } from '@/lib/localModels';
+import { isMockModelId, mockNameFromId, planMockRound, mockChunks } from '@/lib/mockModel';
+import { loadMockScenario } from '@/lib/mockModelStore';
 import { localReasoningEffort, maxContinuationsFor, shouldReportLoadFailure } from '@/lib/localTurnPolicy';
 import {
   runBrowserTool, BROWSER_TOOL_NAMES,
@@ -8444,7 +8446,9 @@ export async function POST(req: Request) {
       // Resolve `localModel` against the real installed/loaded list and
       // pre-load it with the conversation's context window so long chats don't
       // get silently truncated to LM Studio's default.
-      if (isLocal) {
+      // The soulless machine (lib/mockModel.ts) needs no LM Studio at all:
+      // no catalogue, no `lms load`, no context warning.
+      if (isLocal && !isMockModelId(localModel)) {
         const lm = await getLocalModelsMeta();
         // The SECOND silent path to an unintended context. When the catalogue
         // comes back empty — `lms` missing from the PATH of the account the
@@ -9105,6 +9109,56 @@ export async function POST(req: Request) {
       const effectiveLocalTemp = modelParams.temperature ?? 0.7;
       const effectiveLocalTopP = modelParams.topP ?? 0.95;
 
+      // ── The soulless machine (lib/mockModel.ts) ──────────────────────────────
+      // Same signature and return shape as runLocalOnce, so the outer tool loop
+      // executes its tool calls for real. It ignores `msgs` entirely. The round
+      // counter lives here (per turn), not in `msgs`: a mid-turn interjection
+      // appends a user message, and counting "since the last user message"
+      // would restart the script forever.
+      let mockRoundsDone = 0;
+      const runMockOnce = async (
+        controller: ReadableStreamDefaultController,
+        opts?: { noTools?: boolean }
+      ) => {
+        const empty = { visibleText: '', reasoningText: '', finishReason: 'stop' as string | null, toolCalls: [] as { id: string; name: string; arguments: string }[], usage: null as any, webSources: [] as { url: string; title?: string }[] };
+        const { scenario, error } = loadMockScenario(mockNameFromId(localModel));
+        const sleep = (ms: number) => new Promise<void>((resolve) => {
+          if (ms <= 0 || turnAbort.signal.aborted) return resolve();
+          const t = setTimeout(done, ms);
+          function done() { clearTimeout(t); turnAbort.signal.removeEventListener('abort', done); resolve(); }
+          turnAbort.signal.addEventListener('abort', done);
+        });
+        let visibleText = '';
+        let reasoningText = '';
+        const stream = async (text: string, kind: 'thought' | 'text') => {
+          for (const c of mockChunks(text, scenario.chunkChars)) {
+            if (turnAbort.signal.aborted) return;
+            if (kind === 'thought') reasoningText += c; else visibleText += c;
+            betrayalSend(controller, { type: kind, content: c });
+            await sleep(scenario.chunkDelayMs);
+          }
+        };
+        if (mockRoundsDone === 0) {
+          if (error) betrayalSend(controller, { type: 'notice', content: noticeJa ? `台本ファイルを読めなかったので既定の台本で動きます: ${error}` : `Could not read the scenario file, playing the defaults: ${error}` });
+          await sleep(scenario.connectDelaySec * 1000);
+        }
+        if (turnAbort.signal.aborted) return { ...empty, finishReason: null };
+        const toolNames = (localTools || []).map((t: any) => t?.function?.name).filter(Boolean);
+        const plan = planMockRound(scenario, mockRoundsDone, toolNames, !!opts?.noTools);
+        await stream(plan.thought + '\n', 'thought');
+        if (plan.kind === 'final') {
+          await stream(plan.answer, 'text');
+          return { ...empty, visibleText, reasoningText, finishReason: turnAbort.signal.aborted ? null : 'stop' };
+        }
+        mockRoundsDone++;
+        if (plan.selfWaitSec > 0) await sleep(plan.selfWaitSec * 1000);
+        if (!plan.tool || turnAbort.signal.aborted) return { ...empty, visibleText, reasoningText, finishReason: null };
+        return {
+          ...empty, visibleText, reasoningText, finishReason: 'tool_calls',
+          toolCalls: [{ id: `mock_${Date.now()}_${mockRoundsDone}`, name: plan.tool.name, arguments: JSON.stringify(plan.tool.args) }],
+        };
+      };
+
       // One streaming call. Returns visibleText (only the text portion, not thoughts)
       // and finishReason from the provider. Tokens are emitted to controller as they arrive.
       const runLocalOnce = async (
@@ -9120,6 +9174,7 @@ export async function POST(req: Request) {
         usage: any;
         webSources: { url: string; title?: string }[];
       }> => {
+        if (isLocal && isMockModelId(localModel)) return runMockOnce(controller, opts);
         const requestBody: any = {
           model: localModel,
           messages: msgs,
