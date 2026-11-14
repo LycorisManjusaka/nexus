@@ -14,6 +14,7 @@ import {
   knownIdentities,
   regenerateStatus,
   letterAttachmentPath,
+  prepareUploadedFiles,
 } from '@/lib/letters';
 import { mimeForRef } from '@/lib/attachmentStore';
 
@@ -79,6 +80,32 @@ export async function GET(req: Request) {
 /** POST → one action. */
 export async function POST(req: Request) {
   try {
+    // Compose with files arrives as multipart (the only way a browser can send
+    // picked files); every other action stays JSON.
+    if ((req.headers.get('content-type') || '').startsWith('multipart/form-data')) {
+      const form = await req.formData();
+      if (String(form.get('action') || '') !== 'create') {
+        return NextResponse.json({ error: 'Only "create" accepts files.' }, { status: 400 });
+      }
+      const picked = form.getAll('files').filter((v): v is File => typeof v !== 'string');
+      const raw = await Promise.all(picked.map(async (f) => ({
+        name: f.name, size: f.size, data: Buffer.from(await f.arrayBuffer()),
+      })));
+      const prep = prepareUploadedFiles(raw);
+      if ('error' in prep) return NextResponse.json({ error: prep.error }, { status: 400 });
+      const r = await writeLetter(
+        String(form.get('from') || '').trim(),
+        String(form.get('to') || '').trim(),
+        String(form.get('title') || '').trim(),
+        String(form.get('text') || ''),
+        [],
+        prep.files,
+      );
+      return r.ok
+        ? NextResponse.json({ ok: true, id: r.id })
+        : NextResponse.json({ error: r.error }, { status: 400 });
+    }
+
     const body = await req.json();
     const action = String(body?.action || '');
 

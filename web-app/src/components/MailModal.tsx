@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   X, Mail, Loader2, Trash2, Save, RefreshCw, PenLine, Send,
-  MailOpen, Archive, AlertTriangle, Check, Reply, FolderOpen,
+  MailOpen, Archive, AlertTriangle, Check, Reply, FolderOpen, Paperclip,
 } from 'lucide-react';
 import EditableCombo from './EditableCombo';
 import { useT } from '@/lib/i18n';
@@ -84,6 +84,10 @@ export default function MailModal({
   const [cTo, setCTo] = useState('');
   const [cTitle, setCTitle] = useState('');
   const [cText, setCText] = useState('');
+  // Files picked for the letter being composed. Sent as multipart only when
+  // there are any, so a plain letter takes the same JSON path as before.
+  const [cFiles, setCFiles] = useState<File[]>([]);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -204,17 +208,43 @@ export default function MailModal({
     setCTo(l.from);
     setCTitle(replyTitle(l.title));
     setCText('');
+    setCFiles([]);
     // selectedId is kept on purpose: composing takes precedence in the render,
     // so Cancel drops straight back to the letter being answered instead of an
     // empty pane.
     setComposing(true);
   };
 
+  const sendWithFiles = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('action', 'create');
+      fd.append('from', cFrom);
+      fd.append('to', cTo);
+      fd.append('title', cTitle);
+      fd.append('text', cText);
+      for (const f of cFiles) fd.append('files', f, f.name);
+      const res = await fetch('/api/letters', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || t('mail.opFailed'));
+      return data;
+    } catch (e: any) {
+      setError(e?.message || t('mail.opFailed'));
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const send = async () => {
-    const r = await act({ action: 'create', from: cFrom, to: cTo, title: cTitle, text: cText });
+    const r = cFiles.length
+      ? await sendWithFiles()
+      : await act({ action: 'create', from: cFrom, to: cTo, title: cTitle, text: cText });
     if (r?.ok) {
       setComposing(false);
-      setCTitle(''); setCText('');
+      setCTitle(''); setCText(''); setCFiles([]);
       await load();
       setSelectedId(r.id);
     }
@@ -268,7 +298,7 @@ export default function MailModal({
           </span>
           <div className="ml-auto flex items-center gap-2">
             <button
-              onClick={() => { setComposing(true); setSelectedId(null); }}
+              onClick={() => { setComposing(true); setSelectedId(null); setCFiles([]); }}
               className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-500 hover:bg-amber-500/25"
             >
               <PenLine className="h-3.5 w-3.5" /> {t('mail.write')}
@@ -394,6 +424,44 @@ export default function MailModal({
                     onChange={(e) => setCText(e.target.value)}
                     className="min-h-[14rem] flex-1 resize-y rounded-lg border border-border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-amber-500/40"
                   />
+                </div>
+                <div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files || []);
+                      if (picked.length) setCFiles((prev) => [...prev, ...picked]);
+                      e.target.value = ''; // so picking the same file again still fires
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-muted/70"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" /> {t('mail.attachPick')}
+                  </button>
+                  {cFiles.length > 0 && (
+                    <ul className="mt-2 flex flex-wrap gap-1.5">
+                      {cFiles.map((f, i) => (
+                        <li key={`${f.name}-${i}`} className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-0.5 text-[11px] text-foreground">
+                          <span className="max-w-[14rem] truncate">{f.name}</span>
+                          <span className="text-muted-foreground">{f.size >= 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`}</span>
+                          <button
+                            type="button"
+                            onClick={() => setCFiles((prev) => prev.filter((_, j) => j !== i))}
+                            title={t('mail.attachRemove')}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button

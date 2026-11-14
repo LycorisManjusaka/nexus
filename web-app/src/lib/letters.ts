@@ -174,6 +174,28 @@ export function uniqueAttachmentNames(names: string[]): string[] {
 
 export interface LetterFile { name: string; data: Buffer }
 
+/**
+ * Files a PERSON picked in the Mail Manager's compose pane. Same limits and
+ * naming as a being's attachments (loadAttachments), so a hand-written letter
+ * carries files exactly like one a being wrote. Any problem refuses the whole
+ * letter, for the same reason: a letter without the picture it talks about
+ * misleads its reader.
+ */
+export function prepareUploadedFiles(
+  raw: { name: string; size: number; data: Buffer }[],
+): { files: LetterFile[] } | { error: string } {
+  if (raw.length > MAX_LETTER_ATTACHMENTS) {
+    return { error: `Too many attachments (${raw.length}). One letter may carry at most ${MAX_LETTER_ATTACHMENTS} files.` };
+  }
+  for (const f of raw) {
+    if (f.size > MAX_LETTER_ATTACHMENT_BYTES) {
+      return { error: `"${f.name}" is ${fmtBytes(f.size)}, over the ${fmtBytes(MAX_LETTER_ATTACHMENT_BYTES)} limit per file.` };
+    }
+  }
+  const names = uniqueAttachmentNames(raw.map((f) => safeAttachmentName(f.name)));
+  return { files: raw.map((f, i) => ({ name: names[i], data: f.data })) };
+}
+
 async function listAttachmentNames(letterFile: string): Promise<string[]> {
   try {
     const ents = await fs.readdir(letterFilesDir(letterFile), { withFileTypes: true });

@@ -11,7 +11,29 @@ import {
   letterFilesDir,
   letterAttachmentPath,
   LETTER_ATTACHMENTS_DESK_DIR,
+  prepareUploadedFiles,
+  MAX_LETTER_ATTACHMENTS,
+  MAX_LETTER_ATTACHMENT_BYTES,
 } from '@/lib/letters';
+
+test('prepareUploadedFiles: same names and limits as a being\'s attachments', () => {
+  const b = Buffer.from('x');
+  const ok = prepareUploadedFiles([
+    { name: '蟹.jpg', size: 1, data: b },
+    { name: '蟹.jpg', size: 1, data: b },
+    { name: 'C:\\fake\\path\\a?.png', size: 1, data: b },
+  ]);
+  assert.ok('files' in ok);
+  assert.deepEqual(ok.files.map((f) => f.name), ['蟹.jpg', '蟹 (2).jpg', 'a_.png']);
+
+  const tooMany = prepareUploadedFiles(
+    Array.from({ length: MAX_LETTER_ATTACHMENTS + 1 }, (_, i) => ({ name: `${i}.txt`, size: 1, data: b })),
+  );
+  assert.ok('error' in tooMany);
+
+  const tooBig = prepareUploadedFiles([{ name: 'big.mp4', size: MAX_LETTER_ATTACHMENT_BYTES + 1, data: b }]);
+  assert.ok('error' in tooBig && tooBig.error.includes('big.mp4'));
+});
 
 test('safeAttachmentName keeps only the last segment and keeps Japanese', () => {
   assert.equal(safeAttachmentName('C:\\Users\\x\\desk\\蟹.jpg'), '蟹.jpg');
