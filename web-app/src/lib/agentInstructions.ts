@@ -319,7 +319,11 @@ export const DEFAULT_AGENT_INSTRUCTIONS: Record<string, string> = {
   toolListLettersDesc:
     'List your letters: the ones written TO you (with whether you have read or archived each) and the ones ' +
     'YOU sent (with whether the recipient has opened them yet). Returns ids, senders, titles, and dates — ' +
-    'not the text. Use read_letter with an id to open one.',
+    'not the text. Use read_letter with an id to open one. ' +
+    'You do not need this to find out whether anything new has come: every unread letter is announced at ' +
+    'the start of every turn by a note from NEXUS that lists it (normally headed [LETTERS WAITING]). If there is no such note, there is no ' +
+    'unread letter waiting (apart from any you archived yourself). Call this when you want to look back ' +
+    'over letters already read or sent, not to check for new mail.',
 
   toolListRecipientsDesc:
     'List the names you can write a letter to, spelled the way write_letter expects them. Names here are ' +
