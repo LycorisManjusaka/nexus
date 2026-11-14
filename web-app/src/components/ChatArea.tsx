@@ -7,6 +7,7 @@ import InputArea from './InputArea';
 import EditableCombo from './EditableCombo';
 import ModelPriceSelect from './ModelPriceSelect';
 import FamilyModelPicker, { RetiredOption } from './FamilyModelPicker';
+import SenseModelPicker from './SenseModelPicker';
 import { tagPriceOptions, priceTiers, fmtPeakHours, fmtThreshold } from '@/lib/modelPriceLabel';
 import { motion } from 'framer-motion';
 import { Download, Settings2, Eye, EyeOff, Radio, Wrench, RefreshCw, ImageDown, FolderOpen, Layers, Bookmark, BookmarkPlus, Clock, Search, AudioLines, Link2, Check, Menu, MoreHorizontal, Anchor } from 'lucide-react';
@@ -296,28 +297,6 @@ Meta     | muse-spark-1.2               | on  | Muse Spark 1.2
 Meta     | muse-spark-1.1               | on  | Muse Spark 1.1
 Meta     | muse-spark-1.3-contributor   | off | Muse Spark 1.3 (Contributor — Meta trains on it)
 `;
-
-// Parsed { family, model, label } rows for the Subagent model dropdown, derived
-// from the same CLOUD_MODELS_FILL table the model-list window shows. The family
-// is what routes the subagent to the correct provider endpoint+key.
-const SUBAGENT_MODEL_OPTIONS: { family: string; model: string; label: string }[] =
-  CLOUD_MODELS_FILL.split('\n')
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith('#') && l.includes('|'))
-    .map(l => { const p = l.split('|').map(s => s.trim()); return { family: p[0], model: p[1], label: p[3] || p[1] }; })
-    .filter(o => o.family && o.model);
-
-
-// Group the rows by family for <optgroup>s, preserving first-seen order.
-const SUBAGENT_MODEL_GROUPS: { family: string; items: { model: string; label: string }[] }[] = (() => {
-  const order: string[] = [];
-  const map: Record<string, { model: string; label: string }[]> = {};
-  for (const o of SUBAGENT_MODEL_OPTIONS) {
-    if (!map[o.family]) { map[o.family] = []; order.push(o.family); }
-    map[o.family].push({ model: o.model, label: o.label });
-  }
-  return order.map(family => ({ family, items: map[family] }));
-})();
 
 // Heuristic: infer whether a Local model name implies a thinking/reasoning
 // variant. Local models have no thinking toggle — LM Studio just runs the
@@ -7799,28 +7778,47 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                   <div className="mt-3 ml-6 space-y-4">
                     <div>
                       <label className="text-xs font-semibold text-foreground mb-1 block">{t('id.subagent.modelLabel')}</label>
-                      <select
-                        value={`${subagentFamily}|${subagentModel}`}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          const i = v.indexOf('|');
-                          setSubagentFamily(i >= 0 ? v.slice(0, i) : '');
-                          setSubagentModel(i >= 0 ? v.slice(i + 1) : '');
-                        }}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:ring-2 focus:ring-violet-500/50 outline-none cursor-pointer"
-                      >
-                        <option value="|" style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>{t('id.subagent.modelDefault')}</option>
-                        {SUBAGENT_MODEL_GROUPS.map(g => (
-                          <optgroup key={g.family} label={g.family} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
-                            {g.items.map(it => (
-                              <option key={`${g.family}|${it.model}`} value={`${g.family}|${it.model}`} style={{ backgroundColor: 'var(--background)', color: 'var(--foreground)' }}>
-                                {it.label}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                        <RetiredOption value={`${subagentFamily}|${subagentModel}`} id={subagentModel} />
-                      </select>
+                      {/* The SAME family + model picker as the Model tab and the
+                          anchor (2026-11-14), plus a leading "default" family.
+                          The subagent's own routing (lib/subagent.ts) reaches
+                          every family including Local, so nothing is filtered. */}
+                      {(() => { const subFam = BASE_MODEL_FAMILIES.find((f) => f.toLowerCase() === subagentFamily.toLowerCase()) ?? subagentFamily; return (
+                      <div className="rounded-xl border border-border p-3">
+                        <select
+                          value={subFam}
+                          onChange={(e) => {
+                            const fam = e.target.value;
+                            setSubagentFamily(fam);
+                            if (!fam) { setSubagentModel(''); return; }
+                            if (fam === 'Local') { refreshLocalModels(); setSubagentModel(localModels[0] || ''); return; }
+                            setSubagentModel(defaultModelForFamily(fam));
+                          }}
+                          className={`w-full ${subagentFamily ? 'mb-4' : ''} px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-violet-500/50 outline-none`}
+                        >
+                          <option value="">{t('id.subagent.modelDefault')}</option>
+                          {/* A saved family the list no longer has stays visible. */}
+                          {subFam && !BASE_MODEL_FAMILIES.includes(subFam) && (
+                            <option value={subFam}>{subFam}</option>
+                          )}
+                          {BASE_MODEL_FAMILIES.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        {subagentFamily && (
+                          <FamilyModelPicker
+                            compact
+                            hideBilling
+                            family={subFam}
+                            model={subagentModel}
+                            onModel={setSubagentModel}
+                            authMode="oauth"
+                            onAuthMode={() => {}}
+                            localModels={localModels}
+                            localModelsMeta={localModelsMeta}
+                            localModelsError={localModelsError}
+                            onRefreshLocal={refreshLocalModels}
+                          />
+                        )}
+                      </div>
+                      ); })()}
                       <p className="text-xs text-muted-foreground mt-1">
                         <Tx k="id.subagent.modelHelp" />
                       </p>
@@ -8031,36 +8029,14 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                         <span className="block"><Tx k="senses.eyes.modelHelp3" /></span>
                         <span className="block mt-1"><Tx k="senses.eyes.modelHelp4" /></span>
                       </p>
-                      <EditableCombo
+                      <SenseModelPicker
+                        kind="eyes"
                         value={eyesModel}
                         onChange={setEyesModel}
-                        placeholder={t('senses.eyes.modelPh')}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                        options={[
-                          // No-key options first — what you want when only OAuth
-                          // Claude and/or local models are available.
-                          { value: 'claude-haiku-4-5', label: t('senses.eyes.optHaiku') },
-                          { value: 'claude-opus-5-5', label: t('senses.eyes.optOpus55') },
-                          { value: 'claude-opus-5', label: t('senses.eyes.optOpus5') },
-                          { value: 'claude-opus-4-8', label: t('senses.eyes.optOpus48') },
-                          { value: 'local:qwen2-vl-7b-instruct', label: t('senses.eyes.optLocal') },
-                          { value: 'glm-5.3-flash', label: 'glm-5.3-flash (Z.AI key)' },
-                          { value: 'glm-5v-turbo', label: 'glm-5v-turbo (Z.AI key)' },
-                          { value: 'glm-4.6v-flash', label: 'glm-4.6v-flash (Z.AI key)' },
-                          { value: 'glm-4.6v', label: 'glm-4.6v (Z.AI key)' },
-                          { value: 'gemini-4-argon', label: 'gemini-4-argon (Google key)' },
-                          { value: 'gemini-4-hydrogen', label: 'gemini-4-hydrogen (Google key)' },
-                          { value: 'gemini-4-carbon', label: 'gemini-4-carbon (Google key)' },
-                          { value: 'gemini-3.8-flash', label: 'gemini-3.8-flash (Google key)' },
-                          { value: 'gemini-3.7-flash', label: 'gemini-3.7-flash (Google key)' },
-                          { value: 'gemini-3.6-flash', label: 'gemini-3.6-flash (Google key)' },
-                          { value: 'gemini-3.5-flash', label: 'gemini-3.5-flash (Google key)' },
-                          { value: 'gemini-3.5-flash-lite', label: 'gemini-3.5-flash-lite (Google key)' },
-                          { value: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite (Google key)' },
-                          { value: 'gemini-3.1-pro-preview', label: 'gemini-3.1-pro-preview (Google key)' },
-                          { value: 'mimo-v2.6-pro', label: 'mimo-v2.6-pro (MiMo key)' },
-                          { value: 'mimo-v2.6-flash', label: 'mimo-v2.6-flash (MiMo key)' },
-                        ]}
+                        localModels={localModels}
+                        localModelsMeta={localModelsMeta}
+                        localModelsError={localModelsError}
+                        onRefreshLocal={refreshLocalModels}
                       />
                     </div>
                   </>
@@ -8099,27 +8075,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <p className="text-xs text-muted-foreground mb-2">
                         <Tx k="senses.ears.modelHelp" />
                       </p>
-                      <select
+                      <SenseModelPicker
+                        kind="ears"
                         value={earsModel}
-                        onChange={(e) => setEarsModel(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                      >
-                        <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
-                        <option value="qwen3.5-omni-plus">qwen3.5-omni-plus</option>
-                        <option value="gemini-4-argon">gemini-4-argon</option>
-                        <option value="gemini-4-hydrogen">gemini-4-hydrogen</option>
-                        <option value="gemini-4-carbon">gemini-4-carbon</option>
-                        <option value="gemini-3.8-flash">gemini-3.8-flash</option>
-                        <option value="gemini-3.7-flash">gemini-3.7-flash</option>
-                        <option value="gemini-3.6-flash">gemini-3.6-flash</option>
-                        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                        <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
-                        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
-                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                        <option value="mimo-v2.6-pro">mimo-v2.6-pro (Xiaomi)</option>
-                        <option value="seed-2-0-lite-260428">seed-2-0-lite (ByteDance — omnimodal)</option>
-                        <RetiredOption value={earsModel} />
-                      </select>
+                        onChange={setEarsModel}
+                        localModels={localModels}
+                        localModelsMeta={localModelsMeta}
+                        localModelsError={localModelsError}
+                        onRefreshLocal={refreshLocalModels}
+                      />
                     </div>
                   </>
                 )}
@@ -8157,27 +8121,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
                       <p className="text-xs text-muted-foreground mb-2">
                         <Tx k="senses.watcher.modelHelp" />
                       </p>
-                      <select
+                      <SenseModelPicker
+                        kind="watcher"
                         value={watcherModel}
-                        onChange={(e) => setWatcherModel(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                      >
-                        <option value="gemini-4-argon">gemini-4-argon</option>
-                        <option value="gemini-4-hydrogen">gemini-4-hydrogen</option>
-                        <option value="gemini-4-carbon">gemini-4-carbon</option>
-                        <option value="gemini-3.8-flash">gemini-3.8-flash</option>
-                        <option value="gemini-3.7-flash">gemini-3.7-flash</option>
-                        <option value="gemini-3.6-flash">gemini-3.6-flash</option>
-                        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                        <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
-                        <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
-                        <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
-                        <option value="qwen3.5-omni-flash">qwen3.5-omni-flash</option>
-                        <option value="qwen3.5-omni-plus">qwen3.5-omni-plus (higher quality)</option>
-                        <option value="mimo-v2.6-pro">mimo-v2.6-pro (Xiaomi)</option>
-                        <option value="seed-2-0-lite-260428">seed-2-0-lite (ByteDance — omnimodal)</option>
-                        <RetiredOption value={watcherModel} />
-                      </select>
+                        onChange={setWatcherModel}
+                        localModels={localModels}
+                        localModelsMeta={localModelsMeta}
+                        localModelsError={localModelsError}
+                        onRefreshLocal={refreshLocalModels}
+                      />
                     </div>
                   </>
                 )}

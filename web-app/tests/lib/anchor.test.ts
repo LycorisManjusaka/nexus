@@ -126,7 +126,10 @@ test('wiring: button and report exist only behind the Behaviour switch; picker i
   const chat = read('src/components/ChatArea.tsx');
   assert.match(chat, /onAnchor=\{anchorSettings\.enabled && msg\.role !== 'user' \? onAnchorStable : undefined\}/);
   assert.match(chat, /\{anchorSettings\.enabled && msg\.role !== 'user' && \(msg\.anchorReport \|\| anchorBusyId === msg\.id\)/);
-  assert.equal(chat.split('<FamilyModelPicker').length - 1, 2, 'Model tab + anchor, one component');
+  // Model tab + anchor + subagent (2026-11-14); the sense seats use it via SenseModelPicker.
+  assert.equal(chat.split('<FamilyModelPicker').length - 1, 3, 'Model tab + anchor + subagent, one component');
+  assert.equal(chat.split('<SenseModelPicker').length - 1, 3, 'eyes + ears + watcher');
+  assert.match(read('src/components/SenseModelPicker.tsx'), /<FamilyModelPicker/);
   assert.ok(!/<option value="claude-opus-5">/.test(chat), 'the model lists live in FamilyModelPicker only');
   // saved in both places a setting has to be listed
   assert.equal(chat.split('autoTriggers, anchorSettings, instructionOverrides').length - 1, 2);

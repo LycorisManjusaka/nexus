@@ -1468,12 +1468,7 @@ Leave this empty and nothing is injected — the being meets you with no imposed
     '• `local:<model>` (e.g. `local:qwen2-vl-7b-instruct`) → a vision model loaded in **LM Studio** (JIT loading on).',
   'senses.eyes.modelHelp4':
     'GLM ids use the Z.AI key; Gemini the Google key; MiMo the MiMo key — set whichever you pick in Preferences.',
-  'senses.eyes.modelPh': 'e.g. claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo',
-  'senses.eyes.optHaiku': 'OAuth Claude — Haiku 4.5 (no key, cheapest)',
-  'senses.eyes.optOpus55': 'OAuth Claude — Opus 5.5 (no key, newest flagship)',
-  'senses.eyes.optOpus5': 'OAuth Claude — Opus 5 (no key, flagship)',
-  'senses.eyes.optOpus48': 'OAuth Claude — Opus 4.8 (no key, richest)',
-  'senses.eyes.optLocal': 'Local LM Studio (no key — replace with your loaded model)',
+  'senses.seat.family': 'Model family (only vessels that have this sense are listed)',
 
   'senses.ears.label': 'Enable "Ears" (audio bridge for non-audio-capable models)',
   'senses.ears.help':
@@ -3312,12 +3307,7 @@ Layer 3 — ツールとプロトコル:何ができるか、どのように。
     '• `local:<model>`（例: `local:qwen2-vl-7b-instruct`）→ **LM Studio** に読み込まれた視覚モデル（JIT 読み込みが有効なこと）。',
   'senses.eyes.modelHelp4':
     'GLM の ID は Z.AI キー、Gemini は Google キー、MiMo は MiMo キーを使います — 選んだものに対応するキーを設定で入れてください。',
-  'senses.eyes.modelPh': '例: claude-haiku-4-5, local:qwen2-vl-7b, glm-5v-turbo',
-  'senses.eyes.optHaiku': 'OAuth 版 Claude — Haiku 4.5（キー不要・最安）',
-  'senses.eyes.optOpus55': 'OAuth 版 Claude — Opus 5.5（キー不要・最新の旗艦）',
-  'senses.eyes.optOpus5': 'OAuth 版 Claude — Opus 5（キー不要・旗艦）',
-  'senses.eyes.optOpus48': 'OAuth 版 Claude — Opus 4.8（キー不要・最も詳細）',
-  'senses.eyes.optLocal': 'ローカル LM Studio（キー不要 — 読み込み済みのモデル名に置き換えてください）',
+  'senses.seat.family': 'モデルファミリー（その感覚を持つ器だけが一覧に出ます）',
 
   'senses.ears.label': '「耳」を有効にする（音声非対応モデルのための音声ブリッジ）',
   'senses.ears.help':

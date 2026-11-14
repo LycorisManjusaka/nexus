@@ -46,13 +46,24 @@ export interface FamilyModelPickerProps {
   localModelsError?: string | null;
   onRefreshLocal: () => void;
   compact?: boolean;
+  /**
+   * Optional filter (2026-11-14, sense seats): offer only model ids that pass.
+   * For local models `localVision` is LM Studio's own vision flag. Absent =
+   * the full lists, exactly as the Model tab shows them.
+   */
+  keep?: (id: string, localVision?: boolean) => boolean;
+  /** Hide the Claude monthly/pay-as-you-go switch (a seat that has no choice). */
+  hideBilling?: boolean;
 }
 
 export default function FamilyModelPicker({
   family, model, onModel, authMode, onAuthMode,
   localModels, localModelsMeta, localModelsError, onRefreshLocal, compact,
+  keep, hideBilling,
 }: FamilyModelPickerProps) {
   const t = useT();
+  const ks = keep ? (v: string) => keep(v) : undefined;
+  const ksLocal = keep ? (v: string) => keep(v, !!localModelsMeta[v]?.vision) : undefined;
   return (
     <div className={compact ? '[&_.model-help]:hidden' : undefined}>
     {family === 'Claude' && (
@@ -61,7 +72,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="claude-fable-5-2">Claude Fable 5.2 (adaptive thinking, newest flagship)</option>
@@ -78,6 +89,7 @@ export default function FamilyModelPicker({
           <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
         </ModelPriceSelect>
       </div>
+      {!hideBilling && (
       <div className="mb-4">
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.claude.billing')}</label>
         <div className="flex gap-2">
@@ -101,6 +113,7 @@ export default function FamilyModelPicker({
           <span className="block mt-0.5">{renderRich(t('model.claude.billingHelp2'))}</span>
         </div>
       </div>
+      )}
       </>
     )}
 
@@ -109,7 +122,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.gemini.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="gemini-4-argon">Gemini 4 Argon</option>
@@ -131,7 +144,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.qwen.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="qwen3.8-max">Qwen 3.8 Max (reasoning, text + vision)</option>
@@ -152,7 +165,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.deepseek.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <optgroup label="DeepSeek first-party API (api.deepseek.com)">
@@ -182,7 +195,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.minimax.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="MiniMax-M3.1-Flash">MiniMax M3.1 Flash (newest — multimodal, 1M context)</option>
@@ -200,7 +213,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.cohere.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="command-a-plus-05-2026">Command A Plus (May 2026 — flagship)</option>
@@ -218,7 +231,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.kimi.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="moonshotai/Kimi-K3">Kimi K3 (1M context, always-on reasoning, native vision)</option>
@@ -239,7 +252,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.grok.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="grok-4.7">Grok 4.7 (flagship)</option>
@@ -262,7 +275,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.chatgpt.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           {/* sol/astra reject reasoning_effort 'none' (the value tools need on
@@ -292,7 +305,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.mimo.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="mimo-v2.6-pro">MiMo V2.6 Pro (flagship — text + image + video + audio)</option>
@@ -321,7 +334,7 @@ export default function FamilyModelPicker({
             { value: 'seed-2-0-lite-260428', label: 'Seed 2.0 Lite (omnimodal — image, audio, video)' },
             { value: 'seed-2-0-mini-260428', label: 'Seed 2.0 Mini' },
             { value: 'seed-2-0-code-preview-260328', label: 'Seed 2.0 Code (preview)' },
-          ])}
+          ].filter((o) => !ks || ks(o.value)))}
         />
         <div className="model-help text-[10px] text-muted-foreground mt-1 leading-relaxed">
           {renderRich(t('model.bytedance.help'))}
@@ -334,7 +347,7 @@ export default function FamilyModelPicker({
         <label className="text-xs font-medium text-muted-foreground block mb-1">{t('model.meta.label')}</label>
         <ModelPriceSelect
           value={model}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           {/* The tier is part of the MODEL ID on this API, not an
@@ -367,7 +380,9 @@ export default function FamilyModelPicker({
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           <option value="zai">Z.AI (Zhipu) — api.z.ai</option>
-          <option value="digitalocean">DigitalOcean Inference — inference.do-ai.run (US-hosted, ~half Z.ai price)</option>
+          {(!ks || ks('digitalocean/glm-5.2')) && (
+            <option value="digitalocean">DigitalOcean Inference — inference.do-ai.run (US-hosted, ~half Z.ai price)</option>
+          )}
         </select>
         <label className="text-xs font-medium text-muted-foreground block mb-1 mt-3">{t('model.glm.label')}</label>
         <ModelPriceSelect
@@ -381,7 +396,7 @@ export default function FamilyModelPicker({
               : ['glm-5.3','glm-5.3-flash','glm-5.2','glm-5.1','glm-5','glm-5-turbo','glm-5v-turbo','glm-4.7','glm-4.6','glm-4.6v','glm-4.6v-flash','glm-4.5-air'];
             return valid.includes(model || '') ? model : '';
           })()}
-          onChange={(e) => onModel(e.target.value)}
+          onChange={(e) => onModel(e.target.value)} keep={ks}
           className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
         >
           {(model || '').startsWith('digitalocean/') ? (
@@ -428,7 +443,7 @@ export default function FamilyModelPicker({
           </div>
           <ModelPriceSelect
             value={model}
-            onChange={(e) => onModel(e.target.value)}
+            onChange={(e) => onModel(e.target.value)} keep={ksLocal}
             className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm appearance-none cursor-pointer hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
           >
             {localModels.length === 0 && <option value="">{t('model.local.none')}</option>}

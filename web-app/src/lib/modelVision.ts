@@ -28,6 +28,10 @@ export const VISION_CAPABLE_MODELS = new Set<string>([
   // image block shape -> answered "Red".
   'claude-haiku-5-5',
   'claude-haiku-4-5',
+  // The Model tab offers the dated id, not the alias above; without this row a
+  // conversation on Haiku 4.5 was treated as blind (found 2026-11-14 when the
+  // sense seats began filtering by this table).
+  'claude-haiku-4-5-20251001',
 
   // ── Google Gemini ──────────────────────────────────────────────────────────
   // All current Gemini models support vision.

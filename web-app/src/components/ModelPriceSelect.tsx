@@ -35,10 +35,60 @@ export default function ModelPriceSelect(
   // is exactly what a native <select> accepts, so an inline
   // `onChange={(e) => …}` at a call site keeps inferring `e` instead of
   // silently degrading to `any`.
-  props: React.ComponentProps<'select'>,
+  props: React.ComponentProps<'select'> & {
+    /**
+     * Optional filter (2026-11-14): only options whose value passes are kept.
+     * Used by the sense seats, which show the Model tab's lists narrowed to
+     * models that can see / hear / watch. Absent = every option, as before.
+     */
+    keep?: (value: string) => boolean;
+  },
 ) {
-  const { children, ...rest } = props;
-  return <select {...rest}>{withPriceTags(children)}</select>;
+  const { children, keep, ...rest } = props;
+  if (!keep) return <select {...rest}>{withPriceTags(children)}</select>;
+  const kept = keepOptions(children, keep);
+  // A saved value the filter (or the list) does not contain would make the
+  // native <select> silently DISPLAY its first option — showing a model that is
+  // not the one in use. Keep the real value visible instead.
+  const value = typeof rest.value === 'string' ? rest.value : '';
+  const missing = value && !collectValues(kept).includes(value);
+  return (
+    <select {...rest}>
+      {missing && <option value={value}>{value}</option>}
+      {withPriceTags(kept)}
+    </select>
+  );
+}
+
+/** Drop options failing `keep`; drop optgroups left empty. Descends fragments. */
+export function keepOptions(children: React.ReactNode, keep: (value: string) => boolean): React.ReactNode {
+  return React.Children.map(children, (child) => {
+    if (!React.isValidElement(child)) return child;
+    if (child.type === React.Fragment || child.type === 'optgroup') {
+      const props = child.props as { children?: React.ReactNode };
+      const inner = keepOptions(props.children, keep);
+      if (child.type === 'optgroup' && collectValues(inner).length === 0) return null;
+      return React.cloneElement(child as React.ReactElement<{ children?: React.ReactNode }>, {}, inner);
+    }
+    if (child.type === 'option') {
+      const v = (child.props as { value?: unknown }).value;
+      return typeof v === 'string' && keep(v) ? child : null;
+    }
+    // Other elements (e.g. RetiredOption) render their own option or nothing;
+    // a filtered seat does not offer retired models.
+    return null;
+  });
+}
+
+function collectValues(children: React.ReactNode): string[] {
+  const out: string[] = [];
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return;
+    const props = child.props as { value?: unknown; children?: React.ReactNode };
+    if (child.type === 'option') { if (typeof props.value === 'string') out.push(props.value); return; }
+    if (child.type === React.Fragment || child.type === 'optgroup') out.push(...collectValues(props.children));
+  });
+  return out;
 }
 
 /** Recursively tag <option> labels, descending through <optgroup>. */

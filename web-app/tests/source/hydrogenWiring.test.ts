@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import { resolvePrice } from '@/lib/modelPricing';
+import { senseAccepts } from '@/lib/sensorModels';
 import {
   VISION_CAPABLE_MODELS,
   AUDIO_CAPABLE_MODELS,
@@ -51,8 +52,12 @@ describe('Gemini 4 Hydrogen wiring', () => {
 
   it('4. is offered in the Model tab picker and in the bridge-model lists', () => {
     assert.ok(picker.includes(`<option value="${ID}">`), 'FamilyModelPicker has no hydrogen option');
-    assert.ok(chatArea.includes(`value: '${ID}'`), 'eyes bridge list has no hydrogen entry');
-    const opts = chatArea.split(`<option value="${ID}">`).length - 1;
-    assert.equal(opts, 2, 'ears + video bridge selects should each offer hydrogen');
+    // Since 2026-11-14 the sense seats render FamilyModelPicker narrowed by
+    // lib/sensorModels, so being in the picker IS being offered there — as long
+    // as the seat's filter accepts it. No hand-typed copy may come back.
+    assert.equal(chatArea.split(`"${ID}"`).length - 1, 0, 'ChatArea must not carry its own copy of the id');
+    for (const kind of ['eyes', 'ears', 'watcher'] as const) {
+      assert.ok(senseAccepts(kind, 'Gemini', ID), `${kind} seat does not accept hydrogen`);
+    }
   });
 });
