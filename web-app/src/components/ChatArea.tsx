@@ -600,6 +600,15 @@ export default function ChatArea({ convoId, folderName, aiName, userName, defaul
   // handoff this differs from what the conversation is configured with, and the
   // loading line should name the one actually doing the work.
   const [liveModel, setLiveModel] = useState<string>('');
+  // liveModel belongs to ONE turn. It used to be cleared only on Stop, so a
+  // turn that ended normally left its model behind, and the next turn's loading
+  // line named that stale vessel until the server reported the new one
+  // (observed 2026-11-14: vessel changed mid-turn, rerun showed the old one
+  // first). Clearing when the turn ends lets the line fall back to the
+  // configured model, which is what the next turn will actually start with.
+  useEffect(() => {
+    if (!loading) setLiveModel('');
+  }, [loading]);
   const [stallIdleSeconds, setStallIdleSeconds] = useState<number | null>(null);
   // Mid-turn "partner interjection": a per-turn id (also sent in the request
   // body) lets you POST a message to /api/chat/inject WHILE the entity is
